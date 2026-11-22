@@ -7,10 +7,10 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::eval::{
-    parse_circuit_mode, parse_ego_max_hops, parse_ego_mode, parse_fair_bench_conditions,
-    parse_horizon_mode, parse_kv_min_res, parse_pressure_sim_mode, parse_quant_mode,
-    parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode, EgoProfileMode,
-    FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
+    parse_circuit_mode, parse_d2h_heartbeat, parse_ego_max_hops, parse_ego_mode,
+    parse_fair_bench_conditions, parse_horizon_mode, parse_kv_min_res, parse_pressure_sim_mode,
+    parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode,
+    EgoProfileMode, FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
 };
 use candle_core::quantized::GgmlDType;
 use liminika_core::abi::lmnk_q7_t;
@@ -26,6 +26,7 @@ pub(crate) struct EvalCliConfig {
     pub(crate) ego_max_hops: u8,
     pub(crate) temperature: f32,
     pub(crate) rng_seed: u64,
+    pub(crate) d2h_heartbeat_max: usize,
     pub(crate) multi_turn: bool,
     pub(crate) quant_mode: Option<GgmlDType>,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
@@ -37,8 +38,8 @@ pub(crate) struct EvalCliConfig {
     pub(crate) fair_bench_conditions: Option<Vec<(FairBenchCondition, bool, Option<bool>)>>,
     pub(crate) pressure_sim_mode: PressureSimMode,
     pub(crate) step2_only: bool,
-    pub(crate) persona_container_in: Option<PathBuf>,
-    pub(crate) persona_container_out: Option<PathBuf>,
+    pub(crate) persona_lmnk_in: Option<PathBuf>,
+    pub(crate) persona_lmnk_out: Option<PathBuf>,
 }
 
 impl EvalCliConfig {
@@ -53,6 +54,7 @@ impl EvalCliConfig {
         let ego_max_hops = parse_ego_max_hops(cli_args.iter().map(String::as_str));
         let temperature = parse_temperature(cli_args.iter().map(String::as_str));
         let rng_seed = parse_rng_seed(cli_args.iter().map(String::as_str));
+        let d2h_heartbeat_max = parse_d2h_heartbeat(cli_args.iter().map(String::as_str));
         let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
         let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
@@ -68,21 +70,15 @@ impl EvalCliConfig {
             || recall_only
             || fair_bench_conditions.is_some()
             || ablate_dual_axis;
-        let persona_container_in = cli_args
+        let persona_lmnk_in = cli_args
             .iter()
-            .find_map(|a| {
-                a.strip_prefix("--persona-container=")
-                    .or_else(|| a.strip_prefix("--persona-gcso="))
-            })
+            .find_map(|a| a.strip_prefix("--persona-lmnk="))
             .map(PathBuf::from);
-        let persona_container_out = cli_args
+        let persona_lmnk_out = cli_args
             .iter()
-            .find_map(|a| {
-                a.strip_prefix("--save-persona-container=")
-                    .or_else(|| a.strip_prefix("--save-persona-gcso="))
-            })
+            .find_map(|a| a.strip_prefix("--save-persona-lmnk="))
             .map(PathBuf::from)
-            .or_else(|| persona_container_in.clone());
+            .or_else(|| persona_lmnk_in.clone());
 
         Self {
             recall_only,
@@ -94,6 +90,7 @@ impl EvalCliConfig {
             ego_max_hops,
             temperature,
             rng_seed,
+            d2h_heartbeat_max,
             multi_turn,
             quant_mode,
             kv_min_res,
@@ -105,8 +102,8 @@ impl EvalCliConfig {
             fair_bench_conditions,
             pressure_sim_mode,
             step2_only,
-            persona_container_in,
-            persona_container_out,
+            persona_lmnk_in,
+            persona_lmnk_out,
         }
     }
 }
@@ -158,7 +155,7 @@ pub(crate) struct Step2PassResult {
     pub(crate) reflect_adopted: usize,
     pub(crate) reflect_skipped: usize,
     pub(crate) ext_rescues: usize,
-    pub(crate) sandbox_promos: u64,
+    pub(crate) sandbox_settlements: u64,
     pub(crate) replies: Vec<String>,
 }
 

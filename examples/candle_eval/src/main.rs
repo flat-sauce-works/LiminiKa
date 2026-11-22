@@ -40,7 +40,7 @@ use eval::{
     apply_ego_mode, build_preset_circuit, resolve_persona_circuit, CircuitProfileMode,
     HorizonAblationMode,
 };
-use model::{ForwardSteer, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors};
+use model::{ForwardSteer, LogitsFetchMode, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ego_mode = &cli.ego_mode;
     let quant_mode = cli.quant_mode;
     let circuit_mode = cli.circuit_mode;
-    let persona_container_in = &cli.persona_container_in;
+    let persona_lmnk_in = &cli.persona_lmnk_in;
 
     adapter.set_ego_max_hops(ego_max_hops);
     apply_ego_mode(&mut adapter, ego_mode);
@@ -122,8 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_elapsed,
         vram_before.as_deref(),
     );
-    let active_persona_circuit =
-        resolve_persona_circuit(circuit_mode, persona_container_in.as_deref());
+    let active_persona_circuit = resolve_persona_circuit(circuit_mode, persona_lmnk_in.as_deref());
     let mut active_persona_bank: Option<StandardCognitiveBank> = active_persona_circuit.map(|pc| {
         if matches!(circuit_mode, CircuitProfileMode::Hybrid(_)) {
             let micro = build_preset_circuit(CircuitProfileMode::Analytical).unwrap_or(pc);
@@ -176,7 +175,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (logits, _, _) = model.forward_tokens(&ids, 0, None, false, false)?;
+            let (logits_out, _, _) =
+                model.forward_tokens(&ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
+            let logits = logits_out.into_full_logits()?;
             let h_t = adapter.measure_entropy_state(&logits)?.moving_z_entropy;
             base_entropies.push(h_t);
             baselines.push(logits);
@@ -301,8 +302,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
-                    let (mut logits, _, _) =
-                        model.forward_tokens(&ids, 0, Some(&mut steer), use_entropy_gate, false)?;
+                    let (prefill_out, _, _) = model.forward_tokens(
+                        &ids,
+                        0,
+                        Some(&mut steer),
+                        use_entropy_gate,
+                        false,
+                        LogitsFetchMode::FullLogits,
+                    )?;
+                    let mut logits = prefill_out.into_full_logits()?;
                     sum_kl += kl_div(base_logits, &logits);
 
                     let mut probe_d_lp = 0.0_f32;
@@ -319,14 +327,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             break;
                         }
                         gen_ids.push(next);
-                        let (next_logits, _, _) = model.forward_tokens(
+                        let (next_out, _, _) = model.forward_tokens(
                             &[next],
                             offset,
                             Some(&mut steer),
                             use_entropy_gate,
                             false,
+                            LogitsFetchMode::FullLogits,
                         )?;
-                        logits = next_logits;
+                        logits = next_out.into_full_logits()?;
                     }
                     let text = tokenizer
                         .decode(&gen_ids, true)
@@ -545,26 +554,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
-                    let (mut logits, _, _) = model.forward_tokens(
+                    let (mt_prefill_out, _, _) = model.forward_tokens(
                         &ids,
                         offset,
                         Some(&mut steer),
                         use_entropy_gate,
                         false,
+                        LogitsFetchMode::FullLogits,
                     )?;
+                    let mut logits = mt_prefill_out.into_full_logits()?;
                     offset += ids.len();
                     let mut gen_ids = Vec::with_capacity(48);
                     for _ in 0..48 {
                         let next = argmax(&logits);
                         gen_ids.push(next);
-                        let (next_logits, _, _) = model.forward_tokens(
+                        let (next_out, _, _) = model.forward_tokens(
                             &[next],
                             offset,
                             Some(&mut steer),
                             use_entropy_gate,
                             false,
+                            LogitsFetchMode::FullLogits,
                         )?;
-                        logits = next_logits;
+                        logits = next_out.into_full_logits()?;
                         offset += 1;
                         if next == 199999 {
                             break;

@@ -26,7 +26,7 @@ use crate::stigmergy::{
 /// Safe high-level configuration wrapper for LiminiKa runtime initialization.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
-    /// Inner raw C-ABI configuration structure (64 bytes, 16-byte aligned).
+    /// Inner raw C-ABI configuration structure (64 bytes, 64-byte aligned).
     pub raw: RuntimeConfig,
     /// Hysteresis band ($\delta_{\mathrm{hyst}}$) for `EntropyController` branch control stabilization.
     pub hysteresis_band: f32,
@@ -152,7 +152,7 @@ impl Config {
         self
     }
 
-    /// Sets the maximum supported prompt anchor points in the attractor field.
+    /// Sets the maximum supported prompt anchor points in the phase-anchor field.
     #[inline(always)]
     #[must_use]
     pub const fn with_max_prompt_anchors(mut self, max_prompt_anchors: u32) -> Self {

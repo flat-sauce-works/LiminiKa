@@ -158,8 +158,8 @@ pub struct LiminalTopologyTelemetrySnapshot {
     pub regime_code: u8,
     /// Quantized conflict severity in Q0.7 (`0..=127`).
     pub conflict_severity_q7: u8,
-    /// Number of active macro attractors currently populated.
-    pub active_crystals: u8,
+    /// Number of active phase anchors currently populated.
+    pub active_anchors: u8,
     /// Number of autonomously spawned daughter attractors recorded.
     pub spawned_daughters: u8,
 }
@@ -255,7 +255,7 @@ impl LiminalTopologyTelemetrySnapshot {
     pub fn capture(
         field: &LiminalThresholdState,
         horizon: &EpistemicHorizonReading,
-        active_crystals: u8,
+        active_anchors: u8,
         spawned_daughters: u8,
     ) -> Self {
         let sev = (branchless_clamp_f32(horizon.conflict_severity, 0.0, 1.0) * 127.0 + 0.5) as u8;
@@ -266,7 +266,7 @@ impl LiminalTopologyTelemetrySnapshot {
             active_aperture_mask: field.active_aperture_mask,
             regime_code: horizon.regime_code,
             conflict_severity_q7: sev,
-            active_crystals,
+            active_anchors,
             spawned_daughters,
         }
     }
@@ -356,7 +356,7 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.write_str(" | LiminalFloor:");
         cur.write_u8_dec(self.threshold_floor_q7[7]);
         cur.write_str("/127 | Anchors:");
-        cur.write_u8_dec(self.active_crystals);
+        cur.write_u8_dec(self.active_anchors);
         cur.write_str(" | Daughters:");
         cur.write_u8_dec(self.spawned_daughters);
         cur.write_str("\"]\n");
@@ -1015,14 +1015,14 @@ impl CoreTelemetryBank {
         self.assimilation_drift_dwell
     }
 
-    /// Returns the consecutive coherence improvement steps observed for sandbox promotion.
+    /// Returns the consecutive coherence improvement steps observed for sandbox settlement.
     #[inline(always)]
     #[must_use]
     pub const fn sandbox_coherence_improve_dwell(&self) -> u16 {
         self.sandbox_coherence_improve_dwell
     }
 
-    /// Resets the assimilation drift dwell counter (e.g., after sandbox promotion or release).
+    /// Resets the assimilation drift dwell counter (e.g., after sandbox settlement or release).
     #[inline(always)]
     pub const fn reset_assimilation_dwell(&mut self) {
         self.assimilation_drift_dwell = 0;
@@ -1465,7 +1465,7 @@ impl CoreTelemetryBank {
         &self,
         stack: &CoreStateStack,
         horizon: &EpistemicHorizonReading,
-        active_crystals: u8,
+        active_anchors: u8,
         spawned_daughters: u8,
         active_horizon_slots_mask: u32,
     ) -> CoreTelemetrySnapshot {
@@ -1485,7 +1485,7 @@ impl CoreTelemetryBank {
         let topology = LiminalTopologyTelemetrySnapshot::capture(
             &stack.liminal,
             horizon,
-            active_crystals,
+            active_anchors,
             spawned_daughters,
         );
         let distortion = self.compute_distortion_report();

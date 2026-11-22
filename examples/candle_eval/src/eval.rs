@@ -28,7 +28,7 @@ use liminika_core::stigmergy::{
 use tokenizers::Tokenizer;
 
 use crate::bake::argmax;
-use crate::model::{ForwardSteer, Phi3Model, ResonantAnchors};
+use crate::model::{ForwardSteer, LogitsFetchMode, LogitsOutcome, Phi3Model, ResonantAnchors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum PressureSimMode {
@@ -211,6 +211,102 @@ pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64
         }
     }
     42
+}
+
+pub(crate) const HEARTBEAT_MIN_STRIDE: usize = 2;
+pub(crate) const DEFAULT_D2H_HEARTBEAT_MAX: usize = 8;
+
+pub(crate) fn parse_d2h_heartbeat<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--d2h-heartbeat=") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                return parsed;
+            }
+        }
+    }
+    DEFAULT_D2H_HEARTBEAT_MAX
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LiminalD2hApertureGate {
+    pub(crate) heartbeat_max: usize,
+    pub(crate) unobserved_bypass_run: usize,
+    pub(crate) d2h_fast_skips: usize,
+}
+
+impl LiminalD2hApertureGate {
+    pub(crate) const fn new(heartbeat_max: usize) -> Self {
+        Self {
+            heartbeat_max,
+            unobserved_bypass_run: 0,
+            d2h_fast_skips: 0,
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn compute_heartbeat_stride(
+        heartbeat_max: usize,
+        sens_q7: u8,
+        last_observed_entropy: f32,
+    ) -> usize {
+        if heartbeat_max <= 1 {
+            return heartbeat_max;
+        }
+        let p_ent_q7 = ((last_observed_entropy / (2.0 * 0.78)) * 127.0).clamp(0.0, 64.0) as u8;
+        let ent_sens_q7 = liminika_core::liminal::threshold::sensitivity_4p1mp_q7(p_ent_q7);
+        let eff_sens_q7 = sens_q7.max(ent_sens_q7);
+        let span = heartbeat_max - HEARTBEAT_MIN_STRIDE;
+        let shrink = ((span * usize::from(eff_sens_q7) + 64) >> 7).min(span);
+        heartbeat_max - shrink
+    }
+
+    #[must_use]
+    pub(crate) fn select_fetch_mode(
+        &self,
+        step_idx: usize,
+        temperature: f32,
+        tok_was_whole_bypass: bool,
+        sens_q7: u8,
+        last_observed_entropy: f32,
+    ) -> LogitsFetchMode {
+        if self.heartbeat_max == 0 || temperature > 1e-6 || step_idx == 0 || !tok_was_whole_bypass {
+            return LogitsFetchMode::FullLogits;
+        }
+        let stride =
+            Self::compute_heartbeat_stride(self.heartbeat_max, sens_q7, last_observed_entropy);
+        if self.unobserved_bypass_run + 1 < stride {
+            LogitsFetchMode::DeviceArgmaxOnly
+        } else {
+            LogitsFetchMode::FullLogits
+        }
+    }
+
+    pub(crate) fn record_observed(&mut self) {
+        self.unobserved_bypass_run = 0;
+    }
+
+    pub(crate) fn record_unobserved_skip(&mut self) {
+        self.unobserved_bypass_run = self.unobserved_bypass_run.saturating_add(1);
+        self.d2h_fast_skips = self.d2h_fast_skips.saturating_add(1);
+    }
+}
+
+pub(crate) fn update_observed_entropy_stats(
+    outcome: &LogitsOutcome,
+    entropy_sum: &mut f32,
+    entropy_count: &mut u32,
+    last_observed_entropy: &mut f32,
+) -> Option<f32> {
+    match outcome {
+        LogitsOutcome::ObservedFull(logits) => {
+            let h = compute_top_k_logit_entropy(logits, 16);
+            *entropy_sum += h;
+            *entropy_count += 1;
+            *last_observed_entropy = h;
+            Some(h)
+        }
+        LogitsOutcome::UnobservedDeviceArgmax(_) => None,
+    }
 }
 
 /// Computes normalized Top-K Shannon entropy in `[0.0, 1.0]` directly on an already-fetched CPU
@@ -450,8 +546,8 @@ impl KvTraceStats {
             .sum();
         let ph_head = &phase_deltas[..6];
         match outcome {
-            RamPhaseKvStepOutcome::SkippedLiminal => "VOID(skip)".to_string(),
-            RamPhaseKvStepOutcome::Unbacked => format!("VOID(miss,l1={ph_l1},h={ph_head:?})"),
+            RamPhaseKvStepOutcome::SkippedLiminal => "UNOBS(skip)".to_string(),
+            RamPhaseKvStepOutcome::Unbacked => format!("UNOBS(miss,l1={ph_l1},h={ph_head:?})"),
             RamPhaseKvStepOutcome::StoredKeyframe {
                 slot_idx,
                 min_resonance_q7,
@@ -773,10 +869,12 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) enable_pre_bypass: bool,
     pub(crate) temperature: f32,
     pub(crate) rng_seed: u64,
+    pub(crate) d2h_heartbeat_max: usize,
     pub(crate) steer_bypass_hits: usize,
     pub(crate) steer_eligible_layers: usize,
     pub(crate) whole_token_bypass_hits: usize,
     pub(crate) decode_tokens_total: usize,
+    pub(crate) d2h_fast_skips: usize,
     pub(crate) instability_recoveries: usize,
     pub(crate) spine_veto_guard_hits: usize,
     pub(crate) spine_veto_repulse_hits: usize,
@@ -828,8 +926,14 @@ pub(crate) fn generate_steered_reply_with_offset(
     );
     prefill_dispatch.whole_token_steering_bypass = 0;
     steer.compute_dispatch = Some(prefill_dispatch);
-    let (mut logits, _, _) =
-        model.forward_tokens(&ids, start_offset, Some(&mut steer), cfg.use_steer, false)?;
+    let (mut pending_outcome, _, _) = model.forward_tokens(
+        &ids,
+        start_offset,
+        Some(&mut steer),
+        cfg.use_steer,
+        false,
+        LogitsFetchMode::FullLogits,
+    )?;
     steer
         .adapter
         .commit_compute_exit_reward(prefill_dispatch.execute_mask, 64);
@@ -839,8 +943,24 @@ pub(crate) fn generate_steered_reply_with_offset(
     let mut rng_state = cfg.rng_seed.max(1);
     let mut entropy_sum = 0.0f32;
     let mut entropy_count = 0u32;
-    for offset in (start_offset + ids.len()..).take(MAX_GEN_TOKENS) {
-        let next = sample_next_token(&logits, cfg.temperature, &mut rng_state);
+    let mut last_observed_entropy = match pending_outcome {
+        LogitsOutcome::ObservedFull(ref prefill_logits) => {
+            compute_top_k_logit_entropy(prefill_logits, 16)
+        }
+        LogitsOutcome::UnobservedDeviceArgmax(_) => 0.0_f32,
+    };
+    let mut gate = LiminalD2hApertureGate::new(cfg.d2h_heartbeat_max);
+
+    for (step_idx, offset) in (start_offset + ids.len()..)
+        .take(MAX_GEN_TOKENS)
+        .enumerate()
+    {
+        let next = match pending_outcome {
+            LogitsOutcome::ObservedFull(ref logits) => {
+                sample_next_token(logits, cfg.temperature, &mut rng_state)
+            }
+            LogitsOutcome::UnobservedDeviceArgmax(tok_id) => tok_id,
+        };
         if next == 199999 || next == 200020 {
             gen_ids.push(next);
             break;
@@ -855,9 +975,26 @@ pub(crate) fn generate_steered_reply_with_offset(
                 cfg.whole_token_bypass_hits += 1;
             }
         }
+        let pre_sens_q7 = steer
+            .adapter
+            .last_lacuna_partition()
+            .boundary_sensitivity_q7;
+        let fetch_mode = gate.select_fetch_mode(
+            step_idx,
+            cfg.temperature,
+            tok_was_whole_bypass,
+            pre_sens_q7,
+            last_observed_entropy,
+        );
         let t_tok = Instant::now();
-        let (next_logits, _, _) =
-            model.forward_tokens(&[next], offset, Some(&mut steer), cfg.use_steer, false)?;
+        let (next_outcome, _, _) = model.forward_tokens(
+            &[next],
+            offset,
+            Some(&mut steer),
+            cfg.use_steer,
+            false,
+            fetch_mode,
+        )?;
         let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
         let measured_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
         if !matches!(cfg.pressure_sim, PressureSimMode::Off)
@@ -875,31 +1012,49 @@ pub(crate) fn generate_steered_reply_with_offset(
             PressureSimMode::Elevated => measured_q15.max(base_p.saturating_add(6144).min(32767)),
             PressureSimMode::Surge => measured_q15.max(base_p.saturating_add(14336).min(32767)),
         };
-        let logit_entropy = compute_top_k_logit_entropy(&next_logits, 16);
-        entropy_sum += logit_entropy;
-        entropy_count += 1;
-        if tok_was_whole_bypass {
-            steer.adapter.substrate_mut().last_entropy_h_tilde = logit_entropy;
-        }
-        let exit_entropy_q7 = ((logit_entropy - 0.15).max(0.0) * 127.0).clamp(0.0, 127.0) as u8;
         let repulsion_active = ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
             || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
         let sens_q7 = steer
             .adapter
             .last_lacuna_partition()
             .boundary_sensitivity_q7;
-        let guard_prox_q7 = if repulsion_active { 88 } else { sens_q7 >> 2 };
-        let active_overdrive = repulsion_active && steer.adapter.ego_state().is_active();
-        steer.adapter.step_distortion_tension_hot_path(
-            exit_entropy_q7,
-            guard_prox_q7,
-            active_overdrive,
-        );
-        let entropy_surge = logit_entropy > 0.85;
-        if entropy_surge {
-            steer.adapter.signal_compute_instability();
-            cfg.instability_recoveries += 1;
-        }
+
+        let entropy_surge = match update_observed_entropy_stats(
+            &next_outcome,
+            &mut entropy_sum,
+            &mut entropy_count,
+            &mut last_observed_entropy,
+        ) {
+            Some(logit_entropy) => {
+                gate.record_observed();
+                if tok_was_whole_bypass {
+                    steer.adapter.substrate_mut().last_entropy_h_tilde = logit_entropy;
+                }
+                let exit_entropy_q7 =
+                    ((logit_entropy - 0.15).max(0.0) * 127.0).clamp(0.0, 127.0) as u8;
+                let guard_prox_q7 = if repulsion_active { 88 } else { sens_q7 >> 2 };
+                let active_overdrive = repulsion_active && steer.adapter.ego_state().is_active();
+                steer.adapter.step_distortion_tension_hot_path(
+                    exit_entropy_q7,
+                    guard_prox_q7,
+                    active_overdrive,
+                );
+                let surge = logit_entropy > 0.85;
+                if surge {
+                    steer.adapter.signal_compute_instability();
+                    cfg.instability_recoveries += 1;
+                }
+                surge
+            }
+            None => {
+                // `Lacuna::Unobserved`: skip D2H entropy update strictly without polluting
+                // `entropy_sum`, `entropy_count`, or distortion tension statistics.
+                gate.record_unobserved_skip();
+                cfg.d2h_fast_skips += 1;
+                false
+            }
+        };
+
         let mut tok_dispatch = steer.adapter.step_compute_dispatch_with_spine(
             SystemPressureReading {
                 frame_time_pressure_q15: pressure_q15,
@@ -914,7 +1069,7 @@ pub(crate) fn generate_steered_reply_with_offset(
             let ego_active_boundary = steer.adapter.ego_state().is_active() && sens_q7 >= 80;
             let obs = TokenBypassObservation {
                 irreversible_step: 0,
-                liminal_stationary: u8::from(logit_entropy < 0.78 && sens_q7 < 80),
+                liminal_stationary: u8::from(last_observed_entropy < 0.78 && sens_q7 < 80),
                 boundary_sensitivity_q7: sens_q7,
                 repulsion_active: u8::from(repulsion_active),
                 exit_entropy_rising: u8::from(entropy_surge),
@@ -937,12 +1092,12 @@ pub(crate) fn generate_steered_reply_with_offset(
         } else {
             tok_dispatch.whole_token_steering_bypass = 0;
         }
-        let exit_reward = if logit_entropy < 0.55 { 56 } else { 96 };
+        let exit_reward = if last_observed_entropy < 0.55 { 56 } else { 96 };
         steer
             .adapter
             .commit_compute_exit_reward(tok_dispatch.execute_mask, exit_reward);
         steer.compute_dispatch = Some(tok_dispatch);
-        logits = next_logits;
+        pending_outcome = next_outcome;
     }
     if entropy_count > 0 {
         steer.adapter.substrate_mut().last_entropy_h_tilde = entropy_sum / entropy_count as f32;
@@ -1000,7 +1155,14 @@ pub(crate) fn critique_generated_draft(
         return Ok(None);
     }
     model.clear_cache();
-    let (_, draft_tok_qs, _) = model.forward_tokens(&draft_ids, 0, None, false, true)?;
+    let (_, draft_tok_qs, _) = model.forward_tokens(
+        &draft_ids,
+        0,
+        None,
+        false,
+        true,
+        LogitsFetchMode::FullLogits,
+    )?;
     let draft_recall = compiled.recall_token_sequence(adapter, &draft_tok_qs, draft_ids.len())?;
     let draft_snap = TrajectoryManifoldSnapshot::from_recall(&draft_recall);
     Ok(Some(
@@ -1072,6 +1234,129 @@ mod tests {
         assert_eq!(
             sample_next_token(&logits, 0.8, &mut s1),
             sample_next_token(&logits, 0.8, &mut s2)
+        );
+    }
+
+    #[test]
+    fn d2h_aperture_gate_tightens_monotonically_from_8_to_2_and_disables_when_gated() {
+        assert_eq!(parse_d2h_heartbeat(["candle_eval"]), 8);
+        assert_eq!(parse_d2h_heartbeat(["candle_eval", "--d2h-heartbeat=0"]), 0);
+        assert_eq!(parse_d2h_heartbeat(["candle_eval", "--d2h-heartbeat=5"]), 5);
+
+        let mut prev_stride = usize::MAX;
+        for &(sens_q7, entropy) in &[(0u8, 0.0f32), (24, 0.25), (48, 0.50), (64, 0.78)] {
+            let stride = LiminalD2hApertureGate::compute_heartbeat_stride(8, sens_q7, entropy);
+            assert!((2..=8).contains(&stride));
+            assert!(stride <= prev_stride);
+            prev_stride = stride;
+        }
+        assert_eq!(
+            LiminalD2hApertureGate::compute_heartbeat_stride(8, 0, 0.0),
+            8
+        );
+        assert_eq!(
+            LiminalD2hApertureGate::compute_heartbeat_stride(8, 126, 0.78),
+            2
+        );
+
+        let off_gate = LiminalD2hApertureGate::new(0);
+        assert_eq!(
+            off_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
+            LogitsFetchMode::FullLogits
+        );
+
+        let active_gate = LiminalD2hApertureGate::new(8);
+        assert_eq!(
+            active_gate.select_fetch_mode(1, 0.7, true, 0, 0.0),
+            LogitsFetchMode::FullLogits
+        );
+        assert_eq!(
+            active_gate.select_fetch_mode(0, 0.0, true, 0, 0.0),
+            LogitsFetchMode::FullLogits
+        );
+        assert_eq!(
+            active_gate.select_fetch_mode(1, 0.0, false, 0, 0.0),
+            LogitsFetchMode::FullLogits
+        );
+        assert_eq!(
+            active_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
+            LogitsFetchMode::DeviceArgmaxOnly
+        );
+    }
+
+    #[test]
+    fn unobserved_d2h_skips_preserve_observed_mean_entropy_purity() {
+        let sharp = vec![12.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let warm = vec![2.5_f32, 2.0, 1.8, 1.5, 0.2, 0.1];
+        let h1 = compute_top_k_logit_entropy(&sharp, 16);
+        let h2 = compute_top_k_logit_entropy(&warm, 16);
+
+        let mut entropy_sum = 0.0f32;
+        let mut entropy_count = 0u32;
+        let mut last_obs = 0.0f32;
+        let mut gate = LiminalD2hApertureGate::new(4);
+
+        let o1 = LogitsOutcome::ObservedFull(sharp);
+        assert!(update_observed_entropy_stats(
+            &o1,
+            &mut entropy_sum,
+            &mut entropy_count,
+            &mut last_obs
+        )
+        .is_some());
+        gate.record_observed();
+
+        let skip = LogitsOutcome::UnobservedDeviceArgmax(42);
+        assert!(update_observed_entropy_stats(
+            &skip,
+            &mut entropy_sum,
+            &mut entropy_count,
+            &mut last_obs
+        )
+        .is_none());
+        gate.record_unobserved_skip();
+        gate.record_unobserved_skip();
+
+        let o2 = LogitsOutcome::ObservedFull(warm);
+        assert!(update_observed_entropy_stats(
+            &o2,
+            &mut entropy_sum,
+            &mut entropy_count,
+            &mut last_obs
+        )
+        .is_some());
+        gate.record_observed();
+
+        assert_eq!(entropy_count, 2);
+        assert_eq!(gate.d2h_fast_skips, 2);
+        assert_eq!(gate.unobserved_bypass_run, 0);
+        assert!(((entropy_sum / entropy_count as f32) - ((h1 + h2) * 0.5)).abs() < 1e-6);
+        assert!((last_obs - h2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn extract_device_argmax_token_matches_cpu_argmax_for_f32_and_bf16() {
+        use crate::model::extract_device_argmax_token;
+        use candle_core::{DType, Device, Tensor};
+
+        let logits = vec![-2.5_f32, 0.75, 4.25, 1.5, -0.5, 3.0];
+        let expected = argmax(&logits);
+
+        let t_f32 = Tensor::from_slice(&logits, (logits.len(),), &Device::Cpu).expect("f32 tensor");
+        assert_eq!(
+            extract_device_argmax_token(&t_f32).expect("f32 argmax"),
+            expected
+        );
+
+        let t_bf16 = t_f32.to_dtype(DType::BF16).expect("bf16 cast");
+        let bf16_cpu = t_bf16
+            .to_dtype(DType::F32)
+            .expect("bf16->f32")
+            .to_vec1::<f32>()
+            .expect("vec1");
+        assert_eq!(
+            extract_device_argmax_token(&t_bf16).expect("bf16 argmax"),
+            argmax(&bf16_cpu)
         );
     }
 }

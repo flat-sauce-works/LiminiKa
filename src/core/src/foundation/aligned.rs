@@ -17,13 +17,12 @@ use core::mem::{align_of, size_of};
 use core::ops::{Deref, DerefMut, Index, IndexMut, Range};
 use core::slice::{self, SliceIndex};
 
-use crate::foundation::pod::{raw_byte_ranges_overlap, Pod};
+use crate::foundation::pod::{raw_byte_ranges_overlap, validate_raw_slice_bounds, Pod};
 use crate::liminal::{
     LmnkResult, LmnkStatus, LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER,
 };
 
 /// Compile-time helper verifying that `ALIGN` is a non-zero power of two and at least `align_of::<T>()`.
-#[allow(dead_code)]
 struct TypeAlignCheck<T, const ALIGN: usize>(PhantomData<T>);
 impl<T, const ALIGN: usize> TypeAlignCheck<T, ALIGN> {
     const VALID: () = assert!(
@@ -32,8 +31,16 @@ impl<T, const ALIGN: usize> TypeAlignCheck<T, ALIGN> {
     );
 }
 
+/// Compile-time helper verifying that `SUB_ALIGN <= ALIGN` when relaxing alignment constraints.
+struct SubAlignCheck<const ALIGN: usize, const SUB_ALIGN: usize>;
+impl<const ALIGN: usize, const SUB_ALIGN: usize> SubAlignCheck<ALIGN, SUB_ALIGN> {
+    const VALID: () = assert!(
+        SUB_ALIGN <= ALIGN,
+        "Target SUB_ALIGN must be less than or equal to source ALIGN"
+    );
+}
+
 /// Compile-time helper verifying that a fixed chunk or slot length `N` is strictly positive.
-#[allow(dead_code)]
 struct ChunkCheck<const N: usize>;
 impl<const N: usize> ChunkCheck<N> {
     const VALID: () = assert!(N > 0, "Chunk size N must be strictly greater than 0");
@@ -41,7 +48,6 @@ impl<const N: usize> ChunkCheck<N> {
 
 /// Compile-time helper verifying that a 2D slot bank `(SLOTS, SLOT_LEN)` has strictly positive
 /// dimensions and does not overflow `usize`.
-#[allow(dead_code)]
 struct SlotBankCheck<const SLOTS: usize, const SLOT_LEN: usize>;
 impl<const SLOTS: usize, const SLOT_LEN: usize> SlotBankCheck<SLOTS, SLOT_LEN> {
     const VALID: () = assert!(
@@ -168,6 +174,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// # Errors
     /// Returns [`LMNK_ERR_NULL_POINTER`] if `ptr` is null when `len > 0`.
     /// Returns [`LMNK_ERR_ALIGNMENT`] if `ptr` violates the `ALIGN` byte boundary.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `len * size_of::<T>()` exceeds `isize::MAX` or wraps.
     #[inline(always)]
     pub unsafe fn from_raw_parts(ptr: *const T, len: usize) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
@@ -180,8 +187,9 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
         if ((ptr as usize) & (ALIGN - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
-        // SAFETY: Pointer non-nullness and alignment (>= align_of::<T>()) verified above;
-        // caller guarantees `len` initialized elements for lifetime `'a`.
+        let _ = validate_raw_slice_bounds(ptr, len)?;
+        // SAFETY: Pointer non-nullness, alignment (>= align_of::<T>()), and `<= isize::MAX` byte
+        // bounds without wraparound are verified above; caller guarantees `len` initialized elements for `'a`.
         let slice = unsafe { slice::from_raw_parts(ptr, len) };
         Ok(Self { slice })
     }
@@ -209,10 +217,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     #[must_use]
     pub const fn relax_alignment<const SUB_ALIGN: usize>(self) -> AlignedSlice<'a, T, SUB_ALIGN> {
         let () = TypeAlignCheck::<T, SUB_ALIGN>::VALID;
-        assert!(
-            SUB_ALIGN <= ALIGN,
-            "Target SUB_ALIGN must be less than or equal to source ALIGN"
-        );
+        let () = SubAlignCheck::<ALIGN, SUB_ALIGN>::VALID;
         AlignedSlice { slice: self.slice }
     }
 
@@ -518,6 +523,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// # Errors
     /// Returns [`LMNK_ERR_NULL_POINTER`] if `ptr` is null when `len > 0`.
     /// Returns [`LMNK_ERR_ALIGNMENT`] if `ptr` violates the `ALIGN` byte boundary.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `len * size_of::<T>()` exceeds `isize::MAX` or wraps.
     #[inline(always)]
     pub unsafe fn from_raw_parts_mut(ptr: *mut T, len: usize) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
@@ -530,8 +536,9 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         if ((ptr as usize) & (ALIGN - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
-        // SAFETY: Pointer non-nullness and alignment (>= align_of::<T>()) verified above;
-        // caller guarantees exclusive access to `len` initialized elements for lifetime `'a`.
+        let _ = validate_raw_slice_bounds(ptr, len)?;
+        // SAFETY: Pointer non-nullness, alignment (>= align_of::<T>()), and `<= isize::MAX` byte
+        // bounds without wraparound are verified above; caller guarantees exclusive access for `'a`.
         let slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
         Ok(Self { slice })
     }
@@ -576,12 +583,11 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// Downcasts the alignment constraint from `ALIGN` to a smaller or equal power-of-two `SUB_ALIGN`.
     #[inline(always)]
     #[must_use]
-    pub fn relax_alignment<const SUB_ALIGN: usize>(self) -> AlignedSliceMut<'a, T, SUB_ALIGN> {
+    pub const fn relax_alignment<const SUB_ALIGN: usize>(
+        self,
+    ) -> AlignedSliceMut<'a, T, SUB_ALIGN> {
         let () = TypeAlignCheck::<T, SUB_ALIGN>::VALID;
-        assert!(
-            SUB_ALIGN <= ALIGN,
-            "Target SUB_ALIGN must be less than or equal to source ALIGN"
-        );
+        let () = SubAlignCheck::<ALIGN, SUB_ALIGN>::VALID;
         AlignedSliceMut { slice: self.slice }
     }
 
@@ -992,20 +998,27 @@ impl<'a, T, const ALIGN_IN: usize, const ALIGN_OUT: usize>
     ) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN_IN>::VALID;
         let () = TypeAlignCheck::<T, ALIGN_OUT>::VALID;
-        let in_bytes = len_in
-            .checked_mul(size_of::<T>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        let out_bytes = len_out
-            .checked_mul(size_of::<T>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let in_bytes = if len_in == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(ptr_in, len_in)?
+        };
+        let out_bytes = if len_out == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(ptr_out, len_out)?
+        };
 
         if raw_byte_ranges_overlap(ptr_in as usize, in_bytes, ptr_out as usize, out_bytes) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Disjointness is verified above; `from_raw_parts` and `from_raw_parts_mut` verify non-nullness and alignment.
-        let input = unsafe { AlignedSlice::from_raw_parts(ptr_in, len_in)? };
-        // SAFETY: Guaranteed disjoint from `input` above.
-        let output = unsafe { AlignedSliceMut::from_raw_parts_mut(ptr_out, len_out)? };
+        // SAFETY: Disjointness and slice bounds are verified above; `from_raw_parts[_mut]` verify non-nullness and alignment.
+        let (input, output) = unsafe {
+            (
+                AlignedSlice::from_raw_parts(ptr_in, len_in)?,
+                AlignedSliceMut::from_raw_parts_mut(ptr_out, len_out)?,
+            )
+        };
         Ok(Self { input, output })
     }
 
@@ -1100,20 +1113,27 @@ impl<'a, T, const ALIGN: usize> DisjointMutPair<'a, T, ALIGN> {
         len_b: usize,
     ) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
-        let bytes_a = len_a
-            .checked_mul(size_of::<T>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        let bytes_b = len_b
-            .checked_mul(size_of::<T>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let bytes_a = if len_a == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(ptr_a, len_a)?
+        };
+        let bytes_b = if len_b == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(ptr_b, len_b)?
+        };
 
         if raw_byte_ranges_overlap(ptr_a as usize, bytes_a, ptr_b as usize, bytes_b) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Pointers are verified non-overlapping above; `from_raw_parts_mut` checks non-null & alignment.
-        let first = unsafe { AlignedSliceMut::from_raw_parts_mut(ptr_a, len_a)? };
-        // SAFETY: Guaranteed disjoint from `first` above.
-        let second = unsafe { AlignedSliceMut::from_raw_parts_mut(ptr_b, len_b)? };
+        // SAFETY: Pointers are verified non-overlapping and in-bounds above; `from_raw_parts_mut` checks non-null & alignment.
+        let (first, second) = unsafe {
+            (
+                AlignedSliceMut::from_raw_parts_mut(ptr_a, len_a)?,
+                AlignedSliceMut::from_raw_parts_mut(ptr_b, len_b)?,
+            )
+        };
         Ok(Self { first, second })
     }
 
@@ -1225,15 +1245,21 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
         len_c: usize,
     ) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
-        let bytes_a = len_a
-            .checked_mul(size_of::<T>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        let bytes_b = len_b
-            .checked_mul(size_of::<T>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        let bytes_c = len_c
-            .checked_mul(size_of::<T>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let bytes_a = if len_a == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(ptr_a, len_a)?
+        };
+        let bytes_b = if len_b == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(ptr_b, len_b)?
+        };
+        let bytes_c = if len_c == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(ptr_c, len_c)?
+        };
 
         let addr_a = ptr_a as usize;
         let addr_b = ptr_b as usize;
@@ -1246,12 +1272,14 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
-        // SAFETY: Pairwise disjointness verified above; `from_raw_parts_mut` checks non-null & alignment.
-        let first = unsafe { AlignedSliceMut::from_raw_parts_mut(ptr_a, len_a)? };
-        // SAFETY: Guaranteed disjoint from `first` and `third`.
-        let second = unsafe { AlignedSliceMut::from_raw_parts_mut(ptr_b, len_b)? };
-        // SAFETY: Guaranteed disjoint from `first` and `second`.
-        let third = unsafe { AlignedSliceMut::from_raw_parts_mut(ptr_c, len_c)? };
+        // SAFETY: Pairwise disjointness and bounds verified above; `from_raw_parts_mut` checks non-null & alignment.
+        let (first, second, third) = unsafe {
+            (
+                AlignedSliceMut::from_raw_parts_mut(ptr_a, len_a)?,
+                AlignedSliceMut::from_raw_parts_mut(ptr_b, len_b)?,
+                AlignedSliceMut::from_raw_parts_mut(ptr_c, len_c)?,
+            )
+        };
         Ok(Self {
             first,
             second,

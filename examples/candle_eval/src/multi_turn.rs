@@ -29,7 +29,7 @@ use crate::eval::{
     generate_steered_reply_with_offset, HorizonAblationMode, KvTraceStats, ReflectMode,
     SteerDecodeConfig,
 };
-use crate::model::{Phi3Model, ResonantAnchors};
+use crate::model::{LogitsFetchMode, Phi3Model, ResonantAnchors};
 use crate::step2::Step2Output;
 
 pub(crate) fn run_multi_turn_and_step3(
@@ -55,7 +55,7 @@ pub(crate) fn run_multi_turn_and_step3(
     let temperature = cli.temperature;
     let rng_seed = cli.rng_seed;
     let circuit_mode = cli.circuit_mode;
-    let persona_container_out = &cli.persona_container_out;
+    let persona_lmnk_out = &cli.persona_lmnk_out;
     let compiled: &CompiledTokenCorpus = &step2.compiled;
     let timeline: &mut LmnkTimeline = &mut step2.timeline;
     let cut_detector: &AdaptiveGopCutDetector = &step2.cut_detector;
@@ -132,6 +132,7 @@ pub(crate) fn run_multi_turn_and_step3(
             let mut mt_decode_secs = 0.0_f64;
             let mut mt_whole_bypass_hits = 0_usize;
             let mut mt_decode_tokens_steered = 0_usize;
+            let mut mt_d2h_fast_skips = 0_usize;
 
             model.clear_cache();
             let mut conv_history_ids: Vec<u32> = Vec::new();
@@ -148,10 +149,24 @@ pub(crate) fn run_multi_turn_and_step3(
                     .map_err(|e| format!("mt encode error: {e}"))?
                     .get_ids()
                     .to_vec();
-                let (_, query_tok_qs, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+                let (_, query_tok_qs, _) = model.forward_tokens(
+                    &q_ids,
+                    0,
+                    None,
+                    false,
+                    true,
+                    LogitsFetchMode::FullLogits,
+                )?;
                 model.clear_cache();
                 if !conv_history_ids.is_empty() {
-                    let _ = model.forward_tokens(&conv_history_ids, 0, None, false, false)?;
+                    let _ = model.forward_tokens(
+                        &conv_history_ids,
+                        0,
+                        None,
+                        false,
+                        false,
+                        LogitsFetchMode::FullLogits,
+                    )?;
                 }
 
                 let prior_circuit = active_persona_bank
@@ -292,10 +307,12 @@ pub(crate) fn run_multi_turn_and_step3(
                         enable_pre_bypass,
                         temperature,
                         rng_seed,
+                        d2h_heartbeat_max: cli.d2h_heartbeat_max,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                         whole_token_bypass_hits: 0,
                         decode_tokens_total: 0,
+                        d2h_fast_skips: 0,
                         instability_recoveries: 0,
                         spine_veto_guard_hits: 0,
                         spine_veto_repulse_hits: 0,
@@ -320,6 +337,7 @@ pub(crate) fn run_multi_turn_and_step3(
                     mt_decode_secs += dec_secs;
                     mt_whole_bypass_hits += turn_cfg.whole_token_bypass_hits;
                     mt_decode_tokens_steered += turn_cfg.decode_tokens_total;
+                    mt_d2h_fast_skips += turn_cfg.d2h_fast_skips;
 
                     let mut mt_reflect_note = match reflect_mode {
                         ReflectMode::Off => "off".to_string(),
@@ -393,6 +411,7 @@ pub(crate) fn run_multi_turn_and_step3(
                                         None,
                                         false,
                                         false,
+                                        LogitsFetchMode::FullLogits,
                                     )?;
                                 }
                                 let retry_use_steer = !p1_crit.directive.suppress_injection
@@ -433,10 +452,12 @@ pub(crate) fn run_multi_turn_and_step3(
                                     enable_pre_bypass,
                                     temperature,
                                     rng_seed,
+                                    d2h_heartbeat_max: cli.d2h_heartbeat_max,
                                     steer_bypass_hits: 0,
                                     steer_eligible_layers: 0,
                                     whole_token_bypass_hits: 0,
                                     decode_tokens_total: 0,
+                                    d2h_fast_skips: 0,
                                     instability_recoveries: 0,
                                     spine_veto_guard_hits: 0,
                                     spine_veto_repulse_hits: 0,
@@ -460,6 +481,7 @@ pub(crate) fn run_multi_turn_and_step3(
                                 mt_decode_secs += p2_secs;
                                 mt_whole_bypass_hits += retry_cfg.whole_token_bypass_hits;
                                 mt_decode_tokens_steered += retry_cfg.decode_tokens_total;
+                                mt_d2h_fast_skips += retry_cfg.d2h_fast_skips;
                                 if let Some(p2_crit) = critique_generated_draft(
                                     model,
                                     tokenizer,
@@ -568,7 +590,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits as f64 / mt_decode_tokens_steered as f64 * 100.0
             };
             println!(
-                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) | sb_promo={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
+                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) | d2h_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
                 adapter.ego_differential_net().max_hops,
                 if mt_exp_total == 0 {
                     0.0
@@ -594,6 +616,8 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits,
                 mt_decode_tokens_steered,
                 mt_wbyp_pct,
+                mt_d2h_fast_skips,
+                mt_decode_tokens,
                 adapter.sandbox_settlements(),
                 mt_occ,
                 mt_hits,
@@ -662,7 +686,7 @@ pub(crate) fn run_multi_turn_and_step3(
                     .to_vec();
                 let (_, query_tok_qs, _) = self
                     .model
-                    .forward_tokens(&ids, 0, None, false, true)
+                    .forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)
                     .map_err(|e| format!("rebake forward error: {e}"))?;
                 let mut out = Vec::with_capacity(query_tok_qs.len());
                 for tok_flat in query_tok_qs {
@@ -754,7 +778,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 bank.units().len(),
                 pc.steps
             );
-            if let Some(save_path) = persona_container_out.as_deref() {
+            if let Some(save_path) = persona_lmnk_out.as_deref() {
                 let mut pc_tl =
                     LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
                 pc_tl.set_persona_circuit(pc);

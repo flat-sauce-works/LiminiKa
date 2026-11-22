@@ -85,7 +85,7 @@ fn test_lmnk_types_abi_layout_invariants() {
     assert_eq!(size_of::<liminika_core::abi::lmnk_cognitive_ledger_t>(), 8);
     assert_eq!(align_of::<liminika_core::abi::lmnk_cognitive_ledger_t>(), 8);
 
-    // Verify GatewayFrame (128 B, 64 B align) and CrystallizedAttractorRecord (128 B, 64 B align)
+    // Verify GatewayFrame (128 B, 64 B align) and PhaseAnchorRecord (128 B, 64 B align)
     assert_eq!(size_of::<liminika_core::abi::lmnk_gateway_frame_t>(), 128);
     assert_eq!(align_of::<liminika_core::abi::lmnk_gateway_frame_t>(), 64);
     assert_eq!(

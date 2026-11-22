@@ -93,7 +93,7 @@ pub(crate) struct AlignedLut16x256<T>(pub [[T; 256]; 16]);
 /// 64B-aligned 16KB Slice-by-16 IEEE 802.3 CRC32 lookup table (`0xEDB8_8320` reflected polynomial)
 /// enabling 16-byte (`2 x u64`) parallel XOR-table folding per step (`16x` fewer serial dependency
 /// steps than byte-serial lookup and `2x` fewer than Slice-by-8 on `.lmnk` mapped-storage containers and
-/// 128-byte `CrystallizedAttractorRecord` blocks).
+/// 128-byte `PhaseAnchorRecord` blocks).
 pub(crate) const CRC32_IEEE_SLICE16_LUT: AlignedLut16x256<u32> = {
     let mut lut = [[0u32; 256]; 16];
     let mut i = 0usize;
@@ -481,7 +481,7 @@ pub(crate) const CRC32_IEEE_L3_LUT: AlignedLut4x256<u32> = {
 };
 
 /// 64B-aligned 4KB GF(2) linear operator table for $L^4(x)$ (`64`-byte zero-shift modulo IEEE 802.3 CRC32),
-/// enabling single-step 64B block folding (`128B` `CrystallizedAttractorRecord` in `2` parallel 64B halves).
+/// enabling single-step 64B block folding (`128B` `PhaseAnchorRecord` in `2` parallel 64B halves).
 pub(crate) const CRC32_IEEE_L4_LUT: AlignedLut4x256<u32> = {
     let mut lut = [[0u32; 256]; 4];
     let mut byte_pos = 0usize;
@@ -499,7 +499,7 @@ pub(crate) const CRC32_IEEE_L4_LUT: AlignedLut4x256<u32> = {
 
 /// 64B-aligned 4KB GF(2) linear operator table for $L^8(x) = L^4(L^4(x))$ (`128`-byte zero-shift
 /// modulo IEEE 802.3 CRC32), enabling single-step 128B block folding across stamped
-/// `CrystallizedAttractorRecord` arrays and 256B ($4 \times 64\text{B}$) container blocks.
+/// `PhaseAnchorRecord` arrays and 256B ($4 \times 64\text{B}$) container blocks.
 pub(crate) const CRC32_IEEE_L8_LUT: AlignedLut4x256<u32> = {
     let mut lut = [[0u32; 256]; 4];
     let mut byte_pos = 0usize;

@@ -7,6 +7,15 @@ use crate::ast::{
     AttractRule, AttractorsBlock, Declaration, PersonaDecl, RepelRule, SessionDecl, TargetDecl,
 };
 
+/// Hard upper bound on `.lmnk` source text size (`1 MiB`).
+pub const LMNK_DSL_MAX_INPUT_BYTES: usize = 1024 * 1024;
+/// Hard upper bound on lexed `.lmnk` tokens.
+pub const LMNK_DSL_MAX_TOKENS: usize = 65_536;
+/// Hard upper bound on top-level `.lmnk` declarations.
+pub const LMNK_DSL_MAX_DECLARATIONS: usize = 256;
+/// Hard upper bound on `attract` + `repel` rules per persona block.
+pub const LMNK_DSL_MAX_RULES_PER_PERSONA: usize = 1_024;
+
 #[derive(Debug, Clone, PartialEq)]
 enum Token<'a> {
     Ident(&'a str),
@@ -18,7 +27,23 @@ enum Token<'a> {
     Eq,
 }
 
+fn push_token<'a>(out: &mut Vec<Token<'a>>, tok: Token<'a>) -> Result<(), String> {
+    if out.len() >= LMNK_DSL_MAX_TOKENS {
+        return Err(format!(
+            ".lmnk token count exceeds maximum {LMNK_DSL_MAX_TOKENS}"
+        ));
+    }
+    out.push(tok);
+    Ok(())
+}
+
 fn tokenize(src: &str) -> Result<Vec<Token<'_>>, String> {
+    if src.len() > LMNK_DSL_MAX_INPUT_BYTES {
+        return Err(format!(
+            ".lmnk input size ({} B) exceeds maximum {LMNK_DSL_MAX_INPUT_BYTES}",
+            src.len()
+        ));
+    }
     let bytes = src.as_bytes();
     let mut i = 0usize;
     let mut out = Vec::new();
@@ -38,34 +63,40 @@ fn tokenize(src: &str) -> Result<Vec<Token<'_>>, String> {
         }
         match b {
             b'{' => {
-                out.push(Token::LBrace);
+                push_token(&mut out, Token::LBrace)?;
                 i += 1;
             }
             b'}' => {
-                out.push(Token::RBrace);
+                push_token(&mut out, Token::RBrace)?;
                 i += 1;
             }
             b'@' => {
-                out.push(Token::At);
+                push_token(&mut out, Token::At)?;
                 i += 1;
             }
             b'=' => {
-                out.push(Token::Eq);
+                push_token(&mut out, Token::Eq)?;
                 i += 1;
             }
             b'"' => {
                 i += 1;
                 let start = i;
                 while i < bytes.len() && bytes[i] != b'"' {
-                    if bytes[i] == b'\n' {
+                    let ch = bytes[i];
+                    if ch == b'\n' {
                         return Err("unterminated string literal in .lmnk".to_string());
+                    }
+                    if ch < 0x20 || ch == 0x7F {
+                        return Err(format!(
+                            "control character 0x{ch:02X} rejected inside .lmnk string literal"
+                        ));
                     }
                     i += 1;
                 }
                 if i >= bytes.len() {
                     return Err("unterminated string literal at EOF".to_string());
                 }
-                out.push(Token::Str(&src[start..i]));
+                push_token(&mut out, Token::Str(&src[start..i]))?;
                 i += 1;
             }
             c if c.is_ascii_digit() || c == b'-' => {
@@ -74,11 +105,23 @@ fn tokenize(src: &str) -> Result<Vec<Token<'_>>, String> {
                 while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
                     i += 1;
                 }
+                if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+                    i += 1;
+                    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+                        i += 1;
+                    }
+                    while i < bytes.len() && bytes[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                }
                 let raw = &src[start..i];
                 let val = raw
                     .parse::<f32>()
                     .map_err(|_| format!("invalid numeric literal '{raw}'"))?;
-                out.push(Token::Number(val));
+                if !val.is_finite() {
+                    return Err(format!("non-finite numeric literal '{raw}'"));
+                }
+                push_token(&mut out, Token::Number(val))?;
             }
             c if c.is_ascii_alphabetic() || c == b'_' => {
                 let start = i;
@@ -88,7 +131,7 @@ fn tokenize(src: &str) -> Result<Vec<Token<'_>>, String> {
                 {
                     i += 1;
                 }
-                out.push(Token::Ident(&src[start..i]));
+                push_token(&mut out, Token::Ident(&src[start..i]))?;
             }
             other => {
                 return Err(format!(
@@ -174,6 +217,13 @@ fn parse_attractors_block(cur: &mut Cursor<'_>) -> Result<AttractorsBlock, Strin
                 break;
             }
             Some(Token::Ident("attract")) => {
+                if block.attract_rules.len() + block.repel_rules.len()
+                    >= LMNK_DSL_MAX_RULES_PER_PERSONA
+                {
+                    return Err(format!(
+                        "attractors rule count exceeds maximum {LMNK_DSL_MAX_RULES_PER_PERSONA}"
+                    ));
+                }
                 cur.next();
                 let source_path = cur.expect_str("attract source path")?;
                 cur.expect_at("attract weight")?;
@@ -184,6 +234,13 @@ fn parse_attractors_block(cur: &mut Cursor<'_>) -> Result<AttractorsBlock, Strin
                 });
             }
             Some(Token::Ident("repel")) => {
+                if block.attract_rules.len() + block.repel_rules.len()
+                    >= LMNK_DSL_MAX_RULES_PER_PERSONA
+                {
+                    return Err(format!(
+                        "attractors rule count exceeds maximum {LMNK_DSL_MAX_RULES_PER_PERSONA}"
+                    ));
+                }
                 cur.next();
                 let target_pattern = cur.expect_str("repel pattern")?;
                 cur.expect_at("repel weight")?;
@@ -210,6 +267,7 @@ fn parse_persona_decl(cur: &mut Cursor<'_>) -> Result<PersonaDecl, String> {
     }
     cur.expect_lbrace("persona body")?;
     let mut attractors = AttractorsBlock::default();
+    let mut seen_attractors = false;
     loop {
         match cur.peek() {
             Some(Token::RBrace) => {
@@ -217,6 +275,10 @@ fn parse_persona_decl(cur: &mut Cursor<'_>) -> Result<PersonaDecl, String> {
                 break;
             }
             Some(Token::Ident("attractors")) => {
+                if seen_attractors {
+                    return Err(format!("duplicate 'attractors' block in persona '{name}'"));
+                }
+                seen_attractors = true;
                 cur.next();
                 attractors = parse_attractors_block(cur)?;
             }
@@ -257,6 +319,9 @@ fn parse_session_decl(cur: &mut Cursor<'_>) -> Result<SessionDecl, String> {
                 break;
             }
             Some(Token::Ident("mode")) => {
+                if mode.is_some() {
+                    return Err(format!("duplicate 'mode' field in session '{name}'"));
+                }
                 cur.next();
                 cur.expect_eq("session mode")?;
                 mode = Some(cur.expect_ident("session mode value")?);
@@ -281,6 +346,9 @@ fn parse_target_decl(cur: &mut Cursor<'_>) -> Result<TargetDecl, String> {
         name: name.clone(),
         ..Default::default()
     };
+    let mut seen_model = false;
+    let mut seen_vram = false;
+    let mut seen_export = false;
     loop {
         match cur.peek() {
             Some(Token::RBrace) => {
@@ -288,23 +356,45 @@ fn parse_target_decl(cur: &mut Cursor<'_>) -> Result<TargetDecl, String> {
                 break;
             }
             Some(Token::Ident("model")) => {
+                if seen_model {
+                    return Err(format!("duplicate 'model' field in target '{name}'"));
+                }
+                seen_model = true;
                 cur.next();
                 cur.expect_eq("target model")?;
                 target.model_path = cur.expect_str("target model path")?;
+                if target.model_path.trim().is_empty() {
+                    return Err(format!("target '{name}' model path must not be empty"));
+                }
             }
             Some(Token::Ident("vram_budget_mb")) => {
+                if seen_vram {
+                    return Err(format!(
+                        "duplicate 'vram_budget_mb' field in target '{name}'"
+                    ));
+                }
+                seen_vram = true;
                 cur.next();
                 cur.expect_eq("target vram_budget_mb")?;
                 let v = cur.expect_number("target vram_budget_mb")?;
-                if !v.is_finite() || v <= 0.0 {
-                    return Err("target vram_budget_mb must be positive".to_string());
+                if !v.is_finite() || v.fract() != 0.0 || !(1.0..=65536.0).contains(&v) {
+                    return Err(format!(
+                        "target '{name}' vram_budget_mb ({v}) must be an integer in 1..=65536"
+                    ));
                 }
                 target.vram_budget_mb = v as u32;
             }
             Some(Token::Ident("export")) => {
+                if seen_export {
+                    return Err(format!("duplicate 'export' field in target '{name}'"));
+                }
+                seen_export = true;
                 cur.next();
                 cur.expect_eq("target export")?;
                 target.export_path = cur.expect_str("target export path")?;
+                if target.export_path.trim().is_empty() {
+                    return Err(format!("target '{name}' export path must not be empty"));
+                }
             }
             other => {
                 return Err(format!("unexpected token in target '{name}': {other:?}"));
@@ -317,7 +407,7 @@ fn parse_target_decl(cur: &mut Cursor<'_>) -> Result<TargetDecl, String> {
 /// Parses a complete `.lmnk` specification into top-level AST [`Declaration`] entries.
 ///
 /// # Errors
-/// Returns a descriptive syntax error string when tokenization or grammar matching fails.
+/// Returns a descriptive syntax error string when tokenization, resource limits, or grammar matching fails.
 pub fn parse_lmnk_program(input: &str) -> Result<Vec<Declaration>, String> {
     let tokens = tokenize(input)?;
     let mut cur = Cursor {
@@ -326,6 +416,11 @@ pub fn parse_lmnk_program(input: &str) -> Result<Vec<Declaration>, String> {
     };
     let mut decls = Vec::new();
     while let Some(tok) = cur.peek() {
+        if decls.len() >= LMNK_DSL_MAX_DECLARATIONS {
+            return Err(format!(
+                ".lmnk declaration count exceeds maximum {LMNK_DSL_MAX_DECLARATIONS}"
+            ));
+        }
         match tok {
             Token::Ident("persona") => {
                 cur.next();

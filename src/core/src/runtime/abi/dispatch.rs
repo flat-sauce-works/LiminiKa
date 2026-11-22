@@ -67,6 +67,84 @@ pub(super) fn validate_ptr_aligned<T>(ptr: *const T, align: usize) -> LmnkResult
     }
 }
 
+/// Validates that all mutable memory regions in `muts` are pairwise disjoint and none overlap
+/// any immutable input region in `reads` (zero-length entries are ignored).
+///
+/// # Errors
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any mutable-mutable or mutable-read byte ranges overlap.
+#[inline]
+pub(super) fn check_disjoint_rw(
+    muts: &[(usize, usize)],
+    reads: &[(usize, usize)],
+) -> LmnkResult<()> {
+    let mut i = 0usize;
+    while i < muts.len() {
+        let (a_start, a_len) = muts[i];
+        if a_len > 0 {
+            let mut j = i + 1;
+            while j < muts.len() {
+                let (b_start, b_len) = muts[j];
+                if raw_byte_ranges_overlap(a_start, a_len, b_start, b_len) {
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
+                }
+                j += 1;
+            }
+            let mut k = 0usize;
+            while k < reads.len() {
+                let (r_start, r_len) = reads[k];
+                if raw_byte_ranges_overlap(a_start, a_len, r_start, r_len) {
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
+                }
+                k += 1;
+            }
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
+/// Safely creates an immutable slice `&'a [T]` after validating non-nullness, natural alignment,
+/// `len * size_of::<T>() <= isize::MAX`, and non-wrapping address bounds (`#![no_std]` safe).
+///
+/// # Safety
+/// For `len > 0`, `ptr` must point to at least `len` valid, initialized instances of `T` not
+/// concurrently mutated for lifetime `'a`.
+#[inline(always)]
+pub(super) unsafe fn checked_slice_from_raw_parts<'a, T>(
+    ptr: *const T,
+    len: usize,
+) -> LmnkResult<&'a [T]> {
+    if len == 0 {
+        return Ok(&[]);
+    }
+    validate_ptr(ptr)?;
+    let _ = validate_raw_slice_bounds(ptr, len)?;
+    // SAFETY: `ptr` is non-null, naturally aligned, within `isize::MAX` bytes without address
+    // wraparound, and caller guarantees valid initialized memory for lifetime `'a`.
+    Ok(unsafe { slice::from_raw_parts(ptr, len) })
+}
+
+/// Safely creates a mutable slice `&'a mut [T]` after validating non-nullness, natural alignment,
+/// `len * size_of::<T>() <= isize::MAX`, and non-wrapping address bounds (`#![no_std]` safe).
+///
+/// # Safety
+/// For `len > 0`, `ptr` must point to at least `len` valid, initialized instances of `T` with
+/// exclusive mutable access for lifetime `'a`.
+#[inline(always)]
+pub(super) unsafe fn checked_slice_from_raw_parts_mut<'a, T>(
+    ptr: *mut T,
+    len: usize,
+) -> LmnkResult<&'a mut [T]> {
+    if len == 0 {
+        return Ok(&mut []);
+    }
+    validate_ptr(ptr)?;
+    let _ = validate_raw_slice_bounds(ptr, len)?;
+    // SAFETY: `ptr` is non-null, naturally aligned, within `isize::MAX` bytes without address
+    // wraparound, and caller guarantees exclusive access for lifetime `'a`.
+    Ok(unsafe { slice::from_raw_parts_mut(ptr, len) })
+}
+
 /// Zero-copy borrowed 64-head Q7 phase wrapper implementing [`RawPhaseProjectable`] so FFI callers
 /// passing `*const lmnk_q7_t` into 2-Origin Gateway synthesis load directly into 8 `u64` SWAR
 /// registers without intermediate 64-byte stack array copies.
@@ -355,12 +433,8 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
     let fact_sig_opt = if fact_bytes.is_null() {
         None
     } else {
-        let f_slice: &[u8] = if fact_byte_len == 0 {
-            &[]
-        } else {
-            // SAFETY: Non-nullness for `fact_byte_len > 0` is verified above.
-            unsafe { slice::from_raw_parts(fact_bytes, fact_byte_len) }
-        };
+        // SAFETY: `checked_slice_from_raw_parts` validates non-null, alignment, and `<= isize::MAX` bounds.
+        let f_slice = unsafe { checked_slice_from_raw_parts(fact_bytes, fact_byte_len)? };
         Some(ObjectiveFact::new(
             f_slice,
             fact_confidence,
@@ -371,12 +445,8 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
     let pers_sig_opt = if persona_bytes.is_null() {
         None
     } else {
-        let p_slice: &[u8] = if persona_byte_len == 0 {
-            &[]
-        } else {
-            // SAFETY: Non-nullness for `persona_byte_len > 0` is verified above.
-            unsafe { slice::from_raw_parts(persona_bytes, persona_byte_len) }
-        };
+        // SAFETY: `checked_slice_from_raw_parts` validates non-null, alignment, and `<= isize::MAX` bounds.
+        let p_slice = unsafe { checked_slice_from_raw_parts(persona_bytes, persona_byte_len)? };
         Some(SubjectivePersona::new(
             p_slice,
             persona_strength,
@@ -444,12 +514,8 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
     let fact_sig_opt = if fact_values.is_null() {
         None
     } else {
-        let f_slice: &[f32] = if fact_len == 0 {
-            &[]
-        } else {
-            // SAFETY: Validated for non-nullness and `f32` alignment when `fact_len > 0`.
-            unsafe { slice::from_raw_parts(fact_values, fact_len) }
-        };
+        // SAFETY: `checked_slice_from_raw_parts` validates non-null, `f32` alignment, and `<= isize::MAX` bounds.
+        let f_slice = unsafe { checked_slice_from_raw_parts(fact_values, fact_len)? };
         Some(ObjectiveFact::new(
             AbiF32EmbeddingRef {
                 slice: f_slice,
@@ -463,12 +529,8 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
     let pers_sig_opt = if persona_values.is_null() {
         None
     } else {
-        let p_slice: &[f32] = if persona_len == 0 {
-            &[]
-        } else {
-            // SAFETY: Validated for non-nullness and `f32` alignment when `persona_len > 0`.
-            unsafe { slice::from_raw_parts(persona_values, persona_len) }
-        };
+        // SAFETY: `checked_slice_from_raw_parts` validates non-null, `f32` alignment, and `<= isize::MAX` bounds.
+        let p_slice = unsafe { checked_slice_from_raw_parts(persona_values, persona_len)? };
         Some(SubjectivePersona::new(
             AbiF32EmbeddingRef {
                 slice: p_slice,
@@ -578,37 +640,86 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
     updated_gravity_mass_out: *mut f32,
 ) -> LmnkResult<()> {
     validate_ptr(trail_inout)?;
+    let (_, total_len) = init_phase_engine(head_dim, num_heads)?;
+    let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
+    let logits_bytes = if !logits_inout.is_null() && vocab_size > 0 {
+        validate_raw_slice_bounds(logits_inout, vocab_size)?
+    } else {
+        0
+    };
+    if raw_byte_ranges_overlap(
+        trail_inout as usize,
+        size_of::<lmnk_pointer_trail_t>(),
+        query_tensor as usize,
+        qk_bytes,
+    ) || (!key_tensor.is_null()
+        && raw_byte_ranges_overlap(
+            trail_inout as usize,
+            size_of::<lmnk_pointer_trail_t>(),
+            key_tensor as usize,
+            qk_bytes,
+        ))
+        || (logits_bytes > 0
+            && raw_byte_ranges_overlap(
+                trail_inout as usize,
+                size_of::<lmnk_pointer_trail_t>(),
+                logits_inout as usize,
+                logits_bytes,
+            ))
+    {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
+    }
+
     let has_centroids = !centroids_inout.is_null() && num_centroids > 0;
     if has_centroids {
         validate_ptr(centroids_inout)?;
         if !branchless_is_finite_f32(split_coherence_threshold) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let cent_bytes = num_centroids
-            .checked_mul(size_of::<PhaseAnchorRecord>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let cent_bytes = validate_raw_slice_bounds(centroids_inout, num_centroids)?;
         if raw_byte_ranges_overlap(
             centroids_inout as usize,
             cent_bytes,
             trail_inout as usize,
             size_of::<lmnk_pointer_trail_t>(),
-        ) {
+        ) || raw_byte_ranges_overlap(
+            centroids_inout as usize,
+            cent_bytes,
+            query_tensor as usize,
+            qk_bytes,
+        ) || (!key_tensor.is_null()
+            && raw_byte_ranges_overlap(
+                centroids_inout as usize,
+                cent_bytes,
+                key_tensor as usize,
+                qk_bytes,
+            ))
+            || (logits_bytes > 0
+                && raw_byte_ranges_overlap(
+                    centroids_inout as usize,
+                    cent_bytes,
+                    logits_inout as usize,
+                    logits_bytes,
+                ))
+        {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
     }
 
-    // SAFETY: `trail_inout` is validated above.
-    let mut trail = unsafe { FfiHandleMut::from_raw(trail_inout)? };
-    // SAFETY: `bind_qk_and_logits_32` validates alignment, bounds, and pairwise disjointness.
-    let (_engine, mut q_aligned, mut k_opt, mut logits_opt) = unsafe {
-        bind_qk_and_logits_32(
-            query_tensor,
-            key_tensor,
-            head_dim,
-            num_heads,
-            logits_inout,
-            vocab_size,
-        )?
+    // SAFETY: `trail_inout` and tensor pointers are validated non-null, aligned, bounds-checked,
+    // and pairwise disjoint above before constructing mutable borrows.
+    let (mut trail, (_engine, mut q_aligned, mut k_opt, mut logits_opt)) = unsafe {
+        (
+            FfiHandleMut::from_raw(trail_inout)?,
+            bind_qk_and_logits_32(
+                query_tensor,
+                key_tensor,
+                head_dim,
+                num_heads,
+                logits_inout,
+                vocab_size,
+            )?,
+        )
     };
 
     let report = steer_gateway_frame_with_words_core_safe(
@@ -624,8 +735,9 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
     )?;
 
     if has_centroids {
-        // SAFETY: `centroids_inout` is validated non-null, aligned, and disjoint from `trail_inout`.
-        let centroids_slice = unsafe { slice::from_raw_parts_mut(centroids_inout, num_centroids) };
+        // SAFETY: `centroids_inout` is validated non-null, aligned, bounded, and disjoint from `trail_inout`.
+        let centroids_slice =
+            unsafe { checked_slice_from_raw_parts_mut(centroids_inout, num_centroids)? };
         let (assigned_idx, _assigned_anchor_id, assigned_coh, updated_mass, _spawned_new) =
             PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
                 centroids_slice,
@@ -899,16 +1011,27 @@ pub(super) unsafe fn bind_qk_32<'a>(
 )> {
     validate_ptr_aligned(query_tensor, 32)?;
     let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
-    // SAFETY: `AlignedSliceMut32` validates non-nullness and 32-byte alignment.
+    let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
+    if !key_tensor.is_null() {
+        validate_ptr_aligned(key_tensor, 32)?;
+        let _ = validate_raw_slice_bounds(key_tensor, total_len)?;
+        if raw_byte_ranges_overlap(
+            query_tensor as usize,
+            qk_bytes,
+            key_tensor as usize,
+            qk_bytes,
+        ) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+    }
+    // SAFETY: `query_tensor` and optional `key_tensor` are validated aligned, bounded, and
+    // mutually disjoint BEFORE creating any `AlignedSliceMut32` references.
     let (q_aligned, k_opt) = unsafe {
         (
             AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_len)?,
             AlignedSliceMut32::from_raw_parts_mut_opt(key_tensor, total_len)?,
         )
     };
-    if let Some(ref k_ref) = k_opt {
-        q_aligned.ensure_disjoint_mut(k_ref)?;
-    }
     Ok((engine, q_aligned, k_opt))
 }
 
@@ -931,22 +1054,38 @@ pub(super) unsafe fn bind_qk_and_logits_32<'a>(
     Option<AlignedSliceMut32<'a, f32>>,
     Option<AlignedSliceMut32<'a, f32>>,
 )> {
-    // SAFETY: Validated by `bind_qk_32`.
-    let (engine, q_aligned, k_opt) =
-        unsafe { bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)? };
-    let logits_opt = if logits_inout.is_null() || vocab_size == 0 {
-        None
-    } else {
-        // SAFETY: Validated by `AlignedSliceMut32::from_raw_parts_mut_opt`.
-        let l_slice =
-            unsafe { AlignedSliceMut32::from_raw_parts_mut_opt(logits_inout, vocab_size)? };
-        if let Some(ref l_ref) = l_slice {
-            q_aligned.ensure_disjoint_mut(l_ref)?;
-            if let Some(ref k_ref) = k_opt {
-                k_ref.ensure_disjoint_mut(l_ref)?;
-            }
+    let (_engine, total_len) = init_phase_engine(head_dim, num_heads)?;
+    let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
+    let has_logits = !logits_inout.is_null() && vocab_size > 0;
+    if has_logits {
+        validate_ptr_aligned(logits_inout, 32)?;
+        let logits_bytes = validate_raw_slice_bounds(logits_inout, vocab_size)?;
+        if raw_byte_ranges_overlap(
+            query_tensor as usize,
+            qk_bytes,
+            logits_inout as usize,
+            logits_bytes,
+        ) || (!key_tensor.is_null()
+            && raw_byte_ranges_overlap(
+                key_tensor as usize,
+                qk_bytes,
+                logits_inout as usize,
+                logits_bytes,
+            ))
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        l_slice
+    }
+    // SAFETY: Pairwise disjointness across Q, K, and logits is verified BEFORE any `&mut` slice construction.
+    let ((engine, q_aligned, k_opt), logits_opt) = unsafe {
+        (
+            bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)?,
+            if has_logits {
+                AlignedSliceMut32::from_raw_parts_mut_opt(logits_inout, vocab_size)?
+            } else {
+                None
+            },
+        )
     };
     Ok((engine, q_aligned, k_opt, logits_opt))
 }

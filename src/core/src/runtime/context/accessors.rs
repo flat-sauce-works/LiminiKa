@@ -668,6 +668,9 @@ impl RuntimeContext {
             settle_dwell,
         );
         self.last_sandbox_event = ev;
+        if matches!(ev, SandboxLifecycleEvent::Settled(_)) {
+            self.sandbox_settlements = self.sandbox_settlements.saturating_add(1);
+        }
         ev
     }
 

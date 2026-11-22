@@ -640,7 +640,7 @@ struct LMNK_ALIGN_PREFIX(16) lmnk_topology_snapshot {
     uint32_t active_aperture_mask;
     uint8_t regime_code;
     uint8_t conflict_severity_q7;
-    uint8_t active_crystals;
+    uint8_t active_anchors;
     uint8_t spawned_daughters;
 } LMNK_ALIGN_SUFFIX(16);
 typedef struct lmnk_topology_snapshot lmnk_topology_snapshot_t;

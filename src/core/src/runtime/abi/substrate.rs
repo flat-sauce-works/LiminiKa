@@ -10,20 +10,20 @@ use crate::stigmergy::PointerSubstrate;
 // 3. Stigmergic Substrate, Limina Bridging, Bayesian Trail Rewiring & FastPathLedger Interface
 // ===================================================================
 
-/// Allocates an Stigmergic Substrate instance with the specified slot capacity.
+/// Allocates a [`StigmergicSubstrate`] instance with the specified slot capacity.
 ///
 /// # Safety
-/// `hub_out` must be a non-null, naturally aligned writable handle pointer.
+/// `substrate_out` must be a non-null, naturally aligned writable handle pointer.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_substrate_create(
     capacity: u32,
-    hub_out: *mut LmnkSubstrateHandle,
+    substrate_out: *mut LmnkSubstrateHandle,
 ) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
-        let mut out_handle = unsafe { FfiHandleMut::from_raw(hub_out)? };
-        let hub = StigmergicSubstrate::with_capacity(capacity)?;
-        *out_handle = Box::into_raw(Box::new(hub)).cast::<LmnkSubstrateOpaque>();
+        let mut out_handle = unsafe { FfiHandleMut::from_raw(substrate_out)? };
+        let substrate = StigmergicSubstrate::with_capacity(capacity)?;
+        *out_handle = Box::into_raw(Box::new(substrate)).cast::<LmnkSubstrateOpaque>();
         Ok(LMNK_OK)
     })
 }
@@ -38,18 +38,15 @@ pub unsafe extern "C" fn lmnk_substrate_destroy(handle: LmnkSubstrateHandle) -> 
     if handle.is_null() {
         return LMNK_OK;
     }
-    if !is_aligned(handle) {
+    let typed = handle.cast::<StigmergicSubstrate>();
+    if !is_aligned(typed) {
         return LMNK_ERR_ALIGNMENT;
     }
     ffi_boundary!({
-        if (handle as usize) >= 4096
-            && ((handle as usize) & (align_of::<StigmergicSubstrate>() - 1)) == 0
-        {
-            // SAFETY: `handle` was allocated via `Box::into_raw(Box::new(StigmergicSubstrate))`
-            // in `lmnk_substrate_create`.
-            unsafe {
-                let _ = Box::from_raw(handle.cast::<StigmergicSubstrate>());
-            }
+        // SAFETY: `handle` is non-null, verified naturally aligned for `StigmergicSubstrate`,
+        // and was allocated via `Box::into_raw(Box::new(StigmergicSubstrate))` in `lmnk_substrate_create`.
+        unsafe {
+            let _ = Box::from_raw(typed);
         }
         Ok(LMNK_OK)
     })
@@ -75,7 +72,8 @@ pub unsafe extern "C" fn lmnk_substrate_init_default_thresholds(
 /// time (`0` branches) and writes the 32-byte [`lmnk_substrate_step_report_t`] to `report_out`.
 ///
 /// # Safety
-/// `trail` (128B aligned) and `report_out` (32B aligned) must be non-null; `thresholds_opt` may be `NULL` or 32B aligned.
+/// `trail` (64B aligned) and `report_out` (32B aligned) must be non-null and non-overlapping;
+/// `thresholds_opt` may be `NULL` or 32B aligned.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_substrate_evaluate_thresholds(
     thresholds_opt: *const lmnk_stigmergic_thresholds_t,
@@ -89,7 +87,25 @@ pub unsafe extern "C" fn lmnk_substrate_evaluate_thresholds(
     report_out: *mut lmnk_substrate_step_report_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
+        validate_ptr(trail)?;
+        validate_ptr(report_out)?;
+        let th_bytes = if thresholds_opt.is_null() {
+            0
+        } else {
+            validate_ptr(thresholds_opt)?;
+            size_of::<lmnk_stigmergic_thresholds_t>()
+        };
+        check_disjoint_rw(
+            &[(
+                report_out as usize,
+                size_of::<lmnk_substrate_step_report_t>(),
+            )],
+            &[
+                (trail as usize, size_of::<lmnk_pointer_trail_t>()),
+                (thresholds_opt as usize, th_bytes),
+            ],
+        )?;
+        // SAFETY: Validated for non-nullness, alignment, and disjointness above.
         let ((th_opt, trail_ref), mut rep_out) = unsafe {
             (
                 (
@@ -127,7 +143,7 @@ pub unsafe extern "C" fn lmnk_substrate_evaluate_thresholds(
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_substrate_step_safe(
-    hub_opt: LmnkSubstrateHandle,
+    substrate_opt: LmnkSubstrateHandle,
     thresholds_opt: *const lmnk_stigmergic_thresholds_t,
     input_ptr: u64,
     entropy_h_tilde: f32,
@@ -145,67 +161,106 @@ pub unsafe extern "C" fn lmnk_substrate_step_safe(
 ) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(trail_inout)?;
+        validate_ptr(report_out)?;
         let (phase_engine, total_len) = init_phase_engine(head_dim, num_heads)?;
-        // SAFETY: Validated for non-nullness and alignment.
-        let ((th_ref_opt, mut trail), mut rep_out) = unsafe {
+        let sub_typed = substrate_opt.cast::<StigmergicSubstrate>();
+        let sub_bytes = if sub_typed.is_null() {
+            0
+        } else {
+            validate_ptr(sub_typed)?;
+            size_of::<StigmergicSubstrate>()
+        };
+        let th_bytes = if thresholds_opt.is_null() {
+            0
+        } else {
+            validate_ptr(thresholds_opt)?;
+            size_of::<lmnk_stigmergic_thresholds_t>()
+        };
+        let scores_bytes = if attention_scores_inout.is_null() || num_scores == 0 {
+            0
+        } else {
+            validate_ptr_aligned(attention_scores_inout, 32)?;
+            validate_raw_slice_bounds(attention_scores_inout, num_scores)?
+        };
+        let q_bytes = if query_tensor.is_null() {
+            0
+        } else {
+            validate_ptr_aligned(query_tensor, 32)?;
+            validate_raw_slice_bounds(query_tensor, total_len)?
+        };
+        let k_bytes = if key_tensor.is_null() {
+            0
+        } else {
+            validate_ptr_aligned(key_tensor, 32)?;
+            validate_raw_slice_bounds(key_tensor, total_len)?
+        };
+        let logits_bytes = if logits_inout.is_null() || vocab_size == 0 {
+            0
+        } else {
+            validate_ptr_aligned(logits_inout, 32)?;
+            validate_raw_slice_bounds(logits_inout, vocab_size)?
+        };
+
+        check_disjoint_rw(
+            &[
+                (sub_typed as usize, sub_bytes),
+                (trail_inout as usize, size_of::<lmnk_pointer_trail_t>()),
+                (attention_scores_inout as usize, scores_bytes),
+                (query_tensor as usize, q_bytes),
+                (key_tensor as usize, k_bytes),
+                (logits_inout as usize, logits_bytes),
+                (
+                    report_out as usize,
+                    size_of::<lmnk_substrate_step_report_t>(),
+                ),
+            ],
+            &[(thresholds_opt as usize, th_bytes)],
+        )?;
+
+        // SAFETY: All non-null pointers are aligned, bounded, and pairwise disjoint above.
+        let (
+            (mut substrate_ref_opt, th_ref_opt, mut trail, mut rep_out),
+            ((mut scores_opt, mut q_opt), (mut k_opt, mut logits_opt)),
+        ) = unsafe {
             (
                 (
+                    FfiHandleMut::from_raw_opt(sub_typed)?,
                     FfiHandleRef::from_raw_opt(thresholds_opt)?,
                     FfiHandleMut::from_raw(trail_inout)?,
-                ),
-                FfiHandleMut::from_raw(report_out)?,
-            )
-        };
-        // SAFETY: `AlignedSliceMut32::from_raw_parts_mut_opt` validates 32B alignment when non-null.
-        let ((mut scores_opt, mut q_opt), (mut k_opt, mut logits_opt)) = unsafe {
-            (
-                (
-                    if attention_scores_inout.is_null() || num_scores == 0 {
-                        None
-                    } else {
-                        AlignedSliceMut32::from_raw_parts_mut_opt(
-                            attention_scores_inout,
-                            num_scores,
-                        )?
-                    },
-                    AlignedSliceMut32::from_raw_parts_mut_opt(query_tensor, total_len)?,
+                    FfiHandleMut::from_raw(report_out)?,
                 ),
                 (
-                    AlignedSliceMut32::from_raw_parts_mut_opt(key_tensor, total_len)?,
-                    if logits_inout.is_null() || vocab_size == 0 {
-                        None
-                    } else {
-                        AlignedSliceMut32::from_raw_parts_mut_opt(logits_inout, vocab_size)?
-                    },
+                    (
+                        if scores_bytes == 0 {
+                            None
+                        } else {
+                            AlignedSliceMut32::from_raw_parts_mut_opt(
+                                attention_scores_inout,
+                                num_scores,
+                            )?
+                        },
+                        AlignedSliceMut32::from_raw_parts_mut_opt(query_tensor, total_len)?,
+                    ),
+                    (
+                        AlignedSliceMut32::from_raw_parts_mut_opt(key_tensor, total_len)?,
+                        if logits_bytes == 0 {
+                            None
+                        } else {
+                            AlignedSliceMut32::from_raw_parts_mut_opt(logits_inout, vocab_size)?
+                        },
+                    ),
                 ),
             )
         };
 
-        if let (Some(ref q), Some(ref k)) = (&q_opt, &k_opt) {
-            q.ensure_disjoint_mut(k)?;
-        }
-        if let Some(ref s) = scores_opt {
-            if let Some(ref q) = q_opt {
-                q.ensure_disjoint_mut(s)?;
-            }
-            if let Some(ref k) = k_opt {
-                k.ensure_disjoint_mut(s)?;
-            }
-        }
-
-        let report = if !hub_opt.is_null()
-            && (hub_opt as usize) >= 4096
-            && ((hub_opt as usize) & (align_of::<StigmergicSubstrate>() - 1)) == 0
-        {
-            // SAFETY: `hub_opt` is non-null and 128-byte aligned.
-            let hub_ref = unsafe { &mut *hub_opt.cast::<StigmergicSubstrate>() };
-            hub_ref.head_dim = head_dim as u16;
-            hub_ref.num_heads = num_heads as u16;
+        let report = if let Some(ref mut substrate_ref) = substrate_ref_opt {
+            substrate_ref.head_dim = head_dim as u16;
+            substrate_ref.num_heads = num_heads as u16;
             if let Some(ref th) = th_ref_opt {
                 th.validate()?;
-                hub_ref.thresholds = **th;
+                substrate_ref.thresholds = **th;
             }
-            hub_ref.orchestrate_next_action_step_core(
+            substrate_ref.orchestrate_next_action_step_core(
                 TaggedPtr(input_ptr),
                 entropy_h_tilde,
                 dominant_slot,
@@ -255,8 +310,8 @@ pub unsafe extern "C" fn lmnk_substrate_step_pointer(
     trail_out: *mut lmnk_pointer_trail_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        validate_ptr(context)?;
-        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 128B alignment.
+        validate_ptr(context.cast::<RuntimeContext>())?;
+        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 64B alignment.
         let mut trail = unsafe { FfiHandleMut::from_raw(trail_out)? };
         let tp = TaggedPtr(current_ptr);
 
@@ -297,14 +352,17 @@ pub unsafe extern "C" fn lmnk_substrate_resolve_trail_in_swarm(
     ffi_boundary!({
         validate_ptr(trail_inout)?;
         validate_ptr(target_phases)?;
-        if raw_byte_ranges_overlap(
-            trail_inout as usize,
-            size_of::<lmnk_pointer_trail_t>(),
-            target_phases as usize,
-            MAX_ATTENTION_HEADS,
-        ) {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+        validate_ptr(report_out)?;
+        check_disjoint_rw(
+            &[
+                (trail_inout as usize, size_of::<lmnk_pointer_trail_t>()),
+                (
+                    report_out as usize,
+                    size_of::<StigmergicReconstitutionReport>(),
+                ),
+            ],
+            &[(target_phases as usize, MAX_ATTENTION_HEADS)],
+        )?;
         // SAFETY: Validated non-null, aligned, and disjoint above.
         let ((mut trail, tgt_ref), mut out_rep) = unsafe {
             (
@@ -404,28 +462,35 @@ pub unsafe extern "C" fn lmnk_substrate_reduce_bit_tree(
         if num_masks == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Validated for non-nullness and 32B alignment.
-        let masks_slice = unsafe { AlignedSlice32::from_raw_parts(bitmasks, num_masks)? };
-        if masks_slice.contains_ptr(reduced_out.cast_const()) {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        // SAFETY: Validated for non-nullness and 32B alignment.
-        let mut out_ref = unsafe { FfiHandleMut::from_raw(reduced_out)? };
+        let masks_bytes = validate_raw_slice_bounds(bitmasks, num_masks)?;
+        check_disjoint_rw(
+            &[(reduced_out as usize, size_of::<lmnk_paged_bitmask_t>())],
+            &[(bitmasks as usize, masks_bytes)],
+        )?;
+        // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness above.
+        let (masks_slice, mut out_ref) = unsafe {
+            (
+                AlignedSlice32::from_raw_parts(bitmasks, num_masks)?,
+                FfiHandleMut::from_raw(reduced_out)?,
+            )
+        };
 
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         {
-            // SAFETY: `bitmasks` and `out_ref` are 32-byte aligned and `target_feature = "avx2"` is active.
+            let mask_ptr = masks_slice.as_slice().as_ptr();
+            let mask_len = masks_slice.len();
+            // SAFETY: `masks_slice` and `out_ref` are 32-byte aligned, disjoint, and `avx2` is active.
             unsafe {
                 let mut acc0 = _mm256_setzero_si256();
                 let mut acc1 = _mm256_setzero_si256();
                 let mut acc2 = _mm256_setzero_si256();
                 let mut acc3 = _mm256_setzero_si256();
                 let mut i = 0usize;
-                while i + 4 <= num_masks {
-                    let v0 = _mm256_load_si256(bitmasks.add(i).cast::<__m256i>());
-                    let v1 = _mm256_load_si256(bitmasks.add(i + 1).cast::<__m256i>());
-                    let v2 = _mm256_load_si256(bitmasks.add(i + 2).cast::<__m256i>());
-                    let v3 = _mm256_load_si256(bitmasks.add(i + 3).cast::<__m256i>());
+                while i + 4 <= mask_len {
+                    let v0 = _mm256_load_si256(mask_ptr.add(i).cast::<__m256i>());
+                    let v1 = _mm256_load_si256(mask_ptr.add(i + 1).cast::<__m256i>());
+                    let v2 = _mm256_load_si256(mask_ptr.add(i + 2).cast::<__m256i>());
+                    let v3 = _mm256_load_si256(mask_ptr.add(i + 3).cast::<__m256i>());
                     acc0 = _mm256_or_si256(acc0, v0);
                     acc1 = _mm256_or_si256(acc1, v1);
                     acc2 = _mm256_or_si256(acc2, v2);
@@ -434,8 +499,8 @@ pub unsafe extern "C" fn lmnk_substrate_reduce_bit_tree(
                 }
                 let mut acc =
                     _mm256_or_si256(_mm256_or_si256(acc0, acc1), _mm256_or_si256(acc2, acc3));
-                while i < num_masks {
-                    let v = _mm256_load_si256(bitmasks.add(i).cast::<__m256i>());
+                while i < mask_len {
+                    let v = _mm256_load_si256(mask_ptr.add(i).cast::<__m256i>());
                     acc = _mm256_or_si256(acc, v);
                     i += 1;
                 }
@@ -486,14 +551,23 @@ pub unsafe extern "C" fn lmnk_substrate_paged_block_warp_bitmask(
 ) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(kv_bits)?;
-        // SAFETY: Validated for non-nullness and 32B alignment.
-        let mut out_mask = unsafe { FfiHandleMut::from_raw(mask_out)? };
+        validate_ptr(mask_out)?;
         if num_blocks == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let limit = num_blocks.min(PAGED_BITMASK_BITS as usize);
-        // SAFETY: `kv_bits` is non-null, 8B aligned, and valid for `limit <= num_blocks` elements.
-        let active_slice = unsafe { slice::from_raw_parts(kv_bits, limit) };
+        let kv_bytes = validate_raw_slice_bounds(kv_bits, limit)?;
+        check_disjoint_rw(
+            &[(mask_out as usize, size_of::<lmnk_paged_bitmask_t>())],
+            &[(kv_bits as usize, kv_bytes)],
+        )?;
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness above.
+        let (active_slice, mut out_mask) = unsafe {
+            (
+                checked_slice_from_raw_parts(kv_bits, limit)?,
+                FfiHandleMut::from_raw(mask_out)?,
+            )
+        };
 
         let mut acc = lmnk_paged_bitmask_t::default();
         for (word_slot, word_chunk) in active_slice.chunks(64).enumerate() {

@@ -1277,7 +1277,7 @@ fn persona_recall_survives_factual_liminal_void_and_routes_via_gateway_frame() {
 }
 
 #[test]
-fn local_token_resonance_arbitrates_channel_disagreement_via_pspm_subhead_route() {
+fn local_token_resonance_arbitrates_channel_disagreement_via_subhead_route() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;

@@ -45,12 +45,20 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply(
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
+        let q_bytes = validate_raw_slice_bounds(query_tensor, total_q_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[(query_tensor as usize, q_bytes)],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let mut q_aligned =
-            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
+        let (mut q_aligned, p_aligned) = unsafe {
+            (
+                AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
+        };
 
         engine.apply_phase_steering(&mut q_aligned, &p_aligned)?;
         Ok(LMNK_OK)
@@ -74,13 +82,27 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_fused(
         validate_ptr_aligned(key_tensor, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
+        let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[
+                (query_tensor as usize, qk_bytes),
+                (key_tensor as usize, qk_bytes),
+            ],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
 
         // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
-        let mut qk_pair = unsafe {
-            DisjointMutPair::<f32, 32>::from_raw_parts_mut(query_tensor, key_tensor, total_len)?
+        let (mut qk_pair, p_aligned) = unsafe {
+            (
+                DisjointMutPair::<f32, 32>::from_raw_parts_mut(
+                    query_tensor,
+                    key_tensor,
+                    total_len,
+                )?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
         };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_phase_steering_disjoint_pair(&mut qk_pair, &p_aligned)?;
         Ok(LMNK_OK)
@@ -104,12 +126,20 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_safe(
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
+        let q_bytes = validate_raw_slice_bounds(query_tensor, total_q_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[(query_tensor as usize, q_bytes)],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let mut q_aligned =
-            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
+        let (mut q_aligned, p_aligned) = unsafe {
+            (
+                AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
+        };
 
         engine.apply_phase_steering_safe(&mut q_aligned, &p_aligned, max_rad)?;
         Ok(LMNK_OK)
@@ -120,7 +150,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_safe(
 /// (`Interleaved` vs `HalfSplit`, partial `rotary_dim`, `head_dim`, `num_heads`, `phase_clamp_max_rad`).
 ///
 /// # Safety
-/// `query_tensor` (32B aligned), `phase_deltas` (16B aligned), and `config` (16B aligned)
+/// `query_tensor` (32B aligned), `phase_deltas` (16B aligned), and `config` (64B aligned)
 /// must be non-null and valid.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_with_config_safe(
@@ -131,7 +161,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_with_config_safe(
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
-        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 16-byte alignment.
+        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 64-byte alignment of immutable `config`.
         let cfg = unsafe { FfiHandleRef::from_raw(config)? };
         let head_dim = cfg.head_dim as usize;
         let num_heads = cfg.num_heads as usize;
@@ -141,6 +171,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_with_config_safe(
             cfg.rotary_dim as usize
         };
         let layout = RopePairLayout::from_u8(cfg.rope_layout)?;
+        let clamp_max_rad = cfg.phase_clamp_max_rad;
         let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
         let geom = RopeGeometryDescriptor {
             layout,
@@ -148,31 +179,42 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_with_config_safe(
             rotary_dim,
             num_heads,
         };
+        let q_bytes = validate_raw_slice_bounds(query_tensor, total_q_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[(query_tensor as usize, q_bytes)],
+            &[
+                (phase_deltas as usize, p_bytes),
+                (config as usize, size_of::<lmnk_config_t>()),
+            ],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let mut q_aligned =
-            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
+        let (mut q_aligned, p_aligned) = unsafe {
+            (
+                AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
+        };
 
         PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe(
             &engine,
             &geom,
             &mut q_aligned,
             &p_aligned,
-            cfg.phase_clamp_max_rad,
+            clamp_max_rad,
         )?;
         Ok(LMNK_OK)
     })
 }
 
-/// Steers `query_tensor` using a 2-Origin [`ManifoldGatewaySignal`]
+/// Steers `query_tensor` using a 2-Origin [`crate::runtime::gateway::ManifoldGatewaySignal`]
 /// composite (`(ObjectiveFact, SubjectivePersona)`) so structural hyperparameters are synthesized
 /// autonomously from Gateway physics and dispatched via [`lmnk_config_t`] RoPE geometry.
 ///
 /// # Safety
 /// `query_tensor` (32B aligned), `fact_phases` (16B aligned), `persona_phases` (16B aligned),
-/// `trail_inout` (128B aligned), and `config` (16B aligned) must be non-null and valid.
+/// `trail_inout` (64B aligned), and `config` (64B aligned) must be non-null and valid.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_phase_steering_steer_with_gateway_and_config_safe(
     query_tensor: *mut f32,
@@ -187,19 +229,20 @@ pub unsafe extern "C" fn lmnk_phase_steering_steer_with_gateway_and_config_safe(
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(fact_phases)?;
         validate_ptr(persona_phases)?;
-        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 128-byte alignment.
-        let mut trail = unsafe { FfiHandleMut::from_raw(trail_inout)? };
-        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 16-byte alignment.
-        let cfg = unsafe { FfiHandleRef::from_raw(config)? };
+        validate_ptr(trail_inout)?;
+        validate_ptr(config)?;
+        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 64-byte alignment of `config`
+        // before mutable borrows below.
+        let cfg_copy = unsafe { *FfiHandleRef::from_raw(config)? };
 
-        let head_dim = cfg.head_dim as usize;
-        let num_heads = cfg.num_heads as usize;
-        let rotary_dim = if cfg.rotary_dim == 0 {
+        let head_dim = cfg_copy.head_dim as usize;
+        let num_heads = cfg_copy.num_heads as usize;
+        let rotary_dim = if cfg_copy.rotary_dim == 0 {
             head_dim
         } else {
-            cfg.rotary_dim as usize
+            cfg_copy.rotary_dim as usize
         };
-        let layout = RopePairLayout::from_u8(cfg.rope_layout)?;
+        let layout = RopePairLayout::from_u8(cfg_copy.rope_layout)?;
         let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
         let geom = RopeGeometryDescriptor {
             layout,
@@ -207,14 +250,30 @@ pub unsafe extern "C" fn lmnk_phase_steering_steer_with_gateway_and_config_safe(
             rotary_dim,
             num_heads,
         };
+        let q_bytes = validate_raw_slice_bounds(query_tensor, total_q_len)?;
+        let p_bytes = validate_raw_slice_bounds(fact_phases, num_heads)?;
+        let _ = validate_raw_slice_bounds(persona_phases, num_heads)?;
+        check_disjoint_rw(
+            &[
+                (query_tensor as usize, q_bytes),
+                (trail_inout as usize, size_of::<lmnk_pointer_trail_t>()),
+            ],
+            &[
+                (fact_phases as usize, p_bytes),
+                (persona_phases as usize, p_bytes),
+                (config as usize, size_of::<lmnk_config_t>()),
+            ],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let mut q_aligned =
-            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let fact_slice = unsafe { AlignedSlice16::from_raw_parts(fact_phases, num_heads)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let persona_slice = unsafe { AlignedSlice16::from_raw_parts(persona_phases, num_heads)? };
+        // SAFETY: All pointers are validated non-null, aligned, bounded, and pairwise disjoint.
+        let (mut trail, mut q_aligned, fact_slice, persona_slice) = unsafe {
+            (
+                FfiHandleMut::from_raw(trail_inout)?,
+                AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)?,
+                AlignedSlice16::from_raw_parts(fact_phases, num_heads)?,
+                AlignedSlice16::from_raw_parts(persona_phases, num_heads)?,
+            )
+        };
 
         let mut fact_arr = [0i8; MAX_ATTENTION_HEADS];
         let mut persona_arr = [0i8; MAX_ATTENTION_HEADS];
@@ -265,14 +324,22 @@ pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_half_split(
             rotary_dim,
             num_heads,
         };
+        let q_bytes = validate_raw_slice_bounds(q_before, total_q_len)?;
+        let _ = validate_raw_slice_bounds(q_after, total_q_len)?;
+        let p_bytes = validate_raw_slice_bounds(q7_phase_out, num_heads)?;
+        check_disjoint_rw(
+            &[(q7_phase_out as usize, p_bytes)],
+            &[(q_before as usize, q_bytes), (q_after as usize, q_bytes)],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let q_bef_aligned = unsafe { AlignedSlice32::from_raw_parts(q_before, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let q_aft_aligned = unsafe { AlignedSlice32::from_raw_parts(q_after, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let mut p_out_aligned =
-            unsafe { AlignedSliceMut16::from_raw_parts_mut(q7_phase_out, num_heads)? };
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
+        let (q_bef_aligned, q_aft_aligned, mut p_out_aligned) = unsafe {
+            (
+                AlignedSlice32::from_raw_parts(q_before, total_q_len)?,
+                AlignedSlice32::from_raw_parts(q_after, total_q_len)?,
+                AlignedSliceMut16::from_raw_parts_mut(q7_phase_out, num_heads)?,
+            )
+        };
 
         PhaseSteeringGeometryExt::compute_procrustes_phase_delta_for_geometry(
             &engine,
@@ -303,13 +370,27 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_fused_safe(
         validate_ptr_aligned(key_tensor, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
+        let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[
+                (query_tensor as usize, qk_bytes),
+                (key_tensor as usize, qk_bytes),
+            ],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
 
         // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
-        let mut qk_pair = unsafe {
-            DisjointMutPair::<f32, 32>::from_raw_parts_mut(query_tensor, key_tensor, total_len)?
+        let (mut qk_pair, p_aligned) = unsafe {
+            (
+                DisjointMutPair::<f32, 32>::from_raw_parts_mut(
+                    query_tensor,
+                    key_tensor,
+                    total_len,
+                )?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
         };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_phase_steering_fused_safe(
             &mut qk_pair.first,
@@ -338,12 +419,20 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_geodesic_safe(
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
+        let q_bytes = validate_raw_slice_bounds(query_tensor, total_q_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[(query_tensor as usize, q_bytes)],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let mut q_aligned =
-            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
+        let (mut q_aligned, p_aligned) = unsafe {
+            (
+                AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
+        };
 
         engine.apply_phase_steering_geodesic_safe(&mut q_aligned, &p_aligned, max_rad)?;
         Ok(LMNK_OK)
@@ -368,12 +457,20 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_safe(
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
+        let q_bytes = validate_raw_slice_bounds(query_tensor, total_q_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[(query_tensor as usize, q_bytes)],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let mut q_aligned =
-            unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
+        let (mut q_aligned, p_aligned) = unsafe {
+            (
+                AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
+        };
 
         engine.apply_pointer_gated_phase_steering_safe(
             TaggedPtr(tagged_ptr),
@@ -405,13 +502,27 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_fused_safe(
         validate_ptr_aligned(key_tensor, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, total_len) = init_phase_engine(head_dim, num_heads)?;
+        let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[
+                (query_tensor as usize, qk_bytes),
+                (key_tensor as usize, qk_bytes),
+            ],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
 
         // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
-        let mut qk_pair = unsafe {
-            DisjointMutPair::<f32, 32>::from_raw_parts_mut(query_tensor, key_tensor, total_len)?
+        let (mut qk_pair, p_aligned) = unsafe {
+            (
+                DisjointMutPair::<f32, 32>::from_raw_parts_mut(
+                    query_tensor,
+                    key_tensor,
+                    total_len,
+                )?,
+                AlignedSlice16::from_raw_parts(phase_deltas, num_heads)?,
+            )
         };
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_pointer_gated_phase_steering_fused_safe(
             TaggedPtr(tagged_ptr),
@@ -438,16 +549,23 @@ pub unsafe extern "C" fn lmnk_gateway_project_bytes_to_q7_64(
 ) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(phases_out)?;
-        let in_slice: &[u8] = if byte_len == 0 {
-            &[]
+        let in_bytes = if byte_len == 0 {
+            0
         } else {
             validate_ptr(bytes)?;
-            // SAFETY: Validated non-null for `byte_len > 0`.
-            unsafe { slice::from_raw_parts(bytes, byte_len) }
+            validate_raw_slice_bounds(bytes, byte_len)?
         };
-        // SAFETY: `phases_out` was validated non-null above, and `mut_phase64_from_raw` rechecks
-        // nullness and constructs an exclusive `&mut [lmnk_q7_t; 64]` (alignment 1).
-        let out_ref = unsafe { mut_phase64_from_raw(phases_out)? };
+        check_disjoint_rw(
+            &[(phases_out as usize, MAX_ATTENTION_HEADS)],
+            &[(bytes as usize, in_bytes)],
+        )?;
+        // SAFETY: Validated non-null, bounds-checked, and disjoint above.
+        let (in_slice, out_ref) = unsafe {
+            (
+                checked_slice_from_raw_parts(bytes, byte_len)?,
+                mut_phase64_from_raw(phases_out)?,
+            )
+        };
         let projected_w = project_bytes_swar_to_words_64(in_slice);
         store_q7_words_64(out_ref, &projected_w);
         Ok(LMNK_OK)
@@ -473,16 +591,23 @@ pub unsafe extern "C" fn lmnk_gateway_project_f32_to_q7_64(
         if !branchless_is_finite_f32(gain) || gain < 0.0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let in_slice: &[f32] = if num_values == 0 {
-            &[]
+        let in_bytes = if num_values == 0 {
+            0
         } else {
             validate_ptr(values)?;
-            // SAFETY: Validated non-null and 4B aligned.
-            unsafe { slice::from_raw_parts(values, num_values) }
+            validate_raw_slice_bounds(values, num_values)?
         };
-        // SAFETY: `phases_out` was validated non-null above, and `mut_phase64_from_raw` rechecks
-        // nullness and constructs an exclusive `&mut [lmnk_q7_t; 64]` (alignment 1).
-        let out_ref = unsafe { mut_phase64_from_raw(phases_out)? };
+        check_disjoint_rw(
+            &[(phases_out as usize, MAX_ATTENTION_HEADS)],
+            &[(values as usize, in_bytes)],
+        )?;
+        // SAFETY: Validated non-null, aligned, bounds-checked, and disjoint above.
+        let (in_slice, out_ref) = unsafe {
+            (
+                checked_slice_from_raw_parts(values, num_values)?,
+                mut_phase64_from_raw(phases_out)?,
+            )
+        };
         if gain > 0.0 {
             *out_ref = branchless_project_f32_slice_to_q7_64(in_slice, gain);
         } else {
@@ -520,33 +645,64 @@ pub unsafe extern "C" fn lmnk_gateway_synthesize_multi_origin_frame(
     report_out: *mut lmnk_causal_report_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
-        let (mut out_frame, out_report_opt) = unsafe {
-            (
-                FfiHandleMut::from_raw(frame_out)?,
-                FfiHandleMut::from_raw_opt(report_out)?,
-            )
+        validate_ptr(frame_out)?;
+        let rep_bytes = if report_out.is_null() {
+            0
+        } else {
+            validate_ptr(report_out)?;
+            size_of::<lmnk_causal_report_t>()
         };
-
-        // SAFETY: Validated by `synthesize_multi_origin_from_raw_ptrs_with_words`.
-        let (frame, _frm_w) = unsafe {
-            synthesize_multi_origin_from_raw_ptrs_with_words(
-                vram_pressure,
-                gpu_frame_overrun,
-                active_swarm_cell_mask,
-                recommend_layer_skip,
-                fact_phases,
-                fact_confidence,
-                fact_mapped_offset48,
-                fact_anchor_id,
-                persona_phases,
-                persona_strength,
-                persona_mapped_offset48,
-                persona_anchor_id,
-                bloom_filter_opt,
-                contradiction_threshold,
-                bloom_repulsion_threshold,
-            )?
+        let f_bytes = if fact_phases.is_null() {
+            0
+        } else {
+            MAX_ATTENTION_HEADS
+        };
+        let p_bytes = if persona_phases.is_null() {
+            0
+        } else {
+            MAX_ATTENTION_HEADS
+        };
+        let b_bytes = if bloom_filter_opt.is_null() {
+            0
+        } else {
+            size_of::<lmnk_bloom_filter_t>()
+        };
+        check_disjoint_rw(
+            &[
+                (frame_out as usize, size_of::<lmnk_gateway_frame_t>()),
+                (report_out as usize, rep_bytes),
+            ],
+            &[
+                (fact_phases as usize, f_bytes),
+                (persona_phases as usize, p_bytes),
+                (bloom_filter_opt as usize, b_bytes),
+            ],
+        )?;
+        // SAFETY: Output handles and input phase/bloom pointers are non-overlapping and aligned.
+        let ((mut out_frame, out_report_opt), (frame, _frm_w)) = unsafe {
+            (
+                (
+                    FfiHandleMut::from_raw(frame_out)?,
+                    FfiHandleMut::from_raw_opt(report_out)?,
+                ),
+                synthesize_multi_origin_from_raw_ptrs_with_words(
+                    vram_pressure,
+                    gpu_frame_overrun,
+                    active_swarm_cell_mask,
+                    recommend_layer_skip,
+                    fact_phases,
+                    fact_confidence,
+                    fact_mapped_offset48,
+                    fact_anchor_id,
+                    persona_phases,
+                    persona_strength,
+                    persona_mapped_offset48,
+                    persona_anchor_id,
+                    bloom_filter_opt,
+                    contradiction_threshold,
+                    bloom_repulsion_threshold,
+                )?,
+            )
         };
         if let Some(mut rep_out) = out_report_opt {
             *rep_out = frame.to_causal_report();
@@ -577,18 +733,36 @@ pub unsafe extern "C" fn lmnk_phase_steering_steer_gateway_frame_safe(
     ffi_boundary!({
         validate_ptr(frame)?;
         validate_ptr(trail_inout)?;
-        if raw_byte_ranges_overlap(
-            frame as usize,
-            size_of::<lmnk_gateway_frame_t>(),
-            trail_inout as usize,
-            size_of::<lmnk_pointer_trail_t>(),
-        ) {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        // SAFETY: Validated for non-nullness and 64B alignment.
-        let frame_ref = unsafe { FfiHandleRef::from_raw(frame)? };
-        // SAFETY: Validated by `execute_gateway_frame_steer_and_optional_kmeans_ffi`.
+        let (_, total_len) = init_phase_engine(head_dim, num_heads)?;
+        let q_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
+        let k_bytes = if key_tensor.is_null() {
+            0
+        } else {
+            validate_raw_slice_bounds(key_tensor, total_len)?
+        };
+        let l_bytes = if logits_inout.is_null() || vocab_size == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(logits_inout, vocab_size)?
+        };
+        let r_bytes = if report_out.is_null() {
+            0
+        } else {
+            size_of::<lmnk_causal_report_t>()
+        };
+        check_disjoint_rw(
+            &[
+                (trail_inout as usize, size_of::<lmnk_pointer_trail_t>()),
+                (query_tensor as usize, q_bytes),
+                (key_tensor as usize, k_bytes),
+                (logits_inout as usize, l_bytes),
+                (report_out as usize, r_bytes),
+            ],
+            &[(frame as usize, size_of::<lmnk_gateway_frame_t>())],
+        )?;
+        // SAFETY: Validated for non-nullness, 64B alignment, bounds, and disjointness above.
         unsafe {
+            let frame_ref = FfiHandleRef::from_raw(frame)?;
             execute_gateway_frame_steer_and_optional_kmeans_ffi(
                 &frame_ref,
                 trail_inout,
@@ -914,7 +1088,13 @@ pub unsafe extern "C" fn lmnk_phase_steering_fused_logit_shift(
         validate_ptr_aligned(logits, 32)?;
         validate_ptr(phase_deltas)?;
         let (engine, _) = init_phase_engine(128, num_heads)?;
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
+        let l_bytes = validate_raw_slice_bounds(logits, vocab_size)?;
+        let p_bytes = validate_raw_slice_bounds(phase_deltas, num_heads)?;
+        check_disjoint_rw(
+            &[(logits as usize, l_bytes)],
+            &[(phase_deltas as usize, p_bytes)],
+        )?;
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
         let (mut l_aligned, p_aligned) = unsafe {
             (
                 AlignedSliceMut32::from_raw_parts_mut(logits, vocab_size)?,
@@ -945,17 +1125,22 @@ pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_delta(
         validate_ptr(phase_out)?;
         let (head_dim, num_heads) = resolve_flat_tensor_heads(dim)?;
         let engine = PhaseSteeringEngine::new(head_dim, num_heads)?;
+        let s_bytes = validate_raw_slice_bounds(source, dim)?;
+        let _ = validate_raw_slice_bounds(target, dim)?;
+        let p_bytes = validate_raw_slice_bounds(phase_out, num_heads as usize)?;
+        check_disjoint_rw(
+            &[(phase_out as usize, p_bytes)],
+            &[(source as usize, s_bytes), (target as usize, s_bytes)],
+        )?;
 
-        // SAFETY: Validated for non-nullness, alignment, and bounds.
-        let (src_aligned, tgt_aligned) = unsafe {
+        // SAFETY: Validated for non-nullness, alignment, bounds, and disjointness.
+        let (src_aligned, tgt_aligned, mut out_aligned) = unsafe {
             (
                 AlignedSlice32::from_raw_parts(source, dim)?,
                 AlignedSlice32::from_raw_parts(target, dim)?,
+                AlignedSliceMut16::from_raw_parts_mut(phase_out, num_heads as usize)?,
             )
         };
-        // SAFETY: Validated for non-nullness, 16B alignment, and bounds.
-        let mut out_aligned =
-            unsafe { AlignedSliceMut16::from_raw_parts_mut(phase_out, num_heads as usize)? };
 
         engine.compute_procrustes_phase_delta(&src_aligned, &tgt_aligned, &mut out_aligned)?;
         Ok(LMNK_OK)
@@ -997,15 +1182,16 @@ pub unsafe extern "C" fn lmnk_subhead_dispatch_single_pass(
 ) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
-        // SAFETY: Validated for non-nullness and 16B alignment.
-        let cfg = unsafe { FfiHandleRef::from_raw(subhead_cfg)? };
+        validate_ptr(subhead_cfg)?;
+        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 16B alignment of immutable `subhead_cfg`.
+        let cfg_copy = unsafe { *FfiHandleRef::from_raw(subhead_cfg)? };
         if head_dim == 0 || (head_dim & 1) != 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
-        let total_heads = (cfg.num_fact_heads as usize)
-            .checked_add(cfg.num_logic_heads as usize)
-            .and_then(|v| v.checked_add(cfg.num_explore_heads as usize))
+        let total_heads = (cfg_copy.num_fact_heads as usize)
+            .checked_add(cfg_copy.num_logic_heads as usize)
+            .and_then(|v| v.checked_add(cfg_copy.num_explore_heads as usize))
             .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
 
         if total_heads == 0 {
@@ -1015,11 +1201,16 @@ pub unsafe extern "C" fn lmnk_subhead_dispatch_single_pass(
         let expected_len = head_dim
             .checked_mul(total_heads)
             .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        // SAFETY: Validated for non-nullness, 32B alignment, and bounds.
+        let q_bytes = validate_raw_slice_bounds(query_tensor, expected_len)?;
+        check_disjoint_rw(
+            &[(query_tensor as usize, q_bytes)],
+            &[(subhead_cfg as usize, size_of::<lmnk_subhead_config_t>())],
+        )?;
+        // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness.
         let mut q_aligned =
             unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, expected_len)? };
 
-        dispatch_single_pass(&mut q_aligned, &cfg, head_dim)?;
+        dispatch_single_pass(&mut q_aligned, &cfg_copy, head_dim)?;
         Ok(LMNK_OK)
     })
 }
@@ -1039,16 +1230,28 @@ pub unsafe extern "C" fn lmnk_rank1_eval(
     ffi_boundary!({
         validate_ptr_aligned(y_out, 32)?;
         validate_ptr_aligned(x_in, 32)?;
-        // SAFETY: Validated for non-nullness and 32B alignment.
-        let desc = unsafe { FfiHandleRef::from_raw(rank1_desc)? };
+        validate_ptr(rank1_desc)?;
         if dim_in == 0 || dim_out == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness.
-        let mut io_guard =
-            unsafe { DisjointRefMut::<f32, 32, 32>::from_raw_parts(x_in, dim_in, y_out, dim_out)? };
-        let (x_slice, y_slice) = io_guard.as_ref_mut();
-        eval_rank1(y_slice, x_slice, &desc)?;
+        let x_bytes = validate_raw_slice_bounds(x_in, dim_in)?;
+        let y_bytes = validate_raw_slice_bounds(y_out, dim_out)?;
+        check_disjoint_rw(
+            &[(y_out as usize, y_bytes)],
+            &[
+                (x_in as usize, x_bytes),
+                (rank1_desc as usize, size_of::<lmnk_rank1_descriptor_t>()),
+            ],
+        )?;
+        // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness; caller
+        // guarantees valid immutable lifetimes for `desc`'s vector pointers.
+        unsafe {
+            let desc = FfiHandleRef::from_raw(rank1_desc)?;
+            let mut io_guard =
+                DisjointRefMut::<f32, 32, 32>::from_raw_parts(x_in, dim_in, y_out, dim_out)?;
+            let (x_slice, y_slice) = io_guard.as_ref_mut();
+            eval_rank1(y_slice, x_slice, &desc)?;
+        }
         Ok(LMNK_OK)
     })
 }
@@ -1069,26 +1272,37 @@ pub unsafe extern "C" fn lmnk_rank1_eval_fused(
     ffi_boundary!({
         validate_ptr_aligned(y_inout, 32)?;
         validate_ptr_aligned(x_in, 32)?;
-        // SAFETY: Validated for non-nullness and 32B alignment.
-        let desc = unsafe { FfiHandleRef::from_raw(rank1_desc)? };
+        validate_ptr(rank1_desc)?;
         if dim_in == 0 || dim_out == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness.
-        let mut io_guard = unsafe {
-            DisjointRefMut::<f32, 32, 32>::from_raw_parts(x_in, dim_in, y_inout, dim_out)?
-        };
-        let (x_slice, y_slice) = io_guard.as_ref_mut();
-        eval_rank1_fused(y_slice, x_slice, &desc)?;
+        let x_bytes = validate_raw_slice_bounds(x_in, dim_in)?;
+        let y_bytes = validate_raw_slice_bounds(y_inout, dim_out)?;
+        check_disjoint_rw(
+            &[(y_inout as usize, y_bytes)],
+            &[
+                (x_in as usize, x_bytes),
+                (rank1_desc as usize, size_of::<lmnk_rank1_descriptor_t>()),
+            ],
+        )?;
+        // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness; caller
+        // guarantees valid immutable lifetimes for `desc`'s vector pointers.
+        unsafe {
+            let desc = FfiHandleRef::from_raw(rank1_desc)?;
+            let mut io_guard =
+                DisjointRefMut::<f32, 32, 32>::from_raw_parts(x_in, dim_in, y_inout, dim_out)?;
+            let (x_slice, y_slice) = io_guard.as_ref_mut();
+            eval_rank1_fused(y_slice, x_slice, &desc)?;
+        }
         Ok(LMNK_OK)
     })
 }
 
-/// L2P-SVD: Training-free projection of fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}$,
-/// $W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$) into an Rank-1 residual Rank-1 descriptor and Q7 phase profile (Section 5.2).
+/// LoraPhaseProjector: Training-free projection of fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}$,
+/// $W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$) into a Rank-1 residual descriptor and Q7 phase profile (Section 5.2).
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, and bounds invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_lora_project(
     lora_a: *const f32,
@@ -1103,33 +1317,44 @@ pub unsafe extern "C" fn lmnk_lora_project(
         validate_ptr(lora_a)?;
         validate_ptr(lora_b)?;
         validate_ptr(phase_profile_out)?;
-        // SAFETY: Validated for non-nullness and 32B alignment.
-        let mut rank1_desc = unsafe { FfiHandleMut::from_raw(rank1_out)? };
+        validate_ptr(rank1_out)?;
         if rank == 0 || dim_in == 0 || dim_out == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
         let a_len = rank.checked_mul(dim_in).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         let b_len = dim_out.checked_mul(rank).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let num_heads = (dim_out / 128).clamp(1, MAX_ATTENTION_HEADS);
+        let a_bytes = validate_raw_slice_bounds(lora_a, a_len)?;
+        let b_bytes = validate_raw_slice_bounds(lora_b, b_len)?;
+        let p_bytes = validate_raw_slice_bounds(phase_profile_out, num_heads)?;
+        check_disjoint_rw(
+            &[
+                (rank1_out as usize, size_of::<lmnk_rank1_descriptor_t>()),
+                (phase_profile_out as usize, p_bytes),
+            ],
+            &[(lora_a as usize, a_bytes), (lora_b as usize, b_bytes)],
+        )?;
 
         if is_ptr_aligned_to(lora_a, 32)
             && is_ptr_aligned_to(lora_b, 32)
             && is_ptr_aligned_to(phase_profile_out, 16)
             && ((dim_out & 1) == 0)
         {
-            let num_heads = (dim_out / 128).clamp(1, MAX_ATTENTION_HEADS);
-            // SAFETY: `lora_a` and `lora_b` are non-null, verified 32-byte aligned, and
-            // `a_len`/`b_len` were computed with checked multiplication above.
-            let (a_aligned, b_aligned) = unsafe {
+            // SAFETY: `lora_a`, `lora_b`, `rank1_out`, and `phase_profile_out` are aligned,
+            // bounded, and disjoint above.
+            let ((a_aligned, b_aligned), (mut rank1_desc, mut p_aligned)) = unsafe {
                 (
-                    AlignedSlice32::from_raw_parts(lora_a, a_len)?,
-                    AlignedSlice32::from_raw_parts(lora_b, b_len)?,
+                    (
+                        AlignedSlice32::from_raw_parts(lora_a, a_len)?,
+                        AlignedSlice32::from_raw_parts(lora_b, b_len)?,
+                    ),
+                    (
+                        FfiHandleMut::from_raw(rank1_out)?,
+                        AlignedSliceMut16::from_raw_parts_mut(phase_profile_out, num_heads)?,
+                    ),
                 )
             };
-            // SAFETY: `phase_profile_out` is non-null, verified 16-byte aligned above, and
-            // `num_heads` is clamped to `1..=MAX_ATTENTION_HEADS`.
-            let mut p_aligned =
-                unsafe { AlignedSliceMut16::from_raw_parts_mut(phase_profile_out, num_heads)? };
 
             project_lora(
                 &a_aligned,
@@ -1143,11 +1368,17 @@ pub unsafe extern "C" fn lmnk_lora_project(
             return Ok(LMNK_OK);
         }
 
-        // SAFETY: Validated non-null and 4B aligned above.
-        let (a_slice, b_slice) = unsafe {
+        // SAFETY: All pointers are validated non-null, naturally aligned, bounded, and disjoint.
+        let ((a_slice, b_slice), (mut rank1_desc, p_out_slice)) = unsafe {
             (
-                slice::from_raw_parts(lora_a, a_len),
-                slice::from_raw_parts(lora_b, b_len),
+                (
+                    checked_slice_from_raw_parts(lora_a, a_len)?,
+                    checked_slice_from_raw_parts(lora_b, b_len)?,
+                ),
+                (
+                    FfiHandleMut::from_raw(rank1_out)?,
+                    checked_slice_from_raw_parts_mut(phase_profile_out, num_heads)?,
+                ),
             )
         };
 
@@ -1173,13 +1404,20 @@ pub unsafe extern "C" fn lmnk_lora_project(
         rank1_desc.gain_scalar_ptr = 0;
         rank1_desc.scale_factor = branchless_select_f32(sigma_1 > 0.0, sigma_1, 1.0);
 
-        let phase_val = if dim_out >= 2 {
-            branchless_atan2_to_q7_fast(b_slice[rank], b_slice[0])
+        if dim_out >= 2 {
+            let num_pairs = (dim_out / 2).max(1);
+            let step_pairs = (num_pairs / num_heads).max(1);
+            let mut h = 0usize;
+            while h < num_heads {
+                let pair_idx = (h * step_pairs) % num_pairs;
+                let base_idx = (pair_idx << 1) * rank;
+                p_out_slice[h] =
+                    branchless_atan2_to_q7_fast(b_slice[base_idx + rank], b_slice[base_idx]);
+                h += 1;
+            }
         } else {
-            0
-        };
-        // SAFETY: `phase_profile_out` is validated non-null above.
-        unsafe { *phase_profile_out = phase_val };
+            p_out_slice.fill(0);
+        }
         Ok(LMNK_OK)
     })
 }

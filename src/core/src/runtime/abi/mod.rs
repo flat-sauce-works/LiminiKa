@@ -4,31 +4,8 @@
 //! C-ABI interface definitions, FFI safety barriers, binary layout contracts, pointer-driven
 //! orchestration entry points, and opaque handle management for `LiminiKa` `v0.2.0` (`0x0000_0200`).
 
-#![deny(missing_docs)]
-#![deny(unsafe_op_in_unsafe_fn)]
-#![warn(clippy::missing_safety_doc)]
-#![warn(clippy::missing_errors_doc)]
 #![allow(non_camel_case_types)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
 #![allow(clippy::too_many_lines)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::inline_always)]
-#![allow(clippy::incompatible_msrv)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::needless_option_as_deref)]
-#![allow(clippy::needless_range_loop)]
-#![allow(clippy::manual_range_contains)]
-#![allow(clippy::manual_slice_size_calculation)]
-#![allow(clippy::unnecessary_cast)]
-#![allow(clippy::excessive_precision)]
-#![allow(clippy::approx_constant)]
-#![allow(clippy::if_same_then_else)]
-#![allow(clippy::ifs_same_cond)]
-#![allow(clippy::field_reassign_with_default)]
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -45,59 +22,44 @@ use core::mem::{align_of, offset_of, size_of};
 use core::ptr;
 use core::slice;
 
-#[allow(unused_imports)]
 use crate::drivers::{
     eval_barrier_pitchfork, EgoDifferentialNet, LiminalEgoPreset, MAX_DISTORTION_CHAIN_HOPS,
     MAX_EGO_PFRAME_NODES,
 };
-#[allow(unused_imports)]
 use crate::foundation::{
-    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_crc32_ieee,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_min_f32,
-    branchless_project_f32_slice_to_q7_64, branchless_q7_add_sat, branchless_q7_neg_sat,
+    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_min_f32, branchless_project_f32_slice_to_q7_64,
     branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
     branchless_sqrt_f32, dispatch_single_pass, eval_rank1, eval_rank1_fused, is_ptr_aligned_to,
     load_q7_words_64, pack_action_slot_tag, project_bytes_swar_to_words_64,
     project_f32_slice_to_q7_64, project_f32_slice_to_words_64, project_lora,
     raw_byte_ranges_overlap, steer_from_swar_words_core_safe, store_q7_words_64, sum_sq_f32_simd8,
     swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, AlignedSlice16, AlignedSlice32, AlignedSliceMut16,
-    AlignedSliceMut32, DisjointMutPair, DisjointRefMut, PhaseSteering, PhaseSteeringGeometryExt,
-    Pod, RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout,
+    unpack_attractor_slot_from_tag, validate_raw_slice_bounds, AlignedSlice16, AlignedSlice32,
+    AlignedSliceMut16, AlignedSliceMut32, DisjointMutPair, DisjointRefMut, PhaseSteering,
+    PhaseSteeringGeometryExt, RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
     PAGED_BITMASK_BITS,
 };
-#[allow(unused_imports)]
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8,
     evaluate_lacuna_partition_branchless, LmnkResult, MAX_ATTENTION_HEADS,
 };
-#[allow(unused_imports)]
 use crate::runtime::context::{
     init_default_config, query_capability, validate_config_invariants, Config, RuntimeContext,
-    CTX_ALLOC_HEAP_BOXED, CTX_ALLOC_IN_PLACE, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES,
+    CTX_ALLOC_HEAP_BOXED, CTX_ALLOC_IN_PLACE,
 };
-#[allow(unused_imports)]
 use crate::runtime::gateway::{
     accumulate_trail_and_steer_gateway_words_core,
     synthesize_multi_origin_gateway_frame_with_words, CausalProvenanceSignal,
-    CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal, ManifoldGatewaySignal,
-    ObjectiveFact, SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal, ObjectiveFact,
+    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
 };
-#[allow(unused_imports)]
 use crate::runtime::horizon::evaluate_epistemic_horizon_words_64;
-#[allow(unused_imports)]
-use crate::runtime::storage::{
-    init_container_header, init_descriptor_header, validate_descriptor_header,
-    write_container_sections_to_bytes, LmnkContainerView,
-};
-#[allow(unused_imports)]
 use crate::stigmergy::{
-    evaluate_stigmergic_overlap_and_discovery_words_64, trail_phase_words_mut,
-    trail_phase_words_ref, FastPathLedger, PhaseSteeringEngine, StigmergicSubstrate,
-    ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    evaluate_stigmergic_overlap_and_discovery_words_64, trail_phase_words_mut, FastPathLedger,
+    PhaseSteeringEngine, StigmergicSubstrate, ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE,
+    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
@@ -152,10 +114,16 @@ pub use topology::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::foundation::pod::Pod;
     use crate::foundation::{
         AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, ACTION_PRESET_EXPRESS_PHASE,
         ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
         ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+    };
+    use crate::runtime::context::LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES;
+    use crate::runtime::storage::{
+        init_container_header, init_descriptor_header, validate_descriptor_header,
+        write_container_sections_to_bytes, LmnkContainerView,
     };
     use crate::stigmergy::{
         StigmergicActionDecision, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
@@ -845,7 +813,7 @@ mod tests {
         assert_eq!(q_passive.data, [1.0f32, 0.0, 1.0, 0.0]);
         assert!(q_active.data[3] > 0.0);
 
-        let mut hub_handle: LmnkSubstrateHandle = ptr::null_mut();
+        let mut substrate_handle: LmnkSubstrateHandle = ptr::null_mut();
         let mut thresh = lmnk_stigmergic_thresholds_t::default();
         let mut orch_report = lmnk_substrate_step_report_t::default();
         let mut orch_trail = lmnk_pointer_trail_t {
@@ -858,7 +826,7 @@ mod tests {
         let mut k_orch = AlignedBuffer32::new([1.0f32; 16]);
         // SAFETY: Local stack variables satisfy alignment and disjointness invariants.
         unsafe {
-            assert_eq!(lmnk_substrate_create(16, &mut hub_handle), LMNK_OK);
+            assert_eq!(lmnk_substrate_create(16, &mut substrate_handle), LMNK_OK);
             assert_eq!(lmnk_substrate_init_default_thresholds(&mut thresh), LMNK_OK);
             assert_eq!(
                 lmnk_substrate_evaluate_thresholds(
@@ -880,7 +848,7 @@ mod tests {
             );
             assert_eq!(
                 lmnk_substrate_step_safe(
-                    hub_handle,
+                    substrate_handle,
                     &thresh,
                     active_ptr,
                     0.30,
@@ -900,13 +868,13 @@ mod tests {
             );
             assert_eq!(orch_report.dominant_anchor_id, 99);
             assert!(orch_report.updated_density >= 1.50);
-            assert_eq!(lmnk_substrate_destroy(hub_handle), LMNK_OK);
+            assert_eq!(lmnk_substrate_destroy(substrate_handle), LMNK_OK);
         }
     }
 
     #[test]
     fn test_epistemic_overlap_core_stack_and_mermaid_abi() {
-        let mut crystals = [
+        let mut anchors = [
             PhaseAnchorRecord::new_empty(11, ATTRACTOR_SLOT_KNOWLEDGE, 0),
             PhaseAnchorRecord::new_empty(12, ATTRACTOR_SLOT_KNOWLEDGE, 0),
             PhaseAnchorRecord::default(),
@@ -929,8 +897,8 @@ mod tests {
             phase_deltas: p1,
             ..GatewayFrame::default()
         };
-        let _ = crystals[0].absorb_gateway_frame(&f0);
-        let _ = crystals[1].absorb_gateway_frame(&f1);
+        let _ = anchors[0].absorb_gateway_frame(&f0);
+        let _ = anchors[1].absorb_gateway_frame(&f1);
 
         let query_phases = [16i8; MAX_ATTENTION_HEADS];
         let mut drifted_phases = [16i8; MAX_ATTENTION_HEADS];
@@ -950,8 +918,8 @@ mod tests {
         unsafe {
             assert_eq!(
                 lmnk_epistemic_evaluate_horizon(
-                    crystals.as_ptr(),
-                    crystals.len(),
+                    anchors.as_ptr(),
+                    anchors.len(),
                     query_phases.as_ptr(),
                     0.35,
                     &mut horizon,
@@ -962,8 +930,8 @@ mod tests {
 
             assert_eq!(
                 lmnk_stigmergic_evaluate_overlap_and_discovery(
-                    crystals.as_mut_ptr(),
-                    crystals.len(),
+                    anchors.as_mut_ptr(),
+                    anchors.len(),
                     query_phases.as_ptr(),
                     drifted_phases.as_ptr(),
                     0.70,
@@ -977,7 +945,7 @@ mod tests {
             );
             assert_eq!(overlap_report.discovery_triggered, 1);
             assert_eq!(did_nucleate, 1);
-            assert!(crystals[2].verify_integrity());
+            assert!(anchors[2].verify_integrity());
 
             assert_eq!(lmnk_core_stack_init_default(&mut stack), LMNK_OK);
             assert_eq!(

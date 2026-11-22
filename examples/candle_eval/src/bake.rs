@@ -16,7 +16,7 @@ use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona}
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
 
-use crate::model::{Phi3Config, Phi3Model};
+use crate::model::{LogitsFetchMode, Phi3Config, Phi3Model};
 
 pub(crate) struct FixtureSuite {
     pub(crate) facts: Vec<String>,
@@ -262,7 +262,9 @@ pub(crate) fn sample_startup_base_prior(
             .map_err(|e| format!("base prior encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (mut logits, _, _) = model.forward_tokens(&seq_ids, 0, None, false, false)?;
+        let (prefill_out, _, _) =
+            model.forward_tokens(&seq_ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
+        let mut logits = prefill_out.into_full_logits()?;
         let mut gen_ids = Vec::with_capacity(8);
         for offset in (seq_ids.len()..).take(8) {
             let next = argmax(&logits);
@@ -270,12 +272,20 @@ pub(crate) fn sample_startup_base_prior(
                 break;
             }
             gen_ids.push(next);
-            let (next_logits, _, _) = model.forward_tokens(&[next], offset, None, false, false)?;
-            logits = next_logits;
+            let (next_out, _, _) = model.forward_tokens(
+                &[next],
+                offset,
+                None,
+                false,
+                false,
+                LogitsFetchMode::FullLogits,
+            )?;
+            logits = next_out.into_full_logits()?;
         }
         seq_ids.extend_from_slice(&gen_ids);
         model.clear_cache();
-        let (_, layer_tok_qs, _) = model.forward_tokens(&seq_ids, 0, None, false, true)?;
+        let (_, layer_tok_qs, _) =
+            model.forward_tokens(&seq_ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
         base_entries.push(TokenSequenceEntry {
             role: AttractorRole::Persona,
             text: prompt.to_string(),
@@ -348,7 +358,8 @@ pub(crate) fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_tok_qs, h_vec) = model.forward_tokens(&ids, 0, None, false, true)?;
+        let (_, layer_tok_qs, h_vec) =
+            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
         for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
             let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
             for ((f_dst, p_dst), &src) in fact_sum[l]
@@ -373,7 +384,8 @@ pub(crate) fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_tok_qs, h_vec) = model.forward_tokens(&ids, 0, None, false, true)?;
+        let (_, layer_tok_qs, h_vec) =
+            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
         for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
             let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
             for ((per_dst, p_dst), &src) in persona_sum[l]
@@ -398,7 +410,8 @@ pub(crate) fn bake_via_adapter(
             .map_err(|e| format!("encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (_, layer_tok_qs, h_vec) = model.forward_tokens(&ids, 0, None, false, true)?;
+        let (_, layer_tok_qs, h_vec) =
+            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
         for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
             let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
             for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {

@@ -425,7 +425,7 @@ impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32, u32) {
 // ===================================================================
 
 /// 16-byte [`Pod`] telemetry report summarizing the personality growth and precision gain achieved
-/// when absorbing one or more [`EpisodicPhaseSample`] points into the attractor field.
+/// when absorbing one or more [`EpisodicPhaseSample`] points into the phase-anchor field.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct AttractorGrowthReport {

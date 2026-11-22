@@ -18,7 +18,7 @@ use crate::eval::{
     HorizonAblationMode, KvTraceStats, PressureSimMode, ReflectMode, SteerDecodeConfig,
     StepTelemetryTotals,
 };
-use crate::model::ResonantAnchors;
+use crate::model::{LogitsFetchMode, ResonantAnchors};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
     CompiledTokenCorpus, CorpusRecallEscalationProvider, FrameTransitionMetrics,
@@ -94,7 +94,8 @@ pub(crate) fn run_step2_evaluation(
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (_, layer_tok_qs, _) = model.forward_tokens(&ids, 0, None, false, true)?;
+            let (_, layer_tok_qs, _) =
+                model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
             staged_entries.push(TokenSequenceEntry {
                 role,
                 text: text.clone(),
@@ -149,7 +150,14 @@ pub(crate) fn run_step2_evaluation(
             let mut full_ids = prefix_ids.clone();
             full_ids.extend_from_slice(&ids_spaced);
             model.clear_cache();
-            let (_, alias_tok_qs, _) = model.forward_tokens(&full_ids, 0, None, false, true)?;
+            let (_, alias_tok_qs, _) = model.forward_tokens(
+                &full_ids,
+                0,
+                None,
+                false,
+                true,
+                LogitsFetchMode::FullLogits,
+            )?;
             let dim = adapter.geometry().q_rot_len();
             let start = prefix_ids.len() * dim;
             let end = full_ids.len() * dim;
@@ -245,6 +253,7 @@ pub(crate) fn run_step2_evaluation(
         let mut step2_steer_eligible_layers = 0_usize;
         let mut step2_whole_token_bypass_hits = 0_usize;
         let mut step2_decode_tokens_steered = 0_usize;
+        let mut step2_d2h_fast_skips = 0_usize;
         let mut step2_instability_recoveries = 0_usize;
         let mut step2_spine_veto_guard = 0_usize;
         let mut step2_spine_veto_repulse = 0_usize;
@@ -287,7 +296,14 @@ pub(crate) fn run_step2_evaluation(
                 cached.clone()
             } else {
                 model.clear_cache();
-                let (_, q_toks, _) = model.forward_tokens(&q_ids, 0, None, false, true)?;
+                let (_, q_toks, _) = model.forward_tokens(
+                    &q_ids,
+                    0,
+                    None,
+                    false,
+                    true,
+                    LogitsFetchMode::FullLogits,
+                )?;
                 prompt_q_cache.insert(prompt.clone(), q_toks.clone());
                 q_toks
             };
@@ -510,10 +526,12 @@ pub(crate) fn run_step2_evaluation(
                     enable_pre_bypass: run.enable_pre_bypass,
                     temperature: run.temperature,
                     rng_seed: run.rng_seed,
+                    d2h_heartbeat_max: cli.d2h_heartbeat_max,
                     steer_bypass_hits: 0,
                     steer_eligible_layers: 0,
                     whole_token_bypass_hits: 0,
                     decode_tokens_total: 0,
+                    d2h_fast_skips: 0,
                     instability_recoveries: 0,
                     spine_veto_guard_hits: 0,
                     spine_veto_repulse_hits: 0,
@@ -533,6 +551,7 @@ pub(crate) fn run_step2_evaluation(
                 step2_steer_eligible_layers += pass1_cfg.steer_eligible_layers;
                 step2_whole_token_bypass_hits += pass1_cfg.whole_token_bypass_hits;
                 step2_decode_tokens_steered += pass1_cfg.decode_tokens_total;
+                step2_d2h_fast_skips += pass1_cfg.d2h_fast_skips;
                 step2_instability_recoveries += pass1_cfg.instability_recoveries;
                 step2_spine_veto_guard += pass1_cfg.spine_veto_guard_hits;
                 step2_spine_veto_repulse += pass1_cfg.spine_veto_repulse_hits;
@@ -647,10 +666,12 @@ pub(crate) fn run_step2_evaluation(
                                 enable_pre_bypass: run.enable_pre_bypass,
                                 temperature: run.temperature,
                                 rng_seed: run.rng_seed,
+                                d2h_heartbeat_max: cli.d2h_heartbeat_max,
                                 steer_bypass_hits: 0,
                                 steer_eligible_layers: 0,
                                 whole_token_bypass_hits: 0,
                                 decode_tokens_total: 0,
+                                d2h_fast_skips: 0,
                                 instability_recoveries: 0,
                                 spine_veto_guard_hits: 0,
                                 spine_veto_repulse_hits: 0,
@@ -671,6 +692,7 @@ pub(crate) fn run_step2_evaluation(
                             step2_steer_eligible_layers += retry_cfg.steer_eligible_layers;
                             step2_whole_token_bypass_hits += retry_cfg.whole_token_bypass_hits;
                             step2_decode_tokens_steered += retry_cfg.decode_tokens_total;
+                            step2_d2h_fast_skips += retry_cfg.d2h_fast_skips;
                             step2_instability_recoveries += retry_cfg.instability_recoveries;
                             step2_spine_veto_guard += retry_cfg.spine_veto_guard_hits;
                             step2_spine_veto_repulse += retry_cfg.spine_veto_repulse_hits;
@@ -871,7 +893,7 @@ pub(crate) fn run_step2_evaluation(
         };
         let vram_pass = query_nvidia_smi_vram().unwrap_or_else(|| "n/a".to_string());
         let summary_line = format!(
-        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_promo={} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
+        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_settle={} d2h_skip={}/{} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -906,6 +928,8 @@ pub(crate) fn run_step2_evaluation(
         reflect_gate_skipped,
         ext_rescue_hits,
         adapter.sandbox_settlements(),
+        step2_d2h_fast_skips,
+        step2_decode_tokens,
         adapter.threshold_state().adaptation_epochs,
         adapter.stigmergic_granule_state().adaptation_epochs,
         adapter.ego_state().intervention_epochs,
@@ -1077,7 +1101,7 @@ pub(crate) fn run_step2_evaluation(
             reflect_adopted,
             reflect_skipped: reflect_gate_skipped,
             ext_rescues: ext_rescue_hits,
-            sandbox_promos: adapter.sandbox_settlements(),
+            sandbox_settlements: adapter.sandbox_settlements(),
             replies: pass_replies,
         });
         if adapter.ego_state().is_active() {

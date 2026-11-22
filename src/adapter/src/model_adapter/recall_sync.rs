@@ -360,16 +360,16 @@ impl ModelSteeringAdapter {
     /// Captures the live [`LiminalTopologyTelemetrySnapshot`] and renders a self-introspecting
     /// 3-layer Mermaid `flowchart TD` diagram covering Core Layer 0 (`Liminal`), Core Layer 1
     /// (`StigmergicGranuleState`), Core Layer 2 (`LiminalEgoState`), cognitive aperture masks,
-    /// and crystal populations.
+    /// and anchor populations.
     #[must_use]
     pub fn render_liminal_topology_mermaid(
         &self,
-        active_crystals: u8,
+        active_anchors: u8,
         spawned_daughters: u8,
     ) -> String {
         let distortion = self.telemetry_snapshot().distortion;
         self.render_liminal_topology_mermaid_with_distortion(
-            active_crystals,
+            active_anchors,
             spawned_daughters,
             &distortion,
         )
@@ -380,7 +380,7 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub fn render_liminal_topology_mermaid_with_distortion(
         &self,
-        active_crystals: u8,
+        active_anchors: u8,
         spawned_daughters: u8,
         distortion: &LayerDistortionReport,
     ) -> String {
@@ -388,7 +388,7 @@ impl ModelSteeringAdapter {
         let snap = LiminalTopologyTelemetrySnapshot::capture(
             &core_layers.liminal,
             self.ctx.last_horizon(),
-            active_crystals,
+            active_anchors,
             spawned_daughters,
         );
         let mut buf = [0u8; 2048];
@@ -552,6 +552,9 @@ impl ModelSteeringAdapter {
             Self::compute_slot_masks(new_geometry.num_layers);
         self.geometry = new_geometry;
         *self.ctx.sandbox_workbench_lane_mut() = None;
+        *self.ctx.escalated_workbench_lane_mut() = None;
+        self.escalation_boundary_dirty = true;
+        self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
         self.baseline_pinned_compute_mask = pinned_slots;
         self.ctx
             .compute_pool_mut()

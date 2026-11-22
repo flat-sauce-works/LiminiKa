@@ -134,6 +134,9 @@ pub const SPINE_BYPASS_VETO_REPULSION_ACTIVE: u8 = 1 << 1;
 /// Bypass vetoed because an irreversible step lock or pinned compute mask is active (`1 << 2`).
 pub const SPINE_BYPASS_VETO_PINNED_LOCK: u8 = 1 << 2;
 
+/// Minimum host-immutable compute slot bitmask (`bit 0`) preserved across untrusted snapshot restores.
+pub const HOST_IMMUTABLE_PINNED_COMPUTE_MASK: u64 = 1u64 << 0;
+
 /// Mechanical execution spine (`32 B`, `#[repr(C, align(16))]`, `DriverKind::System` = I-Frame).
 ///
 /// Owns physical `pinned` masks isolating irreversible steps, memory safety, OOD aperture-0 locks,

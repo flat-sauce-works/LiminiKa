@@ -397,6 +397,12 @@ pub struct ModelSteeringAdapter {
 impl Drop for ModelSteeringAdapter {
     fn drop(&mut self) {
         self.ctx.zeroize_in_place();
+        self.configured_ego = LiminalEgoState::new();
+        self.residual_adapter = ResidualAdapterEngine::default();
+        self.coherence_guard_slot = CoherenceHorizonGuardSlot::default();
+        *self.residual_spillover = DefaultResidualSpilloverSlot::default();
+        self.last_ensemble_report = None;
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
 }
 

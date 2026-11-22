@@ -306,7 +306,7 @@ lmnk_lora_project(const float* LMNK_RESTRICT lora_a, const float* LMNK_RESTRICT 
 /* 6. Stigmergic Substrate, Swarm Trail Resolution & FastPath Ledger          */
 /* -------------------------------------------------------------------------- */
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_substrate_create(
-    uint32_t capacity, lmnk_substrate_handle_t* LMNK_RESTRICT hub_out) LMNK_NOEXCEPT;
+    uint32_t capacity, lmnk_substrate_handle_t* LMNK_RESTRICT substrate_out) LMNK_NOEXCEPT;
 
 LMNK_API lmnk_status_t LMNK_CALL lmnk_substrate_destroy(lmnk_substrate_handle_t handle)
     LMNK_NOEXCEPT;
@@ -321,7 +321,7 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_substrate_evaluate_threshol
     uint8_t dominant_slot, lmnk_substrate_step_report_t* LMNK_RESTRICT report_out) LMNK_NOEXCEPT;
 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_substrate_step_safe(
-    lmnk_substrate_handle_t hub_opt,
+    lmnk_substrate_handle_t substrate_opt,
     const lmnk_stigmergic_thresholds_t* LMNK_RESTRICT thresholds_opt, uint64_t input_ptr,
     float entropy_h_tilde, uint8_t dominant_slot, lmnk_pointer_trail_t* LMNK_RESTRICT trail_inout,
     float* LMNK_RESTRICT attention_scores_inout, size_t num_scores,

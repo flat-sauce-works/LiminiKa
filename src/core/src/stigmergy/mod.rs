@@ -4,7 +4,7 @@
 //! Level 2 (`Stigmergy`): 8-granule SWAR stigmergic trails, pheromone density laws,
 //! 256-bit paged bitmasks, contrastive Bloom filters, fast-path ledgers, 8-lane
 //! [`StigmergicSubstrate`], multi-scale cognitive circuits, `.lmnk` crystallization, and macro
-//! attractor fields.
+//! phase-anchor fields.
 //!
 //! Depends strictly on `core`, [`crate::liminal`], and [`crate::foundation`].
 
@@ -179,7 +179,7 @@ pub const TRAIL_FLAG_SYNERGY_RESONANCE: u32 = 1 << 3;
 pub const TRAIL_FLAG_LIMINAL_BEAT_ACTIVE: u32 = 1 << 4;
 /// Trail flag bit (`0x20`): Low-entropy inertial layer skipping is active along this pointer chain.
 pub const TRAIL_FLAG_INERTIAL_SKIP_ACTIVE: u32 = 1 << 5;
-/// Trail flag bit (`0x40`): Subdivided 8-cell Micro-Swarm resolved the Action Hub command on the Hot Path.
+/// Trail flag bit (`0x40`): Subdivided 8-cell Micro-Swarm resolved the Stigmergic Substrate command on the Hot Path.
 pub const TRAIL_FLAG_SWARM_RESOLVED: u32 = 1 << 6;
 /// Trail flag bit (`0x80`): Micro-Swarm encountered quorum collapse and escalated the trail.
 pub const TRAIL_FLAG_SWARM_ESCALATED: u32 = 1 << 7;

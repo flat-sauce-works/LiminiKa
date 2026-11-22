@@ -365,21 +365,51 @@ pub unsafe extern "C" fn lmnk_context_step_token(
     trail_out: *mut lmnk_pointer_trail_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
-        let mut ctx = unsafe { FfiHandleMut::from_raw(context.cast::<RuntimeContext>())? };
-        let tensor_len = ctx.head_dim() as usize;
+        let typed = context.cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        // SAFETY: `typed` is verified non-null and 64-byte aligned; read scalar `head_dim` before taking `&mut`.
+        let tensor_len = unsafe { (*typed).head_dim() as usize };
         if tensor_len == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: `AlignedSliceMut32::from_raw_parts_mut_opt` validates alignment when non-null.
-        let (mut q_opt, mut k_opt) = unsafe {
+        let ctx_bytes = size_of::<RuntimeContext>();
+        let q_bytes = if query_tensor.is_null() {
+            0
+        } else {
+            validate_ptr_aligned(query_tensor, 32)?;
+            validate_raw_slice_bounds(query_tensor, tensor_len)?
+        };
+        let k_bytes = if key_tensor.is_null() {
+            0
+        } else {
+            validate_ptr_aligned(key_tensor, 32)?;
+            validate_raw_slice_bounds(key_tensor, tensor_len)?
+        };
+        let t_bytes = if trail_out.is_null() {
+            0
+        } else {
+            validate_ptr(trail_out)?;
+            size_of::<lmnk_pointer_trail_t>()
+        };
+        if raw_byte_ranges_overlap(typed as usize, ctx_bytes, query_tensor as usize, q_bytes)
+            || raw_byte_ranges_overlap(typed as usize, ctx_bytes, key_tensor as usize, k_bytes)
+            || raw_byte_ranges_overlap(typed as usize, ctx_bytes, trail_out as usize, t_bytes)
+            || raw_byte_ranges_overlap(query_tensor as usize, q_bytes, key_tensor as usize, k_bytes)
+            || raw_byte_ranges_overlap(query_tensor as usize, q_bytes, trail_out as usize, t_bytes)
+            || raw_byte_ranges_overlap(key_tensor as usize, k_bytes, trail_out as usize, t_bytes)
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+
+        // SAFETY: All non-null pointers are aligned, bounds-checked, and pairwise disjoint above.
+        let (mut ctx, mut q_opt, mut k_opt, mut trail_opt) = unsafe {
             (
+                FfiHandleMut::from_raw(typed)?,
                 AlignedSliceMut32::from_raw_parts_mut_opt(query_tensor, tensor_len)?,
                 AlignedSliceMut32::from_raw_parts_mut_opt(key_tensor, tensor_len)?,
+                FfiHandleMut::from_raw_opt(trail_out)?,
             )
         };
-        // SAFETY: Validated for non-nullness and 64B alignment when non-null.
-        let mut trail_opt = unsafe { FfiHandleMut::from_raw_opt(trail_out)? };
 
         ctx.step_token(
             token_id,
@@ -391,7 +421,7 @@ pub unsafe extern "C" fn lmnk_context_step_token(
     })
 }
 
-/// Serializes active runtime state into a `320`-byte `.lmnk` binary snapshot conforming to
+/// Serializes active runtime state into a `512`-byte `.lmnk` binary snapshot conforming to
 /// [`LMNK_ABI_VERSION_HEX`] with an IEEE 802.3 CRC32 payload checksum.
 ///
 /// # Safety
@@ -403,10 +433,25 @@ pub unsafe extern "C" fn lmnk_context_serialize(
     buffer_size: *mut usize,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
-        let ctx = unsafe { FfiHandleRef::from_raw(context.cast::<RuntimeContext>())? };
-        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
-        let mut size_io = unsafe { FfiHandleMut::from_raw(buffer_size)? };
+        let typed = context.cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        validate_ptr(buffer_size)?;
+        if raw_byte_ranges_overlap(
+            typed as usize,
+            size_of::<RuntimeContext>(),
+            buffer_size as usize,
+            size_of::<usize>(),
+        ) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+
+        // SAFETY: `typed` and `buffer_size` are non-null, aligned, and disjoint above.
+        let (ctx, mut size_io) = unsafe {
+            (
+                FfiHandleRef::from_raw(typed)?,
+                FfiHandleMut::from_raw(buffer_size)?,
+            )
+        };
         let mut required = 0usize;
         ctx.serialize_to_bytes(&mut [], &mut required)?;
 
@@ -420,9 +465,27 @@ pub unsafe extern "C" fn lmnk_context_serialize(
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
 
-        // SAFETY: `buffer` is non-null and `*size_io >= required`.
-        let out_bytes = unsafe { slice::from_raw_parts_mut(buffer, required) };
-        ctx.serialize_to_bytes(out_bytes, &mut size_io)?;
+        let _ = validate_raw_slice_bounds(buffer, *size_io)?;
+        let buf_bytes = validate_raw_slice_bounds(buffer, required)?;
+        if raw_byte_ranges_overlap(
+            typed as usize,
+            size_of::<RuntimeContext>(),
+            buffer as usize,
+            buf_bytes,
+        ) || raw_byte_ranges_overlap(
+            buffer as usize,
+            buf_bytes,
+            buffer_size as usize,
+            size_of::<usize>(),
+        ) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        // Drop `size_io` before reborrowing `*mut usize` after `serialize_to_bytes`, or copy scalar first.
+        let mut written = *size_io;
+        // SAFETY: `buffer` is non-null, `<= isize::MAX`, and disjoint from `context` and `buffer_size`.
+        let out_bytes = unsafe { checked_slice_from_raw_parts_mut(buffer, required)? };
+        ctx.serialize_to_bytes(out_bytes, &mut written)?;
+        *size_io = written;
         Ok(LMNK_OK)
     })
 }
@@ -442,14 +505,27 @@ pub unsafe extern "C" fn lmnk_context_deserialize(
         if buffer.is_null() {
             return Err(LMNK_ERR_NULL_POINTER);
         }
-        // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
-        let mut out_handle = unsafe { FfiHandleMut::from_raw(context_out)? };
+        validate_ptr(context_out)?;
         if buffer_size < LMNK_CONTAINER_HEADER_BYTES {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
+        let buf_bytes = validate_raw_slice_bounds(buffer, buffer_size)?;
+        if raw_byte_ranges_overlap(
+            buffer as usize,
+            buf_bytes,
+            context_out as usize,
+            size_of::<LmnkContextHandle>(),
+        ) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
 
-        // SAFETY: `buffer` is non-null and `buffer_size >= 64`.
-        let in_bytes = unsafe { slice::from_raw_parts(buffer, buffer_size) };
+        // SAFETY: `buffer` and `context_out` are validated non-null, bounded, aligned, and disjoint.
+        let (in_bytes, mut out_handle) = unsafe {
+            (
+                checked_slice_from_raw_parts(buffer, buffer_size)?,
+                FfiHandleMut::from_raw(context_out)?,
+            )
+        };
         let mut ctx = RuntimeContext::new(Config::new())?;
         ctx.deserialize_from_bytes(in_bytes)?;
         ctx.set_allocation_mode(CTX_ALLOC_HEAP_BOXED);
@@ -500,35 +576,67 @@ pub unsafe extern "C" fn lmnk_container_write_with_reports_zero_copy(
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
 
-        let anchors_slice: &[PhaseAnchorRecord] = if num_anchors == 0 {
-            &[]
+        let a_bytes = if num_anchors == 0 {
+            0
         } else {
             validate_ptr(anchors)?;
-            // SAFETY: Validated non-null and 64B aligned.
-            unsafe { slice::from_raw_parts(anchors, num_anchors) }
+            validate_raw_slice_bounds(anchors, num_anchors)?
         };
-        let trails_slice: &[lmnk_pointer_trail_t] = if num_trails == 0 {
-            &[]
+        let t_bytes = if num_trails == 0 {
+            0
         } else {
             validate_ptr(trails)?;
-            // SAFETY: Validated non-null and 64B aligned.
-            unsafe { slice::from_raw_parts(trails, num_trails) }
+            validate_raw_slice_bounds(trails, num_trails)?
         };
-        let reports_slice: &[CausalProvenanceReport] = if num_reports == 0 {
-            &[]
+        let r_bytes = if num_reports == 0 {
+            0
         } else {
             validate_ptr(reports)?;
-            // SAFETY: Validated non-null and 16B aligned.
-            unsafe { slice::from_raw_parts(reports, num_reports) }
+            validate_raw_slice_bounds(reports, num_reports)?
         };
-        // SAFETY: Validated optional pointers and destination buffer length.
-        let ((bloom_ref, ledger_ref), dst_slice) = unsafe {
+        let b_bytes = if bloom_opt.is_null() {
+            0
+        } else {
+            validate_ptr(bloom_opt)?;
+            size_of::<lmnk_bloom_filter_t>()
+        };
+        let l_bytes = if ledger_opt.is_null() {
+            0
+        } else {
+            validate_ptr(ledger_opt)?;
+            size_of::<lmnk_ledger_slot_t>()
+        };
+        let out_b = validate_raw_slice_bounds(out_bytes, required)?;
+        if raw_byte_ranges_overlap(out_bytes as usize, out_b, anchors as usize, a_bytes)
+            || raw_byte_ranges_overlap(out_bytes as usize, out_b, trails as usize, t_bytes)
+            || raw_byte_ranges_overlap(out_bytes as usize, out_b, reports as usize, r_bytes)
+            || raw_byte_ranges_overlap(out_bytes as usize, out_b, bloom_opt as usize, b_bytes)
+            || raw_byte_ranges_overlap(out_bytes as usize, out_b, ledger_opt as usize, l_bytes)
+            || raw_byte_ranges_overlap(
+                out_bytes as usize,
+                out_b,
+                buffer_size_inout as usize,
+                size_of::<usize>(),
+            )
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+
+        // SAFETY: All non-empty inputs and destination buffer are aligned, bounded, and disjoint.
+        let ((anchors_slice, trails_slice, reports_slice), ((bloom_ref, ledger_ref), dst_slice)) = unsafe {
             (
                 (
-                    FfiHandleRef::from_raw_opt(bloom_opt)?,
-                    FfiHandleRef::from_raw_opt(ledger_opt)?,
+                    checked_slice_from_raw_parts(anchors, num_anchors)?,
+                    checked_slice_from_raw_parts(trails, num_trails)?,
+                    checked_slice_from_raw_parts(reports, num_reports)?,
                 ),
-                slice::from_raw_parts_mut(out_bytes, required),
+                (
+                    (
+                        FfiHandleRef::from_raw_opt(bloom_opt)?,
+                        FfiHandleRef::from_raw_opt(ledger_opt)?,
+                    ),
+                    checked_slice_from_raw_parts_mut(out_bytes, required)?,
+                ),
             )
         };
 
@@ -607,8 +715,8 @@ pub unsafe extern "C" fn lmnk_container_verify_with_reports_zero_copy(
         if byte_len < LMNK_CONTAINER_HEADER_BYTES {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
-        // SAFETY: `container_bytes` is non-null and `byte_len >= 64`.
-        let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
+        // SAFETY: `container_bytes` is non-null, `byte_len >= 64`, and within `isize::MAX`.
+        let bytes = unsafe { checked_slice_from_raw_parts(container_bytes, byte_len)? };
         let view = LmnkContainerView::parse(bytes)?;
         if ((container_bytes as usize) & 63) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
@@ -620,49 +728,44 @@ pub unsafe extern "C" fn lmnk_container_verify_with_reports_zero_copy(
         let ledger = view.ledger_slot_zero_copy()?;
         let reports = view.causal_provenance_zero_copy()?;
 
-        // SAFETY: `write_opt_out` validates optional output pointers.
+        // SAFETY: Optional output pointers are validated non-null and naturally aligned inside `write_opt_out` / `FfiHandleMut::from_raw_opt`.
         unsafe {
             write_opt_out(num_anchors_out, anchors.len())?;
             write_opt_out(num_trails_out, trails.len())?;
             write_opt_out(num_reports_out, reports.len())?;
-        }
-        // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
-        if let Some(mut ap_out) = unsafe { FfiHandleMut::from_raw_opt(anchors_ptr_out)? } {
-            *ap_out = if anchors.is_empty() {
-                ptr::null()
-            } else {
-                anchors.as_ptr()
-            };
-        }
-        // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
-        if let Some(mut tp_out) = unsafe { FfiHandleMut::from_raw_opt(trails_ptr_out)? } {
-            *tp_out = if trails.is_empty() {
-                ptr::null()
-            } else {
-                trails.as_ptr()
-            };
-        }
-        // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
-        if let Some(mut bp_out) = unsafe { FfiHandleMut::from_raw_opt(bloom_ptr_out)? } {
-            *bp_out = match bloom {
-                Some(b_ref) => b_ref as *const lmnk_bloom_filter_t,
-                None => ptr::null(),
-            };
-        }
-        // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
-        if let Some(mut dp_out) = unsafe { FfiHandleMut::from_raw_opt(ledger_ptr_out)? } {
-            *dp_out = match ledger {
-                Some(d_ref) => d_ref as *const lmnk_ledger_slot_t,
-                None => ptr::null(),
-            };
-        }
-        // SAFETY: `FfiHandleMut::from_raw_opt` validates optional output pointers.
-        if let Some(mut rp_out) = unsafe { FfiHandleMut::from_raw_opt(reports_ptr_out)? } {
-            *rp_out = if reports.is_empty() {
-                ptr::null()
-            } else {
-                reports.as_ptr()
-            };
+            if let Some(mut ap_out) = FfiHandleMut::from_raw_opt(anchors_ptr_out)? {
+                *ap_out = if anchors.is_empty() {
+                    ptr::null()
+                } else {
+                    anchors.as_ptr()
+                };
+            }
+            if let Some(mut tp_out) = FfiHandleMut::from_raw_opt(trails_ptr_out)? {
+                *tp_out = if trails.is_empty() {
+                    ptr::null()
+                } else {
+                    trails.as_ptr()
+                };
+            }
+            if let Some(mut bp_out) = FfiHandleMut::from_raw_opt(bloom_ptr_out)? {
+                *bp_out = match bloom {
+                    Some(b_ref) => b_ref as *const lmnk_bloom_filter_t,
+                    None => ptr::null(),
+                };
+            }
+            if let Some(mut dp_out) = FfiHandleMut::from_raw_opt(ledger_ptr_out)? {
+                *dp_out = match ledger {
+                    Some(d_ref) => d_ref as *const lmnk_ledger_slot_t,
+                    None => ptr::null(),
+                };
+            }
+            if let Some(mut rp_out) = FfiHandleMut::from_raw_opt(reports_ptr_out)? {
+                *rp_out = if reports.is_empty() {
+                    ptr::null()
+                } else {
+                    reports.as_ptr()
+                };
+            }
         }
         Ok(LMNK_OK)
     })
@@ -728,28 +831,59 @@ pub unsafe extern "C" fn lmnk_container_map_and_steer_zero_copy_safe(
         if byte_len < LMNK_CONTAINER_HEADER_BYTES {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
+        let c_bytes = validate_raw_slice_bounds(container_bytes, byte_len)?;
         validate_ptr(trail_inout)?;
+        let (_, total_len) = init_phase_engine(head_dim, num_heads)?;
+        let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
         if raw_byte_ranges_overlap(
             container_bytes as usize,
-            byte_len,
+            c_bytes,
             trail_inout as usize,
             size_of::<lmnk_pointer_trail_t>(),
-        ) {
+        ) || raw_byte_ranges_overlap(
+            container_bytes as usize,
+            c_bytes,
+            query_tensor as usize,
+            qk_bytes,
+        ) || (!key_tensor.is_null()
+            && raw_byte_ranges_overlap(
+                container_bytes as usize,
+                c_bytes,
+                key_tensor as usize,
+                qk_bytes,
+            ))
+            || raw_byte_ranges_overlap(
+                trail_inout as usize,
+                size_of::<lmnk_pointer_trail_t>(),
+                query_tensor as usize,
+                qk_bytes,
+            )
+            || (!key_tensor.is_null()
+                && raw_byte_ranges_overlap(
+                    trail_inout as usize,
+                    size_of::<lmnk_pointer_trail_t>(),
+                    key_tensor as usize,
+                    qk_bytes,
+                ))
+        {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
-        // SAFETY: `bind_qk_32` validates `query_tensor` and `key_tensor` alignment and disjointness.
-        let (_engine, mut q_aligned, mut k_opt) =
-            unsafe { bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)? };
-        // SAFETY: `container_bytes` is non-null and `byte_len >= 64`.
-        let bytes = unsafe { slice::from_raw_parts(container_bytes, byte_len) };
+        // SAFETY: `container_bytes` is non-null and bounds-checked; `bind_qk_32` validates Q/K
+        // alignment and disjointness; `trail_inout` is disjoint from Q/K and `container_bytes`.
+        let (bytes, (_engine, mut q_aligned, mut k_opt)) = unsafe {
+            (
+                checked_slice_from_raw_parts(container_bytes, byte_len)?,
+                bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)?,
+            )
+        };
         let view = LmnkContainerView::parse(bytes)?;
         if ((container_bytes as usize) & 63) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         let anchors = view.phase_anchors_zero_copy()?;
         let bloom = view.bloom_filter_zero_copy()?;
-        // SAFETY: `trail_inout` is validated above.
+        // SAFETY: `trail_inout` is validated aligned and disjoint above.
         let mut trail = unsafe { FfiHandleMut::from_raw(trail_inout)? };
 
         let (tot_pull, dom_id, eff_clamp) = steer_crystallized_records_with_optional_bloom_safe(

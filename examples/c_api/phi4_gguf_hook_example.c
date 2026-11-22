@@ -130,7 +130,7 @@ int main(void) {
 
     /* Also verify 2-Origin Gateway composite steering (structural hyperparameters). */
     lmnk_pointer_trail_t* trail =
-        (lmnk_pointer_trail_t*)lmnk_alloc_aligned(128u, sizeof(lmnk_pointer_trail_t));
+        (lmnk_pointer_trail_t*)lmnk_alloc_aligned(64u, sizeof(lmnk_pointer_trail_t));
     lmnk_q7_t* persona_deltas = (lmnk_q7_t*)lmnk_alloc_aligned(16u, num_heads * sizeof(lmnk_q7_t));
     if (trail == NULL || persona_deltas == NULL) {
         fprintf(stderr, "Aligned Gateway buffer allocation failed\n");

@@ -11,7 +11,10 @@ use core::arch::x86_64::{
 };
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
-use crate::foundation::pod::{Rank1Descriptor, TaggedPtr, ACTION_MODE_RANK1_INJECT};
+use crate::foundation::pod::{
+    raw_byte_ranges_overlap, validate_raw_slice_bounds, Rank1Descriptor, TaggedPtr,
+    ACTION_MODE_RANK1_INJECT,
+};
 use crate::foundation::rope::kernels::ptr_has_action_mode;
 use crate::foundation::scalar_math::{branchless_flush_subnormal_f32, branchless_is_finite_f32};
 use crate::foundation::simd_stats::dot_f32_unrolled4;
@@ -251,11 +254,16 @@ pub(crate) fn rank1_accum_outer_product_simd(
 // 2. Synchronous Rank-1 Residual Adapter Pure Functions
 // ===================================================================
 
+/// # Safety
+/// Caller must ensure `desc.u_vector_ptr` (`d_out` floats), `desc.v_vector_ptr` (`d_in` floats),
+/// and optional `desc.gain_scalar_ptr` (`d_out` floats) point to valid, initialized, 32-byte aligned
+/// memory readable for lifetime `'a` without concurrent mutation.
 #[inline(always)]
-fn validate_and_unpack_rank1_descriptor<'a>(
+unsafe fn validate_and_unpack_rank1_descriptor<'a>(
     desc: &'a Rank1Descriptor,
     d_in: usize,
     d_out: usize,
+    y_out_ptr: *const f32,
 ) -> LmnkResult<(
     AlignedSlice32<'a, f32>,
     AlignedSlice32<'a, f32>,
@@ -272,20 +280,38 @@ fn validate_and_unpack_rank1_descriptor<'a>(
     if (u_ptr as usize) & 31 != 0 || (v_ptr as usize) & 31 != 0 {
         return Err(LMNK_ERR_ALIGNMENT);
     }
-    let g_slice_opt = if desc.gain_scalar_ptr != 0 {
+    let y_bytes = validate_raw_slice_bounds(y_out_ptr, d_out)?;
+    let u_bytes = validate_raw_slice_bounds(u_ptr, d_out)?;
+    let v_bytes = validate_raw_slice_bounds(v_ptr, d_in)?;
+    if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, u_ptr as usize, u_bytes)
+        || raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, v_ptr as usize, v_bytes)
+    {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
+    }
+
+    let g_ptr_opt = if desc.gain_scalar_ptr != 0 {
         let g_ptr = desc.gain_scalar_ptr as *const f32;
         if (g_ptr as usize) & 31 != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
-        // SAFETY: `g_ptr` is non-null, 32-byte aligned, and sized to `d_out` elements per C-ABI contract.
-        Some(unsafe { AlignedSlice32::new_unchecked(slice::from_raw_parts(g_ptr, d_out)) })
+        let g_bytes = validate_raw_slice_bounds(g_ptr, d_out)?;
+        if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, g_ptr as usize, g_bytes) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        Some(g_ptr)
     } else {
         None
     };
-    // SAFETY: `u_ptr` and `v_ptr` are non-null, 32-byte aligned, and sized to `d_out` and `d_in`.
-    let u_slice = unsafe { AlignedSlice32::new_unchecked(slice::from_raw_parts(u_ptr, d_out)) };
-    // SAFETY: `v_ptr` is non-null, 32-byte aligned, and sized to `d_in`.
-    let v_slice = unsafe { AlignedSlice32::new_unchecked(slice::from_raw_parts(v_ptr, d_in)) };
+
+    // SAFETY: `u_ptr`, `v_ptr`, and optional `g_ptr` are non-null, 32-byte aligned, bounds-checked,
+    // disjoint from `y_out_ptr`, and caller guarantees valid immutable lifetimes for `'a`.
+    let (u_slice, v_slice, g_slice_opt) = unsafe {
+        (
+            AlignedSlice32::new_unchecked(slice::from_raw_parts(u_ptr, d_out)),
+            AlignedSlice32::new_unchecked(slice::from_raw_parts(v_ptr, d_in)),
+            g_ptr_opt.map(|gp| AlignedSlice32::new_unchecked(slice::from_raw_parts(gp, d_out))),
+        )
+    };
     Ok((u_slice, v_slice, g_slice_opt))
 }
 
@@ -383,18 +409,27 @@ pub fn eval_rank1_slices_fused(
 /// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
 /// from a C-ABI [`Rank1Descriptor`] (including optional 32B-aligned `gain_scalar_ptr`).
 ///
+/// # Safety
+/// Caller must guarantee that `desc.u_vector_ptr` (`y_out.len()` `f32`s), `desc.v_vector_ptr`
+/// (`x_in.len()` `f32`s), and any non-zero `desc.gain_scalar_ptr` (`y_out.len()` `f32`s) point to
+/// valid, initialized, 32-byte aligned, immutable buffers for the duration of this call.
+///
 /// # Errors
 /// Returns [`LMNK_ERR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
 /// [`LMNK_ERR_ALIGNMENT`] if pointers are not 32B-aligned, or
-/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
+/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite,
+/// slices are empty, or input descriptors overlap `y_out`.
 #[inline]
-pub fn eval_rank1(
+pub unsafe fn eval_rank1(
     y_out: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
     desc: &Rank1Descriptor,
 ) -> LmnkResult<()> {
+    let y_ptr = y_out.as_ptr();
+    let y_len = y_out.len();
+    // SAFETY: Caller guarantees valid immutable lifetimes for `desc`'s raw pointers.
     let (u_slice, v_slice, g_slice_opt) =
-        validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_out.len())?;
+        unsafe { validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_len, y_ptr)? };
     eval_rank1_slices(
         y_out,
         x_in,
@@ -408,18 +443,27 @@ pub fn eval_rank1(
 /// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
 /// in-place into `y_inout` from a C-ABI [`Rank1Descriptor`] (including optional 32B-aligned `gain_scalar_ptr`).
 ///
+/// # Safety
+/// Caller must guarantee that `desc.u_vector_ptr` (`y_inout.len()` `f32`s), `desc.v_vector_ptr`
+/// (`x_in.len()` `f32`s), and any non-zero `desc.gain_scalar_ptr` (`y_inout.len()` `f32`s) point to
+/// valid, initialized, 32-byte aligned, immutable buffers for the duration of this call.
+///
 /// # Errors
 /// Returns [`LMNK_ERR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
 /// [`LMNK_ERR_ALIGNMENT`] if pointers are not 32B-aligned, or
-/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
+/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite,
+/// slices are empty, or input descriptors overlap `y_inout`.
 #[inline]
-pub fn eval_rank1_fused(
+pub unsafe fn eval_rank1_fused(
     y_inout: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
     desc: &Rank1Descriptor,
 ) -> LmnkResult<()> {
+    let y_ptr = y_inout.as_ptr();
+    let y_len = y_inout.len();
+    // SAFETY: Caller guarantees valid immutable lifetimes for `desc`'s raw pointers.
     let (u_slice, v_slice, g_slice_opt) =
-        validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
+        unsafe { validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_len, y_ptr)? };
     eval_rank1_slices_fused(
         y_inout,
         x_in,
@@ -432,17 +476,23 @@ pub fn eval_rank1_fused(
 
 /// Accumulates the fused Rank-1 outer product residual gated by `tagged_ptr`'s `ACTION_MODE_RANK1_INJECT` bit (`0x10`).
 ///
+/// # Safety
+/// Caller must guarantee that `desc`'s raw pointers satisfy the safety contract of [`eval_rank1_fused`].
+///
 /// # Errors
 /// Propagates any pointer/slice validation error from [`eval_rank1_fused`].
 #[inline]
-pub fn eval_rank1_pointer_gated_fused(
+pub unsafe fn eval_rank1_pointer_gated_fused(
     tagged_ptr: TaggedPtr,
     y_inout: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
     desc: &Rank1Descriptor,
 ) -> LmnkResult<bool> {
+    let y_ptr = y_inout.as_ptr();
+    let y_len = y_inout.len();
+    // SAFETY: Caller guarantees valid immutable lifetimes for `desc`'s raw pointers.
     let (u_slice, v_slice, g_slice_opt) =
-        validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
+        unsafe { validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_len, y_ptr)? };
     if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_RANK1_INJECT) {
         return Ok(false);
     }
@@ -481,12 +531,15 @@ mod tests {
             reserved: [0; 24],
         };
         let ptr = TaggedPtr::pack(0x1000, (1 << 5) | ACTION_PRESET_FULL_ORCHESTRATION, 0);
-        let injected = eval_rank1_pointer_gated_fused(
-            ptr,
-            &mut y_rank1.as_aligned_slice_mut(),
-            &x_rank1.as_aligned_slice(),
-            &desc,
-        )
+        // SAFETY: `u_rank1`, `v_rank1`, and `g_rank1` are live, 32-byte aligned, and disjoint from `y_rank1`.
+        let injected = unsafe {
+            eval_rank1_pointer_gated_fused(
+                ptr,
+                &mut y_rank1.as_aligned_slice_mut(),
+                &x_rank1.as_aligned_slice(),
+                &desc,
+            )
+        }
         .unwrap();
         assert!(injected);
         assert!((y_rank1.data[0] - 2.0).abs() < 1.0e-5);
@@ -495,11 +548,14 @@ mod tests {
             gain_scalar_ptr: g_rank1.as_aligned_slice().as_ptr() as u64,
             ..desc
         };
-        eval_rank1_fused(
-            &mut y_rank1.as_aligned_slice_mut(),
-            &x_rank1.as_aligned_slice(),
-            &desc_with_gain,
-        )
+        // SAFETY: `u_rank1`, `v_rank1`, and `g_rank1` are live, 32-byte aligned, and disjoint from `y_rank1`.
+        unsafe {
+            eval_rank1_fused(
+                &mut y_rank1.as_aligned_slice_mut(),
+                &x_rank1.as_aligned_slice(),
+                &desc_with_gain,
+            )
+        }
         .unwrap();
         assert!((y_rank1.data[0] - 4.0).abs() < 1.0e-5);
     }

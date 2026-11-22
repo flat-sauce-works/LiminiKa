@@ -614,16 +614,16 @@ fn test_cognitive_circuit_plasticity_composition_and_unified_container_roundtrip
 
     // Zero-copy unified .lmnk roundtrip via to_persona_ledger_slot & cognitive_trajectory_ledger.
     let slot = blended.to_persona_ledger_slot();
-    let crystals = [PhaseAnchorRecord::new_empty(1, ATTRACTOR_SLOT_PERSONA, 0)];
+    let anchors = [PhaseAnchorRecord::new_empty(1, ATTRACTOR_SLOT_PERSONA, 0)];
     let trails = [PointerTrail::default()];
     let req_len =
-        LmnkContainerView::required_standard_byte_len(crystals.len(), trails.len(), false, true, 0)
+        LmnkContainerView::required_standard_byte_len(anchors.len(), trails.len(), false, true, 0)
             .unwrap();
     let mut buf = [0u8; 1024];
     let off = buf.as_ptr().align_offset(128);
     let written = LmnkContainerView::write_standard_sections_to_bytes(
         LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-        &crystals,
+        &anchors,
         &trails,
         None,
         Some(&slot),
@@ -2590,7 +2590,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
 }
 
 #[test]
-fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
+fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let baseline = ManifoldProbeBaseline {
         baseline_entropy: 0.30,
         baseline_inter_layer_coherence: 0.80,
@@ -2663,7 +2663,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
     assert_eq!(substrate.slot_phase_bank.data[row_start], 0);
     assert_eq!(substrate.slot_phase_bank.data[row_start + 32], 10);
 
-    // 3. Consecutive coherence improvement promotes sandbox lane in-place.
+    // 3. Consecutive coherence improvement settles sandbox lane in-place.
     for _ in 0..3 {
         let _ = bank.update_assimilation_ema(0.25, 0.90, 0.20, &baseline, 0.15);
     }

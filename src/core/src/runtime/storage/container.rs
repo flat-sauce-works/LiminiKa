@@ -7,10 +7,10 @@ use core::mem::{align_of, offset_of, size_of};
 
 use super::{
     init_container_header, KvKeyframeCache, KvKeyframeHeader, LmnkContainerHeader,
-    LmnkSectionEntry, LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_MAGIC, LMNK_MAX_CONTAINER_BYTES,
-    LMNK_MAX_CONTAINER_SECTIONS, LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CAUSAL_PROVENANCE,
-    LMNK_SECTION_ENTRY_BYTES, LMNK_SECTION_LEDGER_SLOT, LMNK_SECTION_PHASE_ANCHORS,
-    LMNK_SECTION_POINTER_TRAILS,
+    LmnkSectionEntry, LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_KNOWN_FLAGS,
+    LMNK_CONTAINER_MAGIC, LMNK_MAX_CONTAINER_BYTES, LMNK_MAX_CONTAINER_SECTIONS,
+    LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CAUSAL_PROVENANCE, LMNK_SECTION_ENTRY_BYTES,
+    LMNK_SECTION_LEDGER_SLOT, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS,
 };
 use crate::foundation::{
     compute_aligned64_payload_crc32_ieee, compute_crc32_ieee, AlignedSlice, Pod,
@@ -430,6 +430,8 @@ impl<'a> LmnkContainerView<'a> {
             || header.section_table_offset != LMNK_CONTAINER_HEADER_BYTES as u32
             || header.section_count > LMNK_MAX_CONTAINER_SECTIONS
             || header.total_size != bytes.len() as u64
+            || (header.container_flags & !LMNK_CONTAINER_KNOWN_FLAGS) != 0
+            || header.reserved_future != [0u8; 20]
         {
             return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
@@ -450,11 +452,17 @@ impl<'a> LmnkContainerView<'a> {
         let table_end = LMNK_CONTAINER_HEADER_BYTES
             .checked_add(table_bytes)
             .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
-        if bytes.len() < table_end {
+        let mut prev_end = align_up_64_checked(table_end).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+        if bytes.len() < prev_end {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        let table_pad = bytes
+            .get(table_end..prev_end)
+            .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+        if table_pad.iter().any(|&b| b != 0) {
             return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
-        let mut prev_end = align_up_64_checked(table_end).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
         let mut sections = [LmnkSectionEntry::default(); LMNK_MAX_CONTAINER_SECTIONS as usize];
 
         let mut i = 0usize;
@@ -473,7 +481,7 @@ impl<'a> LmnkContainerView<'a> {
                 .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
             let entry = LmnkSectionEntry::from_le_bytes(entry_slice)?;
 
-            if entry.length == 0 {
+            if entry.length == 0 || entry.flags != 0 {
                 return Err(LMNK_ERR_CONTAINER_CORRUPTED);
             }
             let mut prev_idx = 0usize;
@@ -489,12 +497,23 @@ impl<'a> LmnkContainerView<'a> {
                 usize::try_from(entry.offset).map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
             let sec_len =
                 usize::try_from(entry.length).map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
-            if (sec_off & 63) != 0 || sec_off < prev_end {
+            if (sec_off & 63) != 0 || sec_off != prev_end {
                 return Err(LMNK_ERR_CONTAINER_CORRUPTED);
             }
             let sec_end = sec_off
                 .checked_add(sec_len)
                 .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            let next_aligned_end =
+                align_up_64_checked(sec_end).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            if next_aligned_end > bytes.len() {
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+            }
+            let pad_tail = bytes
+                .get(sec_end..next_aligned_end)
+                .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            if pad_tail.iter().any(|&b| b != 0) {
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+            }
             let payload = bytes
                 .get(sec_off..sec_end)
                 .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
@@ -544,8 +563,12 @@ impl<'a> LmnkContainerView<'a> {
 
             let dst_entry = sections.get_mut(i).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
             *dst_entry = entry;
-            prev_end = align_up_64_checked(sec_end).ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
+            prev_end = next_aligned_end;
             i += 1;
+        }
+
+        if prev_end != bytes.len() {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
         Ok(Self {
@@ -755,13 +778,13 @@ impl<'a> LmnkContainerView<'a> {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on arithmetic overflow.
     #[inline]
     pub const fn required_standard_byte_len(
-        num_crystals: usize,
+        num_anchors: usize,
         num_trails: usize,
         has_bloom: bool,
         has_ledger: bool,
         num_reports: usize,
     ) -> LmnkResult<usize> {
-        let sec_count = (num_crystals > 0) as usize
+        let sec_count = (num_anchors > 0) as usize
             + (num_trails > 0) as usize
             + (has_bloom as usize)
             + (has_ledger as usize)
@@ -771,8 +794,8 @@ impl<'a> LmnkContainerView<'a> {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
 
-        if num_crystals > 0 {
-            let Some(bytes) = num_crystals.checked_mul(size_of::<PhaseAnchorRecord>()) else {
+        if num_anchors > 0 {
+            let Some(bytes) = num_anchors.checked_mul(size_of::<PhaseAnchorRecord>()) else {
                 return Err(LMNK_ERR_INVALID_ARGUMENT);
             };
             let Some(end) = cursor.checked_add(bytes) else {
@@ -841,7 +864,7 @@ impl<'a> LmnkContainerView<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn write_standard_sections_to_bytes(
         container_flags: u32,
-        crystals: &[PhaseAnchorRecord],
+        anchors: &[PhaseAnchorRecord],
         trails: &[PointerTrail],
         bloom_opt: Option<&ContrastivePhaseBloomFilter>,
         ledger_opt: Option<&LedgerSlot>,
@@ -850,7 +873,7 @@ impl<'a> LmnkContainerView<'a> {
         dst_bytes: &mut [u8],
     ) -> LmnkResult<usize> {
         let total_len = Self::required_standard_byte_len(
-            crystals.len(),
+            anchors.len(),
             trails.len(),
             bloom_opt.is_some(),
             ledger_opt.is_some(),
@@ -864,7 +887,7 @@ impl<'a> LmnkContainerView<'a> {
             .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         buf.fill(0);
 
-        let sec_count = usize::from(!crystals.is_empty())
+        let sec_count = usize::from(!anchors.is_empty())
             + usize::from(!trails.is_empty())
             + usize::from(bloom_opt.is_some())
             + usize::from(ledger_opt.is_some())
@@ -873,12 +896,12 @@ impl<'a> LmnkContainerView<'a> {
         let mut cursor = align_up_64_checked(table_end).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         let mut sec_idx = 0usize;
 
-        if !crystals.is_empty() {
+        if !anchors.is_empty() {
             let off = cursor;
-            let len = crystals.len() * size_of::<PhaseAnchorRecord>();
+            let len = anchors.len() * size_of::<PhaseAnchorRecord>();
             let end = off + len;
             let payload_slice = buf.get_mut(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
-            let _ = PhaseAnchorRecord::write_records_to_container_bytes(crystals, payload_slice)?;
+            let _ = PhaseAnchorRecord::write_records_to_container_bytes(anchors, payload_slice)?;
             let crc = compute_aligned64_payload_crc32_ieee(payload_slice);
             let entry = LmnkSectionEntry {
                 kind: LMNK_SECTION_PHASE_ANCHORS,

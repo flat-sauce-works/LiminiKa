@@ -38,7 +38,7 @@ pub struct PersonaDecl {
     pub attractors: AttractorsBlock,
 }
 
-/// External Attractor Fields (positive attraction and phase-conjugate repulsion).
+/// Attractor rule block (positive attraction and phase-conjugate repulsion).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct AttractorsBlock {
     /// Positive attraction rules toward fixture/document sources.

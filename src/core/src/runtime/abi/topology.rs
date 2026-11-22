@@ -29,40 +29,33 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans(
 ) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(centroids_inout)?;
-        // SAFETY: Validated for non-nullness and 64B alignment.
-        let frame_ref = unsafe { FfiHandleRef::from_raw(frame)? };
+        validate_ptr(frame)?;
         if num_centroids == 0 || !branchless_is_finite_f32(split_coherence_threshold) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let cent_bytes = num_centroids
-            .checked_mul(size_of::<PhaseAnchorRecord>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        if raw_byte_ranges_overlap(
-            centroids_inout as usize,
-            cent_bytes,
-            frame as usize,
-            size_of::<lmnk_gateway_frame_t>(),
-        ) || (!trail_inout.is_null()
-            && (raw_byte_ranges_overlap(
-                centroids_inout as usize,
-                cent_bytes,
-                trail_inout as usize,
-                size_of::<lmnk_pointer_trail_t>(),
-            ) || raw_byte_ranges_overlap(
-                frame as usize,
-                size_of::<lmnk_gateway_frame_t>(),
-                trail_inout as usize,
-                size_of::<lmnk_pointer_trail_t>(),
-            )))
-        {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+        let cent_bytes = validate_raw_slice_bounds(centroids_inout, num_centroids)?;
+        let trail_bytes = if trail_inout.is_null() {
+            0
+        } else {
+            validate_ptr(trail_inout)?;
+            size_of::<lmnk_pointer_trail_t>()
+        };
+        check_disjoint_rw(
+            &[
+                (centroids_inout as usize, cent_bytes),
+                (trail_inout as usize, trail_bytes),
+            ],
+            &[(frame as usize, size_of::<lmnk_gateway_frame_t>())],
+        )?;
 
-        // SAFETY: Validated non-null, aligned, and disjoint above.
-        let (centroids_slice, mut trail_opt) = unsafe {
+        // SAFETY: Validated non-null, aligned, bounded, and disjoint above.
+        let ((centroids_slice, mut trail_opt), frame_ref) = unsafe {
             (
-                slice::from_raw_parts_mut(centroids_inout, num_centroids),
-                FfiHandleMut::from_raw_opt(trail_inout)?,
+                (
+                    checked_slice_from_raw_parts_mut(centroids_inout, num_centroids)?,
+                    FfiHandleMut::from_raw_opt(trail_inout)?,
+                ),
+                FfiHandleRef::from_raw(frame)?,
             )
         };
 
@@ -113,39 +106,28 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans_batch(
         {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let cent_bytes = num_centroids
-            .checked_mul(size_of::<PhaseAnchorRecord>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        let frames_bytes = num_frames
-            .checked_mul(size_of::<lmnk_gateway_frame_t>())
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        if raw_byte_ranges_overlap(
-            centroids_inout as usize,
-            cent_bytes,
-            frames as usize,
-            frames_bytes,
-        ) || (!trail_inout.is_null()
-            && (raw_byte_ranges_overlap(
-                centroids_inout as usize,
-                cent_bytes,
-                trail_inout as usize,
-                size_of::<lmnk_pointer_trail_t>(),
-            ) || raw_byte_ranges_overlap(
-                frames as usize,
-                frames_bytes,
-                trail_inout as usize,
-                size_of::<lmnk_pointer_trail_t>(),
-            )))
-        {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+        let cent_bytes = validate_raw_slice_bounds(centroids_inout, num_centroids)?;
+        let frames_bytes = validate_raw_slice_bounds(frames, num_frames)?;
+        let trail_bytes = if trail_inout.is_null() {
+            0
+        } else {
+            validate_ptr(trail_inout)?;
+            size_of::<lmnk_pointer_trail_t>()
+        };
+        check_disjoint_rw(
+            &[
+                (centroids_inout as usize, cent_bytes),
+                (trail_inout as usize, trail_bytes),
+            ],
+            &[(frames as usize, frames_bytes)],
+        )?;
 
-        // SAFETY: Validated non-null, aligned, and disjoint above.
+        // SAFETY: Validated non-null, aligned, bounded, and disjoint above.
         let ((centroids_slice, frames_slice), mut trail_opt) = unsafe {
             (
                 (
-                    slice::from_raw_parts_mut(centroids_inout, num_centroids),
-                    slice::from_raw_parts(frames, num_frames),
+                    checked_slice_from_raw_parts_mut(centroids_inout, num_centroids)?,
+                    checked_slice_from_raw_parts(frames, num_frames)?,
                 ),
                 FfiHandleMut::from_raw_opt(trail_inout)?,
             )
@@ -327,29 +309,29 @@ pub unsafe extern "C" fn lmnk_epistemic_evaluate_horizon(
         if !branchless_is_finite_f32(horizon_floor) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let records_slice: &[PhaseAnchorRecord] = if num_records == 0 {
-            &[]
+        validate_ptr(query_phases)?;
+        validate_ptr(reading_out)?;
+        let rec_bytes = if num_records == 0 {
+            0
         } else {
             validate_ptr(records)?;
-            let byte_len = num_records
-                .checked_mul(size_of::<PhaseAnchorRecord>())
-                .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-            if raw_byte_ranges_overlap(
-                records as usize,
-                byte_len,
-                reading_out as usize,
-                size_of::<EpistemicHorizonReading>(),
-            ) {
-                return Err(LMNK_ERR_INVALID_ARGUMENT);
-            }
-            // SAFETY: Validated non-null, 64B aligned, bounds checked, and disjoint above.
-            unsafe { slice::from_raw_parts(records, num_records) }
+            validate_raw_slice_bounds(records, num_records)?
         };
-        // SAFETY: `ref_phase64_from_raw` and `FfiHandleMut::from_raw` validate pointers & alignment.
-        let (q_ref, mut out_ref) = unsafe {
+        check_disjoint_rw(
+            &[(reading_out as usize, size_of::<EpistemicHorizonReading>())],
+            &[
+                (records as usize, rec_bytes),
+                (query_phases as usize, MAX_ATTENTION_HEADS),
+            ],
+        )?;
+        // SAFETY: Validated non-null, aligned, bounds-checked, and disjoint above.
+        let (records_slice, (q_ref, mut out_ref)) = unsafe {
             (
-                ref_phase64_from_raw(query_phases)?,
-                FfiHandleMut::from_raw(reading_out)?,
+                checked_slice_from_raw_parts(records, num_records)?,
+                (
+                    ref_phase64_from_raw(query_phases)?,
+                    FfiHandleMut::from_raw(reading_out)?,
+                ),
             )
         };
         let q_words = load_q7_words_64(q_ref);
@@ -385,6 +367,32 @@ pub unsafe extern "C" fn lmnk_stigmergic_evaluate_overlap_and_discovery(
         if !branchless_is_finite_f32(aperture_floor) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
+        validate_ptr(query_phases)?;
+        validate_ptr(drifted_phases)?;
+        validate_ptr(report_out)?;
+        let cent_bytes = if num_centroids == 0 {
+            0
+        } else {
+            validate_ptr(centroids_inout)?;
+            validate_raw_slice_bounds(centroids_inout, num_centroids)?
+        };
+        let nuc_bytes = if did_nucleate_out.is_null() {
+            0
+        } else {
+            validate_ptr(did_nucleate_out)?;
+            size_of::<u8>()
+        };
+        check_disjoint_rw(
+            &[
+                (centroids_inout as usize, cent_bytes),
+                (report_out as usize, size_of::<OverlapDiscoveryReport>()),
+                (did_nucleate_out as usize, nuc_bytes),
+            ],
+            &[
+                (query_phases as usize, MAX_ATTENTION_HEADS),
+                (drifted_phases as usize, MAX_ATTENTION_HEADS),
+            ],
+        )?;
         // SAFETY: Validate non-null phase buffers and aligned output handle.
         let ((q_ref, d_ref), mut rep_out) = unsafe {
             (
@@ -408,27 +416,9 @@ pub unsafe extern "C" fn lmnk_stigmergic_evaluate_overlap_and_discovery(
                 discovery_floor_q7,
             )
         } else {
-            validate_ptr(centroids_inout)?;
-            let byte_len = num_centroids
-                .checked_mul(size_of::<PhaseAnchorRecord>())
-                .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-            if raw_byte_ranges_overlap(
-                centroids_inout as usize,
-                byte_len,
-                report_out as usize,
-                size_of::<OverlapDiscoveryReport>(),
-            ) || (!did_nucleate_out.is_null()
-                && raw_byte_ranges_overlap(
-                    centroids_inout as usize,
-                    byte_len,
-                    did_nucleate_out as usize,
-                    size_of::<u8>(),
-                ))
-            {
-                return Err(LMNK_ERR_INVALID_ARGUMENT);
-            }
             // SAFETY: Validated non-null, 64B aligned, bounds-checked, and disjoint above.
-            let centroids = unsafe { slice::from_raw_parts_mut(centroids_inout, num_centroids) };
+            let centroids =
+                unsafe { checked_slice_from_raw_parts_mut(centroids_inout, num_centroids)? };
             let report = evaluate_stigmergic_overlap_and_discovery_words_64(
                 centroids,
                 &q_words,
@@ -579,16 +569,31 @@ pub unsafe extern "C" fn lmnk_topology_format_mermaid(
             return Ok(LMNK_OK);
         }
 
-        if !bytes_written_out.is_null()
-            && raw_byte_ranges_overlap(
-                out_buf as usize,
-                buf_cap,
-                bytes_written_out as usize,
-                size_of::<usize>(),
-            )
-        {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+        let out_bytes = validate_raw_slice_bounds(out_buf, buf_cap)?;
+        let bw_bytes = if bytes_written_out.is_null() {
+            0
+        } else {
+            validate_ptr(bytes_written_out)?;
+            size_of::<usize>()
+        };
+        check_disjoint_rw(
+            &[
+                (out_buf as usize, out_bytes),
+                (bytes_written_out as usize, bw_bytes),
+            ],
+            &[
+                (stack as usize, size_of::<lmnk_core_state_stack_t>()),
+                (horizon as usize, size_of::<lmnk_epistemic_horizon_t>()),
+                (
+                    overlap_report as usize,
+                    if overlap_report.is_null() {
+                        0
+                    } else {
+                        size_of::<lmnk_overlap_discovery_report_t>()
+                    },
+                ),
+            ],
+        )?;
         // SAFETY: `write_opt_out` validates optional output pointer.
         unsafe {
             write_opt_out(bytes_written_out, needed)?;
@@ -596,9 +601,9 @@ pub unsafe extern "C" fn lmnk_topology_format_mermaid(
         if buf_cap < needed {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
-        // SAFETY: `out_buf` is non-null, writable for `buf_cap >= needed`, and does not overlap `bytes_written_out`.
+        // SAFETY: `out_buf` is non-null, bounded (`<= isize::MAX`), writable for `buf_cap >= needed`, and disjoint.
         unsafe {
-            let dst = slice::from_raw_parts_mut(out_buf, buf_cap);
+            let dst = checked_slice_from_raw_parts_mut(out_buf, buf_cap)?;
             let _ = snap.format_core_topology_mermaid(&stack_ref, &overlap_val, dst);
         }
         Ok(LMNK_OK)
@@ -636,23 +641,26 @@ pub unsafe extern "C" fn lmnk_ego_state_derive_from_text(
     ego_out: *mut lmnk_liminal_ego_state_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validates non-nullness and 64-byte natural alignment.
-        let mut out_ref = unsafe { FfiHandleMut::from_raw(ego_out)? };
+        validate_ptr(ego_out)?;
         if utf8_len == 0 {
+            // SAFETY: Validated non-null and 64-byte aligned above.
+            let mut out_ref = unsafe { FfiHandleMut::from_raw(ego_out)? };
             *out_ref = LiminalEgoState::new();
             return Ok(LMNK_OK);
         }
         validate_ptr(utf8_ptr)?;
-        if raw_byte_ranges_overlap(
-            utf8_ptr as usize,
-            utf8_len,
-            ego_out as usize,
-            size_of::<LiminalEgoState>(),
-        ) {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        // SAFETY: Validated non-null, readable length `utf8_len`, and disjoint from `ego_out`.
-        let bytes = unsafe { slice::from_raw_parts(utf8_ptr, utf8_len) };
+        let utf8_bytes = validate_raw_slice_bounds(utf8_ptr, utf8_len)?;
+        check_disjoint_rw(
+            &[(ego_out as usize, size_of::<LiminalEgoState>())],
+            &[(utf8_ptr as usize, utf8_bytes)],
+        )?;
+        // SAFETY: Validated non-null, aligned, bounded, and disjoint above.
+        let (mut out_ref, bytes) = unsafe {
+            (
+                FfiHandleMut::from_raw(ego_out)?,
+                checked_slice_from_raw_parts(utf8_ptr, utf8_len)?,
+            )
+        };
         let text = core::str::from_utf8(bytes).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -830,8 +838,8 @@ pub unsafe extern "C" fn lmnk_liminal_evaluate_lacuna_partition(
         // SAFETY: Pointers validated non-null, naturally aligned, and disjoint above.
         let (other_s, tol_s, mut part_ref) = unsafe {
             (
-                slice::from_raw_parts(other_granule_density_q7, NUM_STIGMERGIC_GRANULES),
-                slice::from_raw_parts(granule_noise_tolerance_q7, NUM_STIGMERGIC_GRANULES),
+                checked_slice_from_raw_parts(other_granule_density_q7, NUM_STIGMERGIC_GRANULES)?,
+                checked_slice_from_raw_parts(granule_noise_tolerance_q7, NUM_STIGMERGIC_GRANULES)?,
                 FfiHandleMut::from_raw(partition_out)?,
             )
         };
@@ -898,35 +906,59 @@ pub unsafe extern "C" fn lmnk_distortion_delta_apply_chain(
     hops_traversed_out: *mut u8,
 ) -> LmnkStatus {
     ffi_boundary!({
-        validate_ptr(nodes)?;
         if num_nodes > MAX_EGO_PFRAME_NODES {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
+        validate_ptr_aligned(nodes, align_of::<DistortionDelta>())?;
+        validate_ptr(ego)?;
+        validate_ptr(spine)?;
+        validate_ptr(partition)?;
+        validate_ptr(stigmergy)?;
+        validate_ptr(tension)?;
         validate_ptr(frame_inout)?;
-        // SAFETY: Validated non-null and naturally aligned via `FfiHandleRef`/`FfiHandleMut` and slice checks.
-        let (ego_ref, spine_ref, part_ref, stig_ref, ten_ref, mut frm_ref) = unsafe {
-            (
-                FfiHandleRef::from_raw(ego)?,
-                FfiHandleRef::from_raw(spine)?,
-                FfiHandleRef::from_raw(partition)?,
-                FfiHandleRef::from_raw(stigmergy)?,
-                FfiHandleRef::from_raw(tension)?,
-                FfiHandleMut::from_raw(frame_inout)?,
-            )
+        let nodes_bytes = validate_raw_slice_bounds(nodes, num_nodes)?;
+        let d_norm_bytes = if delta_norm_out.is_null() {
+            0
+        } else {
+            validate_ptr(delta_norm_out)?;
+            size_of::<u8>()
         };
-        let nodes_bytes = num_nodes.saturating_mul(size_of::<DistortionDelta>());
-        if raw_byte_ranges_overlap(
-            frame_inout as usize,
-            size_of::<GatewayFrame>(),
-            nodes as usize,
-            nodes_bytes,
-        ) {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        // SAFETY: `nodes` is non-null, 64-byte aligned via `DistortionDelta`, and holds `num_nodes <= 8` elements.
-        let node_slice = unsafe {
-            validate_ptr_aligned(nodes, align_of::<DistortionDelta>())?;
-            slice::from_raw_parts(nodes, num_nodes)
+        let hops_bytes = if hops_traversed_out.is_null() {
+            0
+        } else {
+            validate_ptr(hops_traversed_out)?;
+            size_of::<u8>()
+        };
+        check_disjoint_rw(
+            &[
+                (frame_inout as usize, size_of::<GatewayFrame>()),
+                (delta_norm_out as usize, d_norm_bytes),
+                (hops_traversed_out as usize, hops_bytes),
+            ],
+            &[
+                (nodes as usize, nodes_bytes),
+                (ego as usize, size_of::<LiminalEgoState>()),
+                (spine as usize, size_of::<SystemSpineState>()),
+                (partition as usize, size_of::<LacunaPartition8>()),
+                (stigmergy as usize, size_of::<StigmergicGranuleState>()),
+                (tension as usize, size_of::<DistortionTension>()),
+            ],
+        )?;
+        // SAFETY: All pointers are validated non-null, naturally aligned, bounded, and disjoint above.
+        let ((ego_ref, spine_ref, part_ref, stig_ref, ten_ref), (mut frm_ref, node_slice)) = unsafe {
+            (
+                (
+                    FfiHandleRef::from_raw(ego)?,
+                    FfiHandleRef::from_raw(spine)?,
+                    FfiHandleRef::from_raw(partition)?,
+                    FfiHandleRef::from_raw(stigmergy)?,
+                    FfiHandleRef::from_raw(tension)?,
+                ),
+                (
+                    FfiHandleMut::from_raw(frame_inout)?,
+                    checked_slice_from_raw_parts(nodes, num_nodes)?,
+                ),
+            )
         };
         let mut net = EgoDifferentialNet::new_empty(max_hops.min(MAX_DISTORTION_CHAIN_HOPS));
         for (idx, n) in node_slice.iter().enumerate() {

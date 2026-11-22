@@ -6,6 +6,7 @@
 //! zero-forward seeking, explicit `TopologyMismatch` rebake signaling, and cross-model re-baking.
 
 use std::fmt;
+use std::io::Read;
 use std::path::Path;
 
 use liminika_core::Pod;
@@ -704,6 +705,16 @@ impl LmnkTimeline {
                 "frame count {frame_count} exceeds limit {MAX_TIMELINE_FRAMES}"
             )));
         }
+        const MIN_ENCODED_FRAME_BYTES: usize = 26;
+        let min_required_bytes = frame_count
+            .checked_mul(MIN_ENCODED_FRAME_BYTES)
+            .ok_or_else(|| LmnkTimelineError::Corrupted("frame count byte overflow".to_string()))?;
+        if min_required_bytes > cur.remaining() {
+            return Err(LmnkTimelineError::Corrupted(format!(
+                "frame count {frame_count} requires at least {min_required_bytes} B, only {} B remaining",
+                cur.remaining()
+            )));
+        }
 
         let mut frames = Vec::with_capacity(frame_count);
         let mut seek_index = Vec::new();
@@ -721,6 +732,11 @@ impl LmnkTimeline {
                 }
             };
             let energy = cur.read_f32_le()?;
+            if !energy.is_finite() {
+                return Err(LmnkTimelineError::Corrupted(format!(
+                    "non-finite frame energy at index {idx}"
+                )));
+            }
             let text_len = cur.read_u32_le()? as usize;
             let text_bytes = cur.read_exact(text_len)?;
             let text = std::str::from_utf8(text_bytes)
@@ -737,6 +753,14 @@ impl LmnkTimeline {
                     let min_coherence = cur.read_f32_le()?;
                     let boundary_margin = cur.read_f32_le()?;
                     let guard_suppress_margin = cur.read_f32_le()?;
+                    if !min_coherence.is_finite()
+                        || !boundary_margin.is_finite()
+                        || !guard_suppress_margin.is_finite()
+                    {
+                        return Err(LmnkTimelineError::Corrupted(format!(
+                            "non-finite KeyframeI policy float at frame index {idx}"
+                        )));
+                    }
                     let c_len = cur.read_u32_le()? as usize;
                     let container_bytes = cur.read_exact(c_len)?.to_vec();
                     let _ = LmnkContainerView::parse(&container_bytes)
@@ -760,6 +784,11 @@ impl LmnkTimeline {
                         *dst = b as i8;
                     }
                     let energy_delta = cur.read_f32_le()?;
+                    if !energy_delta.is_finite() {
+                        return Err(LmnkTimelineError::Corrupted(format!(
+                            "non-finite DeltaP energy_delta at frame index {idx}"
+                        )));
+                    }
                     let target_anchor_id = cur.read_u32_le()?;
                     GopFrameKind::DeltaP {
                         delta_q7,
@@ -1112,7 +1141,11 @@ impl LmnkTimeline {
     /// Returns [`LmnkTimelineError`] on I/O, ZIP, topology mismatch, or container validation errors.
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, LmnkTimelineError> {
         let p = path.as_ref();
-        let meta_len = std::fs::metadata(p)
+        let file = std::fs::File::open(p).map_err(|e| {
+            LmnkTimelineError::Io(format!("failed to open container {}: {e}", p.display()))
+        })?;
+        let meta_len = file
+            .metadata()
             .map_err(|e| {
                 LmnkTimelineError::Io(format!("failed to stat container {}: {e}", p.display()))
             })?
@@ -1123,9 +1156,19 @@ impl LmnkTimeline {
                 p.display()
             )));
         }
-        let bytes = std::fs::read(p).map_err(|e| {
-            LmnkTimelineError::Io(format!("failed to read container {}: {e}", p.display()))
-        })?;
+        let cap_plus_one = (LMNKP_MAX_PACKAGE_BYTES as u64).saturating_add(1);
+        let mut bytes = Vec::with_capacity((meta_len as usize).min(LMNKP_MAX_PACKAGE_BYTES));
+        file.take(cap_plus_one)
+            .read_to_end(&mut bytes)
+            .map_err(|e| {
+                LmnkTimelineError::Io(format!("failed to read container {}: {e}", p.display()))
+            })?;
+        if bytes.len() > LMNKP_MAX_PACKAGE_BYTES {
+            return Err(LmnkTimelineError::Corrupted(format!(
+                "container {} exceeds hard read cap {LMNKP_MAX_PACKAGE_BYTES}",
+                p.display()
+            )));
+        }
         if bytes.starts_with(b"PK\x03\x04") || p.extension().is_some_and(|e| e == "lmnkp") {
             Self::import_lmnkp_bytes(&bytes)
         } else {

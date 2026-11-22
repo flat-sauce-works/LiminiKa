@@ -7,8 +7,10 @@ use super::{
     CoreStateStack, Result, RuntimeContext, LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES,
     LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES,
 };
-use crate::drivers::{EntropyController, EntropyState, SystemSpineState};
-use crate::foundation::{branchless_is_finite_f32, Pod};
+use crate::drivers::{
+    EntropyController, EntropyState, SystemSpineState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+};
+use crate::foundation::{branchless_is_finite_f32, Pod, RopePairLayout};
 use crate::liminal::{
     LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, MAX_ATTENTION_HEADS,
 };
@@ -16,7 +18,7 @@ use crate::runtime::storage::{
     write_container_sections_to_bytes, LmnkContainerView, LmnkSectionInput,
     LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT, LMNK_SECTION_RUNTIME_SNAPSHOT,
 };
-use crate::stigmergy::{LedgerSlot, PhaseSteeringEngine};
+use crate::stigmergy::{LedgerSlot, PhaseSteeringEngine, DEFAULT_SUBSTRATE_CAPACITY};
 
 impl RuntimeContext {
     /// Serializes active runtime context state into a unified `.lmnk` binary snapshot container
@@ -138,65 +140,120 @@ impl RuntimeContext {
         let host_aperture_pin_floor = self.system_spine.pinned_aperture_mask;
         let host_slot_pin_floor = self.system_spine.pinned_slot_mask;
         let host_mode_pin_floor = self.system_spine.pinned_action_mode_mask;
+        let host_substrate_slot_pin_floor = self.substrate.slot_pinned_mask;
 
+        // ------------------------------------------------------------------
+        // Phase 1: Transactional parsing and validation (zero mutation on Err)
+        // ------------------------------------------------------------------
+        let saved_step_counter = read_u64(0)?;
+        let saved_active_count = read_u32(8)?;
+        let saved_repulsion_threshold = read_u32(12)?;
+        let restored_entropy = f32::from_bits(read_u32(16)?);
+        let saved_slot_enabled_mask = read_u8(20)?;
+        let saved_slot_pinned_mask = read_u8(21)?;
+        let saved_slot_repulsion_mask = read_u8(22)?;
+        let saved_slot_sandbox_mask = read_u8(23)?;
+        let saved_coupling = read_u64(24)?;
+
+        let mut saved_slot_weights = [0.0f32; 8];
+        for (idx, dst) in saved_slot_weights.iter_mut().enumerate() {
+            let w = f32::from_bits(read_u32(32 + idx * 4)?);
+            if !branchless_is_finite_f32(w) {
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+            }
+            *dst = w;
+        }
+
+        if !branchless_is_finite_f32(restored_entropy) {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        if saved_active_count > self.substrate.capacity.max(DEFAULT_SUBSTRATE_CAPACITY)
+            || saved_repulsion_threshold > u32::from(u8::MAX)
+        {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+
+        let entropy_st = EntropyState::read_unaligned_from(payload, 64)?;
+        if !branchless_is_finite_f32(entropy_st.moving_z_entropy)
+            || !branchless_is_finite_f32(entropy_st.bifurcation_threshold)
+            || !branchless_is_finite_f32(entropy_st.singularity_eps)
+            || !branchless_is_finite_f32(entropy_st.sliding_entropy_rate)
+            || !branchless_is_finite_f32(entropy_st.repulsion_gain)
+            || !branchless_is_finite_f32(entropy_st.sample_temperature)
+            || entropy_st.active_branch_mode > 2
+        {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+
+        let saved_last_selected_trail_id = read_u32(96)?;
         let saved_head_dim = read_u32(100)?;
         let saved_num_heads = read_u32(104)?;
         let saved_rotary_dim = read_u32(108)?;
         let saved_rope_layout = read_u8(112)?;
-        if saved_head_dim != 0
-            && (saved_head_dim & 1) == 0
-            && saved_num_heads != 0
-            && (saved_num_heads as usize) <= MAX_ATTENTION_HEADS
-            && saved_head_dim <= u16::MAX as u32
-            && saved_num_heads <= u16::MAX as u32
+
+        if saved_head_dim == 0
+            || (saved_head_dim & 1) != 0
+            || saved_num_heads == 0
+            || (saved_num_heads as usize) > MAX_ATTENTION_HEADS
+            || saved_head_dim > u32::from(u16::MAX)
+            || saved_num_heads > u32::from(u16::MAX)
+            || saved_rotary_dim > saved_head_dim
+            || (saved_rotary_dim & 1) != 0
+            || RopePairLayout::from_u8(saved_rope_layout).is_err()
         {
-            self.config.raw.head_dim = saved_head_dim;
-            self.config.raw.num_heads = saved_num_heads;
-            self.config.raw.rotary_dim = saved_rotary_dim;
-            self.config.raw.rope_layout = saved_rope_layout;
-            self.phase_steering = PhaseSteeringEngine::new(saved_head_dim, saved_num_heads)?;
-            self.substrate.head_dim = saved_head_dim as u16;
-            self.substrate.num_heads = saved_num_heads as u16;
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
+        let new_phase_steering = PhaseSteeringEngine::new(saved_head_dim, saved_num_heads)
+            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
 
-        self.substrate.step_counter = read_u64(0)?;
-        self.substrate.active_count = read_u32(8)?;
-        self.substrate.repulsion_threshold = read_u32(12)?.min(u32::from(u8::MAX)) as u8;
-        let restored_entropy = f32::from_bits(read_u32(16)?);
-        if branchless_is_finite_f32(restored_entropy) {
-            self.substrate.last_entropy_h_tilde = restored_entropy;
-        }
-        self.substrate.slot_enabled_mask = read_u8(20)?;
-        self.substrate.slot_pinned_mask = read_u8(21)?;
-        self.substrate.slot_repulsion_mask = read_u8(22)?;
-        self.substrate.slot_sandbox_mask = read_u8(23)?;
+        let saved_ledger_slot = LedgerSlot::read_unaligned_from(payload, 128)?;
+        let saved_core_layers = CoreStateStack::read_unaligned_from(payload, 192)?;
+        let mut restored_spine = SystemSpineState::read_unaligned_from(payload, 320)?;
 
-        let coupling = read_u64(24)?;
-        if coupling != 0 {
-            self.substrate.coupling_matrix_8x8 = coupling;
-            self.config.slot_coupling_matrix = coupling;
-        }
-        for (idx, dst) in self.substrate.slot_weights.iter_mut().enumerate() {
-            *dst = f32::from_bits(read_u32(32 + idx * 4)?);
-        }
+        // Host-locked Spine & slot privilege invariants cannot be stripped by untrusted snapshot data.
+        let default_spine = SystemSpineState::new();
+        restored_spine.pinned_compute_mask |=
+            host_compute_pin_floor | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        restored_spine.pinned_aperture_mask |=
+            host_aperture_pin_floor | default_spine.pinned_aperture_mask;
+        restored_spine.pinned_slot_mask |= host_slot_pin_floor | default_spine.pinned_slot_mask;
+        restored_spine.pinned_action_mode_mask |=
+            host_mode_pin_floor | default_spine.pinned_action_mode_mask;
 
-        let entropy_st = EntropyState::read_unaligned_from(payload, 64)?;
+        // ------------------------------------------------------------------
+        // Phase 2: Atomic commit after all validation succeeded
+        // ------------------------------------------------------------------
+        self.config.raw.head_dim = saved_head_dim;
+        self.config.raw.num_heads = saved_num_heads;
+        self.config.raw.rotary_dim = saved_rotary_dim;
+        self.config.raw.rope_layout = saved_rope_layout;
+        self.phase_steering = new_phase_steering;
+        self.substrate.head_dim = saved_head_dim as u16;
+        self.substrate.num_heads = saved_num_heads as u16;
+
+        self.substrate.step_counter = saved_step_counter;
+        self.substrate.active_count = saved_active_count;
+        self.substrate.repulsion_threshold = saved_repulsion_threshold as u8;
+        self.substrate.last_entropy_h_tilde = restored_entropy;
+        self.substrate.slot_enabled_mask = saved_slot_enabled_mask;
+        self.substrate.slot_pinned_mask = saved_slot_pinned_mask | host_substrate_slot_pin_floor;
+        self.substrate.slot_repulsion_mask = saved_slot_repulsion_mask;
+        self.substrate.slot_sandbox_mask = saved_slot_sandbox_mask;
+        if saved_coupling != 0 {
+            self.substrate.coupling_matrix_8x8 = saved_coupling;
+            self.config.slot_coupling_matrix = saved_coupling;
+        }
+        self.substrate.slot_weights = saved_slot_weights;
+
         self.entropy_controller = EntropyController::new(entropy_st);
         self.entropy_controller
             .set_hysteresis_band(self.config.hysteresis_band);
         self.entropy_controller.set_tau_flux(self.config.tau_flux);
 
-        self.substrate.last_selected_trail_id = read_u32(96)?;
-        self.substrate.ledger_slot = LedgerSlot::read_unaligned_from(payload, 128)?;
-        self.core_layers = CoreStateStack::read_unaligned_from(payload, 192)?;
-
-        let restored_spine = SystemSpineState::read_unaligned_from(payload, 320)?;
+        self.substrate.last_selected_trail_id = saved_last_selected_trail_id;
+        self.substrate.ledger_slot = saved_ledger_slot;
+        self.core_layers = saved_core_layers;
         self.system_spine = restored_spine;
-        // Host-locked Spine privilege invariants cannot be stripped by untrusted snapshot data.
-        self.system_spine.pinned_compute_mask |= host_compute_pin_floor;
-        self.system_spine.pinned_aperture_mask |= host_aperture_pin_floor;
-        self.system_spine.pinned_slot_mask |= host_slot_pin_floor;
-        self.system_spine.pinned_action_mode_mask |= host_mode_pin_floor;
 
         Ok(())
     }

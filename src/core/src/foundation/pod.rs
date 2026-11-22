@@ -99,13 +99,32 @@ pub const fn unpack_attractor_slot_from_tag(tag: u8) -> u8 {
 
 /// Compile-time helper verifying that a requested alignment `ALIGN` is a non-zero power of two
 /// and at least `align_of::<T>()`.
-#[allow(dead_code)]
 pub(crate) struct PtrAlignCheck<T, const ALIGN: usize>(PhantomData<T>);
 impl<T, const ALIGN: usize> PtrAlignCheck<T, ALIGN> {
     pub(crate) const VALID: () = assert!(
         ALIGN > 0 && ALIGN.is_power_of_two() && ALIGN >= align_of::<T>(),
         "Requested ALIGN must be a non-zero power of two and >= align_of::<T>()"
     );
+}
+
+/// Validates that `len * size_of::<T>()` does not overflow `usize`, does not exceed `isize::MAX`,
+/// and that `(ptr as usize) + byte_len` does not wrap around the address space.
+///
+/// # Errors
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `len * size_of::<T>()` overflows, exceeds
+/// `isize::MAX`, or `(ptr as usize) + byte_len` overflows `usize`.
+#[inline(always)]
+pub fn validate_raw_slice_bounds<T>(ptr: *const T, len: usize) -> LmnkResult<usize> {
+    let Some(byte_len) = len.checked_mul(size_of::<T>()) else {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
+    };
+    if byte_len > isize::MAX as usize {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
+    }
+    if (ptr as usize).checked_add(byte_len).is_none() {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
+    }
+    Ok(byte_len)
 }
 
 /// Branchlessly checks whether two half-open byte intervals

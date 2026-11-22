@@ -624,20 +624,23 @@ impl EgoDifferentialNet {
     /// consolidation and evaporation pruning.
     #[inline]
     pub fn record_chain_activation(&mut self, entry_idx: usize, hops_traversed: u8) {
-        self.last_hops_traversed = hops_traversed;
         let mut cur = entry_idx;
         let mut h = 0u8;
+        let mut visited_mask: u8 = 0;
         let cap = hops_traversed.min(MAX_DISTORTION_CHAIN_HOPS);
         while h < cap && cur < MAX_EGO_PFRAME_NODES {
-            if (self.active_node_mask & (1u8 << cur)) == 0 {
+            let bit = 1u8 << (cur & 7);
+            if (visited_mask & bit) != 0 || (self.active_node_mask & bit) == 0 {
                 break;
             }
+            visited_mask |= bit;
             let cold = &mut self.node_cold[cur];
             cold.reinforce_count = cold.reinforce_count.saturating_add(1);
             cold.last_active_epoch = self.epoch;
             cur = usize::from(self.node_routing[cur].next_hop_idx);
             h = h.saturating_add(1);
         }
+        self.last_hops_traversed = h;
     }
 
     /// Records positive activation for every node bit set in `matched_mask`, advancing
@@ -851,15 +854,17 @@ impl EgoDifferentialNet {
         let mut acc_words = *base_words;
         let mut accum_norm_sum = 0u32;
         let mut hops_traversed = 0u8;
-        let mut matched_mask = 0u8;
+        let mut visited_mask = 0u8;
         let mut cur_idx = best_entry_idx as u16;
         let mut hop = 0u8;
 
         while hop < MAX_DISTORTION_CHAIN_HOPS {
             let slot = usize::from(cur_idx);
+            let slot_bit = 1u8 << (slot & 7);
             let in_bounds = (hop < hop_cap)
                 && (slot < MAX_EGO_PFRAME_NODES)
-                && (((self.active_node_mask >> (cur_idx & 7)) & 1) != 0);
+                && ((visited_mask & slot_bit) == 0)
+                && ((self.active_node_mask & slot_bit) != 0);
             if !in_bounds {
                 break;
             }
@@ -867,7 +872,7 @@ impl EgoDifferentialNet {
             if !routing.is_baked_active() {
                 break;
             }
-            matched_mask |= 1u8 << (cur_idx & 7);
+            visited_mask |= slot_bit;
             let hop_weight_q7 =
                 (((u32::from(routing.gain_q7) * eff_scale) >> 7) * sens_boost_q7) >> 7;
             let dens_weight_q7 = ((hop_weight_q7 * mean_stig_ph) >> 7).clamp(8, 127) as u64;
@@ -896,7 +901,7 @@ impl EgoDifferentialNet {
             avg_delta,
             hops_traversed,
             best_entry_idx as u8,
-            matched_mask,
+            visited_mask,
         )
     }
 }

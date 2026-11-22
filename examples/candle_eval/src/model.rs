@@ -20,7 +20,42 @@ use serde::Deserialize;
 use crate::eval::HorizonAblationMode;
 use crate::LayerResonantSlices;
 
-pub(crate) type ForwardTokensOutput = (Vec<f32>, Vec<Vec<f32>>, Vec<f32>);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LogitsFetchMode {
+    FullLogits,
+    DeviceArgmaxOnly,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum LogitsOutcome {
+    ObservedFull(Vec<f32>),
+    UnobservedDeviceArgmax(u32),
+}
+
+impl LogitsOutcome {
+    pub(crate) fn into_full_logits(self) -> CResult<Vec<f32>> {
+        match self {
+            Self::ObservedFull(v) => Ok(v),
+            Self::UnobservedDeviceArgmax(_) => Err(candle_core::Error::Msg(
+                "expected FullLogits outcome".to_string(),
+            )),
+        }
+    }
+}
+
+pub(crate) fn extract_device_argmax_token(logits_1d: &Tensor) -> CResult<u32> {
+    if let Ok(tok_t) = logits_1d.argmax(0) {
+        if let Ok(tok_id) = tok_t.to_scalar::<u32>() {
+            return Ok(tok_id);
+        }
+    }
+    logits_1d
+        .to_dtype(DType::F32)?
+        .argmax(0)?
+        .to_scalar::<u32>()
+}
+
+pub(crate) type ForwardTokensOutput = (LogitsOutcome, Vec<Vec<f32>>, Vec<f32>);
 
 #[derive(Clone, Copy)]
 pub(crate) struct ResonantAnchors<'a> {
@@ -734,6 +769,7 @@ impl Phi3Model {
         mut steer: Option<&mut ForwardSteer<'_, '_, '_>>,
         use_entropy_gate: bool,
         collect_bake_data: bool,
+        fetch_mode: LogitsFetchMode,
     ) -> CResult<ForwardTokensOutput> {
         let mut h = if self.embed_on_cpu {
             let input_cpu = Tensor::from_slice(tokens, (1, tokens.len()), &Device::Cpu)?;
@@ -891,26 +927,31 @@ impl Phi3Model {
             }
         }
 
-        let mut logits = self
-            .lm_head
-            .forward(&last)?
-            .squeeze(0)?
-            .to_dtype(DType::F32)?
-            .to_vec1::<f32>()?;
-        if use_entropy_gate && !whole_bypass {
-            if let Some(st) = steer {
-                let ad = &mut *st.adapter;
-                if st.rope_rad <= -1.5 {
-                    let _ = ad
-                        .measure_entropy_state(&logits)
-                        .map_err(candle_core::Error::Msg)?;
-                } else {
-                    let _ = ad
-                        .step_entropy_logits(&mut logits)
-                        .map_err(candle_core::Error::Msg)?;
-                }
+        let logits_1d = self.lm_head.forward(&last)?.squeeze(0)?;
+        let outcome = match fetch_mode {
+            LogitsFetchMode::DeviceArgmaxOnly if !use_entropy_gate || whole_bypass => {
+                let tok_id = extract_device_argmax_token(&logits_1d)?;
+                LogitsOutcome::UnobservedDeviceArgmax(tok_id)
             }
-        }
-        Ok((logits, per_layer_q, last_hidden))
+            _ => {
+                let mut logits = logits_1d.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+                if use_entropy_gate && !whole_bypass {
+                    if let Some(st) = steer {
+                        let ad = &mut *st.adapter;
+                        if st.rope_rad <= -1.5 {
+                            let _ = ad
+                                .measure_entropy_state(&logits)
+                                .map_err(candle_core::Error::Msg)?;
+                        } else {
+                            let _ = ad
+                                .step_entropy_logits(&mut logits)
+                                .map_err(candle_core::Error::Msg)?;
+                        }
+                    }
+                }
+                LogitsOutcome::ObservedFull(logits)
+            }
+        };
+        Ok((outcome, per_layer_q, last_hidden))
     }
 }

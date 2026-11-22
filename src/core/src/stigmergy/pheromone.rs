@@ -377,11 +377,11 @@ pub(super) fn swar_subswarm_resolve_words_64(
 // ===================================================================
 
 /// 16-byte register-aligned summary returned when the 8-granule stigmergic field attempts to
-/// reconstitute an Action Hub command on the Hot Path and feeds back into pointer trails.
+/// reconstitute a Stigmergic Substrate command on the Hot Path and feeds back into pointer trails.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StigmergicReconstitutionReport {
-    /// Feedback-evolved 64-bit tagged pointer ready for the Action Hub's next instruction step.
+    /// Feedback-evolved 64-bit tagged pointer ready for the Stigmergic Substrate's next instruction step.
     pub evolved_ptr: TaggedPtr,
     /// Signed stigmergic density feedback ($\Delta\rho_{\mathrm{stigmergy}}$) applied to the trail.
     pub stigmergic_delta_density: f32,
@@ -440,7 +440,7 @@ pub const fn swar_subswarm_resolve_x8(
 /// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
 /// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
 impl PointerTrail {
-    /// Subdivides the Action Hub's target 64-head phase command into **8 parallel 8-head SWAR
+    /// Subdivides the Stigmergic Substrate's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches),
     /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
@@ -480,7 +480,7 @@ impl PointerTrail {
         )
     }
 
-    /// Subdivides the Action Hub's target 64-head phase command into **8 parallel 8-head SWAR
+    /// Subdivides the Stigmergic Substrate's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches).
     #[inline(always)]
     pub fn try_resolve_action_in_swarm_masked(
@@ -515,7 +515,7 @@ impl PointerTrail {
         .0
     }
 
-    /// Subdivides the Action Hub's target 64-head phase command across all 8 Micro-Swarm cells (`0xFF`).
+    /// Subdivides the Stigmergic Substrate's target 64-head phase command across all 8 Micro-Swarm cells (`0xFF`).
     #[inline(always)]
     pub fn try_resolve_action_in_swarm(
         &mut self,
@@ -819,7 +819,7 @@ impl PointerTrail {
         trail_phase_words_mut(self)[safe_cell] = word;
     }
 
-    /// Resolves an Action Hub command across all 8 SWAR Micro-Swarm cells directly from
+    /// Resolves a Stigmergic Substrate command across all 8 SWAR Micro-Swarm cells directly from
     /// pre-loaded target SWAR words (`target_words`), avoiding any 64-byte stack reload when
     /// chained after `ManifoldGatewaySignal::synthesize_gateway_frame_with_words`.
     #[inline(always)]

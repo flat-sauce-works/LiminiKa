@@ -60,3 +60,7 @@ path = "../../tests/ffi/test_abi_layout.rs"
 [[test]]
 name = "test_topology_parity"
 path = "../../tests/core/test_topology_parity.rs"
+
+[[test]]
+name = "test_security_adversarial"
+path = "../../tests/core/test_security_adversarial.rs"

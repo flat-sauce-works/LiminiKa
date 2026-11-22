@@ -51,6 +51,11 @@ pub const LMNK_CONTAINER_FLAG_COMPILED_CACHE: u32 = 1 << 1;
 /// Container flag bit `2`: portable container package (`.lmnkp`).
 pub const LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE: u32 = 1 << 2;
 
+/// Bitmask of all defined [`LmnkContainerHeader::container_flags`] bits (`0x07`).
+pub const LMNK_CONTAINER_KNOWN_FLAGS: u32 = LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT
+    | LMNK_CONTAINER_FLAG_COMPILED_CACHE
+    | LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE;
+
 /// Section kind ID for runtime context state snapshots (`1`).
 pub const LMNK_SECTION_RUNTIME_SNAPSHOT: u16 = 1;
 /// Section kind ID for crystallized `PhaseAnchorRecord` arrays (`2`).

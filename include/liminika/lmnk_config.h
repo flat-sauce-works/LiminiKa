@@ -193,7 +193,7 @@
     #endif
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     #define LMNK_ALIGN_PREFIX(n)
-    #define LMNK_ALIGN_SUFFIX(n) _Alignas(n)
+    #define LMNK_ALIGN_SUFFIX(n)
     #define LMNK_ALIGNAS(n) _Alignas(n)
     #define LMNK_ALIGNOF(type) _Alignof(type)
 #else

@@ -493,11 +493,7 @@ impl ModelSteeringAdapter {
                 3,
             );
             match sb_event {
-                SandboxLifecycleEvent::Settled(_) => {
-                    this.ctx.increment_sandbox_settlements();
-                    this.sandbox_settlement_streak = 0;
-                }
-                SandboxLifecycleEvent::Released(_) => {
+                SandboxLifecycleEvent::Settled(_) | SandboxLifecycleEvent::Released(_) => {
                     this.sandbox_settlement_streak = 0;
                 }
                 SandboxLifecycleEvent::Idle | SandboxLifecycleEvent::Nucleated(_) => {}
