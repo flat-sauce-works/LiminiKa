@@ -7,40 +7,12 @@
 use crate::foundation::lut_crc32::{
     crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
     crc32_slice16_indep_lo1_u32, crc32_step_block64_words, crc32_step_l2, crc32_step_l3,
-    crc32_step_l4, crc32_step_l5, crc32_step_l6, crc32_step_l8, AlignedLut256, AlignedLut4x256,
+    crc32_step_l4, crc32_step_l5, crc32_step_l6, AlignedLut256, AlignedLut4x256,
     CRC32_IEEE_SLICE16_LUT, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::foundation::DEFAULT_PHASE_CLAMP_MAX_RAD;
 
 use super::{LMNK_PHASE_ANCHOR_MAGIC, LMNK_PHASE_ANCHOR_VERSION};
-
-/// 64B-aligned 4KB GF(2) affine operator table fusing $L^4(L_{12}(\text{record\_crc32})) \oplus (\neg\text{record\_crc32}) \oplus L^8(\text{0xFFFF\_FFFF})$
-/// into a single 4-lookup stage (`0` branches, `1` lookup stage instead of `2` serial stages).
-#[allow(dead_code)]
-pub(crate) const CRC32_IEEE_ANCHOR_STAMP_LUT: AlignedLut4x256<u32> = {
-    const L8_ONES: u32 = crc32_step_l8(0xFFFF_FFFFu32);
-    let mut lut = [[0u32; 256]; 4];
-    let mut byte_pos = 0usize;
-    while byte_pos < 4 {
-        let shift = byte_pos * 8;
-        let mut b = 0usize;
-        while b < 256 {
-            let d = CRC32_IEEE_SLICE16_LUT.0[11 - byte_pos][b];
-            let mut v = crc32_step_l4(d) ^ ((b as u32) << shift);
-            if byte_pos == 0 {
-                v ^= 0xFFFF_FFFFu32 ^ L8_ONES;
-            }
-            lut[byte_pos][b] = v;
-            b += 1;
-        }
-        byte_pos += 1;
-    }
-    AlignedLut4x256(lut)
-};
-
-/// Promoted `.rodata` reference to the 4KB 1-stage anchor stamp CRC32 folding table.
-#[allow(dead_code)]
-pub(crate) const CRC32_IEEE_ANCHOR_STAMP_REF: &[[u32; 256]; 4] = &CRC32_IEEE_ANCHOR_STAMP_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for low-byte `sample_count` increments
 /// (`offset 12..16` inside a 128-byte `PhaseAnchorRecord`, shifted by 112 bytes),
@@ -288,26 +260,6 @@ pub(crate) const fn crc32_anchor_tm44_final_u32(tm_bits: u32) -> u32 {
     } else {
         crc32_step_l5(crc32_slice16_indep_hi1_u32(tm_bits))
     }
-}
-
-/// Evaluates the accumulator-independent 128-byte stamped anchor contribution
-/// $L^4(L_{12}(\text{record\_crc32})) \oplus (\neg\text{record\_crc32}) \oplus L^8(\text{0xFFFF\_FFFF})$
-/// in 4 parallel table lookups (`0` branches).
-#[allow(dead_code)]
-#[inline(always)]
-pub(crate) const fn crc32_anchor_stamp_contrib_128b(record_crc32: u32) -> u32 {
-    let lut = CRC32_IEEE_ANCHOR_STAMP_REF;
-    (lut[0][(record_crc32 & 0xFF) as usize] ^ lut[1][((record_crc32 >> 8) & 0xFF) as usize])
-        ^ (lut[2][((record_crc32 >> 16) & 0xFF) as usize] ^ lut[3][(record_crc32 >> 24) as usize])
-}
-
-/// Advances an uninverted IEEE 802.3 CRC32 accumulator (`crc`) across an entire 128-byte stamped
-/// `PhaseAnchorRecord` using GF(2) linearity ($L^8(\text{crc}) \oplus \text{stamp}(\text{record\_crc32})$)
-/// in a single 4-lookup stage (`0` branches).
-#[allow(dead_code)]
-#[inline(always)]
-pub(crate) const fn crc32_fold_stamped_anchor_128b(crc: u32, record_crc32: u32) -> u32 {
-    crc32_step_l8(crc) ^ crc32_anchor_stamp_contrib_128b(record_crc32)
 }
 
 /// Updates a stamped `PhaseAnchorRecord`'s IEEE 802.3 `checksum_crc32` in $\mathcal{O}(1)$

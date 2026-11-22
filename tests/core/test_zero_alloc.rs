@@ -345,7 +345,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     let mut mock_esc = liminika_core::DefaultResidualSpilloverSlot::default();
     let _ = wb_substrate.apply_horizon_escalation(&esc_req, &mut esc_lane, &mut mock_esc);
 
-    // Verify label-free AnonymousComputePool dispatch, whole-token bypass, Venn partition,
+    // Verify label-free AnonymousComputePool dispatch, whole-token bypass, LacunaPartition8,
     // SystemSpine isolation, DistortionDelta P-Frame chain, and DistortionTension remain zero-alloc.
     ctx.system_spine_mut().pin_compute_slots(0b0001);
     ctx.compute_pool_mut()

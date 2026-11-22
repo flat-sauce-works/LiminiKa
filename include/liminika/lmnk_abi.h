@@ -8,7 +8,7 @@
  * Exposes exact 1:1 C11/C++20 bindings for `liminika-core` (`runtime/abi`):
  * - Version, capability, and configuration validation
  * - Zero-heap in-place and boxed `RuntimeContext` lifecycle
- * - Zero-copy 4-section `.lmnk` container write/verify/steer operations
+ * - Zero-copy unified `.lmnk` container write/verify/steer operations
  * - RoPE phase steering, sub-head routing, Rank-1 / LoRA projections, and gateway synthesis
  * - Stigmergic substrate orchestration, Bloom filter, FastPath ledger, and paged bit-tree reduction
  * - Online toroidal k-Means / DP-Means (`"LNKR"` `lmnk_phase_anchor_record_t`), entropy control,

@@ -571,30 +571,10 @@ pub(crate) const CRC32_IEEE_L16_LUT: AlignedLut4x256<u32> = {
     AlignedLut4x256(lut)
 };
 
-/// 64B-aligned 4KB GF(2) operator table for $L^{32}(x) = L^{16}(L^{16}(x))$ (`512`-byte / 4-record zero-shift).
-#[allow(dead_code)]
-pub(crate) const CRC32_IEEE_L32_LUT: AlignedLut4x256<u32> = {
-    let mut lut = [[0u32; 256]; 4];
-    let mut byte_pos = 0usize;
-    while byte_pos < 4 {
-        let mut b = 0usize;
-        while b < 256 {
-            let l16 = CRC32_IEEE_L16_LUT.0[byte_pos][b];
-            lut[byte_pos][b] = crc32_step_l8(crc32_step_l8(l16));
-            b += 1;
-        }
-        byte_pos += 1;
-    }
-    AlignedLut4x256(lut)
-};
-
 /// Promoted `.rodata` reference to the 4KB $L^8(x)$ 128-byte shift table.
 pub(crate) const CRC32_IEEE_L8_REF: &[[u32; 256]; 4] = &CRC32_IEEE_L8_LUT.0;
 /// Promoted `.rodata` reference to the 4KB $L^{16}(x)$ 256-byte shift table.
 pub(crate) const CRC32_IEEE_L16_REF: &[[u32; 256]; 4] = &CRC32_IEEE_L16_LUT.0;
-/// Promoted `.rodata` reference to the 4KB $L^{32}(x)$ 512-byte shift table.
-#[allow(dead_code)]
-pub(crate) const CRC32_IEEE_L32_REF: &[[u32; 256]; 4] = &CRC32_IEEE_L32_LUT.0;
 
 #[inline(always)]
 pub(crate) const fn crc32_step_l2(x: u32) -> u32 {
@@ -641,14 +621,6 @@ pub(crate) const fn crc32_step_l8(x: u32) -> u32 {
 #[inline(always)]
 pub(crate) const fn crc32_step_l16(x: u32) -> u32 {
     let lut = CRC32_IEEE_L16_REF;
-    (lut[0][(x & 0xFF) as usize] ^ lut[1][((x >> 8) & 0xFF) as usize])
-        ^ (lut[2][((x >> 16) & 0xFF) as usize] ^ lut[3][(x >> 24) as usize])
-}
-
-#[allow(dead_code)]
-#[inline(always)]
-pub(crate) const fn crc32_step_l32(x: u32) -> u32 {
-    let lut = CRC32_IEEE_L32_REF;
     (lut[0][(x & 0xFF) as usize] ^ lut[1][((x >> 8) & 0xFF) as usize])
         ^ (lut[2][((x >> 16) & 0xFF) as usize] ^ lut[3][(x >> 24) as usize])
 }

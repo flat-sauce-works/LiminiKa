@@ -133,7 +133,6 @@ pub const MAX_PHASE_ANCHORS: usize = 64;
 /// Maximum dimension supported for embedding vectors in inline zero-alloc storage (`128`).
 pub const MAX_EMBEDDING_DIM: usize = 128;
 
-#[allow(dead_code)]
 pub(crate) const MAX_REGISTER_CACHED_CENTROIDS: usize = 16;
 
 pub(crate) mod crc32_delta;

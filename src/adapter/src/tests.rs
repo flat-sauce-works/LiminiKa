@@ -1945,7 +1945,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert!(adapter.ego_state().intervention_epochs >= 1);
     assert!(adapter.last_boundary_delta().kinetic_energy_q7 > 0);
 
-    // Clamp Ego off & drive identical quiescence with quiescent ledger/Venn to observe stationary shortcut
+    // Clamp Ego off & drive identical quiescence with quiescent ledger/LacunaPartition8 to observe stationary shortcut
     adapter.configure_ego_from_preset(LiminalEgoPreset::Custom);
     adapter.set_active_circuit(CognitiveTrajectoryLedger::default());
     let quiescent_horizon = EpistemicHorizonReading {

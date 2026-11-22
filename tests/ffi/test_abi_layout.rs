@@ -398,7 +398,7 @@ fn test_lmnk_types_abi_layout_invariants() {
         1 << 2
     );
 
-    // Unified v0.1.3 2 Primitives x 2 Drivers & Distortion ABI types
+    // Unified v0.2.0 2 Primitives x 2 Drivers & Distortion ABI types
     assert_eq!(size_of::<liminika_core::abi::lmnk_attribution_tag_t>(), 1);
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_core_primitive_state_t>(),

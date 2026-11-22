@@ -779,9 +779,9 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     group.finish();
 }
 
-/// Provisional `.lmnk` / MappedStorage 4-Section Container Benchmarks (Isolated from Core PhaseSteering Suite).
+/// Provisional `.lmnk` / MappedStorage Unified Container Benchmarks (Isolated from Core PhaseSteering Suite).
 ///
-/// Evaluates pre-v1.0 `.lmnk` record crystallization and 4-section zero-copy byte container mapping.
+/// Evaluates pre-v1.0 `.lmnk` record crystallization and unified zero-copy byte container mapping.
 /// Skipped by default under `run_benchmarks.py --profile standard` so Core `PhaseSteering`/`EntropyControl` evaluations
 /// remain decoupled from the provisional container layout prior to v1.0 KV-keyframe video-stream memory integration.
 fn bench_phase_steering_provisional_lmnk_container(c: &mut Criterion) {

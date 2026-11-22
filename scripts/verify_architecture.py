@@ -95,7 +95,7 @@ RETIRED_LEGACY_PATHS: tuple[str, ...] = (
 
 REQUIRED_CANONICAL_PATHS: tuple[str, ...] = (
     "foundation/phase_ops/mod.rs",
-    "stigmergy/substrate.rs",
+    "stigmergy/substrate/mod.rs",
     "stigmergy/anchor/mod.rs",
     "runtime/topology.rs",
 )
@@ -154,10 +154,10 @@ def split_ident_tokens(ident: str) -> set[str]:
 
 
 ALLOWED_SUBSTRATE_DECLS: dict[str, tuple[str, ...]] = {
-    "StigmergicSubstrate": ("stigmergy/substrate.rs",),
-    "SubstrateStepReport": ("stigmergy/substrate.rs",),
-    "PointerSubstrate": ("stigmergy/trail.rs",),
-    "StigmergicSubstrateOps": ("stigmergy/trail.rs",),
+    "StigmergicSubstrate": ("stigmergy/substrate/mod.rs",),
+    "SubstrateStepReport": ("stigmergy/substrate/mod.rs",),
+    "PointerSubstrate": ("stigmergy/trail/traits.rs",),
+    "StigmergicSubstrateOps": ("stigmergy/trail/traits.rs",),
     "SubstrateGatewayExt": ("runtime/gateway/orchestrator.rs",),
     "LmnkSubstrateOpaque": ("runtime/abi/handles.rs",),
     "LmnkSubstrateHandle": ("runtime/abi/handles.rs",),
