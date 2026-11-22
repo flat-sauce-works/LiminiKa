@@ -293,42 +293,51 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
 ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
     if let Some(ctx) = core_ctx {
         if ctx.stack.liminal_layer.adaptation_epochs > 0 || ctx.stack.ego_layer.is_active() {
-            // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoState` and
-            // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
-            // pre-Ego state.
-            let raw_frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
-            let sys_baseline =
-                ctx.stack
-                    .modulate_gateway_frame_branchless(raw_frame, ctx.horizon, ctx.venn);
-            let ego_base = ctx.stack.modulate_gateway_frame_with_ego_readonly(
-                ctx.delta,
-                ctx.horizon,
-                ctx.venn,
-                raw_frame,
-            );
-            if let (Some(spine), Some(vp), Some(net), Some(tension)) =
-                (ctx.spine, ctx.venn_partition, ctx.ego_net, ctx.tension)
-            {
-                let (p_frame, _d_norm, hops) = net.evaluate_pframe_chain_branchless(
-                    &ctx.stack.ego_layer,
-                    spine,
-                    vp,
-                    &ctx.stack.stigmergic_layer,
-                    tension,
-                    ego_base,
+            let mut frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
+            if ctx.stack.ego_layer.is_active() {
+                // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoState` and
+                // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
+                // pre-Ego state.
+                let mut sys_baseline = frame;
+                ctx.stack.modulate_gateway_frame_branchless(
+                    &mut sys_baseline,
+                    ctx.horizon,
+                    ctx.venn,
                 );
-                let candidate = if hops > 0 { p_frame } else { ego_base };
-                let isolated = spine.enforce_pinned_isolation_branchless(&sys_baseline, candidate);
-                let w = *isolated.phase_words_ref();
-                return (isolated, w);
+                ctx.stack.modulate_gateway_frame_with_ego_readonly(
+                    ctx.delta,
+                    ctx.horizon,
+                    ctx.venn,
+                    &mut frame,
+                );
+                if let (Some(spine), Some(vp), Some(net), Some(tension)) =
+                    (ctx.spine, ctx.venn_partition, ctx.ego_net, ctx.tension)
+                {
+                    let _ = net.evaluate_pframe_chain_branchless(
+                        &ctx.stack.ego_layer,
+                        spine,
+                        vp,
+                        &ctx.stack.stigmergic_layer,
+                        tension,
+                        &mut frame,
+                    );
+                    spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+                    let w = *frame.phase_words_ref();
+                    return (frame, w);
+                }
+                if let Some(spine) = ctx.spine {
+                    spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+                    let w = *frame.phase_words_ref();
+                    return (frame, w);
+                }
+            } else {
+                // Non-Ego fast path: modulate in-place without cloning `sys_baseline` or
+                // enforcing pinned isolation when `ego_layer` is inactive.
+                ctx.stack
+                    .modulate_gateway_frame_branchless(&mut frame, ctx.horizon, ctx.venn);
             }
-            if let Some(spine) = ctx.spine {
-                let isolated = spine.enforce_pinned_isolation_branchless(&sys_baseline, ego_base);
-                let w = *isolated.phase_words_ref();
-                return (isolated, w);
-            }
-            let ego_w = *ego_base.phase_words_ref();
-            return (ego_base, ego_w);
+            let w = *frame.phase_words_ref();
+            return (frame, w);
         }
     }
     signal.synthesize_gateway_frame_with_words()

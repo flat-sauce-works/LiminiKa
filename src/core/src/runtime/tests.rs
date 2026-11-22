@@ -944,6 +944,93 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         }
     ));
 
+    // When P-Frame count reaches GOP length P=4 (or seek repulsion fires), the next hit
+    // triggers FrameDirective::ReAnchorKeyframe via SystemSpineState and resets pframe_count to 0.
+    let mut delta_arr = fact_arr;
+    for step_idx in 0..3u32 {
+        delta_arr[2] = (step_idx as i8 + 1) * 4;
+        let mut step_frame = ObjectiveFact::new(delta_arr, 2.5, 0, 77).synthesize_gateway_frame();
+        step_frame.active_head_count = 24;
+        let out = auto_cache
+            .step_with_gateway_autonomous(
+                0x5555,
+                14 + step_idx,
+                &step_frame,
+                &mut auto_circuit,
+                act,
+                &policy,
+                4 + step_idx,
+            )
+            .unwrap();
+        assert!(matches!(
+            out,
+            RamPhaseKvStepOutcome::ResonatedSeeked {
+                slot_idx: 0,
+                exact_hit: true,
+                ..
+            }
+        ));
+    }
+    assert_eq!(auto_cache.slot_pframe_count(0), 4);
+
+    delta_arr[2] = 20;
+    let mut reanchor_frame = ObjectiveFact::new(delta_arr, 2.5, 0, 77).synthesize_gateway_frame();
+    reanchor_frame.active_head_count = 24;
+    let reanchored = auto_cache
+        .step_with_gateway_autonomous(
+            0x5555,
+            20,
+            &reanchor_frame,
+            &mut auto_circuit,
+            act,
+            &policy,
+            8,
+        )
+        .unwrap();
+    assert!(matches!(
+        reanchored,
+        RamPhaseKvStepOutcome::ResonatedSeeked {
+            slot_idx: 0,
+            exact_hit: true,
+            pframe_count: 0,
+            ..
+        }
+    ));
+    assert_eq!(auto_cache.base.entries()[0].keyframe.anchor_phases[2], 20);
+
+    // Guard/repulsion seek triggers immediate re-anchoring before P=4 expires.
+    let mut opp_arr = [-120i8; MAX_ATTENTION_HEADS];
+    opp_arr[0] = -96;
+    let mut opp_frame = ObjectiveFact::new(opp_arr, 2.5, 0, 78).synthesize_gateway_frame();
+    opp_frame.active_head_count = 24;
+    let _ = auto_cache
+        .step_with_gateway_autonomous(0x5555, 21, &opp_frame, &mut auto_circuit, act, &policy, 9)
+        .unwrap();
+    assert_eq!(auto_cache.slot_pframe_count(0), 1);
+    auto_cache.pframes[0][0] =
+        crate::foundation::KvMotionDeltaPacket::new([-120; MAX_ATTENTION_HEADS]);
+    let repulsed_out = auto_cache
+        .step_with_gateway_autonomous(
+            0x5555,
+            22,
+            &reanchor_frame,
+            &mut auto_circuit,
+            act,
+            &policy,
+            10,
+        )
+        .unwrap();
+    assert!(matches!(
+        repulsed_out,
+        RamPhaseKvStepOutcome::ResonatedSeeked {
+            slot_idx: 0,
+            exact_hit: true,
+            pframe_count: 0,
+            seek_repulsed,
+            ..
+        } if seek_repulsed > 0
+    ));
+
     // 4-tuple (SystemConstraint, ObjectiveFact, SubjectivePersona, GuardPhaseAnchor) composes guard severity,
     // and CognitiveTrajectoryLedger::modulate_gateway_frame_at_scale routes `SubheadRouter`/`EntropyController` cleanly.
     let guard = GuardPhaseAnchor::new([24i8; MAX_ATTENTION_HEADS], 0.85, 0.5);
@@ -1277,7 +1364,8 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
     assert!(pool[1].verify_integrity());
     coupling.record_dissipative_transition_branchless(&report_scatter, 64);
     assert_eq!(
-        coupling.row(report_scatter.primary_idx)[report_scatter.landed_idx],
+        coupling.row(usize::from(report_scatter.primary_idx))
+            [usize::from(report_scatter.landed_idx)],
         64
     );
 
@@ -1292,9 +1380,12 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
     assert!(report_birth.overflowed);
     assert!(report_birth.spawned_new);
     assert_eq!(report_birth.landed_idx, 2);
-    assert!(pool[report_birth.landed_idx].verify_integrity());
+    assert!(pool[usize::from(report_birth.landed_idx)].verify_integrity());
     coupling.record_dissipative_transition_branchless(&report_birth, 96);
-    assert!(coupling.row(report_birth.primary_idx)[report_birth.landed_idx] < 0);
+    assert!(
+        coupling.row(usize::from(report_birth.primary_idx))[usize::from(report_birth.landed_idx)]
+            < 0
+    );
 }
 
 #[test]
@@ -1413,18 +1504,19 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
     };
     let res_words = load_q7_words_64(&[24i8; MAX_ATTENTION_HEADS]);
     let scatter_report = DissipativeOverflowReport {
-        primary_idx: 0,
-        landed_idx: 1,
+        residual_words: res_words,
         primary_anchor_id: 1,
         landed_anchor_id: 2,
         primary_coherence: 0.70,
         scatter_coherence: 0.88,
         overflow_pressure: 0.45,
         updated_gravity_mass: 1.5,
-        residual_words: res_words,
+        primary_idx: 0,
+        landed_idx: 1,
         overflowed: true,
         scattered: true,
         spawned_new: false,
+        _reserved: 0,
     };
     field.adapt_from_circuit_and_overflow_branchless(
         &fuse_ledger,
@@ -1453,8 +1545,6 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
 
 #[test]
 fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays() {
-    use crate::stigmergy::{AttractorAnchor, CrystallizedAnchorRecord};
-
     let mut t0 = gcso_pointer_trail_t {
         target_anchor_id: 10,
         stigmergic_density: 1.5,
@@ -1496,29 +1586,6 @@ fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays(
     let hetero = (fact, persona);
     assert!((hetero.relative_energy() - 3.7).abs() < 1e-5);
     assert_eq!(hetero.relative_anchor_id(), 32);
-
-    // Bidirectional bridge between CrystallizedAnchorRecord and CrystallizedAttractorRecord.
-    let mut legacy_anchor = AttractorAnchor {
-        id: 55,
-        domain_id: u32::from(ATTRACTOR_SLOT_KNOWLEDGE),
-        weight: 2.2,
-        pull_force: 1.8,
-        is_active: 1,
-        is_crystallized: 1,
-        phase_deltas: [20i8; MAX_ATTENTION_HEADS],
-        ..Default::default()
-    };
-    let snap_rec = CrystallizedAnchorRecord::from_anchor(&legacy_anchor);
-    let crystal_rec = snap_rec.to_crystallized_attractor_record();
-    assert!(crystal_rec.verify_integrity());
-    assert_eq!(crystal_rec.anchor_id, 55);
-    assert_eq!(crystal_rec.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
-    let roundtrip_snap = CrystallizedAnchorRecord::from_crystallized_attractor_record(&crystal_rec);
-    assert_eq!(roundtrip_snap.id, 55);
-    assert_eq!(roundtrip_snap.phase_deltas, legacy_anchor.phase_deltas);
-    legacy_anchor.id = 55;
-    assert_eq!(legacy_anchor.relative_anchor_id(), 55);
-    assert_eq!(roundtrip_snap.relative_anchor_id(), 55);
 }
 
 #[test]
@@ -1770,18 +1837,20 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     *basin_frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
 
     let before_floor2 = stack.liminal_layer.threshold_floor_q7[2];
-    let out_orbit = ego_rebel.intervene_on_layers_and_frame_branchless(
+    let orig_basin_words = *basin_frame.phase_words_ref();
+    let mut out_orbit = basin_frame;
+    ego_rebel.intervene_on_layers_and_frame_branchless(
         &mut stack,
         &delta1,
         &strong_capture_horizon,
         &venn,
-        basin_frame,
+        &mut out_orbit,
     );
     assert_ne!(
         ego_rebel.last_intervened_mask & EGO_TRIGGER_BASIN_CAPTURE,
         0
     );
-    assert_ne!(out_orbit.phase_words_ref(), basin_frame.phase_words_ref());
+    assert_ne!(out_orbit.phase_words_ref(), &orig_basin_words);
     assert!(stack.liminal_layer.threshold_floor_q7[2] <= before_floor2);
 
     // Zero-gated Liminal exterior -> transgressive rebel dares step beyond rather than silence
@@ -1791,13 +1860,13 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
         regime_code: EpistemicRegime::Liminal as u8,
         ..Default::default()
     };
-    let zero_frame = GatewayFrame::default();
-    let out_transgress = liminal_ego.intervene_on_layers_and_frame_branchless(
+    let mut out_transgress = GatewayFrame::default();
+    liminal_ego.intervene_on_layers_and_frame_branchless(
         &mut stack,
         &delta0,
         &zeroed_horizon,
         &venn,
-        zero_frame,
+        &mut out_transgress,
     );
     assert!(out_transgress.effective_energy > 0.0);
     assert_ne!(
@@ -1865,11 +1934,11 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
         ..Default::default()
     };
     *frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
-    let modulated =
-        stack.intervene_ego_and_modulate_frame_branchless(&delta, &horizon, &venn, frame);
+    let orig_words = *frame.phase_words_ref();
+    stack.intervene_ego_and_modulate_frame_branchless(&delta, &horizon, &venn, &mut frame);
     assert!(stack.ego_layer.intervention_epochs >= 1);
     assert_ne!(stack.ego_layer.last_intervened_mask, 0);
-    assert_ne!(modulated.phase_words_ref(), frame.phase_words_ref());
+    assert_ne!(frame.phase_words_ref(), &orig_words);
 
     let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_layer, &horizon, 4, 1);
     let mut buf = [0u8; 2048];
@@ -2540,8 +2609,8 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     assert_eq!(trail_rep.accumulated_phase_delta[0], -20);
     assert_eq!(trail_rep.accumulated_phase_delta[40], 0);
 
-    // 3. Promote sandbox lane 2 -> now contributes into venn_core_mask granules 0..4 (+10 + +20 = +30).
-    assert!(substrate.promote_sandbox_lane(2).unwrap());
+    // 3. Settle sandbox lane 2 -> now contributes into venn_core_mask granules 0..4 (+10 + +20 = +30).
+    assert!(substrate.settle_sandbox_lane(2).unwrap());
     let mut trail_prom = gcso_pointer_trail_t::default();
     let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
@@ -2654,7 +2723,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         3,
         3,
     );
-    assert_eq!(ev_prom, SandboxLifecycleEvent::Promoted(lane));
+    assert_eq!(ev_prom, SandboxLifecycleEvent::Settled(lane));
     assert_eq!(active_sandbox, None);
     assert_eq!(substrate.slot_sandbox_mask & (1u8 << lane), 0);
     assert_ne!(substrate.slot_enabled_mask & (1u8 << lane), 0);
@@ -2745,12 +2814,14 @@ fn test_system_spine_physical_pinned_isolation() {
         phase_deltas: [25; MAX_ATTENTION_HEADS],
         ..GatewayFrame::default()
     };
-    let guarded = spine.enforce_pinned_isolation_branchless(&baseline, ego_attempt);
+    let mut guarded = ego_attempt;
+    spine.enforce_pinned_isolation_branchless(&baseline, &mut guarded);
     assert_eq!(guarded.dominant_slot, ATTRACTOR_SLOT_REPULSION);
     assert_ne!(guarded.action_mode_flags & ACTION_MODE_PHASE_REPULSE, 0);
 
     spine.ood_void_locked = 1;
-    let void_locked = spine.enforce_pinned_isolation_branchless(&baseline, ego_attempt);
+    let mut void_locked = ego_attempt;
+    spine.enforce_pinned_isolation_branchless(&baseline, &mut void_locked);
     assert_eq!(void_locked.phase_deltas, baseline.phase_deltas);
 }
 
@@ -2771,12 +2842,13 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
         boundary_sensitivity_q7: 96,
         ..EpistemicPartition::default()
     };
-    let base = GatewayFrame::default();
+    let mut f1 = GatewayFrame::default();
+    let mut f3 = f1;
 
-    let (f1, _n1, h1, mask1) = net_1
-        .evaluate_pframe_chain_with_mask_branchless(&ego, &spine, &venn, &stig, &tension, base);
-    let (f3, _n3, h3, entry) = net_3
-        .evaluate_pframe_chain_with_entry_branchless(&ego, &spine, &venn, &stig, &tension, base);
+    let (_n1, h1, mask1) = net_1
+        .evaluate_pframe_chain_with_mask_branchless(&ego, &spine, &venn, &stig, &tension, &mut f1);
+    let (_n3, h3, entry) = net_3
+        .evaluate_pframe_chain_with_entry_branchless(&ego, &spine, &venn, &stig, &tension, &mut f3);
     assert_eq!(h1, 1);
     assert!(
         mask1.count_ones() >= 2,
@@ -2789,8 +2861,8 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
     net_1.record_matched_activations(mask1);
     for idx in 0..3 {
         if ((mask1 >> idx) & 1) != 0 {
-            assert_eq!(net_1.nodes[idx].reinforce_count, 1);
-            assert_eq!(net_1.nodes[idx].last_active_epoch, 1);
+            assert_eq!(net_1.node_cold[idx].reinforce_count, 1);
+            assert_eq!(net_1.node_cold[idx].last_active_epoch, 1);
         }
     }
 
@@ -2798,19 +2870,20 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
         net_3.epoch = ep;
         net_3.record_chain_activation(usize::from(entry), h3);
     }
-    assert!(net_3.nodes[2].reinforce_count >= 4);
+    assert!(net_3.node_cold[2].reinforce_count >= 4);
     let crystal = net_3.consolidate_and_evaporate_cold_path(6);
     assert!(crystal.is_some());
     assert_ne!(
-        net_3.nodes[2].flags & DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME,
+        net_3.export_node(2).flags & DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME,
         0
     );
+    assert!(net_3.node_routing[2].is_consolidated());
 
     // Stale unreinforced node evaporates when untouched across epochs.
-    net_3.nodes[0].last_active_epoch = 0;
-    net_3.nodes[0].pheromone_q7 = 16;
+    net_3.node_cold[0].last_active_epoch = 0;
+    net_3.node_routing[0].pheromone_q7 = 16;
     let _ = net_3.consolidate_and_evaporate_cold_path(12);
-    assert!(!net_3.nodes[0].is_active());
+    assert!(!net_3.is_node_active(0));
 }
 
 #[test]

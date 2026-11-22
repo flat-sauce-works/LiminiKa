@@ -432,11 +432,10 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let frame = self.synthesize_gateway_with_aperture_from_stack(stack);
-        let modulated =
-            stack.intervene_ego_and_modulate_frame_branchless(delta, horizon, venn_report, frame);
-        let out_words = *modulated.phase_words_ref();
-        (modulated, out_words)
+        let mut frame = self.synthesize_gateway_with_aperture_from_stack(stack);
+        stack.intervene_ego_and_modulate_frame_branchless(delta, horizon, venn_report, &mut frame);
+        let out_words = *frame.phase_words_ref();
+        (frame, out_words)
     }
 
     /// Read-only counterpart to [`Self::synthesize_gateway_with_core_layers`] for per-layer
@@ -450,11 +449,10 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let frame = self.synthesize_gateway_with_aperture_from_stack(stack);
-        let modulated =
-            stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, frame);
-        let out_words = *modulated.phase_words_ref();
-        (modulated, out_words)
+        let mut frame = self.synthesize_gateway_with_aperture_from_stack(stack);
+        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut frame);
+        let out_words = *frame.phase_words_ref();
+        (frame, out_words)
     }
 
     /// Shared helper resolving `self`'s dynamic cognitive aperture against `stack` and shaping
@@ -491,15 +489,15 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let combined = combine_pair_aperture_frame_pure(self, other, stack);
-        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+        let mut combined = combine_pair_aperture_frame_pure(self, other, stack);
+        stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
             venn_report,
-            combined,
+            &mut combined,
         );
-        let final_words = *modulated.phase_words_ref();
-        (modulated, final_words)
+        let final_words = *combined.phase_words_ref();
+        (combined, final_words)
     }
 
     /// Read-only counterpart to [`Self::combine_pair_with_core_layers`] for per-layer
@@ -513,11 +511,10 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let combined = combine_pair_aperture_frame_pure(self, other, stack);
-        let modulated =
-            stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, combined);
-        let final_words = *modulated.phase_words_ref();
-        (modulated, final_words)
+        let mut combined = combine_pair_aperture_frame_pure(self, other, stack);
+        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut combined);
+        let final_words = *combined.phase_words_ref();
+        (combined, final_words)
     }
 
     /// Aggregates a slice of fragmented signal experts (`fragments`) across the 8 SWAR granules
@@ -755,24 +752,24 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         out_frame.tagged_ptr =
             gcso_tagged_ptr_t::pack(out_frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
 
-        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+        stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
             venn_report,
-            out_frame,
+            &mut out_frame,
         );
-        let final_words = *modulated.phase_words_ref();
+        let final_words = *out_frame.phase_words_ref();
         let report = StigmergicFragmentEnsembleReport {
-            ensemble_consensus_energy: modulated.effective_energy,
+            ensemble_consensus_energy: out_frame.effective_energy,
             ensemble_diversity_gain: diversity_gain,
             quorum_agreed_granule_mask: quorum_agreed_mask,
             split_contested_granule_mask: split_contested_mask,
             ego_tiebreak_granule_mask: ego_tiebreak_mask,
             active_fragment_count: active_frag_count,
-            dominant_fragment_slot: modulated.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            dominant_fragment_slot: out_frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
             reserved: [0; 3],
         };
-        (modulated, final_words, report)
+        (out_frame, final_words, report)
     }
 }
 
@@ -2163,15 +2160,15 @@ impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> ManifoldGatewaySignal f
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
-        let modulated = stack.intervene_ego_and_modulate_frame_branchless(
+        let mut combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
+        stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
             venn_report,
-            combined,
+            &mut combined,
         );
-        let words = *modulated.phase_words_ref();
-        (modulated, words)
+        let words = *combined.phase_words_ref();
+        (combined, words)
     }
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
@@ -2181,11 +2178,10 @@ impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> ManifoldGatewaySignal f
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        let combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
-        let modulated =
-            stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, combined);
-        let words = *modulated.phase_words_ref();
-        (modulated, words)
+        let mut combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
+        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut combined);
+        let words = *combined.phase_words_ref();
+        (combined, words)
     }
 }
 
@@ -2240,13 +2236,17 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
-        let guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
+        let mut guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
             &self.0, None, pair_frame,
         );
-        let modulated =
-            stack.intervene_ego_and_modulate_frame_branchless(delta, horizon, venn_report, guarded);
-        let words = *modulated.phase_words_ref();
-        (modulated, words)
+        stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            &mut guarded,
+        );
+        let words = *guarded.phase_words_ref();
+        (guarded, words)
     }
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
@@ -2257,13 +2257,12 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
-        let guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
+        let mut guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
             &self.0, None, pair_frame,
         );
-        let modulated =
-            stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, guarded);
-        let words = *modulated.phase_words_ref();
-        (modulated, words)
+        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut guarded);
+        let words = *guarded.phase_words_ref();
+        (guarded, words)
     }
 }
 
@@ -2331,11 +2330,15 @@ impl<
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
-        let guarded = apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
-        let modulated =
-            stack.intervene_ego_and_modulate_frame_branchless(delta, horizon, venn_report, guarded);
-        let words = *modulated.phase_words_ref();
-        (modulated, words)
+        let mut guarded = apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
+        stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            venn_report,
+            &mut guarded,
+        );
+        let words = *guarded.phase_words_ref();
+        (guarded, words)
     }
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
@@ -2346,11 +2349,10 @@ impl<
         venn_report: &StigmergicOverlapSerendipityReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
-        let guarded = apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
-        let modulated =
-            stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, guarded);
-        let words = *modulated.phase_words_ref();
-        (modulated, words)
+        let mut guarded = apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
+        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut guarded);
+        let words = *guarded.phase_words_ref();
+        (guarded, words)
     }
 }
 

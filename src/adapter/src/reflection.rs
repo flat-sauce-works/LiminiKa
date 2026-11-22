@@ -15,10 +15,11 @@ use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
     AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame,
     GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 use liminika_core::stigmergy::{
     CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    StigmergicActionDecision, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    StigmergicActionDecision,
 };
 
 /// Policy governing bounded, event-triggered closed-loop reflection retries.

@@ -471,6 +471,7 @@ pub enum TelemetryVerbosityMode {
 }
 
 /// Capture policy deciding whether verbosity stays manually pinned or slides dynamically between tiers.
+#[repr(C, u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetryCapturePolicy {
     /// Fixes telemetry to a single mode for reproducible benchmarking and ablations.
@@ -479,7 +480,7 @@ pub enum TelemetryCapturePolicy {
     Auto {
         /// Nominal baseline tier (`Coarse` or `Standard`).
         base: TelemetryVerbosityMode,
-        /// Promotes temporarily to [`TelemetryVerbosityMode::Detailed`] during destabilization.
+        /// Transitions temporarily to [`TelemetryVerbosityMode::Detailed`] during destabilization.
         spike_to_detailed: bool,
         /// Drops to [`TelemetryVerbosityMode::Coarse`] when `System` QoS throttling is active.
         qos_throttle_to_coarse: bool,
@@ -555,10 +556,10 @@ pub struct SystemSpineTelemetry {
     pub entropy_gate_bifurcation_events: u64,
     /// Steps in `EntropyController` repulsion branch mode (`active_branch_mode >= 2`).
     pub entropy_gate_repulsion_events: u64,
-    /// Automatic or manual upward verbosity transitions.
-    pub mode_promotions: u64,
-    /// Automatic or manual downward verbosity transitions.
-    pub mode_demotions: u64,
+    /// Automatic or manual verbosity expansion transitions.
+    pub mode_expansions: u64,
+    /// Automatic or manual verbosity retraction transitions.
+    pub mode_retractions: u64,
     /// Number of Slow-Loop epoch evaluations performed.
     pub slow_loop_epochs: u64,
     /// Number of auxiliary residual spillover cache hits (`RamPhaseKvCache` recall).
@@ -670,30 +671,20 @@ pub struct CoreTelemetrySnapshot {
 }
 
 /// Standalone `#![no_std]` zero-alloc `3 + System` telemetry bank stored beside compute engines.
+///
+/// Hot `Coarse`-mode control and counters (`policy`, `active_mode`, and `system.total_steps` /
+/// `system.qos_throttle_events`) reside in Cache Line 0 (`0..64`), while `detailed` is isolated at
+/// offset `384` (Cache Line 6) to avoid polluting Hot/Warm cache lines.
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoreTelemetryBank {
     policy: TelemetryCapturePolicy,
     active_mode: TelemetryVerbosityMode,
-    /// Consecutive quiescent steps required before demoting from `Detailed` back to `base`.
-    pub retract_dwell_threshold: u16,
-    /// Layer 0 (`Liminal`) counters.
-    pub layer0: LiminalLayerTelemetry,
-    /// Layer 1 (`Stigmergic`) counters.
-    pub layer1: StigmergicLayerTelemetry,
-    /// Layer 2 (`Ego`) counters.
-    pub layer2: EgoLayerTelemetry,
-    /// Vertical `+ System` spine counters.
-    pub system: SystemSpineTelemetry,
-    /// Slide-in detailed counters (untouched unless `active_mode == Detailed`).
-    pub detailed: DetailedLayerTelemetry,
-    ema_initialized: bool,
-    entropy_ema_q15: u16,
-    coherence_ema_q15: u16,
-    guard_ema_q15: u16,
-    assimilation_drift_q15: u16,
-    assimilation_drift_dwell: u16,
-    sandbox_coherence_improve_dwell: u16,
     derivative_alpha_q7: u8,
+    ema_initialized: bool,
+    reserved_cl0: u8,
+    /// Vertical `+ System` spine counters (hot `Coarse` counters packed within `0..64`).
+    pub system: SystemSpineTelemetry,
     attribution_counts: [u64; 4],
     whole_token_bypass_events: u64,
     immediate_tension_damps: u64,
@@ -702,7 +693,31 @@ pub struct CoreTelemetryBank {
     pframe_total_hops: u64,
     known_unknown_sandbox_stages: u64,
     true_void_aperture_zeros: u64,
+    /// Layer 0 (`Liminal`) counters.
+    pub layer0: LiminalLayerTelemetry,
+    /// Layer 1 (`Stigmergic`) counters.
+    pub layer1: StigmergicLayerTelemetry,
+    /// Layer 2 (`Ego`) counters.
+    pub layer2: EgoLayerTelemetry,
+    /// Consecutive quiescent steps required before retracting from `Detailed` back to `base`.
+    pub retract_dwell_threshold: u16,
+    entropy_ema_q15: u16,
+    coherence_ema_q15: u16,
+    guard_ema_q15: u16,
+    assimilation_drift_q15: u16,
+    assimilation_drift_dwell: u16,
+    sandbox_coherence_improve_dwell: u16,
+    reserved_warm: [u16; 5],
+    /// Slide-in detailed counters (untouched unless `active_mode == Detailed`; CL6-isolated).
+    pub detailed: DetailedLayerTelemetry,
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<TelemetryCapturePolicy>() == 4);
+    assert!(core::mem::align_of::<CoreTelemetryBank>() == 64);
+    assert!(core::mem::offset_of!(CoreTelemetryBank, system) == 8);
+    assert!(core::mem::offset_of!(CoreTelemetryBank, detailed) == 384);
+};
 
 impl Default for CoreTelemetryBank {
     #[inline]
@@ -723,7 +738,33 @@ impl CoreTelemetryBank {
         Self {
             policy,
             active_mode: initial_mode,
-            retract_dwell_threshold: 2,
+            derivative_alpha_q7: crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7,
+            ema_initialized: false,
+            reserved_cl0: 0,
+            system: SystemSpineTelemetry {
+                total_steps: 0,
+                continuous_standard_steps: 0,
+                qos_throttle_events: 0,
+                entropy_gate_bifurcation_events: 0,
+                entropy_gate_repulsion_events: 0,
+                mode_expansions: 0,
+                mode_retractions: 0,
+                slow_loop_epochs: 0,
+                experience_cache_hits: 0,
+                experience_cache_stores: 0,
+                experience_cache_evictions: 0,
+                slow_loop_repulse_bias_q7: 0,
+                slow_loop_dwell_delta: 0,
+                reserved: [0; 6],
+            },
+            attribution_counts: [0; 4],
+            whole_token_bypass_events: 0,
+            immediate_tension_damps: 0,
+            slow_tension_excites: 0,
+            pframe_chain_evals: 0,
+            pframe_total_hops: 0,
+            known_unknown_sandbox_stages: 0,
+            true_void_aperture_zeros: 0,
             layer0: LiminalLayerTelemetry {
                 regime_counts: [0; 3],
                 chatter_events: 0,
@@ -743,44 +784,20 @@ impl CoreTelemetryBank {
                 escalation_swaps: 0,
                 unaligned_intervention_count: 0,
             },
-            system: SystemSpineTelemetry {
-                total_steps: 0,
-                continuous_standard_steps: 0,
-                qos_throttle_events: 0,
-                entropy_gate_bifurcation_events: 0,
-                entropy_gate_repulsion_events: 0,
-                mode_promotions: 0,
-                mode_demotions: 0,
-                slow_loop_epochs: 0,
-                experience_cache_hits: 0,
-                experience_cache_stores: 0,
-                experience_cache_evictions: 0,
-                slow_loop_repulse_bias_q7: 0,
-                slow_loop_dwell_delta: 0,
-                reserved: [0; 6],
-            },
-            detailed: DetailedLayerTelemetry {
-                liminal_channel_chatter_counts: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
-                stigmergic_granule_venn_hits: [0; NUM_STIGMERGIC_GRANULES],
-                ego_trigger_counts: [0; 5],
-                detailed_captured_steps: 0,
-            },
-            ema_initialized: false,
+            retract_dwell_threshold: 2,
             entropy_ema_q15: 0,
             coherence_ema_q15: 0,
             guard_ema_q15: 0,
             assimilation_drift_q15: 0,
             assimilation_drift_dwell: 0,
             sandbox_coherence_improve_dwell: 0,
-            derivative_alpha_q7: crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7,
-            attribution_counts: [0; 4],
-            whole_token_bypass_events: 0,
-            immediate_tension_damps: 0,
-            slow_tension_excites: 0,
-            pframe_chain_evals: 0,
-            pframe_total_hops: 0,
-            known_unknown_sandbox_stages: 0,
-            true_void_aperture_zeros: 0,
+            reserved_warm: [0; 5],
+            detailed: DetailedLayerTelemetry {
+                liminal_channel_chatter_counts: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
+                stigmergic_granule_venn_hits: [0; NUM_STIGMERGIC_GRANULES],
+                ego_trigger_counts: [0; 5],
+                detailed_captured_steps: 0,
+            },
         }
     }
 
@@ -827,9 +844,9 @@ impl CoreTelemetryBank {
             TelemetryCapturePolicy::Auto { base, .. } => base,
         };
         if (next as u8) > (self.active_mode as u8) {
-            self.system.mode_promotions = self.system.mode_promotions.saturating_add(1);
+            self.system.mode_expansions = self.system.mode_expansions.saturating_add(1);
         } else if (next as u8) < (self.active_mode as u8) {
-            self.system.mode_demotions = self.system.mode_demotions.saturating_add(1);
+            self.system.mode_retractions = self.system.mode_retractions.saturating_add(1);
         }
         self.active_mode = next;
     }
@@ -1030,9 +1047,9 @@ impl CoreTelemetryBank {
             }
         };
         if (next as u8) > (self.active_mode as u8) {
-            self.system.mode_promotions = self.system.mode_promotions.saturating_add(1);
+            self.system.mode_expansions = self.system.mode_expansions.saturating_add(1);
         } else if (next as u8) < (self.active_mode as u8) {
-            self.system.mode_demotions = self.system.mode_demotions.saturating_add(1);
+            self.system.mode_retractions = self.system.mode_retractions.saturating_add(1);
         }
         self.active_mode = next;
         next
@@ -1281,14 +1298,14 @@ impl CoreTelemetryBank {
             .system
             .entropy_gate_repulsion_events
             .saturating_add(snap.system.entropy_gate_repulsion_events);
-        self.system.mode_promotions = self
+        self.system.mode_expansions = self
             .system
-            .mode_promotions
-            .saturating_add(snap.system.mode_promotions);
-        self.system.mode_demotions = self
+            .mode_expansions
+            .saturating_add(snap.system.mode_expansions);
+        self.system.mode_retractions = self
             .system
-            .mode_demotions
-            .saturating_add(snap.system.mode_demotions);
+            .mode_retractions
+            .saturating_add(snap.system.mode_retractions);
         self.system.experience_cache_hits = snap.system.experience_cache_hits;
         self.system.experience_cache_stores = snap.system.experience_cache_stores;
         self.system.experience_cache_evictions = snap.system.experience_cache_evictions;

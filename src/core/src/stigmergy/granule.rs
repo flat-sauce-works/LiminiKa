@@ -16,8 +16,7 @@ use core::mem::{align_of, offset_of, size_of};
 use crate::foundation::{
     atan2_to_q7_word_x8_simd, branchless_mask8_min_delta, branchless_max_f32, branchless_relu_f32,
     branchless_sincos_q7, coherence_from_uniform_words_x8, is_word_array_uniform_64,
-    load_q7_words_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8,
-    swar_u8_mean_round_x8, Pod,
+    store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, swar_u8_mean_round_x8, Pod,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
@@ -25,7 +24,6 @@ use crate::liminal::{
     LiminalThresholdState, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
 };
-use crate::stigmergy::attractor::{AttractorAnchor, CrystallizedAnchorRecord};
 use crate::stigmergy::circuit::{CognitiveOpKind, CognitiveTrajectoryLedger};
 use crate::stigmergy::crystal::{CrystallizedAttractorRecord, DissipativeOverflowReport};
 use crate::stigmergy::pheromone::StigmergicReconstitutionReport;
@@ -589,44 +587,6 @@ impl RelativeAttractorNode for gcso_pointer_trail_t {
     }
 }
 
-impl RelativeAttractorNode for AttractorAnchor {
-    #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
-        *self.phase_words_ref()
-    }
-    #[inline(always)]
-    fn relative_energy(&self) -> f32 {
-        branchless_select_f32(
-            (self.is_active != 0) & (self.id != 0),
-            branchless_relu_f32(self.weight),
-            0.0,
-        )
-    }
-    #[inline(always)]
-    fn relative_anchor_id(&self) -> u32 {
-        self.id
-    }
-}
-
-impl RelativeAttractorNode for CrystallizedAnchorRecord {
-    #[inline(always)]
-    fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
-        load_q7_words_64(&self.phase_deltas)
-    }
-    #[inline(always)]
-    fn relative_energy(&self) -> f32 {
-        branchless_select_f32(
-            (self.is_active != 0) & (self.id != 0),
-            branchless_relu_f32(self.weight),
-            0.0,
-        )
-    }
-    #[inline(always)]
-    fn relative_anchor_id(&self) -> u32 {
-        self.id
-    }
-}
-
 #[inline]
 fn accumulate_words_sincos_weighted(
     nw: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -832,16 +792,13 @@ impl<const N: usize> RelativeCouplingMatrix<N> {
         report: &DissipativeOverflowReport,
         step_q7: u8,
     ) {
+        let primary_idx = usize::from(report.primary_idx);
+        let landed_idx = usize::from(report.landed_idx);
         let edge_active = (report.scattered | (report.spawned_new & report.overflowed))
-            & (report.primary_idx != report.landed_idx);
+            & (primary_idx != landed_idx);
         let eff_step = branchless_select_u8(edge_active, step_q7, 0);
         let is_opposed = report.spawned_new & report.overflowed;
-        self.reinforce_relation_branchless(
-            report.primary_idx,
-            report.landed_idx,
-            is_opposed,
-            eff_step,
-        );
+        self.reinforce_relation_branchless(primary_idx, landed_idx, is_opposed, eff_step);
     }
 }
 

@@ -943,14 +943,13 @@ pub unsafe extern "C" fn gcso_ego_field_intervene_frame(
             Some(v) => *v,
             None => StigmergicOverlapSerendipityReport::default(),
         };
-        let next_frame = ego_ref.intervene_on_layers_and_frame_branchless(
+        ego_ref.intervene_on_layers_and_frame_branchless(
             &mut stack_ref,
             &delta_ref,
             &horizon_ref,
             &venn_val,
-            *frame_ref,
+            &mut frame_ref,
         );
-        *frame_ref = next_frame;
         Ok(GCSO_SUCCESS)
     })
 }
@@ -1090,15 +1089,16 @@ pub unsafe extern "C" fn gcso_distortion_delta_apply_chain(
         };
         let mut net = EgoDifferentialNet::new_empty(max_hops.min(MAX_DISTORTION_CHAIN_HOPS));
         for (idx, n) in node_slice.iter().enumerate() {
-            net.nodes[idx] = *n;
-            if n.is_baked_active() {
-                net.active_node_mask |= 1u8 << idx;
-            }
+            net.set_node(idx, *n);
         }
-        let (out_frame, d_norm, hops) = net.evaluate_pframe_chain_branchless(
-            &ego_ref, &spine_ref, &venn_ref, &stig_ref, &ten_ref, *frm_ref,
+        let (d_norm, hops) = net.evaluate_pframe_chain_branchless(
+            &ego_ref,
+            &spine_ref,
+            &venn_ref,
+            &stig_ref,
+            &ten_ref,
+            &mut frm_ref,
         );
-        *frm_ref = out_frame;
         // SAFETY: `write_opt_out` validates nullness and alignment for optional scalar outputs.
         unsafe {
             write_opt_out(delta_norm_out, d_norm)?;

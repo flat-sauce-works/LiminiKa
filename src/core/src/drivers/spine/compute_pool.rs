@@ -16,8 +16,10 @@
 //! 3. **Zero-`fdiv` EMA + asymmetric hysteresis**: External `+ System` Gauge-Zero pressure surges
 //!    retreat rapidly (`alpha = 1/2`), while recovery decays slowly (`alpha = 1/16`) with dwell
 //!    gating to protect 1% Low frame times.
-//! 4. **Pinned protection & anti-paralysis**: Irreversible slots (`pinned_mask`) are never
-//!    bypassed or migrated, and bypassed slots are excluded from `stationary_evidence_mask`.
+//! 4. **Pinned protection & anti-paralysis**: Irreversible slots (`SystemSpineState::pinned_compute_mask`)
+//!    are never bypassed or migrated, and bypassed slots are excluded from `stationary_evidence_mask`.
+
+use core::mem::{align_of, offset_of, size_of};
 
 use crate::drivers::spine::state::{SystemSpineState, SPINE_BYPASS_VETO_NONE};
 use crate::foundation::{branchless_argmin_u8_x8_masked, Pod};
@@ -171,46 +173,59 @@ pub struct TokenBypassObservation {
 unsafe impl Pod for TokenBypassObservation {}
 
 /// Label-free anonymous compute pool state machine (`#![no_std]`, zero-alloc, zero-`fdiv`).
+///
+/// Cacheline-packed into 3 exact 64-byte cache lines (`192 B`, `#[repr(C, align(64))]`, 0 splits,
+/// 0 implicit padding): CL0 (`0..64`) scalars & bitmasks, CL1 (`64..128`) `slot_pheromone_q7`,
+/// CL2 (`128..192`) `slot_lane`. Irreversible slot pinning uses [`SystemSpineState::pinned_compute_mask`]
+/// as the single source of truth.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnonymousComputePool {
-    /// Bitmask of registered anonymous compute slots (`0..64`).
+    /// Bitmask of registered anonymous compute slots (`0..64`, CL0 `0..8`).
     pub active_mask: u64,
-    /// Irreversible slots protected from Fast-Loop bypass and Slow-Loop migration.
-    pub pinned_mask: u64,
-    /// Repulsed/quarantined slots excluded from primary execution.
+    /// Repulsed/quarantined slots excluded from primary execution (CL0 `8..16`).
     pub repulsion_mask: u64,
-    /// Reversible slots eligible for Fast-Loop bypass or throttling under pressure.
+    /// Reversible slots eligible for Fast-Loop bypass or throttling under pressure (CL0 `16..24`).
     pub reversible_mask: u64,
-    /// Per-slot contribution pheromone in Q0.7 (`0..=127`), updated only from exit scalar reward.
-    pub slot_pheromone_q7: [u8; MAX_ANONYMOUS_COMPUTE_SLOTS],
-    /// Current anonymous execution lane assignment (`0..=7`) per slot.
-    pub slot_lane: [u8; MAX_ANONYMOUS_COMPUTE_SLOTS],
-    /// Per-lane relative capacity/headroom in Q0.7 (`0..=127`).
-    pub lane_capacity_q7: [u8; MAX_ANONYMOUS_EXECUTION_LANES],
-    /// Bitmask of enabled anonymous execution lanes (`0..8`).
-    pub lane_enabled_mask: u8,
-    /// Bitmask of pinned execution lanes.
-    pub lane_pinned_mask: u8,
-    /// Current primary execution lane index (`0..=7`).
-    pub primary_lane: u8,
-    /// Current pressure regime.
-    pub regime: ComputePressureRegime,
-    /// Gauge-Zero baseline pressure in Q0.15 (re-anchored only by `+ System` checkpoints).
-    pub baseline_pressure_q15: u16,
-    /// Asymmetric-EMA smoothed raw pressure in Q0.15 (`>> 1` on surge, `>> 4` on recovery).
-    pub ema_pressure_q15: u16,
-    /// Consecutive steps spent below recovery hysteresis threshold.
-    pub recovery_dwell: u16,
-    /// Consecutive steps spent under sustained `Elevated`/`Surge` pressure for Slow-Loop migration.
-    pub lane_switch_dwell: u16,
-    /// Remaining calm steps before Fast-Loop bypass may re-engage after an exit instability recovery.
-    pub re_bypass_cooldown: u8,
-    /// Consecutive calm decode steps observed before token-level whole-steering bypass engages.
-    pub whole_token_calm_dwell: u8,
-    /// Pool configuration thresholds.
+    /// Pool configuration thresholds (`16 B`, CL0 `24..40`).
     pub config: ComputePoolConfig,
+    /// Gauge-Zero baseline pressure in Q0.15 (re-anchored only by `+ System` checkpoints, CL0 `40..42`).
+    pub baseline_pressure_q15: u16,
+    /// Asymmetric-EMA smoothed raw pressure in Q0.15 (`>> 1` on surge, `>> 4` on recovery, CL0 `42..44`).
+    pub ema_pressure_q15: u16,
+    /// Consecutive steps spent below recovery hysteresis threshold (CL0 `44..46`).
+    pub recovery_dwell: u16,
+    /// Consecutive steps spent under sustained `Elevated`/`Surge` pressure for Slow-Loop migration (CL0 `46..48`).
+    pub lane_switch_dwell: u16,
+    /// Per-lane relative capacity/headroom in Q0.7 (`0..=127`, CL0 `48..56`).
+    pub lane_capacity_q7: [u8; MAX_ANONYMOUS_EXECUTION_LANES],
+    /// Bitmask of enabled anonymous execution lanes (`0..8`, CL0 `56`).
+    pub lane_enabled_mask: u8,
+    /// Bitmask of pinned execution lanes (CL0 `57`).
+    pub lane_pinned_mask: u8,
+    /// Current primary execution lane index (`0..=7`, CL0 `58`).
+    pub primary_lane: u8,
+    /// Current pressure regime (CL0 `59`).
+    pub regime: ComputePressureRegime,
+    /// Remaining calm steps before Fast-Loop bypass may re-engage after an exit instability recovery (CL0 `60`).
+    pub re_bypass_cooldown: u8,
+    /// Consecutive calm decode steps observed before token-level whole-steering bypass engages (CL0 `61`).
+    pub whole_token_calm_dwell: u8,
+    /// Explicit zero-padding aligning CL1 arrays to byte offset `64` (CL0 `62..64`).
+    pub reserved_cl0: [u8; 2],
+    /// Per-slot contribution pheromone in Q0.7 (`0..=127`), updated only from exit scalar reward (CL1 `64..128`).
+    pub slot_pheromone_q7: [u8; MAX_ANONYMOUS_COMPUTE_SLOTS],
+    /// Current anonymous execution lane assignment (`0..=7`) per slot (CL2 `128..192`).
+    pub slot_lane: [u8; MAX_ANONYMOUS_COMPUTE_SLOTS],
 }
+
+const _: () = {
+    assert!(size_of::<ComputePoolConfig>() == 16);
+    assert!(size_of::<AnonymousComputePool>() == 192);
+    assert!(align_of::<AnonymousComputePool>() == 64);
+    assert!(offset_of!(AnonymousComputePool, slot_pheromone_q7) == 64);
+    assert!(offset_of!(AnonymousComputePool, slot_lane) == 128);
+};
 
 impl Default for AnonymousComputePool {
     fn default() -> Self {
@@ -224,23 +239,23 @@ impl AnonymousComputePool {
     pub const fn new(config: ComputePoolConfig) -> Self {
         Self {
             active_mask: 0,
-            pinned_mask: 0,
             repulsion_mask: 0,
             reversible_mask: 0,
-            slot_pheromone_q7: [64; MAX_ANONYMOUS_COMPUTE_SLOTS],
-            slot_lane: [0; MAX_ANONYMOUS_COMPUTE_SLOTS],
+            config,
+            baseline_pressure_q15: 8192,
+            ema_pressure_q15: 8192,
+            recovery_dwell: 0,
+            lane_switch_dwell: 0,
             lane_capacity_q7: [127, 96, 64, 64, 0, 0, 0, 0],
             lane_enabled_mask: 0b0000_0001,
             lane_pinned_mask: 0,
             primary_lane: 0,
             regime: ComputePressureRegime::Quiescent,
-            baseline_pressure_q15: 8192,
-            ema_pressure_q15: 8192,
-            recovery_dwell: 0,
-            lane_switch_dwell: 0,
             re_bypass_cooldown: 0,
             whole_token_calm_dwell: 0,
-            config,
+            reserved_cl0: [0; 2],
+            slot_pheromone_q7: [64; MAX_ANONYMOUS_COMPUTE_SLOTS],
+            slot_lane: [0; MAX_ANONYMOUS_COMPUTE_SLOTS],
         }
     }
 
@@ -299,14 +314,16 @@ impl AnonymousComputePool {
         dispatch: &mut ComputeDispatchMask,
     ) -> u8 {
         let repulsion_active = obs.repulsion_active != 0;
-        let veto_mask =
-            spine.evaluate_whole_token_bypass_veto_branchless(guard_active, repulsion_active);
+        let veto_mask = spine.evaluate_pool_bypass_veto_branchless(
+            self.reversible_mask,
+            guard_active,
+            repulsion_active,
+        );
         if veto_mask != SPINE_BYPASS_VETO_NONE {
             obs.irreversible_step = 1;
         }
         let candidate = self.evaluate_whole_token_steering_bypass(obs, dispatch);
-        let allow =
-            spine.should_bypass_whole_token_branchless(candidate, guard_active, repulsion_active);
+        let allow = candidate & (veto_mask == SPINE_BYPASS_VETO_NONE);
         dispatch.whole_token_steering_bypass = u8::from(allow);
         let masked_bypass = spine.mask_layer_bypass_with_pinned(dispatch.bypass_mask, veto_mask);
         let restored_slots = BitCut64::split(dispatch.bypass_mask, masked_bypass).outside;
@@ -380,19 +397,20 @@ impl AnonymousComputePool {
         self.regime = ComputePressureRegime::Quiescent;
     }
 
-    /// Configures anonymous slot masks (`active`, `pinned`, `repulsion`, `reversible`).
+    /// Configures anonymous slot masks (`active`, `repulsion`, `reversible`), clamping non-active
+    /// and `pinned_compute_mask` slots out of `repulsion` and `reversible` without duplicating
+    /// [`SystemSpineState::pinned_compute_mask`].
     pub fn set_slot_masks(
         &mut self,
         active_mask: u64,
-        pinned_mask: u64,
+        pinned_compute_mask: u64,
         repulsion_mask: u64,
         reversible_mask: u64,
     ) {
         self.active_mask = active_mask;
-        let active_cut = BitCut64::split(active_mask, pinned_mask);
-        self.pinned_mask = active_cut.inside;
-        self.repulsion_mask = BitCut64::split(active_cut.outside, repulsion_mask).inside;
-        self.reversible_mask = BitCut64::split(active_cut.outside, reversible_mask).inside;
+        let non_pinned_active = BitCut64::split(active_mask, pinned_compute_mask).outside;
+        self.repulsion_mask = BitCut64::split(non_pinned_active, repulsion_mask).inside;
+        self.reversible_mask = BitCut64::split(non_pinned_active, reversible_mask).inside;
     }
 
     /// Configures available anonymous execution lanes (`0..8`) and their Q0.7 headroom.
@@ -432,8 +450,14 @@ impl AnonymousComputePool {
     }
 
     /// Advances the Gauge-Zero pressure EMA + asymmetric hysteresis state machine and emits a
-    /// pre-execution [`ComputeDispatchMask`] (`0 alloc`, `0 fdiv`, branchless mask folding).
-    pub fn step_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
+    /// pre-execution [`ComputeDispatchMask`] (`0 alloc`, `0 fdiv`, branchless mask folding),
+    /// protecting all active bits present in `pinned_compute_mask`.
+    pub fn step_dispatch(
+        &mut self,
+        reading: SystemPressureReading,
+        pinned_compute_mask: u64,
+    ) -> ComputeDispatchMask {
+        let pinned = BitCut64::split(self.active_mask, pinned_compute_mask).inside;
         let raw_q15 = Self::composite_pressure_q15(reading);
         let prev = self.ema_pressure_q15;
 
@@ -478,7 +502,7 @@ impl AnonymousComputePool {
         let effective_reversible = branchless_select_u64(
             reading.irreversible_step != 0 || in_instability_cooldown,
             0,
-            BitCut64::split(self.reversible_mask, self.pinned_mask).outside,
+            BitCut64::split(self.reversible_mask, pinned).outside,
         );
 
         let mut low_pheromone_mask = 0_u64;
@@ -498,7 +522,7 @@ impl AnonymousComputePool {
             max_bypass_slots,
         );
         let eligible_exec = BitCut64::split(self.active_mask, self.repulsion_mask).outside;
-        let execute_mask = BitCut64::split(eligible_exec, bypass_mask).outside | self.pinned_mask;
+        let execute_mask = BitCut64::split(eligible_exec, bypass_mask).outside | pinned;
         let throttle_mask =
             BitCut64::split(effective_reversible & throttle_candidate_mask, bypass_mask).outside;
         // Anti-paralysis guardrail: bypassed slots never count as Layer 0 stationary evidence.
@@ -534,12 +558,15 @@ impl AnonymousComputePool {
         guard_active: bool,
         repulsion_active: bool,
     ) -> ComputeDispatchMask {
-        let veto_mask =
-            spine.evaluate_whole_token_bypass_veto_branchless(guard_active, repulsion_active);
+        let veto_mask = spine.evaluate_pool_bypass_veto_branchless(
+            self.reversible_mask,
+            guard_active,
+            repulsion_active,
+        );
         if veto_mask != SPINE_BYPASS_VETO_NONE {
             reading.irreversible_step = 1;
         }
-        let mut dispatch = self.step_dispatch(reading);
+        let mut dispatch = self.step_dispatch(reading, spine.pinned_compute_mask);
         let masked_bypass = spine.mask_layer_bypass_with_pinned(dispatch.bypass_mask, veto_mask);
         let restored_slots = BitCut64::split(dispatch.bypass_mask, masked_bypass).outside;
         dispatch.bypass_mask = masked_bypass;
@@ -576,15 +603,20 @@ impl AnonymousComputePool {
 
     /// Applies Slow-Loop lane migration for `migrate_mask` only when `slow_loop_migration_ready` is true.
     ///
-    /// Pinned slots are never migrated. Returns `true` if any slot lane assignment changed.
-    pub fn try_migrate_lanes(&mut self, migrate_mask: u64, target_lane: u8) -> bool {
+    /// Slots present in `pinned_compute_mask` are never migrated. Returns `true` if any slot lane assignment changed.
+    pub fn try_migrate_lanes(
+        &mut self,
+        migrate_mask: u64,
+        target_lane: u8,
+        pinned_compute_mask: u64,
+    ) -> bool {
         let target = target_lane & 7;
         if self.lane_switch_dwell < self.config.min_lane_switch_dwell
             || (self.lane_enabled_mask & (1_u8 << target)) == 0
         {
             return false;
         }
-        let movable = BitCut64::split(migrate_mask & self.active_mask, self.pinned_mask).outside;
+        let movable = BitCut64::split(migrate_mask & self.active_mask, pinned_compute_mask).outside;
         if movable == 0 {
             return false;
         }
@@ -674,12 +706,10 @@ impl AnonymousComputePool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::mem::{align_of, size_of};
 
     const _: () = {
         assert!(size_of::<SystemPressureReading>() == 8);
         assert!(size_of::<ComputeDispatchMask>() == 40);
-        assert!(align_of::<AnonymousComputePool>() == 64);
     };
 
     #[test]
@@ -697,7 +727,8 @@ mod tests {
         pool.reanchor_baseline_pressure(8000);
         pool.set_lanes(0b0011, 0b0001, [127, 96, 0, 0, 0, 0, 0, 0]);
         // Slots 0..=1 pinned, slots 2..=3 reversible, slot 4 repulsed.
-        pool.set_slot_masks(0b1_1111, 0b0_0011, 0b1_0000, 0b0_1100);
+        let pinned = 0b0_0011_u64;
+        pool.set_slot_masks(0b1_1111, pinned, 0b1_0000, 0b0_1100);
         // Slot 2 has low pheromone (32), slot 3 has high pheromone (96).
         pool.slot_pheromone_q7[2] = 32;
         pool.slot_pheromone_q7[3] = 96;
@@ -710,7 +741,7 @@ mod tests {
             irreversible_step: 0,
             _pad: 0,
         };
-        let d1 = pool.step_dispatch(surge_reading);
+        let d1 = pool.step_dispatch(surge_reading, pinned);
         assert_eq!(d1.regime_u8, ComputePressureRegime::Surge as u8);
         // Slot 2 is reversible & low pheromone -> bypassed; slot 3 resists bypass; slot 4 repulsed.
         assert_eq!(d1.bypass_mask, 0b0_0100);
@@ -720,7 +751,7 @@ mod tests {
         assert_eq!(d1.stationary_evidence_mask, 0b0_1011);
         // Slow-Loop migration must be blocked until min_lane_switch_dwell elapses.
         assert_eq!(d1.slow_loop_migration_ready, 0);
-        assert!(!pool.try_migrate_lanes(0b0_1100, 1));
+        assert!(!pool.try_migrate_lanes(0b0_1100, 1, pinned));
 
         // 2. Sudden drop to baseline must NOT immediately drop Surge (slow alpha = 1/16 + recovery dwell).
         let calm_reading = SystemPressureReading {
@@ -730,17 +761,17 @@ mod tests {
             irreversible_step: 0,
             _pad: 0,
         };
-        let d2 = pool.step_dispatch(calm_reading);
+        let d2 = pool.step_dispatch(calm_reading, pinned);
         assert_eq!(d2.regime_u8, ComputePressureRegime::Surge as u8);
 
         // 3. Sustained pressure unlocks Slow-Loop migration, while pinned slots remain immovable.
         for _ in 0..6 {
-            let _ = pool.step_dispatch(surge_reading);
+            let _ = pool.step_dispatch(surge_reading, pinned);
         }
-        let d_ready = pool.step_dispatch(surge_reading);
+        let d_ready = pool.step_dispatch(surge_reading, pinned);
         assert_eq!(d_ready.slow_loop_migration_ready, 1);
         assert_eq!(d_ready.fallback_lane, 1);
-        assert!(pool.try_migrate_lanes(0b0_1111, 1));
+        assert!(pool.try_migrate_lanes(0b0_1111, 1, pinned));
         assert_eq!(pool.slot_lane[0], 0); // Pinned slot 0 stays on lane 0.
         assert_eq!(pool.slot_lane[1], 0); // Pinned slot 1 stays on lane 0.
         assert_eq!(pool.slot_lane[2], 1); // Unpinned slot 2 migrated to lane 1.
@@ -751,7 +782,8 @@ mod tests {
     fn compute_pool_protects_irreversible_steps_and_updates_exit_reward() {
         let mut pool = AnonymousComputePool::default();
         pool.reanchor_baseline_pressure(8000);
-        pool.set_slot_masks(0b1111, 0b0001, 0, 0b1110);
+        let pinned = 0b0001_u64;
+        pool.set_slot_masks(0b1111, pinned, 0, 0b1110);
         pool.slot_pheromone_q7[1] = 10;
         pool.slot_pheromone_q7[2] = 10;
 
@@ -763,7 +795,7 @@ mod tests {
             irreversible_step: 1,
             _pad: 0,
         };
-        let d = pool.step_dispatch(prefill_surge);
+        let d = pool.step_dispatch(prefill_surge, pinned);
         assert_eq!(d.bypass_mask, 0);
         assert_eq!(d.execute_mask, 0b1111);
 
@@ -792,7 +824,7 @@ mod tests {
             irreversible_step: 0,
             _pad: 0,
         };
-        let d = pool.step_dispatch(surge);
+        let d = pool.step_dispatch(surge, pinned);
         assert_eq!(d.regime_u8, ComputePressureRegime::Surge as u8);
         // Must never bypass pinned layers.
         assert_eq!(d.bypass_mask & pinned, 0);
@@ -806,12 +838,12 @@ mod tests {
         // Exit instability immediately forces full-layer recovery for min_re_bypass_dwell steps.
         pool.signal_exit_instability();
         for _ in 0..pool.config.min_re_bypass_dwell {
-            let d_rec = pool.step_dispatch(surge);
+            let d_rec = pool.step_dispatch(surge, pinned);
             assert_eq!(d_rec.bypass_mask, 0);
             assert_eq!(d_rec.execute_mask, active);
         }
         // After dwell expires under sustained surge, bypass may re-engage.
-        let d_after = pool.step_dispatch(surge);
+        let d_after = pool.step_dispatch(surge, pinned);
         assert!(d_after.bypass_mask.count_ones() > 0);
     }
 
@@ -878,13 +910,13 @@ mod tests {
         assert_eq!(d2.bypass_mask, 0);
         assert!(pool2.re_bypass_cooldown >= 2);
 
-        // Case 3: pinned_compute_mask excludes pinned bits from bypass_mask and vetoes whole-token.
+        // Case 3: dynamic pins overlapping `reversible_mask` exclude pinned bits from bypass_mask and veto whole-token.
         let mut pool3 = AnonymousComputePool::default();
         pool3.reanchor_baseline_pressure(8000);
         pool3.set_slot_masks(active, pinned_base, 0, rev);
         let mut spine3 = SystemSpineState::new();
         let pin_bits = (1_u64 << 8) | (1_u64 << 12);
-        spine3.pin_compute_slots(pin_bits);
+        spine3.pin_compute_slots(pinned_base | pin_bits);
         assert_eq!(
             spine3.mask_layer_bypass_with_pinned(pin_bits | (1_u64 << 10), SPINE_BYPASS_VETO_NONE),
             1_u64 << 10
@@ -911,9 +943,9 @@ mod tests {
         );
         assert!(spine4.should_bypass_whole_token_branchless(true, false, false));
 
-        // Case 5: after clearing guard/repulsion/pinned and cooldown expiry, whole-token bypass resumes.
+        // Case 5: after unpinning dynamic interior slots (keeping permanent `pinned_base`), whole-token bypass resumes.
         spine3.unpin_compute_slots(pin_bits);
-        assert_eq!(spine3.pinned_compute_mask, 0);
+        assert_eq!(spine3.pinned_compute_mask, pinned_base);
         let mut resumed = false;
         for _ in 0..8 {
             let mut d_rec = pool3.step_dispatch_with_spine(surge, &spine3, false, false);

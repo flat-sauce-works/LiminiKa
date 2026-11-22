@@ -374,8 +374,8 @@ pub enum SandboxLifecycleEvent {
     Idle,
     /// A new isolated sandbox lane was leased from the free pool.
     Nucleated(u8),
-    /// An active sandbox lane was promoted in-place to standard full-aperture participation.
-    Promoted(u8),
+    /// An active sandbox lane settled in-place into standard full-aperture participation.
+    Settled(u8),
     /// Unpinned active sandbox lanes were released immediately due to repulsion or overdrive.
     Released(u8),
 }
@@ -1422,15 +1422,15 @@ impl StigmergicSubstrate {
         Ok(())
     }
 
-    /// Promotes an active sandbox workbench lane (`slot_sandbox_mask`) to standard full-aperture
+    /// Settles an active sandbox workbench lane (`slot_sandbox_mask`) into standard full-aperture
     /// participation in-place without relocating its physical register slot.
     ///
-    /// Returns `Ok(true)` if `lane` was an active sandbox lane and is now promoted.
+    /// Returns `Ok(true)` if `lane` was an active sandbox lane and is now settled.
     ///
     /// # Errors
     /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    pub fn promote_sandbox_lane(&mut self, lane: u8) -> GcsoResult<bool> {
+    pub fn settle_sandbox_lane(&mut self, lane: u8) -> GcsoResult<bool> {
         if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
@@ -2655,7 +2655,7 @@ mod tests {
         assert!((substrate.slot_weights[0] - 0.25).abs() < 1e-6);
         assert!((substrate.slot_weights[1] - 0.40).abs() < 1e-6);
 
-        // Allocate sandbox lane again -> promote_sandbox_lane clears sandbox bit in-place;
+        // Allocate sandbox lane again -> settle_sandbox_lane clears sandbox bit in-place;
         // release_sandbox_lanes prunes unpinned sandbox lanes.
         let sb2 = substrate
             .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(
@@ -2664,7 +2664,7 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(sb2, 2);
-        assert!(substrate.promote_sandbox_lane(sb2).unwrap());
+        assert!(substrate.settle_sandbox_lane(sb2).unwrap());
         assert_eq!(substrate.sandbox_lane_mask(), 0);
         assert_ne!(substrate.active_lane_mask() & (1 << sb2), 0);
 

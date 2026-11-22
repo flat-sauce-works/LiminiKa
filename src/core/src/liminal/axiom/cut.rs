@@ -181,8 +181,8 @@ impl<O: GroundedOrigin, I: GroundedOrigin> GroundedOrigin for Refine<O, I> {}
 /// for crystallization or persistence into long-term memory.
 ///
 /// Because [`Exterior`] does not implement [`GroundedOrigin`] or [`Groundable`], neither
-/// [`BoundaryViolation`] nor unbridged [`SpeculativeDiscovery`] can be promoted by repeated
-/// refinement.
+/// [`BoundaryViolation`] nor unbridged [`SpeculativeDiscovery`] can reach a grounded closure by
+/// repeated refinement.
 pub trait Groundable: Activatable + GroundedOrigin {}
 
 impl Groundable for Interior {}
@@ -203,7 +203,8 @@ pub type BoundaryViolation<T> = Scoped<Refine<FromBoundary, Exterior>, T>;
 
 /// Delta-originated exterior reading ($O \setminus S$) pending shared-bridge verification.
 ///
-/// Excluded from [`Groundable`] until promoted via `bridge_to_shared` in `liminal::axiom`.
+/// Excluded from [`Groundable`] until bridged into a settled phase via `bridge_to_shared` in
+/// `liminal::axiom`.
 pub type SpeculativeDiscovery<T> = Scoped<Refine<FromDelta, Exterior>, T>;
 
 /// Delta-originated discovery verified across at least one shared bridge granule ($S \cap O$).

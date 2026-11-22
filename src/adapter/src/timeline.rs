@@ -47,10 +47,60 @@ impl Default for AdaptiveGopCutDetector {
 
 impl TimelineCutDetector for AdaptiveGopCutDetector {
     fn should_emit_keyframe(&self, metrics: &FrameTransitionMetrics) -> bool {
-        metrics.frames_since_keyframe >= self.max_gop_len
-            || metrics.new_cluster_spawned
-            || matches!(metrics.void_state, VoidBoundaryState::LiminalExterior)
-            || metrics.phase_l1_delta >= self.phase_delta_cut_thresh
+        use liminika_core::drivers::{
+            FrameDirective, SpineFrameTransitionInput, SystemSpineState,
+            SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED,
+        };
+        use liminika_core::liminal::Lacuna;
+
+        let gop_reached = metrics.frames_since_keyframe >= self.max_gop_len;
+        let (steps_since_keyframe, max_gop_steps) = if gop_reached {
+            (1, 1)
+        } else {
+            (
+                metrics.frames_since_keyframe.min(254) as u8,
+                self.max_gop_len.clamp(1, 255) as u8,
+            )
+        };
+        let lacuna_code = if !metrics.phase_l1_delta.is_finite() {
+            Lacuna::Undefined.code()
+        } else if matches!(metrics.void_state, VoidBoundaryState::LiminalExterior) {
+            Lacuna::Exterior.code()
+        } else {
+            Lacuna::SelfRef.code()
+        };
+        let delta_exceeded_raw = metrics.phase_l1_delta >= self.phase_delta_cut_thresh;
+        let phase_delta_q7 = (metrics.phase_l1_delta * 64.0).clamp(0.0, 127.0) as u8;
+        let mut reanchor_thresh_q7 = (self.phase_delta_cut_thresh * 64.0).clamp(0.0, 127.0) as u8;
+        if delta_exceeded_raw && reanchor_thresh_q7 == 0 {
+            reanchor_thresh_q7 = 1;
+        }
+        let eff_phase_delta_q7 = if delta_exceeded_raw {
+            phase_delta_q7.max(reanchor_thresh_q7)
+        } else if phase_delta_q7 >= reanchor_thresh_q7 && reanchor_thresh_q7 > 0 {
+            phase_delta_q7.saturating_sub(1)
+        } else {
+            phase_delta_q7
+        };
+        let flags = if metrics.new_cluster_spawned {
+            SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED
+        } else {
+            0
+        };
+
+        let (directive, _) = SystemSpineState::new().evaluate_frame_transition_branchless(
+            SpineFrameTransitionInput {
+                lacuna_code,
+                phase_delta_q7: eff_phase_delta_q7,
+                reanchor_delta_thresh_q7: reanchor_thresh_q7,
+                steps_since_keyframe,
+                max_gop_steps,
+                candidate_granule_mask: 0xFF,
+                flags,
+                reserved: 0,
+            },
+        );
+        matches!(directive, FrameDirective::ReAnchorKeyframe)
     }
 }
 
@@ -1006,5 +1056,67 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
             out.extend_from_slice(&d.intent_delta.signature_hash.to_le_bytes());
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adaptive_gop_cut_detector_delegates_to_spine_transition_controller() {
+        let detector = AdaptiveGopCutDetector::default();
+        let calm = FrameTransitionMetrics {
+            phase_l1_delta: 0.10,
+            void_state: VoidBoundaryState::InsideBasin,
+            frames_since_keyframe: 2,
+            new_cluster_spawned: false,
+        };
+        assert!(!detector.should_emit_keyframe(&calm));
+
+        assert!(detector.should_emit_keyframe(&FrameTransitionMetrics {
+            void_state: VoidBoundaryState::LiminalExterior,
+            ..calm
+        }));
+        assert!(detector.should_emit_keyframe(&FrameTransitionMetrics {
+            new_cluster_spawned: true,
+            ..calm
+        }));
+        assert!(detector.should_emit_keyframe(&FrameTransitionMetrics {
+            phase_l1_delta: 0.35,
+            ..calm
+        }));
+        assert!(!detector.should_emit_keyframe(&FrameTransitionMetrics {
+            phase_l1_delta: 0.349,
+            ..calm
+        }));
+        assert!(!detector.should_emit_keyframe(&FrameTransitionMetrics {
+            phase_l1_delta: f32::NAN,
+            ..calm
+        }));
+
+        // Large max_gop_len (> 255) must not wrap or prematurely expire below max_gop_len.
+        let long_gop = AdaptiveGopCutDetector {
+            max_gop_len: 300,
+            phase_delta_cut_thresh: 0.35,
+        };
+        assert!(!long_gop.should_emit_keyframe(&FrameTransitionMetrics {
+            frames_since_keyframe: 299,
+            ..calm
+        }));
+        assert!(long_gop.should_emit_keyframe(&FrameTransitionMetrics {
+            frames_since_keyframe: 300,
+            ..calm
+        }));
+
+        // Zero cut threshold always triggers keyframe on non-negative deltas.
+        let zero_thresh = AdaptiveGopCutDetector {
+            max_gop_len: 16,
+            phase_delta_cut_thresh: 0.0,
+        };
+        assert!(zero_thresh.should_emit_keyframe(&FrameTransitionMetrics {
+            phase_l1_delta: 0.0,
+            ..calm
+        }));
     }
 }

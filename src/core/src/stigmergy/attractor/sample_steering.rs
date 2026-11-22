@@ -4,11 +4,11 @@
 //! Coherence-safe [`EpisodicPhaseSample`] and blanket [`EpisodicSampleSteering`].
 
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_max_f32, branchless_min_f32,
-    branchless_q7_conjugate_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
-    branchless_splitmix64, branchless_von_mises_kappa, circular_r_bar_from_words_64,
-    is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64, store_q7_word_at,
-    store_q7_words_64, swar_q7_phase_step_filter_words_64, swar_q7_phase_step_filter_x8,
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
+    branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
+    branchless_von_mises_kappa, circular_r_bar_from_words_64, is_phase_profile_nonzero_64,
+    is_word_array_uniform_64, load_q7_words_64, store_q7_word_at, store_q7_words_64,
+    swar_q7_phase_step_filter_words_64, swar_q7_phase_step_filter_x8,
     swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice,
     AlignedSliceMut32, PhaseSteering, Pod, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64,
     SWAR_SPLAT_BYTE_64,
@@ -19,7 +19,7 @@ use crate::liminal::{
 };
 use crate::stigmergy::attractor::{
     gcso_anchor_type_t, GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING,
-    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL, MAX_EMBEDDING_DIM,
+    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
 };
 use crate::stigmergy::crystal::CrystallizedAttractorRecord;
 use crate::stigmergy::gate::{PhaseDeltaSlice, PhaseSteeringActiveExt};
@@ -28,8 +28,6 @@ use crate::stigmergy::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_REPULSION_ACTIVE,
 };
-
-use super::*;
 
 // ===================================================================
 // Internal Branchless & SWAR Phase Synthesis Helpers
@@ -123,22 +121,6 @@ pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [gcso_q7_t; MA
     out
 }
 
-/// Synthesizes a 16-element normalized `f32` embedding preview from a 64-head Q7 phase array
-/// so that absorbed phase samples can be registered via [`crate::stigmergy::AttractorFieldEngine::add_embedding_anchor`].
-#[inline(always)]
-#[must_use]
-pub(crate) const fn q7_phases_to_embedding16(
-    phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> [f32; 16] {
-    let mut emb = [0.0_f32; 16];
-    let mut i = 0usize;
-    while i < 16 {
-        emb[i] = (phases[i] as f32) * (1.0 / 128.0);
-        i += 1;
-    }
-    emb
-}
-
 // ===================================================================
 // 1. Coherence-Safe Base Signal Trait (`EpisodicPhaseSample`)
 // ===================================================================
@@ -151,8 +133,8 @@ pub(crate) const fn q7_phases_to_embedding16(
 /// Instead of an unconstrained upstream `impl<T: AsRef<[u8]>>` (which collides with `[i8; 64]`
 /// and tuples under Rust's orphan/coherence rules), `EpisodicPhaseSample` is implemented for
 /// disjoint concrete head types (`str`, `[u8]`, `[u8; N]`, `[gcso_q7_t; 64]`, `[f32]`, `[f32; N]`,
-/// `AlignedSlice`, `gcso_pointer_trail_t`, `gcso_tagged_ptr_t`, `AttractorAnchor`,
-/// `CrystallizedAnchorRecord`) combined with blanket reference delegators (`&T`, `&mut T`) and
+/// `AlignedSlice`, `gcso_pointer_trail_t`, `gcso_tagged_ptr_t`, `CrystallizedAttractorRecord`)
+/// combined with blanket reference delegators (`&T`, `&mut T`) and
 /// tuple decorators (`(S, f32)`, `(S, f32, u32)`).
 pub trait EpisodicPhaseSample {
     /// Extracts or deterministically projects the sample's 64-head Q7 phase coordinates on $SO(2)^{64}$.
@@ -530,9 +512,8 @@ unsafe impl Pod for AttractorGrowthReport {}
 /// Blanket-implemented behavioral trait (`impl<T: EpisodicPhaseSample + ?Sized> EpisodicSampleSteering for T {}`)
 /// that automatically equips every [`EpisodicPhaseSample`] type with:
 /// 1. Direct conversion to SWAR-scaled, `PhaseStepFilter`-filtered RoPE phase deltas (`[gcso_q7_t; 64]`),
-/// 2. Direct in-place `PhaseClamp` RoPE steering of Query/Key tensors via [`PhaseSteering`],
-/// 3. Constant-time $S^1$ geodesic resonance absorption into [`gcso_pointer_trail_t`], and
-/// 4. Direct crystallization into a [`Pod`] [`AttractorAnchor`].
+/// 2. Direct in-place `PhaseClamp` RoPE steering of Query/Key tensors via [`PhaseSteering`], and
+/// 3. Constant-time $S^1$ geodesic resonance absorption into [`gcso_pointer_trail_t`].
 pub trait EpisodicSampleSteering: EpisodicPhaseSample {
     /// Projects `self` onto $SO(2)^{64}$, scales all 64 heads by its bounded mass $\times$ coherence
     /// prior using 8-lane SWAR (`branchless_q7_scale_64`), and filters sub-grid phase jitter via
@@ -685,49 +666,6 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
             resultant_r_bar: r_bar,
             von_mises_kappa: kappa,
             crystallized_anchor_id: 0,
-        }
-    }
-
-    /// Converts `self` directly into a 640-byte [`Pod`] [`AttractorAnchor`] ready for insertion
-    /// into the unified manifold or `.gcso` persistence.
-    #[inline]
-    #[must_use]
-    fn crystallize_into_anchor(
-        &self,
-        anchor_id: u32,
-        current_step: u64,
-        domain_salt: u32,
-    ) -> AttractorAnchor {
-        let mut phases = self.sample_phase_coords(domain_salt);
-        let anchor_type = self.sample_anchor_type();
-        if anchor_type == GCSO_ANCHOR_TYPE_PHASE_REPULSE {
-            phases = branchless_q7_conjugate_64(&phases);
-        }
-        let mass = branchless_max_f32(
-            branchless_flush_subnormal_f32(branchless_relu_f32(self.sample_mass())),
-            0.1,
-        );
-        let mut vector_data = [0.0_f32; MAX_EMBEDDING_DIM];
-        let mut i = 0usize;
-        while i < 16 {
-            vector_data[i] = (phases[i] as f32) * (1.0 / 128.0);
-            i += 1;
-        }
-        AttractorAnchor {
-            id: anchor_id,
-            anchor_type,
-            weight: mass,
-            pull_force: 1.0,
-            stigmergic_density: 1.0,
-            half_life_steps: 1000,
-            last_active_step: current_step,
-            domain_id: self.preferred_working_lane() & ((MAX_ATTRACTOR_DOMAINS as u32) - 1),
-            vector_dim: 16,
-            is_active: 1,
-            is_crystallized: u8::from(anchor_type == GCSO_ANCHOR_TYPE_CRYSTALLIZED),
-            reserved_padding: [0; 24],
-            phase_deltas: phases,
-            vector_data,
         }
     }
 }

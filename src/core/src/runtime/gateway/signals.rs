@@ -27,6 +27,42 @@ use crate::stigmergy::{
 
 pub(super) const INV_FACT_RIPA_CLAMP_RAD: f32 = 1.0 / DEFAULT_FACT_PHASE_CLAMP_RAD;
 
+/// Provenance axis bit (`bit 0`): Origin 1 (`SystemConstraintSignal`) contributed to this frame.
+pub const CAUSAL_AXIS_SYSTEM_CONSTRAINT: u32 = 1 << 0;
+/// Provenance axis bit (`bit 1`): Origin 2-A (`ObjectiveFactSignal`) contributed to this frame.
+pub const CAUSAL_AXIS_OBJECTIVE_FACT: u32 = 1 << 1;
+/// Provenance axis bit (`bit 2`): Origin 2-B (`SubjectivePersonaSignal`) contributed to this frame.
+pub const CAUSAL_AXIS_SUBJECTIVE_PERSONA: u32 = 1 << 2;
+/// Provenance axis bit (`bit 3`): Origin 2-C (`ContradictionGuardSignal`) contributed to this frame.
+pub const CAUSAL_AXIS_CONTRADICTION_GUARD: u32 = 1 << 3;
+
+/// Provenance cause bit (`bit 8`): System QoS or low-entropy inertial throttle active.
+pub const CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE: u32 = 1 << 8;
+/// Provenance cause bit (`bit 9`): Objective fact retrieval energy was weak or absent.
+pub const CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK: u32 = 1 << 9;
+/// Provenance cause bit (`bit 10`): Subjective persona collided with objective fact ($\mathcal{C}_{\mathrm{FP}} < -\tau$).
+pub const CAUSAL_CAUSE_PERSONA_FACT_COLLISION: u32 = 1 << 10;
+/// Provenance cause bit (`bit 11`): Cohomological obstruction ($H^1 \neq 0$) or Bloom repulsion triggered.
+pub const CAUSAL_CAUSE_COHOMOLOGY_REPULSION: u32 = 1 << 11;
+/// Provenance cause bit (`bit 12`): Attractor sample count & coherence reached `.gcso` crystallization maturity.
+pub const CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED: u32 = 1 << 12;
+
+/// Root-cause diagnosis code `0`: Nominal synergistic orchestration across active origins.
+pub const ROOT_CAUSE_NOMINAL: u8 = 0;
+/// Root-cause diagnosis code `1`: System QoS / VRAM pressure / inertial layer-skip throttle.
+pub const ROOT_CAUSE_SYSTEM_QOS_THROTTLE: u8 = 1;
+/// Root-cause diagnosis code `2`: Objective fact retrieval miss or weak grounding energy.
+pub const ROOT_CAUSE_FACT_RETRIEVAL_MISS: u8 = 2;
+/// Root-cause diagnosis code `3`: Destructive phase collision between Persona and Objective Fact.
+pub const ROOT_CAUSE_PERSONA_FACT_COLLISION: u8 = 3;
+/// Root-cause diagnosis code `4`: Cohomological obstruction ($H^1 \neq 0$) or Bloom repetition escape.
+pub const ROOT_CAUSE_COHOMOLOGY_REPULSION: u8 = 4;
+
+const _: () = {
+    assert!(ROOT_CAUSE_NOMINAL == crate::stigmergy::CRYSTAL_CAUSE_CODE_NOMINAL);
+    assert!(CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED == crate::stigmergy::CRYSTAL_PROVENANCE_MATURE_BIT);
+};
+
 // ===================================================================
 // 3. Root Supertrait (`CausalProvenanceSignal`) & 16-Byte Report
 // ===================================================================

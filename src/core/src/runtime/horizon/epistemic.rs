@@ -20,15 +20,18 @@ use crate::liminal::{
     MAX_ATTENTION_HEADS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
     THRESHOLD_STIGMERGY_WIDE,
 };
-use crate::runtime::gateway::{CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal};
+use crate::runtime::gateway::{
+    CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+    ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+};
 use crate::stigmergy::{
     evaluate_stigmergic_overlap_and_serendipity_words_64, fold_fractal_nodes_words_64,
     fold_sincos64_to_words, CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport,
     RelativeAttractorNode, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, DEFAULT_FACT_PHASE_CLAMP_RAD, MAX_ATTRACTOR_PULL_FORCE,
-    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    MAX_ATTRACTOR_PULL_FORCE,
 };
 
 /// Branchless epistemic horizon measurement over a finite local memory manifold (`16`-byte aligned).
@@ -77,12 +80,11 @@ impl EpistemicHorizonReading {
         self.regime_code == EpistemicRegime::InternalConflict as u8
     }
 
-    /// Modulates any synthesized [`GatewayFrame`] strictly branchlessly according to this epistemic
-    /// horizon: zeroes amplitude in [`EpistemicRegime::Liminal`] and elevates repulsive flags in
-    /// [`EpistemicRegime::InternalConflict`].
+    /// Modulates any synthesized [`GatewayFrame`] strictly branchlessly in-place according to this
+    /// epistemic horizon: zeroes amplitude in [`EpistemicRegime::Liminal`] and elevates repulsive
+    /// flags in [`EpistemicRegime::InternalConflict`].
     #[inline(always)]
-    #[must_use]
-    pub fn apply_to_frame_branchless(&self, mut frame: GatewayFrame) -> GatewayFrame {
+    pub fn apply_to_frame_branchless(&self, frame: &mut GatewayFrame) {
         let is_void = self.is_liminal();
         let is_conflict = self.is_internal_conflict();
         let gate = branchless_clamp_f32(branchless_relu_f32(self.horizon_gate), 0.0, 1.0);
@@ -148,7 +150,6 @@ impl EpistemicHorizonReading {
             frame.mean_phase_tag_q7,
         )
         .raw();
-        frame
     }
 }
 
@@ -204,7 +205,9 @@ impl ManifoldGatewaySignal for EpistemicHorizonReading {
             ),
             ..GatewayFrame::default()
         };
-        self.apply_to_frame_branchless(base)
+        let mut frame = base;
+        self.apply_to_frame_branchless(&mut frame);
+        frame
     }
 }
 
@@ -473,8 +476,8 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
         ..GatewayFrame::default()
     };
     *frame.phase_words_mut() = final_w;
-    let gated_frame = horizon.apply_to_frame_branchless(frame);
-    (gated_frame, horizon)
+    horizon.apply_to_frame_branchless(&mut frame);
+    (frame, horizon)
 }
 
 /// Blanket-implemented epistemic & relative-coupling trait over any [`RelativeAttractorNode`].
@@ -706,36 +709,37 @@ impl LiminalThresholdState {
         self.adaptation_epochs = self.adaptation_epochs.wrapping_add(1);
     }
 
-    /// Branchlessly modulates `frame` with this [`LiminalThresholdState`] and `horizon`:
+    /// Branchlessly modulates `frame` in-place with this [`LiminalThresholdState`] and `horizon`:
     /// enforces the dynamic Fact `Liminal` floor, scales Fact/Logic/Explore sub-head gains,
     /// and applies channel `7`'s focal phase shift when inside the horizon.
     #[inline(always)]
-    #[must_use]
     pub fn modulate_gateway_frame_branchless(
         &self,
-        frame: GatewayFrame,
+        frame: &mut GatewayFrame,
         horizon: &EpistemicHorizonReading,
-    ) -> GatewayFrame {
-        let mut out = horizon.apply_to_frame_branchless(frame);
+    ) {
+        horizon.apply_to_frame_branchless(frame);
         let below_fact_floor = horizon.total_memory_support < self.channel_threshold_floor_f32(1);
         let is_void = horizon.is_liminal() | below_fact_floor;
 
-        out.effective_energy = branchless_select_f32(is_void, 0.0, out.effective_energy);
+        frame.effective_energy = branchless_select_f32(is_void, 0.0, frame.effective_energy);
 
         let scale_gain = |base_q7: u8, ap_q7: u8| -> u8 {
             let scaled = (u16::from(base_q7) * (u16::from(ap_q7) + 32)) >> 7;
             scaled.clamp(16, 255) as u8
         };
-        out.subhead_fact_gain_q7 = scale_gain(out.subhead_fact_gain_q7, self.aperture_gain_q7[1]);
-        out.subhead_logic_gain_q7 = scale_gain(out.subhead_logic_gain_q7, self.aperture_gain_q7[3]);
-        out.subhead_explore_gain_q7 =
-            scale_gain(out.subhead_explore_gain_q7, self.aperture_gain_q7[2]);
+        frame.subhead_fact_gain_q7 =
+            scale_gain(frame.subhead_fact_gain_q7, self.aperture_gain_q7[1]);
+        frame.subhead_logic_gain_q7 =
+            scale_gain(frame.subhead_logic_gain_q7, self.aperture_gain_q7[3]);
+        frame.subhead_explore_gain_q7 =
+            scale_gain(frame.subhead_explore_gain_q7, self.aperture_gain_q7[2]);
 
         let shift_byte = self.phase_shift_q7[7] as u8 as u64;
         let shift_word = shift_byte.wrapping_mul(SWAR_SPLAT_BYTE_64);
         let keep_mask = branchless_select_u64(is_void, 0, u64::MAX);
         {
-            let pw = out.phase_words_mut();
+            let pw = frame.phase_words_mut();
             let mut c = 0usize;
             while c < NUM_STIGMERGIC_GRANULES {
                 let shifted = swar_q7_circular_add_x8(pw[c], shift_word);
@@ -743,14 +747,16 @@ impl LiminalThresholdState {
                 c += 1;
             }
         }
-        out.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(out.phase_words_ref());
-        let eff_slot = out.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
-        let ptr_tag = pack_action_slot_tag(eff_slot, out.action_mode_flags);
-        out.frame_flags = ptr_tag as u16;
-        out.tagged_ptr =
-            gcso_tagged_ptr_t::pack(out.mapped_section_offset48, ptr_tag, out.mean_phase_tag_q7)
-                .raw();
-        out
+        frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(frame.phase_words_ref());
+        let eff_slot = frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
+        let ptr_tag = pack_action_slot_tag(eff_slot, frame.action_mode_flags);
+        frame.frame_flags = ptr_tag as u16;
+        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+            frame.mapped_section_offset48,
+            ptr_tag,
+            frame.mean_phase_tag_q7,
+        )
+        .raw();
     }
 }
 

@@ -1033,17 +1033,9 @@ pub const fn branchless_argmin_u8_x8_masked(values: &[u8; 8], eligible_mask: u8)
 /// Integer Q0.7 reciprocal lookup table (`round(128 / k)`) for `0..=8` active parallel lanes.
 pub const INV_PARALLEL_COUNT_Q7: [i32; 9] = [0, 128, 64, 43, 32, 26, 21, 18, 16];
 
-/// Synthesizes a masked 8-lane weighted parallel ensemble over 64-head Q7 profiles and adds it
-/// circularly onto `base_words` (`0` allocations, `0` floating-point divisions).
-///
-/// For each lane `i` whose bit is set in `eligible_mask`, accumulates `(profiles[i][h] * weights_q7[i]) >> 7`
-/// across all 64 heads, divides by the active lane count via [`INV_PARALLEL_COUNT_Q7`] with symmetric
-/// half-up rounding, clamps to `[-127, 127]`, and adds onto `base_words` with circular Q7 wraparound.
-/// Returns `(out_words, avg_delta_norm_q7, lowest_active_lane_idx)`.
-#[inline]
-#[must_use]
-pub fn branchless_q7_weighted_ensemble_words_64(
-    profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8],
+#[inline(always)]
+fn branchless_q7_weighted_ensemble_core<'a>(
+    get_profile: impl Fn(usize) -> &'a [gcso_q7_t; MAX_ATTENTION_HEADS],
     weights_q7: &[u8; 8],
     eligible_mask: u8,
     base_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -1059,7 +1051,7 @@ pub fn branchless_q7_weighted_ensemble_words_64(
         if ((eligible_mask >> lane) & 1) != 0 {
             let w_u32 = u32::from(weights_q7[lane]);
             let w_i32 = w_u32 as i32;
-            for (acc, &d_q7) in head_sum.iter_mut().zip(profiles[lane].iter()) {
+            for (acc, &d_q7) in head_sum.iter_mut().zip(get_profile(lane).iter()) {
                 *acc += (i32::from(d_q7) * w_i32) >> 7;
             }
             accum_norm_sum = accum_norm_sum.saturating_add(w_u32);
@@ -1088,6 +1080,43 @@ pub fn branchless_q7_weighted_ensemble_words_64(
     let avg_delta = (((accum_norm_sum as i32) * inv + 64) / 128).clamp(0, 127) as u8;
     let entry_idx = eligible_mask.trailing_zeros() as u8;
     (out_words, avg_delta, entry_idx)
+}
+
+/// Synthesizes a masked 8-lane weighted parallel ensemble over 64-head Q7 profiles and adds it
+/// circularly onto `base_words` (`0` allocations, `0` floating-point divisions).
+///
+/// For each lane `i` whose bit is set in `eligible_mask`, accumulates `(profiles[i][h] * weights_q7[i]) >> 7`
+/// across all 64 heads, divides by the active lane count via [`INV_PARALLEL_COUNT_Q7`] with symmetric
+/// half-up rounding, clamps to `[-127, 127]`, and adds onto `base_words` with circular Q7 wraparound.
+/// Returns `(out_words, avg_delta_norm_q7, lowest_active_lane_idx)`.
+#[inline]
+#[must_use]
+pub fn branchless_q7_weighted_ensemble_words_64(
+    profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8],
+    weights_q7: &[u8; 8],
+    eligible_mask: u8,
+    base_words: &[u64; NUM_STIGMERGIC_GRANULES],
+) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u8) {
+    branchless_q7_weighted_ensemble_core(
+        move |i| profiles[i],
+        weights_q7,
+        eligible_mask,
+        base_words,
+    )
+}
+
+/// Zero-copy contiguous-matrix counterpart to [`branchless_q7_weighted_ensemble_words_64`],
+/// reading directly from `&[[gcso_q7_t; MAX_ATTENTION_HEADS]; 8]` without constructing a stack
+/// pointer array.
+#[inline]
+#[must_use]
+pub fn branchless_q7_weighted_ensemble_contiguous_words_64(
+    profiles: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; 8],
+    weights_q7: &[u8; 8],
+    eligible_mask: u8,
+    base_words: &[u64; NUM_STIGMERGIC_GRANULES],
+) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u8) {
+    branchless_q7_weighted_ensemble_core(|i| &profiles[i], weights_q7, eligible_mask, base_words)
 }
 
 #[inline(always)]

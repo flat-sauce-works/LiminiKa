@@ -262,8 +262,8 @@ impl<O: Cuttable + GroundedOrigin, T> ScopedCut<O, T> {
 }
 
 impl<T> SpeculativeDiscovery<T> {
-    /// Attempts to promote a delta-originated exterior discovery into [`BridgedDiscovery`]
-    /// when supported by at least one shared bridge granule (`bridge_count >= 1`).
+    /// Attempts to bridge a delta-originated exterior discovery into a [`BridgedDiscovery`]
+    /// settled phase when supported by at least one shared bridge granule (`bridge_count >= 1`).
     ///
     /// # Errors
     /// Returns `Err(self)` unchanged when `bridge_count == 0`.

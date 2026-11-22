@@ -8,10 +8,9 @@ use crate::liminal::{
     gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
 use crate::runtime::context::AutonomousCoreLayerStack;
-use crate::runtime::gateway::GatewayFrame;
+use crate::runtime::gateway::{GatewayFrame, ROOT_CAUSE_NOMINAL};
 use crate::stigmergy::{
-    StigmergicSubstrate, WorkbenchLanePlacement, WorkbenchSlotSpec, ROOT_CAUSE_NOMINAL,
-    WORKBENCH_LANE_FLAG_PINNED,
+    StigmergicSubstrate, WorkbenchLanePlacement, WorkbenchSlotSpec, WORKBENCH_LANE_FLAG_PINNED,
 };
 
 /// Consecutive-step hysteresis tracker for dynamic [`LatentHorizonSlot`] slide-in / slide-out.

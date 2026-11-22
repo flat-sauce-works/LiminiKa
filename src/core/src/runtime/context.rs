@@ -22,10 +22,10 @@ use crate::foundation::{
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
     gcso_tagged_ptr_t, is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64,
     store_q7_words_64, swar_or_avx2_q7_add_sat_words_64, swar_slerp_words_with_uniform_flag_64,
-    swar_words_equal_64, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, PhaseSteering, Pod, RopeSteeringTarget,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
+    swar_words_equal_64, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSliceMut16,
+    AlignedSliceMut32, PhaseSteering, Pod, RopeSteeringTarget, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8, gcso_config_t, gcso_q7_t,
@@ -44,15 +44,16 @@ use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
     CausalProvenanceReport, CausalProvenanceSignal, GatewayFrame, GatewayPhaseSteeringExt,
     ManifoldGatewaySignal, ManifoldProbeBaseline, SubstrateGatewayExt, SystemConstraintSignal,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use crate::runtime::horizon::{
     apply_latent_horizon_slots, EpistemicHorizonReading, HorizonDwellState,
     HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
 };
 use crate::stigmergy::{
-    PhaseDeltaSlice, PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN,
-    MAX_ANCHORS_PER_FIELD, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, WORKBENCH_LANE_FLAG_REPULSION,
+    PhaseDeltaSlice, PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+    DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN, MAX_ANCHORS_PER_FIELD,
+    WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 /// Default number of tokens per PagedAttention KV cache block (`32`).
@@ -76,12 +77,12 @@ use crate::runtime::storage::{
 };
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
-    gcso_anchor_type_t, gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t,
-    trail_phase_words_mut, trail_phase_words_ref, CognitiveTrajectoryLedger,
-    ContrastivePhaseBloomFilter, CorePrimitiveState, DissipativeOverflowReport, FastPathLedger,
-    MultiAttractorSpace, PointerSubstrate, SandboxLifecycleEvent, StigmergicActionDecision,
-    StigmergicGranuleState, StigmergicOverlapSerendipityReport, StigmergicSubstrate,
-    StigmergicSubstrateOps, WorkbenchLanePlacement, WorkbenchSlotSpec, LEDGER_METRIC_FAST_PATH_HIT,
+    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, trail_phase_words_mut,
+    trail_phase_words_ref, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
+    CorePrimitiveState, DissipativeOverflowReport, FastPathLedger, PointerSubstrate,
+    SandboxLifecycleEvent, StigmergicActionDecision, StigmergicGranuleState,
+    StigmergicOverlapSerendipityReport, StigmergicSubstrate, StigmergicSubstrateOps,
+    WorkbenchLanePlacement, WorkbenchSlotSpec, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED, MAX_ATTRACTOR_PULL_FORCE,
     SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_REPULSION_ACTIVE,
 };
@@ -261,78 +262,70 @@ impl AutonomousCoreLayerStack {
             .adapt_from_horizon_and_overlap_branchless(horizon, venn_report, ledger);
     }
 
-    /// Branchlessly modulates `frame` across Core Stack Slot 0 (`Liminal`) and Slot 1 (`Stigmergic`).
+    /// Branchlessly modulates `frame` in-place across Core Stack Slot 0 (`Liminal`) and Slot 1 (`Stigmergic`).
     #[inline(always)]
-    #[must_use]
     pub fn modulate_gateway_frame_branchless(
         &self,
-        frame: GatewayFrame,
+        frame: &mut GatewayFrame,
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
-    ) -> GatewayFrame {
-        let mut out = self
-            .liminal_layer
+    ) {
+        self.liminal_layer
             .modulate_gateway_frame_branchless(frame, horizon);
         let core_cnt = venn_report.venn_core_mask.count_ones() as f32;
         let has_venn = (venn_report.venn_core_mask | venn_report.venn_penumbra_mask) != 0;
         let coop_boost = branchless_clamp_f32(1.0 + 0.05 * core_cnt, 1.0, 1.40);
         let void_gated = horizon.is_liminal()
             | (horizon.total_memory_support < self.liminal_layer.channel_threshold_floor_f32(1));
-        out.effective_energy = branchless_select_f32(
+        frame.effective_energy = branchless_select_f32(
             !void_gated & (venn_report.venn_core_mask != 0),
-            out.effective_energy * coop_boost,
-            out.effective_energy,
+            frame.effective_energy * coop_boost,
+            frame.effective_energy,
         );
         let active_granules = venn_report.venn_core_mask
             | venn_report.venn_penumbra_mask
             | venn_report.serendipity_excursion_mask;
-        out.active_swarm_cell_mask =
-            branchless_select_u8(has_venn, active_granules, out.active_swarm_cell_mask);
-        out
+        frame.active_swarm_cell_mask =
+            branchless_select_u8(has_venn, active_granules, frame.active_swarm_cell_mask);
     }
 
-    /// Branchlessly modulates `frame` across Core Stack Slot 0 (`Liminal`), Slot 1 (`Stigmergic`), and
-    /// Slot 2 (`Ego`) **without mutating** sub-slot state or `intervention_epochs` (for read-only
-    /// per-layer Hot-Path RoPE modulation across all transformer layers).
+    /// Branchlessly modulates `frame` in-place across Core Stack Slot 0 (`Liminal`), Slot 1
+    /// (`Stigmergic`), and Slot 2 (`Ego`) **without mutating** sub-slot state or
+    /// `intervention_epochs` (for read-only per-layer Hot-Path RoPE modulation across all
+    /// transformer layers).
     #[inline]
-    #[must_use]
     pub fn modulate_gateway_frame_with_ego_readonly(
         &self,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
-        frame: GatewayFrame,
-    ) -> GatewayFrame {
-        let modulated = self.modulate_gateway_frame_branchless(frame, horizon, venn_report);
+        frame: &mut GatewayFrame,
+    ) {
+        self.modulate_gateway_frame_branchless(frame, horizon, venn_report);
         if self.ego_layer.is_active() {
-            self.ego_layer
-                .modulate_frame_pure(
-                    &self.liminal_layer,
-                    &self.stigmergic_layer,
-                    delta,
-                    horizon,
-                    venn_report,
-                    modulated,
-                )
-                .0
-        } else {
-            modulated
+            let _ = self.ego_layer.modulate_frame_pure(
+                &self.liminal_layer,
+                &self.stigmergic_layer,
+                delta,
+                horizon,
+                venn_report,
+                frame,
+            );
         }
     }
 
-    /// Branchlessly modulates `frame` across Core Stack Slot 0 (`Liminal`) and Slot 1 (`Stigmergic`) and,
-    /// when Core Stack Slot 2 (`ego_layer`) is active, performs in-place Ego intervention across all
-    /// three slots and `frame`.
+    /// Branchlessly modulates `frame` in-place across Core Stack Slot 0 (`Liminal`) and Slot 1
+    /// (`Stigmergic`) and, when Core Stack Slot 2 (`ego_layer`) is active, performs in-place Ego
+    /// intervention across all three slots and `frame`.
     #[inline]
-    #[must_use]
     pub fn intervene_ego_and_modulate_frame_branchless(
         &mut self,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn_report: &StigmergicOverlapSerendipityReport,
-        frame: GatewayFrame,
-    ) -> GatewayFrame {
-        let modulated = self.modulate_gateway_frame_branchless(frame, horizon, venn_report);
+        frame: &mut GatewayFrame,
+    ) {
+        self.modulate_gateway_frame_branchless(frame, horizon, venn_report);
         if self.ego_layer.is_active() {
             self.ego_layer.intervene_on_sublayers_and_frame_branchless(
                 &mut self.liminal_layer,
@@ -340,10 +333,8 @@ impl AutonomousCoreLayerStack {
                 delta,
                 horizon,
                 venn_report,
-                modulated,
-            )
-        } else {
-            modulated
+                frame,
+            );
         }
     }
 }
@@ -657,7 +648,7 @@ pub struct OrchestratorStatusSnapshot {
     pub active_trail_count: u32,
     /// Active `EntropyController` branch mode (`0` = normal, `1` = bifurcation, `2` = repulsion).
     pub entropy_gate_mode: u32,
-    /// Active anchor count in `MultiAttractorSpace`.
+    /// Active enabled working-lane count in [`StigmergicSubstrate`].
     pub attractor_anchor_count: u32,
     /// Bitmask of enabled working lanes (`0..=7`) in `StigmergicSubstrate`.
     pub slot_enabled_mask: u8,
@@ -686,7 +677,7 @@ pub struct OrchestratorStatusSnapshot {
 }
 
 /// High-level safe Rust single orchestrator facade integrating concrete core engines
-/// ([`StigmergicSubstrate`], [`PhaseSteeringEngine`], [`EntropyController`], [`MultiAttractorSpace`]),
+/// ([`StigmergicSubstrate`], [`PhaseSteeringEngine`], [`EntropyController`]),
 /// the 128-byte 3-slot core stack ([`AutonomousCoreLayerStack`]: `Liminal` + `Stigmergic` + `Ego`),
 /// and dynamic slide-in/slide-out [`LatentHorizonSlot`] boundaries.
 #[derive(Debug)]
@@ -695,7 +686,6 @@ pub struct RuntimeContext {
     substrate: StigmergicSubstrate,
     phase_steering: PhaseSteeringEngine,
     entropy_controller: EntropyController,
-    attractor_space: MultiAttractorSpace,
     core_layers: AutonomousCoreLayerStack,
     last_boundary_delta: LiminalBoundaryDelta,
     last_horizon: EpistemicHorizonReading,
@@ -705,7 +695,7 @@ pub struct RuntimeContext {
     escalated_workbench_lane: Option<u8>,
     sandbox_workbench_lane: Option<u8>,
     last_sandbox_event: SandboxLifecycleEvent,
-    sandbox_promotions: u32,
+    sandbox_settlements: u32,
     probe_baseline: ManifoldProbeBaseline,
     telemetry: CoreTelemetryBank,
     compute_pool: AnonymousComputePool,
@@ -743,7 +733,6 @@ impl RuntimeContext {
             substrate,
             phase_steering,
             entropy_controller: entropy_ctrl,
-            attractor_space: MultiAttractorSpace::new(),
             core_layers: AutonomousCoreLayerStack::new(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
             last_horizon: EpistemicHorizonReading::default(),
@@ -753,7 +742,7 @@ impl RuntimeContext {
             escalated_workbench_lane: None,
             sandbox_workbench_lane: None,
             last_sandbox_event: SandboxLifecycleEvent::Idle,
-            sandbox_promotions: 0,
+            sandbox_settlements: 0,
             probe_baseline: ManifoldProbeBaseline::new(),
             telemetry: CoreTelemetryBank::default(),
             compute_pool: AnonymousComputePool::default(),
@@ -813,11 +802,11 @@ impl RuntimeContext {
         self.last_sandbox_event
     }
 
-    /// Returns the cumulative count of promoted sandbox hypothesis lanes recorded in this context.
+    /// Returns the cumulative count of settled sandbox hypothesis lanes recorded in this context.
     #[inline(always)]
     #[must_use]
-    pub const fn sandbox_promotions(&self) -> u32 {
-        self.sandbox_promotions
+    pub const fn sandbox_settlements(&self) -> u32 {
+        self.sandbox_settlements
     }
 
     /// Returns a mutable reference to the latest Core Stack Slot 0 [`LiminalBoundaryDelta`].
@@ -951,7 +940,8 @@ impl RuntimeContext {
     /// [`ComputeDispatchMask`] without heap allocation or `fdiv`.
     #[inline]
     pub fn step_compute_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
-        self.compute_pool.step_dispatch(reading)
+        self.compute_pool
+            .step_dispatch(reading, self.system_spine.pinned_compute_mask)
     }
 
     /// Updates slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
@@ -982,7 +972,7 @@ impl RuntimeContext {
         self.telemetry.snapshot(
             &self.core_layers,
             &self.last_horizon,
-            self.attractor_space.system_field().active_count().min(255) as u8,
+            self.substrate.slot_enabled_mask.count_ones() as u8,
             0,
             self.active_horizon_slots_mask,
         )
@@ -997,7 +987,7 @@ impl RuntimeContext {
             step_counter: self.substrate.step_counter,
             active_trail_count: self.substrate.active_count,
             entropy_gate_mode: self.entropy_controller.state().active_branch_mode,
-            attractor_anchor_count: self.attractor_space.system_field().active_count(),
+            attractor_anchor_count: self.substrate.slot_enabled_mask.count_ones(),
             slot_enabled_mask: self.substrate.slot_enabled_mask,
             slot_pinned_mask: self.substrate.slot_pinned_mask,
             slot_repulsion_mask: self.substrate.slot_repulsion_mask,
@@ -1046,20 +1036,6 @@ impl RuntimeContext {
     #[must_use]
     pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
         &mut self.entropy_controller
-    }
-
-    /// Returns an immutable reference to the [`MultiAttractorSpace`].
-    #[inline(always)]
-    #[must_use]
-    pub const fn attractor_space(&self) -> &MultiAttractorSpace {
-        &self.attractor_space
-    }
-
-    /// Returns a mutable reference to the [`MultiAttractorSpace`].
-    #[inline(always)]
-    #[must_use]
-    pub fn attractor_space_mut(&mut self) -> &mut MultiAttractorSpace {
-        &mut self.attractor_space
     }
 
     /// Returns an immutable reference to the 64-byte [`ContrastivePhaseBloomFilter`].
@@ -1220,18 +1196,12 @@ impl RuntimeContext {
     ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32) {
         let tw = *trail_phase_words_ref(trail);
         let tn = swar_words_nonzero_64(&tw);
-        let (comp_w, base_pull) = self
-            .attractor_space
-            .evaluate_multi_domain_superposition_words(&tw, tn);
-        let (init_w, init_nonzero) = if swar_words_nonzero_64(&comp_w) {
-            (comp_w, true)
-        } else {
-            (tw, tn)
-        };
+        let init_w = tw;
+        let init_nonzero = tn;
         let init_is_uniform = !init_nonzero || is_word_array_uniform_64(&init_w);
         let mut run_w = init_w;
         let mut run_is_uniform = init_is_uniform;
-        let mut running_pull = branchless_flush_subnormal_f32(branchless_relu_f32(base_pull));
+        let mut running_pull = 0.0_f32;
 
         if let Ok(bank_2d) = self
             .substrate
@@ -1356,10 +1326,9 @@ impl RuntimeContext {
         let ctx_buf = &mut buffer[substrate_off..entropy_off];
         ctx_buf[0..8].copy_from_slice(&self.substrate.step_counter.to_le_bytes());
         ctx_buf[8..12].copy_from_slice(&self.substrate.active_count.to_le_bytes());
-        let sys_anchors = self.attractor_space.system_field().active_count();
-        ctx_buf[12..16].copy_from_slice(&sys_anchors.to_le_bytes());
-        let rep_gain = self.attractor_space.system_field().repulsion_gain;
-        ctx_buf[16..20].copy_from_slice(&rep_gain.to_le_bytes());
+        ctx_buf[12..16]
+            .copy_from_slice(&u32::from(self.substrate.repulsion_threshold).to_le_bytes());
+        ctx_buf[16..20].copy_from_slice(&self.substrate.last_entropy_h_tilde.to_le_bytes());
         ctx_buf[20] = self.substrate.slot_enabled_mask;
         ctx_buf[21] = self.substrate.slot_pinned_mask;
         ctx_buf[22] = self.substrate.slot_repulsion_mask;
@@ -1418,8 +1387,9 @@ impl RuntimeContext {
         if buffer.len() >= substrate_off + 21 {
             self.substrate.step_counter = u64::read_unaligned_from(buffer, substrate_off)?;
             self.substrate.active_count = u32::read_unaligned_from(buffer, substrate_off + 8)?;
-            let sys_anchors = u32::read_unaligned_from(buffer, substrate_off + 12)?;
-            let rep_gain = f32::read_unaligned_from(buffer, substrate_off + 16)?;
+            self.substrate.repulsion_threshold =
+                u32::read_unaligned_from(buffer, substrate_off + 12)?.min(u32::from(u8::MAX)) as u8;
+            let restored_entropy = f32::read_unaligned_from(buffer, substrate_off + 16)?;
             self.substrate.slot_enabled_mask = buffer[substrate_off + 20];
             if buffer.len() >= substrate_off + 24 {
                 self.substrate.slot_pinned_mask = buffer[substrate_off + 21];
@@ -1442,13 +1412,8 @@ impl RuntimeContext {
                 )?;
             }
 
-            self.attractor_space.system_field_mut().clear_anchors()?;
-            self.attractor_space.system_field_mut().repulsion_gain = rep_gain;
-            for _ in 0..sys_anchors.min(MAX_ANCHORS_PER_FIELD as u32) {
-                let _ = self
-                    .attractor_space
-                    .system_field_mut()
-                    .add_system_prompt_anchor("restored_anchor", 1.0);
+            if branchless_is_finite_f32(restored_entropy) {
+                self.substrate.last_entropy_h_tilde = restored_entropy;
             }
         }
 
@@ -1528,25 +1493,11 @@ impl RuntimeContext {
         self.active_horizon_slots_mask = 0;
         self.sandbox_workbench_lane = None;
         self.last_sandbox_event = SandboxLifecycleEvent::Idle;
-        self.sandbox_promotions = 0;
+        self.sandbox_settlements = 0;
         self.system_spine = SystemSpineState::new();
         self.last_epistemic_partition = EpistemicPartition::default();
         self.distortion_tension = DistortionTension::new(false);
         self.ego_differential_net = EgoDifferentialNet::default();
-        Ok(())
-    }
-
-    /// Registers a natural language system prompt text anchor in phase space as the primary baseline attractor.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `prompt` is empty or `weight` is non-finite.
-    #[inline]
-    pub fn set_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<()> {
-        self.attractor_space
-            .system_field_mut()
-            .add_system_prompt_anchor(prompt, weight)?;
-        self.substrate.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
-            branchless_relu_f32(weight);
         Ok(())
     }
 
@@ -1571,7 +1522,6 @@ impl RuntimeContext {
 
         let next_step = self.substrate.step_counter.wrapping_add(1);
         self.substrate.step_counter = next_step;
-        self.attractor_space.advance_step();
         let cap = self.config.raw.action_hub_capacity;
         let cur_active = self.substrate.active_count;
         self.substrate.active_count =
@@ -1686,47 +1636,56 @@ impl RuntimeContext {
             return Err(GCSO_ERROR_INVALID_ARGUMENT);
         }
 
-        // 1. Compute pure `SystemSpine` I-Frame baseline first, then pierce `Liminal` -> `Stigmergy`
-        //    -> `EgoDifferentialNet` and enforce physical `pinned` isolation.
+        // 1. Compute pure `SystemSpine` I-Frame baseline when Ego is active, then pierce
+        //    `Liminal` -> `Stigmergy` -> `EgoDifferentialNet` and enforce physical `pinned` isolation.
         let prev_layer0 = self.core_layers.liminal_layer;
         let prev_venn = self.core_layers.stigmergic_layer.venn_overlap_mask;
-        let raw_sys_frame = signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
-        let sys_baseline = self.core_layers.modulate_gateway_frame_branchless(
-            raw_sys_frame,
-            &self.last_horizon,
-            &self.last_overlap_report,
-        );
-        let (ego_frame, _ego_w) = signal.synthesize_gateway_with_core_layers(
-            &mut self.core_layers,
-            &self.last_boundary_delta,
-            &self.last_horizon,
-            &self.last_overlap_report,
-        );
-        self.core_layers.liminal_layer.active_aperture_mask =
-            self.system_spine.mask_ego_aperture_edits(
-                prev_layer0.active_aperture_mask,
-                self.core_layers.liminal_layer.active_aperture_mask,
+        let (mut frame, pframe_delta_q7, pframe_hops) = if self.core_layers.ego_layer.is_active() {
+            let mut sys_baseline =
+                signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
+            self.core_layers.modulate_gateway_frame_branchless(
+                &mut sys_baseline,
+                &self.last_horizon,
+                &self.last_overlap_report,
             );
-        let (pframe_frame, pframe_delta_q7, pframe_hops, pframe_matched_mask) = self
-            .ego_differential_net
-            .evaluate_pframe_chain_with_mask_branchless(
-                &self.core_layers.ego_layer,
-                &self.system_spine,
-                &self.last_epistemic_partition,
-                &self.core_layers.stigmergic_layer,
-                &self.distortion_tension,
-                ego_frame,
+            let (mut ego_frame, _ego_w) = signal.synthesize_gateway_with_core_layers(
+                &mut self.core_layers,
+                &self.last_boundary_delta,
+                &self.last_horizon,
+                &self.last_overlap_report,
             );
-        let candidate_frame = if pframe_hops > 0 {
-            self.ego_differential_net
-                .record_matched_activations(pframe_matched_mask);
-            pframe_frame
+            self.core_layers.liminal_layer.active_aperture_mask =
+                self.system_spine.mask_ego_aperture_edits(
+                    prev_layer0.active_aperture_mask,
+                    self.core_layers.liminal_layer.active_aperture_mask,
+                );
+            let (d_q7, hops, pframe_matched_mask) = self
+                .ego_differential_net
+                .evaluate_pframe_chain_with_mask_branchless(
+                    &self.core_layers.ego_layer,
+                    &self.system_spine,
+                    &self.last_epistemic_partition,
+                    &self.core_layers.stigmergic_layer,
+                    &self.distortion_tension,
+                    &mut ego_frame,
+                );
+            if hops > 0 {
+                self.ego_differential_net
+                    .record_matched_activations(pframe_matched_mask);
+            }
+            self.system_spine
+                .enforce_pinned_isolation_branchless(&sys_baseline, &mut ego_frame);
+            (ego_frame, d_q7, hops)
         } else {
-            ego_frame
+            let mut base_frame =
+                signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
+            self.core_layers.modulate_gateway_frame_branchless(
+                &mut base_frame,
+                &self.last_horizon,
+                &self.last_overlap_report,
+            );
+            (base_frame, 0, 0)
         };
-        let mut frame = self
-            .system_spine
-            .enforce_pinned_isolation_branchless(&sys_baseline, candidate_frame);
         let mut frm_w = *frame.phase_words_ref();
         self.last_boundary_delta = LiminalBoundaryDelta::compute_branchless(
             &prev_layer0,
@@ -1929,8 +1888,8 @@ impl RuntimeContext {
             3,
         );
         self.last_sandbox_event = sb_event;
-        if matches!(sb_event, SandboxLifecycleEvent::Promoted(_)) {
-            self.sandbox_promotions = self.sandbox_promotions.saturating_add(1);
+        if matches!(sb_event, SandboxLifecycleEvent::Settled(_)) {
+            self.sandbox_settlements = self.sandbox_settlements.saturating_add(1);
         }
 
         Ok((
@@ -2125,94 +2084,10 @@ impl RuntimeContext {
 }
 
 impl RuntimeContext {
-    /// Returns the number of active anchors in the System Baseline field.
-    #[inline]
-    #[must_use]
-    pub fn anchor_count(&self) -> u32 {
-        self.attractor_space.system_field().active_count()
-    }
-
-    /// Applies evaporative decay to the System Baseline field.
-    #[inline]
-    pub fn apply_evaporative_decay(&mut self) {
-        self.attractor_space
-            .system_field_mut()
-            .apply_evaporative_decay();
-    }
-
-    /// Returns total potential energy of the System Baseline field.
-    #[inline]
-    #[must_use]
-    pub fn total_potential_energy(&self) -> f32 {
-        self.attractor_space.system_field().total_potential_energy()
-    }
-
-    /// Returns occupancy pressure ratio of the System Baseline field.
-    #[inline]
-    #[must_use]
-    pub fn pressure_ratio(&self) -> f32 {
-        self.attractor_space.system_field().pressure_ratio()
-    }
-
-    /// Evicts the weakest displaceable anchor from the System Baseline field.
-    #[inline]
-    pub fn evaporate_weakest_anchor(&mut self) -> Option<u32> {
-        self.attractor_space
-            .system_field_mut()
-            .evaporate_weakest_anchor()
-    }
-
-    /// Adds a system prompt anchor to the System Baseline field and updates its workbench weight.
+    /// Injects a phase-conjugate repulsion pattern into the Bloom filter and workbench lane.
     ///
     /// # Errors
-    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::add_system_prompt_anchor`].
-    #[inline]
-    pub fn add_system_prompt_anchor(&mut self, prompt: &str, weight: f32) -> Result<u32> {
-        let id = self
-            .attractor_space
-            .system_field_mut()
-            .add_system_prompt_anchor(prompt, weight)?;
-        self.substrate.slot_weights[usize::from(ATTRACTOR_SLOT_SYSTEM_BASELINE)] =
-            branchless_relu_f32(weight);
-        Ok(id)
-    }
-
-    /// Adds an embedding anchor to the System Baseline field.
-    ///
-    /// # Errors
-    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::add_embedding_anchor`].
-    #[inline]
-    pub fn add_embedding_anchor(
-        &mut self,
-        embedding: &AlignedSlice32<'_, f32>,
-        anchor_type: gcso_anchor_type_t,
-        weight: f32,
-    ) -> Result<u32> {
-        self.attractor_space
-            .system_field_mut()
-            .add_embedding_anchor(embedding, anchor_type, weight)
-    }
-
-    /// Adds a unit-weight embedding anchor to the System Baseline field.
-    ///
-    /// # Errors
-    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::add_anchor`].
-    #[inline]
-    pub fn add_anchor(
-        &mut self,
-        anchor_type: gcso_anchor_type_t,
-        vec: &AlignedSlice32<'_, f32>,
-        dim: usize,
-    ) -> Result<u32> {
-        self.attractor_space
-            .system_field_mut()
-            .add_anchor(anchor_type, vec, dim)
-    }
-
-    /// Injects a phase-conjugate repulsion pattern into the Bloom filter, workbench lane, and baseline field.
-    ///
-    /// # Errors
-    /// Propagates any error from workbench lane allocation or [`crate::stigmergy::AttractorFieldEngine::inject_phase_repulsion`].
+    /// Propagates any error from workbench lane allocation.
     #[inline]
     pub fn inject_phase_repulsion(
         &mut self,
@@ -2235,35 +2110,7 @@ impl RuntimeContext {
                 anti_phase,
             ))?;
 
-        self.attractor_space
-            .system_field_mut()
-            .inject_phase_repulsion(repulsion_deltas, gain)
-    }
-
-    /// Aggregates and crystallizes high-density anchors bottom-up in the System Baseline field.
-    ///
-    /// # Errors
-    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::aggregate_bottom_up`].
-    #[inline]
-    pub fn aggregate_bottom_up(&mut self) -> Result<u32> {
-        self.attractor_space
-            .system_field_mut()
-            .aggregate_bottom_up()
-    }
-
-    /// Clears all anchors in the System Baseline field.
-    ///
-    /// # Errors
-    /// Propagates any error from [`crate::stigmergy::AttractorFieldEngine::clear_anchors`].
-    #[inline]
-    pub fn clear_anchors(&mut self) -> Result<()> {
-        self.attractor_space.system_field_mut().clear_anchors()
-    }
-
-    /// Advances global evaporative decay across the multi-domain attractor space.
-    #[inline]
-    pub fn advance_step(&mut self) {
-        self.attractor_space.advance_step();
+        Ok(())
     }
 
     /// Sets the relative weight of workbench domain lane `domain_id`.
@@ -2328,7 +2175,7 @@ impl RuntimeContext {
     pub fn evaluate_slot_force(
         &self,
         domain_id: u32,
-        trail: &gcso_pointer_trail_t,
+        _trail: &gcso_pointer_trail_t,
         slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
     ) -> Result<f32> {
         let idx = domain_id as usize;
@@ -2348,10 +2195,8 @@ impl RuntimeContext {
             return Ok(self.substrate.slot_weights[idx]);
         }
 
-        let base_pull = self
-            .attractor_space
-            .evaluate_multi_domain_superposition(trail, slot_phase_out);
-        Ok(self.substrate.slot_weights[idx].max(base_pull))
+        *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
+        Ok(self.substrate.slot_weights[idx])
     }
 
     /// Evaluates unified multi-domain superposition across active workbench lanes.
@@ -2366,13 +2211,12 @@ impl RuntimeContext {
         pull
     }
 
-    /// Clears all attractor domains and releases all workbench lanes.
+    /// Releases all workbench lanes and clears any escalated lane marker.
     ///
     /// # Errors
-    /// Propagates any error from [`MultiAttractorSpace::clear_all_domains`].
+    /// Propagates any error from [`StigmergicSubstrate::release_all_lanes`].
     #[inline]
     pub fn clear_all_domains(&mut self) -> Result<()> {
-        self.attractor_space.clear_all_domains()?;
         let _ = self.substrate.release_all_lanes();
         self.escalated_workbench_lane = None;
         Ok(())
@@ -2592,17 +2436,13 @@ mod tests {
 
     #[test]
     fn test_runtime_context_lifecycle_and_serialization() {
-        let config = Config::new();
+        let config = Config::new().with_repulsion_threshold(3);
         let mut ctx = RuntimeContext::new(config).unwrap();
         assert_eq!(ctx.slot_enabled_mask(), 0x00);
         assert_eq!(ctx.slot_pinned_mask(), 0x00);
         assert_eq!(ctx.slot_repulsion_mask(), 0x00);
         assert_eq!(ctx.slot_sandbox_mask(), 0x00);
 
-        assert!(ctx
-            .set_system_prompt_anchor("System prompt anchor test", 1.5)
-            .is_ok());
-        assert_eq!(ctx.anchor_count(), 1);
         let pinned_lane = ctx
             .substrate_mut()
             .allocate_lane(&WorkbenchSlotSpec::explicit(
@@ -2653,11 +2493,10 @@ mod tests {
 
         assert!(ctx.reset().is_ok());
         assert_eq!(ctx.step_counter(), 0);
-        assert_eq!(ctx.anchor_count(), 0);
         assert_eq!(ctx.slot_enabled_mask(), 0x00);
         assert!(ctx.deserialize_from_bytes(&buffer).is_ok());
         assert_eq!(ctx.step_counter(), 1);
-        assert_eq!(ctx.anchor_count(), 1);
+        assert_eq!(ctx.substrate().repulsion_threshold, 3);
         assert_eq!(ctx.slot_enabled_mask(), expected_enabled);
         assert_eq!(ctx.slot_pinned_mask(), expected_pinned);
         assert_eq!(ctx.slot_repulsion_mask(), expected_rep);

@@ -10,9 +10,11 @@
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
 
+use core::mem::{align_of, offset_of, size_of};
+
 use crate::drivers::ego::intent::{EgoIntentAxes, LiminalEgoState};
 use crate::foundation::{
-    branchless_q7_weighted_ensemble_words_64, load_q7_words_64, swar_q7_circular_add_x8,
+    branchless_q7_weighted_ensemble_contiguous_words_64, load_q7_words_64, swar_q7_circular_add_x8,
     swar_q7_scale_le128_with_bias_x8, Pod, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
@@ -133,28 +135,250 @@ impl DistortionDelta {
 // SAFETY: `DistortionDelta` is `#[repr(C, align(64))]`, exact size 128 bytes with zero padding.
 unsafe impl Pod for DistortionDelta {}
 
+/// Compact 8-byte (`#[repr(C, align(8))]`) hot-path routing and gating descriptor for one P-Frame
+/// node inside [`EgoDifferentialNet`].
+///
+/// Eight [`PFrameRoutingMeta`] descriptors fit into a single 64-byte cache line (`CL0`), allowing
+/// 1-hop parallel perspective screening without touching phase arrays or cold provenance fields.
+#[repr(C, align(8))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PFrameRoutingMeta {
+    /// Next chained P-Frame node index (`0..8`, or `0xFFFF` if terminal, `offset 0..2`).
+    pub next_hop_idx: u16,
+    /// Hop depth along the chain (`1..=4`, `offset 2`).
+    pub hop_depth: u8,
+    /// 8-granule Venn support bitmask required to trigger this delta (`offset 3`).
+    pub venn_trigger_mask: u8,
+    /// Bitmask of allowed Venn regions (`bit 0=S&O`, `bit 1=S\O`, `bit 2=O\S`, `offset 4`).
+    pub venn_region_selector: u8,
+    /// Stigmergic trace density in Q0.7 (`0..=127`, `offset 5`).
+    pub pheromone_q7: u8,
+    /// Directed delta scaling gain in Q0.7 (`0..=127`, `offset 6`).
+    pub gain_q7: u8,
+    /// Packed 2-bit [`AttributionTag`] (`bits 0..=1`) and lifecycle flags (`bits 2..=4`, `offset 7`).
+    pub flags_and_tag: u8,
+}
+
+impl PFrameRoutingMeta {
+    /// Bit `2`: node is active and eligible for Venn trigger matching.
+    pub const FLAG_ACTIVE_BIT: u8 = 1 << 2;
+    /// Bit `3`: node was consolidated into an I-Frame crystal anchor.
+    pub const FLAG_CONSOLIDATED_BIT: u8 = 1 << 3;
+    /// Bit `4`: node carries valid model-baked 64-head Q7 phase deltas.
+    pub const FLAG_BAKED_VALID_BIT: u8 = 1 << 4;
+    /// Low 2-bit mask extracting [`AttributionTag::raw()`].
+    pub const TAG_MASK: u8 = 0x03;
+
+    /// Constructs an inactive default 8-byte [`PFrameRoutingMeta`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn new_empty() -> Self {
+        Self {
+            next_hop_idx: DISTORTION_DELTA_NO_NEXT_HOP,
+            hop_depth: 1,
+            venn_trigger_mask: 0xFF,
+            venn_region_selector: SCOPE_REGION_SHARED_CORE | SCOPE_REGION_SELF_EXCLUSIVE,
+            pheromone_q7: 64,
+            gain_q7: 64,
+            flags_and_tag: AttributionTag::STIGMERGY_EGO.raw() & Self::TAG_MASK,
+        }
+    }
+
+    /// Packs `DISTORTION_DELTA_FLAG_*` bits and a 2-bit [`AttributionTag`] into `flags_and_tag`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn pack_flags_and_tag(distortion_flags: u32, tag: u8) -> u8 {
+        let a = if (distortion_flags & DISTORTION_DELTA_FLAG_ACTIVE) != 0 {
+            Self::FLAG_ACTIVE_BIT
+        } else {
+            0
+        };
+        let c = if (distortion_flags & DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME) != 0 {
+            Self::FLAG_CONSOLIDATED_BIT
+        } else {
+            0
+        };
+        let b = if (distortion_flags & DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID) != 0 {
+            Self::FLAG_BAKED_VALID_BIT
+        } else {
+            0
+        };
+        (tag & Self::TAG_MASK) | a | c | b
+    }
+
+    /// Unpacks lifecycle flags back into `DISTORTION_DELTA_FLAG_*` bits.
+    #[inline(always)]
+    #[must_use]
+    pub const fn raw_distortion_flags(self) -> u32 {
+        let a = if (self.flags_and_tag & Self::FLAG_ACTIVE_BIT) != 0 {
+            DISTORTION_DELTA_FLAG_ACTIVE
+        } else {
+            0
+        };
+        let c = if (self.flags_and_tag & Self::FLAG_CONSOLIDATED_BIT) != 0 {
+            DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME
+        } else {
+            0
+        };
+        let b = if (self.flags_and_tag & Self::FLAG_BAKED_VALID_BIT) != 0 {
+            DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID
+        } else {
+            0
+        };
+        a | c | b
+    }
+
+    /// Extracts the 2-bit [`AttributionTag`] code (`0..=3`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn attribution_tag(self) -> u8 {
+        self.flags_and_tag & Self::TAG_MASK
+    }
+
+    /// Returns `true` when this node is marked active.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        (self.flags_and_tag & Self::FLAG_ACTIVE_BIT) != 0
+    }
+
+    /// Returns `true` when this node is active and carries valid model-baked phase deltas.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_baked_active(self) -> bool {
+        const MASK: u8 =
+            PFrameRoutingMeta::FLAG_ACTIVE_BIT | PFrameRoutingMeta::FLAG_BAKED_VALID_BIT;
+        (self.flags_and_tag & MASK) == MASK
+    }
+
+    /// Returns `true` when this node has been consolidated into an I-Frame anchor.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_consolidated(self) -> bool {
+        (self.flags_and_tag & Self::FLAG_CONSOLIDATED_BIT) != 0
+    }
+
+    /// Sets or clears the active bit in `flags_and_tag`.
+    #[inline(always)]
+    pub const fn set_active(&mut self, active: bool) {
+        if active {
+            self.flags_and_tag |= Self::FLAG_ACTIVE_BIT;
+        } else {
+            self.flags_and_tag &= !Self::FLAG_ACTIVE_BIT;
+        }
+    }
+
+    /// Sets or clears the consolidated I-Frame bit in `flags_and_tag`.
+    #[inline(always)]
+    pub const fn set_consolidated(&mut self, consolidated: bool) {
+        if consolidated {
+            self.flags_and_tag |= Self::FLAG_CONSOLIDATED_BIT;
+        } else {
+            self.flags_and_tag &= !Self::FLAG_CONSOLIDATED_BIT;
+        }
+    }
+}
+
+impl Default for PFrameRoutingMeta {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new_empty()
+    }
+}
+
+// SAFETY: `PFrameRoutingMeta` is `#[repr(C, align(8))]`, exact size 8 bytes with primitive integer fields only.
+unsafe impl Pod for PFrameRoutingMeta {}
+
+/// Cold-path provenance and reinforcement metadata (`32 B`, `#[repr(C, align(16))]`) for one
+/// P-Frame node inside [`EgoDifferentialNet`], segregated from CL0 hot screening.
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PFrameColdMeta {
+    /// Model-agnostic logical `EgoIntentAxes` transition (`16 B`, `offset 0..16`).
+    pub intent_delta: EgoIntentAxes,
+    /// Logical P-Frame node identifier (`offset 16..20`).
+    pub node_id: u32,
+    /// Reference logical I-Frame anchor identifier (`offset 20..24`).
+    pub anchor_ref_id: u32,
+    /// Accumulated positive reinforcement counter for Cold-Path I-Frame consolidation (`offset 24..28`).
+    pub reinforce_count: u32,
+    /// Last active step epoch for stigmergic evaporation pruning (`offset 28..32`).
+    pub last_active_epoch: u32,
+}
+
+impl PFrameColdMeta {
+    /// Constructs an inactive 32-byte [`PFrameColdMeta`] packet.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new_empty(node_id: u32, anchor_ref_id: u32) -> Self {
+        Self {
+            intent_delta: EgoIntentAxes::new(),
+            node_id,
+            anchor_ref_id,
+            reinforce_count: 0,
+            last_active_epoch: 0,
+        }
+    }
+}
+
+impl Default for PFrameColdMeta {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new_empty(0, 0)
+    }
+}
+
+// SAFETY: `PFrameColdMeta` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for PFrameColdMeta {}
+
 /// Inline fixed-capacity (`8` nodes, `0` heap allocations) non-parametric P-Frame residual
 /// neural network evaluating directed [`DistortionDelta`] pointer chains (up to `max_hops`
 /// in `1..=4`) triggered by Venn region support and stigmergic density.
+///
+/// Stored in Structure-of-Arrays (SoA) cacheline layout (`896 B`, `#[repr(C, align(64))]`):
+/// - CL0 (`0..64`): `node_routing` (`[PFrameRoutingMeta; 8]`) for 1-CL Hot-Path screening
+/// - CL1..8 (`64..576`): `node_phases` (`[[gcso_q7_t; 64]; 8]`) for zero-copy ensemble evaluation
+/// - CL9..12 (`576..832`): `node_cold` (`[PFrameColdMeta; 8]`) for Cold-Path rebake/consolidation
+/// - CL13 (`832..896`): network control scalars
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EgoDifferentialNet {
-    /// Fixed array of up to 8 directed P-Frame [`DistortionDelta`] nodes.
-    pub nodes: [DistortionDelta; MAX_EGO_PFRAME_NODES],
-    /// 8-bit bitmask marking populated nodes (`0..=7`).
-    pub active_node_mask: u8,
-    /// Maximum hop traversal bound (`1..=4`, allows clean 1-hop vs multi-hop comparison).
-    pub max_hops: u8,
-    /// Minimum hop depth before Cold-Path GOP consolidation crystallizes an I-Frame anchor.
-    pub consolidation_hop_limit: u8,
-    /// Stigmergic pheromone floor (`0..=127`) below which unused P-Frame nodes evaporate.
-    pub evaporation_floor_q7: u8,
-    /// Hop count traversed on the most recent evaluation.
-    pub last_hops_traversed: u8,
-    /// Mean differential magnitude (`0..=127`) observed on the most recent evaluation.
-    pub last_delta_norm_q7: u8,
-    /// Monotonic Cold-Path maintenance epoch counter.
+    /// Hot-path routing and gating metadata (`64 B` = CL0 `0..64`).
+    pub node_routing: [PFrameRoutingMeta; MAX_EGO_PFRAME_NODES],
+    /// Contiguous 64-head Q7 delta profiles (`512 B` = CL1..8 `64..576`).
+    pub node_phases: [[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_EGO_PFRAME_NODES],
+    /// Cold-path intent, anchor, and epoch metadata (`256 B` = CL9..12 `576..832`).
+    pub node_cold: [PFrameColdMeta; MAX_EGO_PFRAME_NODES],
+    /// Monotonic Cold-Path maintenance epoch counter (`offset 832..836`).
     pub epoch: u32,
+    /// 8-bit bitmask marking populated nodes (`0..=7`, `offset 836`).
+    pub active_node_mask: u8,
+    /// Maximum hop traversal bound (`1..=4`, allows clean 1-hop vs multi-hop comparison, `offset 837`).
+    pub max_hops: u8,
+    /// Minimum hop depth before Cold-Path GOP consolidation crystallizes an I-Frame anchor (`offset 838`).
+    pub consolidation_hop_limit: u8,
+    /// Stigmergic pheromone floor (`0..=127`) below which unused P-Frame nodes evaporate (`offset 839`).
+    pub evaporation_floor_q7: u8,
+    /// Hop count traversed on the most recent evaluation (`offset 840`).
+    pub last_hops_traversed: u8,
+    /// Mean differential magnitude (`0..=127`) observed on the most recent evaluation (`offset 841`).
+    pub last_delta_norm_q7: u8,
+    /// Explicit zero-padding completing the 896-byte cacheline block (`offset 842..896`).
+    pub reserved_tail: [u8; 54],
 }
+
+const _: () = {
+    assert!(size_of::<PFrameRoutingMeta>() == 8);
+    assert!(align_of::<PFrameRoutingMeta>() == 8);
+    assert!(size_of::<PFrameColdMeta>() == 32);
+    assert!(align_of::<PFrameColdMeta>() == 16);
+    assert!(size_of::<EgoDifferentialNet>() == 896);
+    assert!(align_of::<EgoDifferentialNet>() == 64);
+    assert!(offset_of!(EgoDifferentialNet, node_routing) == 0);
+    assert!(offset_of!(EgoDifferentialNet, node_phases) == 64);
+    assert!(offset_of!(EgoDifferentialNet, node_cold) == 576);
+    assert!(offset_of!(EgoDifferentialNet, epoch) == 832);
+};
 
 impl Default for EgoDifferentialNet {
     #[inline(always)]
@@ -176,14 +400,100 @@ impl EgoDifferentialNet {
             max_hops
         };
         Self {
-            nodes: [DistortionDelta::new_empty(0, 0); MAX_EGO_PFRAME_NODES],
+            node_routing: [PFrameRoutingMeta::new_empty(); MAX_EGO_PFRAME_NODES],
+            node_phases: [[0; MAX_ATTENTION_HEADS]; MAX_EGO_PFRAME_NODES],
+            node_cold: [PFrameColdMeta::new_empty(0, 0); MAX_EGO_PFRAME_NODES],
+            epoch: 0,
             active_node_mask: 0,
             max_hops: clamped_hops,
             consolidation_hop_limit: 3,
             evaporation_floor_q7: 16,
             last_hops_traversed: 0,
             last_delta_norm_q7: 0,
-            epoch: 0,
+            reserved_tail: [0; 54],
+        }
+    }
+
+    /// Returns `true` when slot `idx` is active in both `active_node_mask` and routing metadata.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_node_active(&self, idx: usize) -> bool {
+        if idx >= MAX_EGO_PFRAME_NODES {
+            return false;
+        }
+        ((self.active_node_mask >> idx) & 1) != 0 && self.node_routing[idx].is_active()
+    }
+
+    /// Returns `true` when slot `idx` is active and carries valid model-baked phase deltas.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_node_baked_active(&self, idx: usize) -> bool {
+        if idx >= MAX_EGO_PFRAME_NODES {
+            return false;
+        }
+        ((self.active_node_mask >> idx) & 1) != 0 && self.node_routing[idx].is_baked_active()
+    }
+
+    /// Reconstructs the 128-byte [`DistortionDelta`] packet view for node `idx`.
+    #[inline]
+    #[must_use]
+    pub const fn export_node(&self, idx: usize) -> DistortionDelta {
+        if idx >= MAX_EGO_PFRAME_NODES {
+            return DistortionDelta::new_empty(0, 0);
+        }
+        let r = self.node_routing[idx];
+        let c = self.node_cold[idx];
+        DistortionDelta {
+            node_id: c.node_id,
+            anchor_ref_id: c.anchor_ref_id,
+            next_hop_idx: r.next_hop_idx,
+            hop_depth: r.hop_depth,
+            venn_trigger_mask: r.venn_trigger_mask,
+            venn_region_selector: r.venn_region_selector,
+            pheromone_q7: r.pheromone_q7,
+            gain_q7: r.gain_q7,
+            attribution_tag: r.attribution_tag(),
+            intent_delta: c.intent_delta,
+            reinforce_count: c.reinforce_count,
+            last_active_epoch: c.last_active_epoch,
+            checksum_crc32: 0,
+            flags: r.raw_distortion_flags(),
+            reserved_header: [0; 16],
+            delta_phase_q7: self.node_phases[idx],
+        }
+    }
+
+    /// Writes a 128-byte [`DistortionDelta`] packet into SoA slot `idx`, syncing `active_node_mask`.
+    #[inline]
+    pub fn set_node(&mut self, idx: usize, delta: DistortionDelta) {
+        if idx >= MAX_EGO_PFRAME_NODES {
+            return;
+        }
+        self.node_routing[idx] = PFrameRoutingMeta {
+            next_hop_idx: delta.next_hop_idx,
+            hop_depth: delta.hop_depth,
+            venn_trigger_mask: delta.venn_trigger_mask,
+            venn_region_selector: delta.venn_region_selector,
+            pheromone_q7: delta.pheromone_q7,
+            gain_q7: delta.gain_q7,
+            flags_and_tag: PFrameRoutingMeta::pack_flags_and_tag(
+                delta.flags,
+                delta.attribution_tag,
+            ),
+        };
+        self.node_phases[idx] = delta.delta_phase_q7;
+        self.node_cold[idx] = PFrameColdMeta {
+            intent_delta: delta.intent_delta,
+            node_id: delta.node_id,
+            anchor_ref_id: delta.anchor_ref_id,
+            reinforce_count: delta.reinforce_count,
+            last_active_epoch: delta.last_active_epoch,
+        };
+        let bit = 1u8 << idx;
+        if delta.is_active() {
+            self.active_node_mask |= bit;
+        } else {
+            self.active_node_mask &= !bit;
         }
     }
 
@@ -277,10 +587,9 @@ impl EgoDifferentialNet {
             false,
         );
 
-        net.nodes[0] = n0;
-        net.nodes[1] = n1;
-        net.nodes[2] = n2;
-        net.active_node_mask = 0b0000_0111;
+        net.set_node(0, n0);
+        net.set_node(1, n1);
+        net.set_node(2, n2);
         net
     }
 
@@ -297,10 +606,10 @@ impl EgoDifferentialNet {
             if (self.active_node_mask & (1u8 << cur)) == 0 {
                 break;
             }
-            let node = &mut self.nodes[cur];
-            node.reinforce_count = node.reinforce_count.saturating_add(1);
-            node.last_active_epoch = self.epoch;
-            cur = usize::from(node.next_hop_idx);
+            let cold = &mut self.node_cold[cur];
+            cold.reinforce_count = cold.reinforce_count.saturating_add(1);
+            cold.last_active_epoch = self.epoch;
+            cur = usize::from(self.node_routing[cur].next_hop_idx);
             h = h.saturating_add(1);
         }
     }
@@ -316,11 +625,17 @@ impl EgoDifferentialNet {
         } else {
             (active_matched.count_ones() as u8).min(self.max_hops)
         };
-        for (idx, node) in self.nodes.iter_mut().enumerate().take(MAX_EGO_PFRAME_NODES) {
+        for (idx, (routing, cold)) in self
+            .node_routing
+            .iter_mut()
+            .zip(self.node_cold.iter_mut())
+            .enumerate()
+            .take(MAX_EGO_PFRAME_NODES)
+        {
             if ((active_matched >> idx) & 1) != 0 {
-                node.reinforce_count = node.reinforce_count.saturating_add(1);
-                node.pheromone_q7 = node.pheromone_q7.saturating_add(1).min(127);
-                node.last_active_epoch = self.epoch;
+                cold.reinforce_count = cold.reinforce_count.saturating_add(1);
+                routing.pheromone_q7 = routing.pheromone_q7.saturating_add(1).min(127);
+                cold.last_active_epoch = self.epoch;
             }
         }
     }
@@ -335,22 +650,29 @@ impl EgoDifferentialNet {
         self.epoch = current_epoch;
         let mut crystallized: Option<CrystallizedAttractorRecord> = None;
 
-        for (idx, node) in self.nodes.iter_mut().enumerate().take(MAX_EGO_PFRAME_NODES) {
+        for (idx, ((routing, phases), cold)) in self
+            .node_routing
+            .iter_mut()
+            .zip(self.node_phases.iter())
+            .zip(self.node_cold.iter())
+            .enumerate()
+            .take(MAX_EGO_PFRAME_NODES)
+        {
             let bit = 1u8 << idx;
             if (self.active_node_mask & bit) == 0 {
                 continue;
             }
-            if !node.is_active() {
+            if !routing.is_active() {
                 self.active_node_mask &= !bit;
                 continue;
             }
-            if node.hop_depth >= self.consolidation_hop_limit
-                && node.reinforce_count >= 4
-                && (node.flags & DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME) == 0
+            if routing.hop_depth >= self.consolidation_hop_limit
+                && cold.reinforce_count >= 4
+                && !routing.is_consolidated()
             {
-                let bridge_count = node.reinforce_count.min(u32::from(u8::MAX)) as u8;
-                let grounded_profile = match Scoped::from_delta(PhaseProfile64(node.delta_phase_q7))
-                    .cut_by_lacuna_q7(true, node.gain_q7.max(1), 0)
+                let bridge_count = cold.reinforce_count.min(u32::from(u8::MAX)) as u8;
+                let grounded_profile = match Scoped::from_delta(PhaseProfile64(*phases))
+                    .cut_by_lacuna_q7(true, routing.gain_q7.max(1), 0)
                 {
                     ScopedCut::SelfRef(aligned) => Some(aligned.into_grounded()),
                     ScopedCut::Exterior(spec) => spec
@@ -361,22 +683,22 @@ impl EgoDifferentialNet {
                 };
                 if let Some(grounded) = grounded_profile {
                     let rec = CrystallizedAttractorRecord::from_grounded_delta_64(
-                        node.anchor_ref_id,
+                        cold.anchor_ref_id,
                         ATTRACTOR_SLOT_SYSTEM_BASELINE,
-                        node.reinforce_count,
-                        f32::from(node.gain_q7) * (1.0 / 127.0),
+                        cold.reinforce_count,
+                        f32::from(routing.gain_q7) * (1.0 / 127.0),
                         grounded,
                     );
-                    node.flags |= DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME;
+                    routing.set_consolidated(true);
                     crystallized = Some(rec);
                 }
             }
 
-            if current_epoch.saturating_sub(node.last_active_epoch) >= 4 {
-                let decay = (node.pheromone_q7 >> 3).max(1);
-                node.pheromone_q7 = node.pheromone_q7.saturating_sub(decay);
-                if node.pheromone_q7 < self.evaporation_floor_q7 {
-                    node.flags &= !DISTORTION_DELTA_FLAG_ACTIVE;
+            if current_epoch.saturating_sub(cold.last_active_epoch) >= 4 {
+                let decay = (routing.pheromone_q7 >> 3).max(1);
+                routing.pheromone_q7 = routing.pheromone_q7.saturating_sub(decay);
+                if routing.pheromone_q7 < self.evaporation_floor_q7 {
+                    routing.set_active(false);
                     self.active_node_mask &= !bit;
                 }
             }
@@ -448,15 +770,21 @@ impl EgoDifferentialNet {
             let mut matched_mask = 0u8;
             let mut weights_q7 = [0u8; MAX_EGO_PFRAME_NODES];
 
-            for (i, node) in self.nodes.iter().enumerate().take(MAX_EGO_PFRAME_NODES) {
-                let active = ((self.active_node_mask >> i) & 1) != 0 && node.is_baked_active();
-                let reg_ok = BitCut8::split(node.venn_region_selector, region_fallback).inside != 0;
-                let trig_ok = BitCut8::split(node.venn_trigger_mask, support_mask).inside != 0;
+            for (i, routing) in self
+                .node_routing
+                .iter()
+                .enumerate()
+                .take(MAX_EGO_PFRAME_NODES)
+            {
+                let active = ((self.active_node_mask >> i) & 1) != 0 && routing.is_baked_active();
+                let reg_ok =
+                    BitCut8::split(routing.venn_region_selector, region_fallback).inside != 0;
+                let trig_ok = BitCut8::split(routing.venn_trigger_mask, support_mask).inside != 0;
                 if active && reg_ok && trig_ok {
                     matched_mask |= 1u8 << i;
                     let hop_weight_q7 =
-                        (((u32::from(node.gain_q7) * eff_scale) >> 7) * sens_boost_q7) >> 7;
-                    let ph_blend_q7 = (u32::from(node.pheromone_q7) + mean_stig_ph) >> 1;
+                        (((u32::from(routing.gain_q7) * eff_scale) >> 7) * sens_boost_q7) >> 7;
+                    let ph_blend_q7 = (u32::from(routing.pheromone_q7) + mean_stig_ph) >> 1;
                     let dens_weight_q7 = ((hop_weight_q7 * ph_blend_q7) >> 7).clamp(8, 127) as u8;
                     weights_q7[i] = dens_weight_q7;
                 }
@@ -466,27 +794,31 @@ impl EgoDifferentialNet {
                 return (*base_words, 0, 0, 0, 0);
             }
 
-            let profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_EGO_PFRAME_NODES] =
-                core::array::from_fn(|i| &self.nodes[i].delta_phase_q7);
-            let (out_words, avg_delta, entry_idx) = branchless_q7_weighted_ensemble_words_64(
-                profiles,
-                &weights_q7,
-                matched_mask,
-                base_words,
-            );
+            let (out_words, avg_delta, entry_idx) =
+                branchless_q7_weighted_ensemble_contiguous_words_64(
+                    &self.node_phases,
+                    &weights_q7,
+                    matched_mask,
+                    base_words,
+                );
             return (out_words, avg_delta, 1, entry_idx, matched_mask);
         }
 
         let mut best_entry_idx = 0usize;
         let mut best_entry_score = 0u32;
-        for (i, n) in self.nodes.iter().enumerate().take(MAX_EGO_PFRAME_NODES) {
-            let active = ((self.active_node_mask >> i) & 1) != 0 && n.is_baked_active();
-            let reg_ok = BitCut8::split(n.venn_region_selector, region_fallback).inside != 0;
-            let trig_overlap = BitCut8::split(n.venn_trigger_mask, support_mask)
+        for (i, routing) in self
+            .node_routing
+            .iter()
+            .enumerate()
+            .take(MAX_EGO_PFRAME_NODES)
+        {
+            let active = ((self.active_node_mask >> i) & 1) != 0 && routing.is_baked_active();
+            let reg_ok = BitCut8::split(routing.venn_region_selector, region_fallback).inside != 0;
+            let trig_overlap = BitCut8::split(routing.venn_trigger_mask, support_mask)
                 .inside
                 .count_ones();
             let score = if active && reg_ok && trig_overlap > 0 {
-                u32::from(n.pheromone_q7).saturating_mul(trig_overlap)
+                u32::from(routing.pheromone_q7).saturating_mul(trig_overlap)
             } else {
                 0
             };
@@ -507,22 +839,24 @@ impl EgoDifferentialNet {
         let mut hop = 0u8;
 
         while hop < MAX_DISTORTION_CHAIN_HOPS {
+            let slot = usize::from(cur_idx);
             let in_bounds = (hop < hop_cap)
-                && (usize::from(cur_idx) < MAX_EGO_PFRAME_NODES)
+                && (slot < MAX_EGO_PFRAME_NODES)
                 && (((self.active_node_mask >> (cur_idx & 7)) & 1) != 0);
             if !in_bounds {
                 break;
             }
-            let node = &self.nodes[usize::from(cur_idx)];
-            if !node.is_baked_active() {
+            let routing = &self.node_routing[slot];
+            if !routing.is_baked_active() {
                 break;
             }
             matched_mask |= 1u8 << (cur_idx & 7);
-            let hop_weight_q7 = (((u32::from(node.gain_q7) * eff_scale) >> 7) * sens_boost_q7) >> 7;
+            let hop_weight_q7 =
+                (((u32::from(routing.gain_q7) * eff_scale) >> 7) * sens_boost_q7) >> 7;
             let dens_weight_q7 = ((hop_weight_q7 * mean_stig_ph) >> 7).clamp(8, 127) as u64;
             let bias_restore =
                 (128u64.wrapping_sub(dens_weight_q7)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-            let node_words = load_q7_words_64(&node.delta_phase_q7);
+            let node_words = load_q7_words_64(&self.node_phases[slot]);
             for (acc_w, &nw) in acc_words
                 .iter_mut()
                 .zip(node_words.iter())
@@ -533,7 +867,7 @@ impl EgoDifferentialNet {
             }
             accum_norm_sum = accum_norm_sum.saturating_add(dens_weight_q7 as u32);
             hops_traversed = hops_traversed.saturating_add(1);
-            cur_idx = node.next_hop_idx;
+            cur_idx = routing.next_hop_idx;
             hop = hop.saturating_add(1);
         }
 
@@ -594,21 +928,29 @@ mod tests {
         );
 
         let ph_before: [u8; 3] = [
-            net_1.nodes[0].pheromone_q7,
-            net_1.nodes[1].pheromone_q7,
-            net_1.nodes[2].pheromone_q7,
+            net_1.node_routing[0].pheromone_q7,
+            net_1.node_routing[1].pheromone_q7,
+            net_1.node_routing[2].pheromone_q7,
         ];
         net_1.epoch = 5;
         net_1.record_matched_activations(mask1);
         for (idx, prev_ph) in ph_before.iter().enumerate() {
             if ((mask1 >> idx) & 1) != 0 {
-                assert_eq!(net_1.nodes[idx].reinforce_count, 1);
-                assert_eq!(net_1.nodes[idx].last_active_epoch, 5);
+                assert_eq!(net_1.node_cold[idx].reinforce_count, 1);
+                assert_eq!(net_1.node_cold[idx].last_active_epoch, 5);
                 assert_eq!(
-                    net_1.nodes[idx].pheromone_q7,
+                    net_1.node_routing[idx].pheromone_q7,
                     prev_ph.saturating_add(1).min(127)
                 );
             }
         }
+        // Verify export_node / set_node roundtrip preserves all DistortionDelta metadata & phase bytes.
+        let exported = net_1.export_node(0);
+        assert_eq!(exported.delta_phase_q7, net_1.node_phases[0]);
+        assert!(exported.is_baked_active());
+        let mut net_rt = EgoDifferentialNet::new_empty(1);
+        net_rt.set_node(0, exported);
+        assert_eq!(net_rt.export_node(0), exported);
+        assert!(net_rt.is_node_baked_active(0));
     }
 }

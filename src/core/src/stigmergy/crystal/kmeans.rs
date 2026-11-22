@@ -11,10 +11,13 @@ use crate::foundation::{
     ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
 };
 use crate::liminal::{DEFAULT_ENTROPY_EPS, NUM_STIGMERGIC_GRANULES};
-use crate::stigmergy::{CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE};
+use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
 
 use super::crc32_delta::crc32_update_crystal_energy_and_mass_delta;
-use super::{CrystallizedAttractorRecord, GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION};
+use super::{
+    CrystallizedAttractorRecord, CRYSTAL_PROVENANCE_MATURE_BIT, GCSO_CRYSTAL_RECORD_MAGIC,
+    GCSO_CRYSTAL_RECORD_VERSION,
+};
 
 impl CrystallizedAttractorRecord {
     fn merge_other_centroid_words_in_place(
@@ -120,7 +123,7 @@ impl CrystallizedAttractorRecord {
         self.phase_gravity_mass = branchless_flush_subnormal_f32(
             next_e * branchless_clamp_f32(r_bar, 0.10, 1.0) * maturity_scale,
         );
-        self.provenance_bits |= b_provenance_bits | CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED;
+        self.provenance_bits |= b_provenance_bits | CRYSTAL_PROVENANCE_MATURE_BIT;
         self.action_mode_flags |= b_action_mode_flags;
         if self.action_mode_flags == ACTION_PRESET_PASSIVE_SIDECAR {
             self.action_mode_flags = ACTION_PRESET_EXPRESS_PHASE;

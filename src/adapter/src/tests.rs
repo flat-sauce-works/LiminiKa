@@ -68,8 +68,10 @@ fn adapter_steps_edbc_and_applies_srl_residual() {
 
 #[test]
 fn adapter_steers_via_gateway_trait_composition() {
-    use liminika_core::runtime::{ObjectiveFact, SubjectivePersona};
-    use liminika_core::stigmergy::{CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA};
+    use liminika_core::runtime::{
+        ObjectiveFact, SubjectivePersona, CAUSAL_AXIS_OBJECTIVE_FACT,
+        CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+    };
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
@@ -2724,12 +2726,12 @@ fn gcso_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
         alt_adapter.ego_differential_net().active_node_mask & 0x07,
         0x07
     );
-    assert!(alt_adapter.ego_differential_net().nodes[0].is_baked_active());
-    assert!(alt_adapter.ego_differential_net().nodes[2].is_baked_active());
+    assert!(alt_adapter.ego_differential_net().is_node_baked_active(0));
+    assert!(alt_adapter.ego_differential_net().is_node_baked_active(2));
 }
 
 #[test]
-fn hot_path_sandbox_promotion_increments_sandbox_promotions() {
+fn hot_path_sandbox_settlement_increments_sandbox_settlements() {
     use liminika_core::liminal::EpistemicRegime;
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
     use liminika_core::stigmergy::StigmergicOverlapSerendipityReport;
@@ -2752,7 +2754,7 @@ fn hot_path_sandbox_promotion_increments_sandbox_promotions() {
         },
         None,
     );
-    assert_eq!(adapter.sandbox_promotions(), 0);
+    assert_eq!(adapter.sandbox_settlements(), 0);
 
     let q_len = adapter.geometry().q_rot_len();
     let mut q = vec![0.25_f32; q_len];
@@ -2764,7 +2766,7 @@ fn hot_path_sandbox_promotion_increments_sandbox_promotions() {
 
     // Run Hot-Path orchestration steps under sustained entropy drift so telemetry crosses
     // `continuous_standard_steps >= 16` + `assimilation_drift_dwell >= 3` to nucleate,
-    // and then crosses `sandbox_coherence_improve_dwell >= 3` to promote in-place.
+    // and then crosses `sandbox_coherence_improve_dwell >= 3` to settle in-place.
     for _ in 0..32 {
         let _ = adapter
             .orchestrate_layer_rope_with_substrate(
@@ -2780,9 +2782,9 @@ fn hot_path_sandbox_promotion_increments_sandbox_promotions() {
     }
 
     assert!(
-        adapter.sandbox_promotions() >= 1,
-        "expected Hot-Path SandboxLifecycleEvent::Promoted to increment sandbox_promotions, got {}",
-        adapter.sandbox_promotions()
+        adapter.sandbox_settlements() >= 1,
+        "expected Hot-Path SandboxLifecycleEvent::Settled to increment sandbox_settlements, got {}",
+        adapter.sandbox_settlements()
     );
 }
 
@@ -2840,4 +2842,110 @@ fn adapter_ego_intent_natural_language_and_word_boundary_matching() {
     assert_eq!(mixed.autonomy_q7, expected_mixed.autonomy_q7);
     assert_eq!(mixed.logic_q7, expected_mixed.logic_q7);
     assert_eq!(mixed.defiance_q7, expected_mixed.defiance_q7);
+}
+
+#[test]
+fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
+    use liminika_core::drivers::{SystemPressureReading, TokenBypassObservation};
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let expected_baseline_pins = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
+    assert_eq!(
+        adapter.system_spine().pinned_compute_mask,
+        expected_baseline_pins
+    );
+
+    let fact = TextAttractorEntry {
+        anchor_id: 1,
+        role: AttractorRole::Fact,
+        text: "Mars orbits the Sun at roughly 1.52 AU.".to_string(),
+        per_layer_q7: vec![[24i8; MAX_ATTENTION_HEADS]],
+        energy: 2.0,
+        residual_sig: vec![1.0, 0.0],
+    };
+    let calm_recall = DynamicAttractorRecall {
+        void_state: VoidBoundaryState::InsideBasin,
+        top1_fact_score: 0.85,
+        top2_fact_score: 0.40,
+        top1_persona_score: 0.15,
+        min_local_void_depth: 0.0,
+        guard_conflict_margin: -0.30,
+        action_decision: StigmergicActionDecision::FullOrchestration,
+        gateway_frame: GatewayFrame::default(),
+        telemetry: StratumProbeTelemetry::default(),
+        recalled_facts: vec![(&fact, 0.85)],
+        recalled_personas: Vec::new(),
+        venn_partition: EpistemicPartition::default(),
+        exterior_sandbox_facts: Vec::new(),
+        is_known_unknown_exterior: false,
+    };
+
+    // Calm non-guard recall must preserve baseline head/tail pins without clearing to 0.
+    let _ = adapter.sync_core_layers_from_recall(&calm_recall, None);
+    assert_eq!(
+        adapter.system_spine().pinned_compute_mask,
+        expected_baseline_pins
+    );
+
+    // Whole-token bypass can engage across consecutive calm steps despite head/tail pins.
+    let surge = SystemPressureReading {
+        frame_time_pressure_q15: 30000,
+        bandwidth_pressure_q15: 30000,
+        l3_load_pressure_q15: 15000,
+        irreversible_step: 0,
+        _pad: 0,
+    };
+    let calm_obs = TokenBypassObservation {
+        irreversible_step: 0,
+        liminal_stationary: 1,
+        boundary_sensitivity_q7: 16,
+        repulsion_active: 0,
+        exit_entropy_rising: 0,
+        ego_active_boundary: 0,
+        min_calm_dwell: 2,
+        _pad: 0,
+    };
+    let mut bypassed = false;
+    for _ in 0..4 {
+        let mut d = adapter.step_compute_dispatch(surge);
+        assert_eq!(d.bypass_mask & expected_baseline_pins, 0);
+        if adapter.evaluate_whole_token_bypass(calm_obs, &mut d) {
+            bypassed = true;
+            break;
+        }
+    }
+    assert!(
+        bypassed,
+        "calm non-guard turns should permit whole-token bypass"
+    );
+
+    // Guard turn pins all active slots and vetoes whole-token bypass; subsequent calm turn
+    // restores `expected_baseline_pins` (never wiping permanent anchors to 0).
+    let guard_recall = DynamicAttractorRecall {
+        guard_conflict_margin: 0.30,
+        action_decision: StigmergicActionDecision::RepulsionEscape,
+        ..calm_recall.clone()
+    };
+    let _ = adapter.sync_core_layers_from_recall(&guard_recall, None);
+    assert_eq!(
+        adapter.system_spine().pinned_compute_mask,
+        adapter.compute_pool().active_mask
+    );
+    let mut d_guard = adapter.step_compute_dispatch(surge);
+    assert!(!adapter.evaluate_whole_token_bypass(calm_obs, &mut d_guard));
+
+    let _ = adapter.sync_core_layers_from_recall(&calm_recall, None);
+    assert_eq!(
+        adapter.system_spine().pinned_compute_mask,
+        expected_baseline_pins
+    );
+
+    // Rebind cold-path resets baseline pins to the new geometry's head/tail boundaries.
+    let mut small_geom = RopeGeometry::phi4_mini();
+    small_geom.num_layers = 8;
+    small_geom.layer_rope_mask = 0xFF;
+    let _ = adapter
+        .rebind_geometry_cold_path(small_geom)
+        .expect("rebind");
+    assert_eq!(adapter.system_spine().pinned_compute_mask, 0x81_u64);
 }

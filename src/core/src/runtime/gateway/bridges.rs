@@ -4,15 +4,15 @@
 //! Distributed `impl` blocks integrating Lv.1-Lv.3 types (`ResidualAdapterEngine`,
 //! `SystemSpineState`, `EgoDifferentialNet`, `LiminalEgoState`, `StigmergicSubstrate`,
 //! `CrystallizedAttractorRecord`, `CognitiveTrajectoryLedger`, `CognitiveCircuitBank`,
-//! `gcso_pointer_trail_t`, `CrystallizedAnchorRecord`, `AttractorAnchor`, and
-//! `EntropyController`) with Lv.4 Gateway/Signal contracts.
+//! `gcso_pointer_trail_t`, and `EntropyController`) with Lv.4 Gateway/Signal contracts.
 
 use super::*;
 use crate::drivers::{
-    DistortionTension, EgoDifferentialNet, EntropyController, LiminalEgoState, SystemSpineState,
-    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
-    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR,
-    ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
+    DistortionTension, EgoDifferentialNet, EntropyController, FrameDirective, LiminalEgoState,
+    SpineFrameTransitionInput, SystemSpineState, EGO_TRIGGER_BASIN_CAPTURE,
+    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
+    EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR, ENTROPY_GATE_MODE_NORMAL_ENTROPY,
+    ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
 };
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
@@ -32,7 +32,7 @@ use crate::foundation::{
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
     branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t, BitCut8,
-    EpistemicPartition, GcsoResult, Grounded, Indivisible, LiminalThresholdState, Scoped,
+    EpistemicPartition, GcsoResult, Grounded, Indivisible, Lacuna, LiminalThresholdState, Scoped,
     ScopedCut, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
 };
@@ -42,17 +42,16 @@ use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::runtime::telemetry::{CoreTelemetryBank, LayerDistortionKind};
 use crate::stigmergy::{
     gcso_anchor_type_t, gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref,
-    AttractorAnchor, CognitiveCircuitActivation, CognitiveCircuitBank, CognitiveCircuitBankOps,
-    CognitiveOpKind, CognitiveTrajectoryLedger, CrystallizedAnchorRecord,
-    CrystallizedAttractorRecord, DissipativeOverflowReport, EpisodicPhaseSample, PhaseWordsRef64,
-    RelativeAttractorNode, ResidualAdapterEngine, SandboxLifecycleEvent, StigmergicActionDecision,
-    StigmergicGranuleState, StigmergicOverlapSerendipityReport, StigmergicScaleGranularity,
-    StigmergicSubstrate, StigmergicSubstrateOps, SubstrateStepReport, WorkbenchSlotSpec,
-    ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
-    GCSO_ANCHOR_TYPE_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE, SUBSTRATE_INLINE_TRAILS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_SWARM_QUORUM_MASK,
-    TRAIL_SWARM_QUORUM_SHIFT,
+    CognitiveCircuitActivation, CognitiveCircuitBank, CognitiveCircuitBankOps, CognitiveOpKind,
+    CognitiveTrajectoryLedger, CrystallizedAttractorRecord, DissipativeOverflowReport,
+    EpisodicPhaseSample, PhaseWordsRef64, RelativeAttractorNode, ResidualAdapterEngine,
+    SandboxLifecycleEvent, StigmergicActionDecision, StigmergicGranuleState,
+    StigmergicOverlapSerendipityReport, StigmergicScaleGranularity, StigmergicSubstrate,
+    StigmergicSubstrateOps, SubstrateStepReport, WorkbenchSlotSpec, ATTRACTOR_SLOT_CRYSTALLIZED,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, GCSO_ANCHOR_TYPE_CRYSTALLIZED,
+    MAX_ATTRACTOR_PULL_FORCE, SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
 };
 
 impl ResidualAdapterEngine {
@@ -80,12 +79,11 @@ impl SystemSpineState {
     /// - Always preserves every `pinned_action_mode_mask` bit from `baseline_frame` and blocks
     ///   slot overrides away from any `pinned_slot_mask` slot.
     #[inline]
-    #[must_use]
     pub fn enforce_pinned_isolation_branchless(
         &self,
         baseline_frame: &GatewayFrame,
-        mut ego_frame: GatewayFrame,
-    ) -> GatewayFrame {
+        ego_frame: &mut GatewayFrame,
+    ) {
         let (full_lock, eff_slot, eff_modes) = self.isolate_slot_and_modes_branchless(
             baseline_frame.dominant_slot,
             baseline_frame.action_mode_flags,
@@ -93,7 +91,8 @@ impl SystemSpineState {
             ego_frame.action_mode_flags,
         );
         if full_lock {
-            return *baseline_frame;
+            *ego_frame = *baseline_frame;
+            return;
         }
 
         ego_frame.dominant_slot = eff_slot;
@@ -110,19 +109,44 @@ impl SystemSpineState {
             ego_frame.mean_phase_tag_q7,
         )
         .raw();
-        ego_frame
     }
 }
 
+#[inline(always)]
+fn pframe_transition_allowed(spine: &SystemSpineState, venn: &EpistemicPartition) -> bool {
+    let lacuna_code = if (venn.shared_core_mask | venn.self_exclusive_mask) != 0 {
+        Lacuna::SelfRef.code()
+    } else if venn.known_unknown_mask != 0 {
+        Lacuna::Exterior.code()
+    } else if venn.true_void_mask != 0 {
+        Lacuna::Unobserved.code()
+    } else {
+        Lacuna::SelfRef.code()
+    };
+    let (directive, _) = spine.evaluate_frame_transition_branchless(SpineFrameTransitionInput {
+        lacuna_code,
+        phase_delta_q7: 0,
+        reanchor_delta_thresh_q7: 0,
+        steps_since_keyframe: 0,
+        max_gop_steps: 0,
+        candidate_granule_mask: 0xFF,
+        flags: 0,
+        reserved: 0,
+    });
+    matches!(
+        directive,
+        FrameDirective::EmitDelta | FrameDirective::ReAnchorKeyframe
+    )
+}
+
 impl EgoDifferentialNet {
-    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network (1-hop parallel perspective ensemble
-    /// when `max_hops == 1`, or sequential chain up to 4 hops when `max_hops >= 2`; `0` heap alloc,
-    /// `0 fdiv`) and returns `(modulated_frame, delta_norm_q7, hops_traversed)`.
+    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network in-place on `frame`
+    /// (1-hop parallel perspective ensemble when `max_hops == 1`, or sequential chain up to 4 hops
+    /// when `max_hops >= 2`; `0` heap alloc, `0 fdiv`) and returns `(delta_norm_q7, hops_traversed)`.
     ///
     /// When Ego is inactive, tension scale is 0, or `spine` enforces `ood_void_locked` /
-    /// `irreversible_step_lock`, returns `(base_frame, 0, 0)` (zero-cost unobservable bypass).
+    /// `irreversible_step_lock`, leaves `frame` untouched and returns `(0, 0)` (zero-copy bypass).
     #[inline]
-    #[must_use]
     pub fn evaluate_pframe_chain_branchless(
         &self,
         ego: &LiminalEgoState,
@@ -130,18 +154,18 @@ impl EgoDifferentialNet {
         venn: &EpistemicPartition,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
-        base_frame: GatewayFrame,
-    ) -> (GatewayFrame, u8, u8) {
-        let (frame, norm, hops, _mask) = self.evaluate_pframe_chain_with_mask_branchless(
-            ego, spine, venn, stigmergy, tension, base_frame,
+        frame: &mut GatewayFrame,
+    ) -> (u8, u8) {
+        let (norm, hops, _mask) = self.evaluate_pframe_chain_with_mask_branchless(
+            ego, spine, venn, stigmergy, tension, frame,
         );
-        (frame, norm, hops)
+        (norm, hops)
     }
 
-    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network and additionally returns the selected
-    /// entry node index `entry_idx` (`0..8`) for reinforcement telemetry tracking.
+    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network in-place on `frame`
+    /// and returns `(delta_norm_q7, hops_traversed, entry_idx)` (`entry_idx` in `0..8`) for
+    /// reinforcement telemetry tracking.
     #[inline]
-    #[must_use]
     pub fn evaluate_pframe_chain_with_entry_branchless(
         &self,
         ego: &LiminalEgoState,
@@ -149,10 +173,10 @@ impl EgoDifferentialNet {
         venn: &EpistemicPartition,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
-        base_frame: GatewayFrame,
-    ) -> (GatewayFrame, u8, u8, u8) {
-        if spine.ood_void_locked != 0 || spine.irreversible_step_lock != 0 {
-            return (base_frame, 0, 0, 0);
+        frame: &mut GatewayFrame,
+    ) -> (u8, u8, u8) {
+        if !pframe_transition_allowed(spine, venn) {
+            return (0, 0, 0);
         }
         let (acc_words, avg_delta, hops_traversed, entry_idx, matched_mask) = self
             .evaluate_pframe_words_branchless(
@@ -160,23 +184,42 @@ impl EgoDifferentialNet {
                 venn,
                 stigmergy,
                 tension.effective_ego_scale_q7,
-                base_frame.phase_words_ref(),
+                frame.phase_words_ref(),
             );
         if matched_mask == 0 {
-            return (base_frame, 0, 0, 0);
+            return (0, 0, 0);
         }
-        let mut ego_frame = base_frame;
-        *ego_frame.phase_words_mut() = acc_words;
-        ego_frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
-        let isolated = spine.enforce_pinned_isolation_branchless(&base_frame, ego_frame);
-        (isolated, avg_delta, hops_traversed, entry_idx)
+        let (full_lock, eff_slot, eff_modes) = spine.isolate_slot_and_modes_branchless(
+            frame.dominant_slot,
+            frame.action_mode_flags,
+            frame.dominant_slot,
+            frame.action_mode_flags,
+        );
+        if full_lock {
+            return (avg_delta, hops_traversed, entry_idx);
+        }
+        frame.dominant_slot = eff_slot;
+        frame.action_mode_flags = eff_modes;
+        *frame.phase_words_mut() = acc_words;
+        frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
+        let ptr_tag = pack_action_slot_tag(
+            frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            frame.action_mode_flags,
+        );
+        frame.frame_flags = u16::from(ptr_tag);
+        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+            frame.mapped_section_offset48,
+            ptr_tag,
+            frame.mean_phase_tag_q7,
+        )
+        .raw();
+        (avg_delta, hops_traversed, entry_idx)
     }
 
-    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network and additionally returns the bitmask
-    /// of every matched/traversed node (`matched_mask`) for parallel perspective reinforcement via
-    /// [`Self::record_matched_activations`].
+    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network in-place on `frame`
+    /// and returns `(delta_norm_q7, hops_traversed, matched_mask)` of every matched/traversed node
+    /// for parallel perspective reinforcement via [`Self::record_matched_activations`].
     #[inline]
-    #[must_use]
     pub fn evaluate_pframe_chain_with_mask_branchless(
         &self,
         ego: &LiminalEgoState,
@@ -184,10 +227,10 @@ impl EgoDifferentialNet {
         venn: &EpistemicPartition,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
-        base_frame: GatewayFrame,
-    ) -> (GatewayFrame, u8, u8, u8) {
-        if spine.ood_void_locked != 0 || spine.irreversible_step_lock != 0 {
-            return (base_frame, 0, 0, 0);
+        frame: &mut GatewayFrame,
+    ) -> (u8, u8, u8) {
+        if !pframe_transition_allowed(spine, venn) {
+            return (0, 0, 0);
         }
         let (acc_words, avg_delta, hops_traversed, _entry_idx, matched_mask) = self
             .evaluate_pframe_words_branchless(
@@ -195,25 +238,44 @@ impl EgoDifferentialNet {
                 venn,
                 stigmergy,
                 tension.effective_ego_scale_q7,
-                base_frame.phase_words_ref(),
+                frame.phase_words_ref(),
             );
         if matched_mask == 0 {
-            return (base_frame, 0, 0, 0);
+            return (0, 0, 0);
         }
-        let mut ego_frame = base_frame;
-        *ego_frame.phase_words_mut() = acc_words;
-        ego_frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
-        let isolated = spine.enforce_pinned_isolation_branchless(&base_frame, ego_frame);
-        (isolated, avg_delta, hops_traversed, matched_mask)
+        let (full_lock, eff_slot, eff_modes) = spine.isolate_slot_and_modes_branchless(
+            frame.dominant_slot,
+            frame.action_mode_flags,
+            frame.dominant_slot,
+            frame.action_mode_flags,
+        );
+        if full_lock {
+            return (avg_delta, hops_traversed, matched_mask);
+        }
+        frame.dominant_slot = eff_slot;
+        frame.action_mode_flags = eff_modes;
+        *frame.phase_words_mut() = acc_words;
+        frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
+        let ptr_tag = pack_action_slot_tag(
+            frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            frame.action_mode_flags,
+        );
+        frame.frame_flags = u16::from(ptr_tag);
+        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+            frame.mapped_section_offset48,
+            ptr_tag,
+            frame.mean_phase_tag_q7,
+        )
+        .raw();
+        (avg_delta, hops_traversed, matched_mask)
     }
 }
 
 impl LiminalEgoState {
-    /// Purely computes the Ego trigger mask (`fired_mask`) and modulated [`GatewayFrame`] without
+    /// Purely computes the Ego trigger mask (`fired_mask`) and modulates `frame` in-place without
     /// mutating `self`, `liminal_layer`, or `stigmergic_layer`. Used directly by read-only per-layer
     /// Hot-Path RoPE modulation so multi-layer passes never accumulate repeated sub-layer shifts.
     #[inline]
-    #[must_use]
     pub fn modulate_frame_pure(
         &self,
         liminal_layer: &LiminalThresholdState,
@@ -221,8 +283,8 @@ impl LiminalEgoState {
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn: &StigmergicOverlapSerendipityReport,
-        mut frame: GatewayFrame,
-    ) -> (GatewayFrame, u8) {
+        frame: &mut GatewayFrame,
+    ) -> u8 {
         let _ = (liminal_layer, stigmergic_layer);
         let pull_q7 = branchless_clamp_f32(
             branchless_relu_f32(frame.effective_energy) * 16.0,
@@ -345,14 +407,14 @@ impl LiminalEgoState {
         )
         .raw();
 
-        (frame, fired_mask)
+        fired_mask
     }
 
     /// Branchlessly evaluates active Ego triggers directly across Core Layer 0 (`liminal_layer`),
     /// Core Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, updating both
-    /// sub-layers and injecting counter-basin orbital thrust or transgressive phase steering into `frame`.
+    /// sub-layers and injecting counter-basin orbital thrust or transgressive phase steering into `frame`
+    /// in-place.
     #[inline]
-    #[must_use]
     pub fn intervene_on_sublayers_and_frame_branchless(
         &mut self,
         liminal_layer: &mut LiminalThresholdState,
@@ -360,9 +422,9 @@ impl LiminalEgoState {
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn: &StigmergicOverlapSerendipityReport,
-        frame: GatewayFrame,
-    ) -> GatewayFrame {
-        let (out_frame, fired_mask) =
+        frame: &mut GatewayFrame,
+    ) {
+        let fired_mask =
             self.modulate_frame_pure(liminal_layer, stigmergic_layer, delta, horizon, venn, frame);
         let any_fired = fired_mask != 0;
         let t_liminal = (fired_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0;
@@ -412,23 +474,21 @@ impl LiminalEgoState {
 
         self.last_intervened_mask = fired_mask;
         self.intervention_epochs = self.intervention_epochs.wrapping_add(u32::from(any_fired));
-        out_frame
     }
 
     /// Branchlessly evaluates active Ego triggers across `stack`'s Layer 0 (`liminal_layer`),
-    /// Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, synchronizing `self`
-    /// onto `stack.ego_layer` after intervention.
+    /// Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, modulating `frame`
+    /// in-place and synchronizing `self` onto `stack.ego_layer` after intervention.
     #[inline]
-    #[must_use]
     pub fn intervene_on_layers_and_frame_branchless(
         &mut self,
         stack: &mut AutonomousCoreLayerStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
         venn: &StigmergicOverlapSerendipityReport,
-        frame: GatewayFrame,
-    ) -> GatewayFrame {
-        let out = self.intervene_on_sublayers_and_frame_branchless(
+        frame: &mut GatewayFrame,
+    ) {
+        self.intervene_on_sublayers_and_frame_branchless(
             &mut stack.liminal_layer,
             &mut stack.stigmergic_layer,
             delta,
@@ -437,7 +497,6 @@ impl LiminalEgoState {
             frame,
         );
         stack.ego_layer = *self;
-        out
     }
 }
 
@@ -496,8 +555,8 @@ impl StigmergicSubstrate {
     /// Drives the isolated sandbox hypothesis lifecycle in zero-alloc mode:
     /// 1. Immediately releases unpinned sandbox lanes on [`StigmergicActionDecision::RepulsionEscape`]
     ///    or [`LayerDistortionKind::ActiveOverdrive`].
-    /// 2. Promotes an active sandbox lane via [`Self::promote_sandbox_lane`] once consecutive
-    ///    coherence improvement reaches `promote_dwell_threshold`.
+    /// 2. Settles an active sandbox lane via [`Self::settle_sandbox_lane`] once consecutive
+    ///    coherence improvement reaches `settle_dwell_threshold`.
     /// 3. On sustained assimilation drift (`drift_dwell >= drift_dwell_threshold`), when `ego_active`
     ///    and `exterior_granule_mask != 0` (`(void_exterior_mask | serendipity_excursion_mask) & !venn_core_mask`),
     ///    leases a free lane via [`WorkbenchSlotSpec::auto_sandbox`] masked strictly to `exterior_granule_mask`.
@@ -513,7 +572,7 @@ impl StigmergicSubstrate {
         candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
         candidate_weight: f32,
         drift_dwell_threshold: u16,
-        promote_dwell_threshold: u16,
+        settle_dwell_threshold: u16,
     ) -> SandboxLifecycleEvent {
         let distortion = telemetry.compute_distortion_report();
         if matches!(decision, StigmergicActionDecision::RepulsionEscape)
@@ -551,13 +610,12 @@ impl StigmergicSubstrate {
                 && ((self.slot_enabled_mask & self.slot_sandbox_mask) & lane_bit) != 0;
             if !still_sandbox {
                 *active_sandbox_lane = None;
-            } else if telemetry.sandbox_coherence_improve_dwell() >= promote_dwell_threshold.max(1)
-            {
-                if self.promote_sandbox_lane(lane).unwrap_or(false) {
+            } else if telemetry.sandbox_coherence_improve_dwell() >= settle_dwell_threshold.max(1) {
+                if self.settle_sandbox_lane(lane).unwrap_or(false) {
                     *active_sandbox_lane = None;
                     telemetry.reset_assimilation_dwell();
                     telemetry.reset_sandbox_improve_dwell();
-                    return SandboxLifecycleEvent::Promoted(lane);
+                    return SandboxLifecycleEvent::Settled(lane);
                 }
             } else {
                 return SandboxLifecycleEvent::Idle;
@@ -1272,18 +1330,19 @@ impl CrystallizedAttractorRecord {
 
         if is_repulsed {
             return DissipativeOverflowReport {
-                primary_idx: idx_1,
-                landed_idx: idx_1,
+                residual_words: res_w,
                 primary_anchor_id: primary_aid,
                 landed_anchor_id: primary_aid,
                 primary_coherence: coh_1,
                 scatter_coherence: 0.0,
                 overflow_pressure,
                 updated_gravity_mass: primary_mass,
-                residual_words: res_w,
+                primary_idx: idx_1 as u16,
+                landed_idx: idx_1 as u16,
                 overflowed: false,
                 scattered: false,
                 spawned_new: false,
+                _reserved: 0,
             };
         }
 
@@ -1368,18 +1427,19 @@ impl CrystallizedAttractorRecord {
             ScopedCut::SelfRef(aligned) => aligned.into_grounded(),
             _ => {
                 return DissipativeOverflowReport {
-                    primary_idx: idx_1,
-                    landed_idx: idx_1,
+                    residual_words: res_w,
                     primary_anchor_id: primary_aid,
                     landed_anchor_id: primary_aid,
                     primary_coherence: coh_1,
                     scatter_coherence: clean_scatter_coh,
                     overflow_pressure,
                     updated_gravity_mass: primary_mass,
-                    residual_words: res_w,
+                    primary_idx: idx_1 as u16,
+                    landed_idx: idx_1 as u16,
                     overflowed: false,
                     scattered: false,
                     spawned_new: false,
+                    _reserved: 0,
                 };
             }
         };
@@ -1450,18 +1510,19 @@ impl CrystallizedAttractorRecord {
         );
 
         DissipativeOverflowReport {
-            primary_idx: idx_1,
-            landed_idx: target_idx,
+            residual_words: res_w,
             primary_anchor_id: primary_aid,
             landed_anchor_id: landed_aid,
             primary_coherence: coh_1,
             scatter_coherence: clean_scatter_coh,
             overflow_pressure,
             updated_gravity_mass: updated_mass,
-            residual_words: res_w,
+            primary_idx: idx_1 as u16,
+            landed_idx: target_idx as u16,
             overflowed,
             scattered: settled_on_scatter,
             spawned_new: effective_spawn,
+            _reserved: 0,
         }
     }
 
@@ -2372,132 +2433,6 @@ impl EpisodicPhaseSample for GatewayFrame {
     #[inline(always)]
     fn sample_anchor_type(&self) -> gcso_anchor_type_t {
         GCSO_ANCHOR_TYPE_CRYSTALLIZED
-    }
-}
-
-impl CausalProvenanceSignal for CrystallizedAnchorRecord {
-    #[inline(always)]
-    fn causal_provenance_bits(&self) -> u32 {
-        branchless_select_u32(
-            self.is_active != 0,
-            CAUSAL_AXIS_SUBJECTIVE_PERSONA
-                | branchless_select_u32(
-                    self.is_crystallized != 0,
-                    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-                    0,
-                ),
-            0,
-        )
-    }
-}
-
-impl CognitiveGroundingSignal for CrystallizedAnchorRecord {
-    #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-        self.phase_deltas
-    }
-
-    #[inline(always)]
-    fn grounding_phases_ref_64(&self) -> Option<&[gcso_q7_t; MAX_ATTENTION_HEADS]> {
-        Some(&self.phase_deltas)
-    }
-
-    #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
-        *self.phase_words_ref()
-    }
-
-    #[inline(always)]
-    fn grounding_base_energy(&self) -> f32 {
-        self.sample_mass()
-    }
-
-    #[inline(always)]
-    fn grounding_anchor_id(&self) -> u32 {
-        self.id
-    }
-}
-
-impl SubjectivePersonaSignal for CrystallizedAnchorRecord {}
-
-impl ManifoldGatewaySignal for CrystallizedAnchorRecord {
-    #[inline(always)]
-    fn synthesize_gateway_frame_with_words(
-        &self,
-    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        self.to_crystallized_attractor_record_unstamped()
-            .synthesize_gateway_frame_with_words()
-    }
-
-    #[inline(always)]
-    fn synthesize_gateway_frame(&self) -> GatewayFrame {
-        self.to_crystallized_attractor_record_unstamped()
-            .synthesize_gateway_frame()
-    }
-}
-
-impl CausalProvenanceSignal for AttractorAnchor {
-    #[inline(always)]
-    fn causal_provenance_bits(&self) -> u32 {
-        branchless_select_u32(
-            self.is_active != 0,
-            CAUSAL_AXIS_SUBJECTIVE_PERSONA
-                | branchless_select_u32(
-                    self.is_crystallized != 0,
-                    CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
-                    0,
-                ),
-            0,
-        )
-    }
-}
-
-impl CognitiveGroundingSignal for AttractorAnchor {
-    #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-        self.phase_deltas
-    }
-
-    #[inline(always)]
-    fn grounding_phases_ref_64(&self) -> Option<&[gcso_q7_t; MAX_ATTENTION_HEADS]> {
-        Some(&self.phase_deltas)
-    }
-
-    #[inline(always)]
-    fn project_grounding_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
-        *self.phase_words_ref()
-    }
-
-    #[inline(always)]
-    fn grounding_base_energy(&self) -> f32 {
-        self.sample_mass()
-    }
-
-    #[inline(always)]
-    fn grounding_anchor_id(&self) -> u32 {
-        self.id
-    }
-}
-
-impl SubjectivePersonaSignal for AttractorAnchor {}
-
-impl ManifoldGatewaySignal for AttractorAnchor {
-    #[inline(always)]
-    fn synthesize_gateway_frame_with_words(
-        &self,
-    ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        if self.is_active == 0 {
-            return (GatewayFrame::zeroed(), [0u64; NUM_STIGMERGIC_GRANULES]);
-        }
-        CrystallizedAnchorRecord::from_anchor(self).synthesize_gateway_frame_with_words()
-    }
-
-    #[inline(always)]
-    fn synthesize_gateway_frame(&self) -> GatewayFrame {
-        if self.is_active == 0 {
-            return GatewayFrame::zeroed();
-        }
-        CrystallizedAnchorRecord::from_anchor(self).synthesize_gateway_frame()
     }
 }
 

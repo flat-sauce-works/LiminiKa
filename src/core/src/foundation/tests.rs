@@ -401,4 +401,13 @@ fn test_branchless_q7_weighted_ensemble_words_64() {
         branchless_q7_weighted_ensemble_words_64(profiles, &weights, 0b0000_0001, &base_100);
     // 100 + 64 = 164 wraps on S^1 Q7 to -92
     assert_eq!(swar_q7_unpack_x8(w_wrap[0])[0], -92);
+
+    // 5. Contiguous-matrix variant produces bit-exact output without stack pointer array
+    let contig = [p0, p1, p2, p3, p_zero, p_zero, p_zero, p_zero];
+    for mask in [0u8, 0b0000_0001, 0b0000_0100, 0b0000_1111] {
+        assert_eq!(
+            branchless_q7_weighted_ensemble_contiguous_words_64(&contig, &weights, mask, &base_100),
+            branchless_q7_weighted_ensemble_words_64(profiles, &weights, mask, &base_100)
+        );
+    }
 }

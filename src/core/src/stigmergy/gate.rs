@@ -228,7 +228,7 @@ impl PhaseSteeringEngine {
 /// Level 1 traits.
 pub trait PhaseSteeringActiveExt: PhaseSteeringGeometryExt {
     /// Applies [`PhaseSteering::apply_phase_steering_safe`] only after `phase_deltas` carries an
-    /// [`Indivisible<Active, _>`] promotion certificate.
+    /// [`Indivisible<Active, _>`] sealed closure certificate.
     ///
     /// # Errors
     /// Propagates any validation or alignment error from
@@ -244,7 +244,7 @@ pub trait PhaseSteeringActiveExt: PhaseSteeringGeometryExt {
     }
 
     /// Applies [`PhaseSteering::apply_phase_steering_fused_safe`] only after `phase_deltas`
-    /// carries an [`Indivisible<Active, _>`] promotion certificate.
+    /// carries an [`Indivisible<Active, _>`] sealed closure certificate.
     ///
     /// # Errors
     /// Propagates any validation, aliasing, or alignment error from
@@ -266,7 +266,7 @@ pub trait PhaseSteeringActiveExt: PhaseSteeringGeometryExt {
     }
 
     /// Applies [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`] only after
-    /// `phase_deltas` carries an [`Indivisible<Active, _>`] promotion certificate.
+    /// `phase_deltas` carries an [`Indivisible<Active, _>`] sealed closure certificate.
     ///
     /// # Errors
     /// Propagates any validation, geometry, or alignment error from
@@ -360,7 +360,7 @@ impl ResidualAdapterEngine {
     }
 
     /// Validated Rank-1 outer-product residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$)
-    /// gated by an [`Indivisible<Active, _>`] promotion certificate.
+    /// gated by an [`Indivisible<Active, _>`] sealed closure certificate.
     ///
     /// Statically excludes [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`], and
     /// unclassified origins from injecting Rank-1 hidden-state residuals while keeping the

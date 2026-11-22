@@ -1799,7 +1799,8 @@ mod tests {
     use super::*;
     use crate::foundation::AlignedBuffer64;
     use crate::liminal::MAX_ATTENTION_HEADS;
-    use crate::stigmergy::{ATTRACTOR_SLOT_PERSONA, CAUSAL_AXIS_SUBJECTIVE_PERSONA};
+    use crate::runtime::gateway::CAUSAL_AXIS_SUBJECTIVE_PERSONA;
+    use crate::stigmergy::ATTRACTOR_SLOT_PERSONA;
 
     #[test]
     fn test_mapped_storage_engine_dnp_and_pprc_gop_video_stream_seek() {

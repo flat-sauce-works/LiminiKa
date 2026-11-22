@@ -83,6 +83,9 @@ RETIRED_LEGACY_PATHS: tuple[str, ...] = (
     "foundation/phase_field.rs",
     "stigmergy/action_hub.rs",
     "runtime/gateway/closed_loop.rs",
+    "stigmergy/attractor/field_engine.rs",
+    "stigmergy/attractor/multi_space.rs",
+    "stigmergy/attractor/snapshot.rs",
 )
 
 REQUIRED_CANONICAL_PATHS: tuple[str, ...] = (
@@ -396,7 +399,7 @@ def strip_literals_preserve_lines(clean_text: str) -> str:
 
 
 def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]:
-    """Verify public `*Field*` (attractor-only) and `*Substrate*` (stigmergy-only) ownership."""
+    """Verify dissolved `*Field*` ban (0 non-ABI allowed) and `*Substrate*` (stigmergy-only) ownership."""
     norm_rel = rel_path.replace("\\", "/").lstrip("/")
     if norm_rel.startswith("src/core/src/"):
         norm_rel = norm_rel[len("src/core/src/"):]
@@ -417,11 +420,10 @@ def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]
         name = match.group("name")
         lineno = code_only.count("\n", 0, match.start()) + 1
         if "Field" in name:
-            if not (norm_rel.startswith("stigmergy/attractor/") and "AttractorField" in name):
-                violations.append(
-                    f"Vocabulary ownership (Field=attractor-only): {norm_rel}:{lineno}: "
-                    f"disallowed public declaration `{name}`"
-                )
+            violations.append(
+                f"Vocabulary ownership (Field=dissolved): {norm_rel}:{lineno}: "
+                f"disallowed public declaration `{name}`"
+            )
         if "Substrate" in name:
             allowed_paths = ALLOWED_SUBSTRATE_DECLS.get(name, ())
             if norm_rel not in allowed_paths:
@@ -433,7 +435,7 @@ def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]
 
 
 def check_vocabulary_ownership(core_src: pathlib.Path) -> list[str]:
-    """Verify symmetric Field (attractor-only) and Substrate (stigmergy-only) ownership."""
+    """Verify dissolved Field ban (0 non-ABI allowed) and Substrate (stigmergy-only) ownership."""
     violations: list[str] = []
     for rs_file in sorted(core_src.rglob("*.rs")):
         if rs_file.name == "tests.rs" or "tests" in rs_file.parts:

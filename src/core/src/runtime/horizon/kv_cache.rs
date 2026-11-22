@@ -6,6 +6,10 @@
 
 use super::slots::{HorizonEscalationProvider, HorizonEscalationRequest, LatentHorizonSlot};
 use super::*;
+use crate::drivers::{
+    FrameDirective, SpineFrameTransitionInput, SystemSpineState,
+    SPINE_TRANSITION_FLAG_GUARD_REPULSION,
+};
 use crate::foundation::{
     branchless_clamp_f32, branchless_splitmix64, circular_resultant_from_words_64,
     encode_pframe_motion_delta_64, load_q7_words_64, seek_pframe_chain_words_64, store_q7_words_64,
@@ -14,19 +18,19 @@ use crate::foundation::{
     KvMotionDeltaPacket, RawPhaseProjectable, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, BitCut32, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT,
+    branchless_select_f32, gcso_q7_t, BitCut32, GcsoResult, Lacuna, GCSO_ERROR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::runtime::context::AutonomousCoreLayerStack;
 use crate::runtime::gateway::{
     tangent_cosine_active_heads_64, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy,
     CognitiveGroundingSignal, GatewayFrame, ManifoldGatewaySignal, ObjectiveFactSignal,
+    CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 use crate::runtime::storage::KvKeyframePacket;
 use crate::stigmergy::{
     swar_mean_u8_le128_x8, CognitiveCircuitActivation, CognitiveTrajectoryLedger,
     DissipativeOverflowReport, PheromoneDensityOps, ATTRACTOR_SLOT_KNOWLEDGE,
-    CAUSAL_AXIS_OBJECTIVE_FACT,
 };
 
 /// 192-byte (`#[repr(C, align(64))]`) host-RAM entry pairing a compressed 128-byte
@@ -871,7 +875,37 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
                 let blend_q7 = policy.kv_circuit_blend_q7(frame);
                 *circuit = cached_circuit.compose_persona_circuit(circuit, blend_q7);
             }
-            self.append_context_pframe(slot_idx, &frame.phase_deltas, qdps_step, epoch)?;
+            let cur_pframes = self.slot_pframe_count(slot_idx);
+            let (directive, _) = SystemSpineState::new().evaluate_frame_transition_branchless(
+                SpineFrameTransitionInput {
+                    lacuna_code: Lacuna::SelfRef.code(),
+                    phase_delta_q7: 0,
+                    reanchor_delta_thresh_q7: 0,
+                    steps_since_keyframe: cur_pframes.min(usize::from(u8::MAX)) as u8,
+                    max_gop_steps: P.min(usize::from(u8::MAX)) as u8,
+                    candidate_granule_mask: 0xFF,
+                    flags: if seek_repulsed > 0 {
+                        SPINE_TRANSITION_FLAG_GUARD_REPULSION
+                    } else {
+                        0
+                    },
+                    reserved: 0,
+                },
+            );
+            if matches!(directive, FrameDirective::ReAnchorKeyframe) {
+                let reanchor_hash = self.base.slots[slot_idx].context_hash;
+                let _ = self.store_keyframe_and_reset_gop(
+                    reanchor_hash,
+                    token_index,
+                    frame.target_anchor_id,
+                    &frame.phase_deltas,
+                    *circuit,
+                    activation,
+                    epoch,
+                );
+            } else {
+                self.append_context_pframe(slot_idx, &frame.phase_deltas, qdps_step, epoch)?;
+            }
             let pframe_count = self.slot_pframe_count(slot_idx);
             return Ok(RamPhaseKvStepOutcome::ResonatedSeeked {
                 slot_idx,

@@ -24,24 +24,27 @@ use self::crc32_delta::{
     CRYSTAL_CRC32_RBAR_ONE_FINAL_CONTRIB, CRYSTAL_CRC32_W0_FINAL_CONTRIB,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_maturity_scale_u32,
-    branchless_min_f32, branchless_relu_f32, coherence_above_floor_from_word_arrays_64,
+    atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_maturity_scale_u32,
+    branchless_min_f32, branchless_relu_f32, branchless_sincos_q7, branchless_von_mises_kappa,
+    circular_r_bar_from_words_64, coherence_above_floor_from_word_arrays_64,
     coherence_from_uniform_words_x8, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
     crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
     crc32_step_block64_words, crc32_step_l3, crc32_step_l4, crc32_step_l5, crc32_step_l6,
     gcso_tagged_ptr_t, is_aligned_to, is_word_array_uniform_64, load_q7_words_64,
-    step_toroidal_centroid_words_cached_64, Pod, RawPhaseProjectable, CRC32_IEEE_SLICE16_REF,
-    Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
+    step_toroidal_centroid_words_cached_64, store_q7_words_64, Pod, RawPhaseProjectable,
+    CRC32_IEEE_SLICE16_REF, Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::foundation::{
     ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_usize, gcso_q7_t, AbstractDomain, GcsoResult,
-    Grounded, Indivisible, Scoped, DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX,
-    GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT,
-    GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, branchless_select_q7, branchless_select_usize, gcso_q7_t,
+    AbstractDomain, GcsoResult, Grounded, Indivisible, Scoped, DEFAULT_ENTROPY_EPS,
+    GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED,
+    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES,
 };
 
 /// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
@@ -94,10 +97,15 @@ const _: () = {
             == align_of::<&[u64; NUM_STIGMERGIC_GRANULES]>()
     );
 };
-use crate::stigmergy::{
-    ATTRACTOR_SLOT_PERSONA, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, MAX_ATTRACTOR_PULL_FORCE,
-    ROOT_CAUSE_NOMINAL,
-};
+use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_ref};
+use crate::stigmergy::{ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY};
+
+/// Nominal cause code (`0`) stored in [`CrystallizedAttractorRecord::dominant_cause_code`].
+pub const CRYSTAL_CAUSE_CODE_NOMINAL: u8 = 0;
+
+/// Provenance maturity flag (`bit 12`) stamped on [`CrystallizedAttractorRecord::provenance_bits`]
+/// once sample count and circular coherence cross the crystallization gate.
+pub const CRYSTAL_PROVENANCE_MATURE_BIT: u32 = 1 << 12;
 
 /// Narrow phase clamp authority (`0.14 rad`) for Objective Fact grounding (`Fact` sub-heads).
 pub const DEFAULT_FACT_PHASE_CLAMP_RAD: f32 = 0.14;
@@ -133,13 +141,11 @@ pub(crate) use self::crc32_delta::{
 
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous
 /// daughter-attractor birth (`CrystallizedAttractorRecord::step_dissipative_overflow_scatter_or_spawn_64`).
-#[repr(C)]
+#[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DissipativeOverflowReport {
-    /// Nearest primary attractor slot index evaluated before overflow pressure.
-    pub primary_idx: usize,
-    /// Slot index where the sample or its peeled residual settled (`primary_idx`, secondary scatter target, or spawned daughter).
-    pub landed_idx: usize,
+    /// Peeled 64-head SWAR residual phase words (`sample_w - primary_w`) propagated on overflow.
+    pub residual_words: [u64; NUM_STIGMERGIC_GRANULES],
     /// Anchor ID of `primary_idx`.
     pub primary_anchor_id: u32,
     /// Anchor ID of `landed_idx`.
@@ -152,32 +158,43 @@ pub struct DissipativeOverflowReport {
     pub overflow_pressure: f32,
     /// Updated phase-gravity mass of `landed_idx`.
     pub updated_gravity_mass: f32,
-    /// Peeled 64-head SWAR residual phase words (`sample_w - primary_w`) propagated on overflow.
-    pub residual_words: [u64; NUM_STIGMERGIC_GRANULES],
+    /// Nearest primary attractor slot index evaluated before overflow pressure.
+    pub primary_idx: u16,
+    /// Slot index where the sample or its peeled residual settled (`primary_idx`, secondary scatter target, or spawned daughter).
+    pub landed_idx: u16,
     /// `true` when `primary_idx` overflowed its capacity/coherence bound.
     pub overflowed: bool,
     /// `true` when the overflow residual settled onto an existing secondary attractor (`landed_idx != primary_idx`).
     pub scattered: bool,
     /// `true` when unsettled overflow autonomously spawned a new daughter attractor.
     pub spawned_new: bool,
+    /// Explicit trailing byte padding to preserve a packed 96-byte layout.
+    pub _reserved: u8,
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<DissipativeOverflowReport>() == 96);
+    assert!(core::mem::align_of::<DissipativeOverflowReport>() == 32);
+    assert!(core::mem::offset_of!(DissipativeOverflowReport, residual_words) == 0);
+};
 
 impl Default for DissipativeOverflowReport {
     #[inline]
     fn default() -> Self {
         Self {
-            primary_idx: 0,
-            landed_idx: 0,
+            residual_words: [0u64; NUM_STIGMERGIC_GRANULES],
             primary_anchor_id: 0,
             landed_anchor_id: 0,
             primary_coherence: 0.0,
             scatter_coherence: 0.0,
             overflow_pressure: 0.0,
             updated_gravity_mass: 0.0,
-            residual_words: [0u64; NUM_STIGMERGIC_GRANULES],
+            primary_idx: 0,
+            landed_idx: 0,
             overflowed: false,
             scattered: false,
             spawned_new: false,
+            _reserved: 0,
         }
     }
 }
@@ -303,7 +320,7 @@ impl CrystallizedAttractorRecord {
             dominant_slot: dominant_slot & ATTRACTOR_SLOT_ID_MASK,
             action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
             active_swarm_mask: 0xFF,
-            dominant_cause_code: ROOT_CAUSE_NOMINAL,
+            dominant_cause_code: CRYSTAL_CAUSE_CODE_NOMINAL,
             reserved_align64: 0,
             phase_profile: [0i8; MAX_ATTENTION_HEADS],
         }
@@ -446,12 +463,12 @@ impl CrystallizedAttractorRecord {
             crc32_slice16_dep_lo0(self.provenance_bits)
         };
         const DEFAULT_W7_MASK_CAUSE_CRC_C3: u32 = CRC32_IEEE_SLICE16_REF[5][0xFF]
-            ^ CRC32_IEEE_SLICE16_REF[4][ROOT_CAUSE_NOMINAL as usize];
+            ^ CRC32_IEEE_SLICE16_REF[4][CRYSTAL_CAUSE_CODE_NOMINAL as usize];
         const DEFAULT_W7_MASK_CAUSE_FINAL_CONTRIB: u32 =
             crc32_step_l4(DEFAULT_W7_MASK_CAUSE_CRC_C3);
         let slot_fast = (self.dominant_slot & 0xF8) == 0;
-        let mask_cause_default =
-            (self.active_swarm_mask == 0xFF) & (self.dominant_cause_code == ROOT_CAUSE_NOMINAL);
+        let mask_cause_default = (self.active_swarm_mask == 0xFF)
+            & (self.dominant_cause_code == CRYSTAL_CAUSE_CODE_NOMINAL);
         let w7_c = if slot_fast & mask_cause_default {
             final_acc ^= CRC32_CRYSTAL_SLOT_BYTE56_LUT_8[(self.dominant_slot & 7) as usize]
                 ^ CRC32_CRYSTAL_ACTION_BYTE57_REF[self.action_mode_flags as usize]
@@ -643,7 +660,7 @@ impl CrystallizedAttractorRecord {
             && ((self.dominant_slot & !ATTRACTOR_SLOT_ID_MASK) == 0)
             && (self.action_mode_flags == ACTION_PRESET_PASSIVE_SIDECAR)
             && (self.active_swarm_mask == 0xFF)
-            && (self.dominant_cause_code == ROOT_CAUSE_NOMINAL)
+            && (self.dominant_cause_code == CRYSTAL_CAUSE_CODE_NOMINAL)
             && ((((pw[0] | pw[1]) | (pw[2] | pw[3])) | ((pw[4] | pw[5]) | (pw[6] | pw[7]))) == 0)
         {
             return self.checksum_crc32
@@ -724,7 +741,7 @@ impl CrystallizedAttractorRecord {
         }
 
         if (next_count >= 2) & (r_bar >= 0.45) {
-            self.provenance_bits |= CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED;
+            self.provenance_bits |= CRYSTAL_PROVENANCE_MATURE_BIT;
         }
         (next_w, grav_mass, words_changed)
     }
@@ -1043,7 +1060,7 @@ impl CrystallizedAttractorRecord {
         self.dominant_slot = slot;
         self.action_mode_flags = ACTION_PRESET_PASSIVE_SIDECAR;
         self.active_swarm_mask = 0xFF;
-        self.dominant_cause_code = ROOT_CAUSE_NOMINAL;
+        self.dominant_cause_code = CRYSTAL_CAUSE_CODE_NOMINAL;
         self.reserved_align64 = 0;
         if was_active {
             *self.phase_words_mut() = [0u64; NUM_STIGMERGIC_GRANULES];
@@ -1207,6 +1224,158 @@ impl RawPhaseProjectable for CrystallizedAttractorRecord {
     }
 }
 
+/// Executes **Persistent Topological Mode Quantization** in row-major order,
+/// returning `Ok((0.0, 0.0))` with zeroed `profile_out` if total trail weight is zero.
+///
+/// # Errors
+/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `coherent_trails` is empty or `min_coherence_r_bar` is non-finite.
+#[inline]
+pub fn quantize_persistent_topological_mode(
+    coherent_trails: &[gcso_pointer_trail_t],
+    min_coherence_r_bar: f32,
+    profile_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+) -> GcsoResult<(f32, f32)> {
+    if coherent_trails.is_empty() || !branchless_is_finite_f32(min_coherence_r_bar) {
+        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    }
+
+    let mut candidate = [0i8; MAX_ATTENTION_HEADS];
+    let candidate_words: [u64; 8];
+    if coherent_trails.len() == 1 {
+        let trail = &coherent_trails[0];
+        let d_bounded = branchless_clamp_f32(trail.stigmergic_density, 0.0, MAX_STIGMERGIC_DENSITY);
+        let f_bounded =
+            branchless_clamp_f32(trail.attractor_pull_force, 1.0, MAX_ATTRACTOR_PULL_FORCE);
+        let w = branchless_flush_subnormal_f32(d_bounded * f_bounded);
+        if w <= 1.0e-10 {
+            *profile_out = [0i8; MAX_ATTENTION_HEADS];
+            return Ok((0.0, 0.0));
+        }
+        candidate = trail.accumulated_phase_delta;
+        candidate_words = *trail_phase_words_ref(trail);
+    } else {
+        let mut sum_s = [[0.0_f32; 8]; 8];
+        let mut sum_c = [[0.0_f32; 8]; 8];
+        let mut word_s = [0.0_f32; 8];
+        let mut word_c = [0.0_f32; 8];
+        let mut total_w = 0.0_f32;
+        let mut all_byte_uniform = true;
+        let mut all_word_uniform = true;
+        let mut uniform_s = 0.0_f32;
+        let mut uniform_c = 0.0_f32;
+
+        for trail in coherent_trails {
+            let d_bounded =
+                branchless_clamp_f32(trail.stigmergic_density, 0.0, MAX_STIGMERGIC_DENSITY);
+            let f_bounded =
+                branchless_clamp_f32(trail.attractor_pull_force, 1.0, MAX_ATTRACTOR_PULL_FORCE);
+            let w = branchless_flush_subnormal_f32(d_bounded * f_bounded);
+            if w > 0.0 {
+                total_w += w;
+                let tw = *trail_phase_words_ref(trail);
+                let w0 = tw[0];
+                if is_word_array_uniform_64(&tw) {
+                    if w0 == w0.rotate_right(8) {
+                        let (s, c) = branchless_sincos_q7(w0 as gcso_q7_t);
+                        uniform_s += w * s;
+                        uniform_c += w * c;
+                    } else {
+                        all_byte_uniform = false;
+                        let b = w0.to_le_bytes();
+                        let mut lane = 0usize;
+                        while lane < 8 {
+                            let (s, c) = branchless_sincos_q7(b[lane] as gcso_q7_t);
+                            word_s[lane] += w * s;
+                            word_c[lane] += w * c;
+                            lane += 1;
+                        }
+                    }
+                } else {
+                    all_byte_uniform = false;
+                    all_word_uniform = false;
+                    let mut cell = 0usize;
+                    while cell < 8 {
+                        let b = tw[cell].to_le_bytes();
+                        let mut lane = 0usize;
+                        while lane < 8 {
+                            let (s, c) = branchless_sincos_q7(b[lane] as gcso_q7_t);
+                            sum_s[cell][lane] += w * s;
+                            sum_c[cell][lane] += w * c;
+                            lane += 1;
+                        }
+                        cell += 1;
+                    }
+                }
+            }
+        }
+        if total_w <= 1.0e-10 {
+            *profile_out = [0i8; MAX_ATTENTION_HEADS];
+            return Ok((0.0, 0.0));
+        }
+        if all_byte_uniform {
+            let mag_sq = uniform_s * uniform_s + uniform_c * uniform_c;
+            let has_mag = mag_sq > 1.0e-20;
+            let q7 = branchless_select_q7(
+                has_mag,
+                branchless_atan2_to_q7_fast(uniform_s, uniform_c),
+                0,
+            );
+            let r_bar = branchless_select_f32(has_mag, 1.0, 0.0);
+            let kappa_c = branchless_von_mises_kappa(r_bar);
+            let keep = r_bar >= branchless_clamp_f32(min_coherence_r_bar, 0.0, 1.0);
+            *profile_out = [branchless_select_q7(keep, q7, 0); MAX_ATTENTION_HEADS];
+            return Ok((r_bar, kappa_c));
+        } else if all_word_uniform {
+            let mut s_cell = [0.0_f32; 8];
+            let mut c_cell = [0.0_f32; 8];
+            let mut lane = 0usize;
+            while lane < 8 {
+                s_cell[lane] = word_s[lane] + uniform_s;
+                c_cell[lane] = word_c[lane] + uniform_c;
+                lane += 1;
+            }
+            let word0 = atan2_to_q7_word_x8_simd(&s_cell, &c_cell);
+            candidate_words = [word0; 8];
+            store_q7_words_64(&mut candidate, &candidate_words);
+        } else {
+            let has_word_or_uni = (uniform_s != 0.0)
+                | (uniform_c != 0.0)
+                | (word_s != [0.0_f32; 8])
+                | (word_c != [0.0_f32; 8]);
+            if has_word_or_uni {
+                let mut cell = 0usize;
+                while cell < 8 {
+                    let mut lane = 0usize;
+                    while lane < 8 {
+                        sum_s[cell][lane] += word_s[lane] + uniform_s;
+                        sum_c[cell][lane] += word_c[lane] + uniform_c;
+                        lane += 1;
+                    }
+                    cell += 1;
+                }
+            }
+            let mut cw = [0u64; 8];
+            let mut cell = 0usize;
+            while cell < 8 {
+                cw[cell] = atan2_to_q7_word_x8_simd(&sum_s[cell], &sum_c[cell]);
+                cell += 1;
+            }
+            candidate_words = cw;
+            store_q7_words_64(&mut candidate, &candidate_words);
+        }
+    }
+
+    let r_bar = circular_r_bar_from_words_64(&candidate_words);
+    let kappa_c = branchless_von_mises_kappa(r_bar);
+    let keep = r_bar >= branchless_clamp_f32(min_coherence_r_bar, 0.0, 1.0);
+    if keep {
+        *profile_out = candidate;
+    } else {
+        *profile_out = [0i8; MAX_ATTENTION_HEADS];
+    }
+    Ok((r_bar, kappa_c))
+}
+
 #[cfg(test)]
 mod grounded_gate_tests {
     use super::*;
@@ -1248,5 +1417,51 @@ mod grounded_gate_tests {
         let bridged_mass = bridged_rec.absorb_sample_point_64(bridged.into_grounded(), 1.5);
         assert_eq!(bridged_mass.to_bits(), direct_mass.to_bits());
         assert_eq!(bridged_rec, direct);
+    }
+
+    #[test]
+    fn test_quantize_persistent_topological_mode_single_and_multi_trail() {
+        let mut out = [0i8; MAX_ATTENTION_HEADS];
+        assert_eq!(
+            quantize_persistent_topological_mode(&[], 0.5, &mut out),
+            Err(GCSO_ERROR_INVALID_ARGUMENT)
+        );
+        assert_eq!(
+            quantize_persistent_topological_mode(
+                &[gcso_pointer_trail_t::default()],
+                f32::NAN,
+                &mut out
+            ),
+            Err(GCSO_ERROR_INVALID_ARGUMENT)
+        );
+
+        let t0 = gcso_pointer_trail_t {
+            stigmergic_density: 1.5,
+            attractor_pull_force: 1.0,
+            accumulated_phase_delta: [28i8; MAX_ATTENTION_HEADS],
+            ..Default::default()
+        };
+        let (r0, k0) = quantize_persistent_topological_mode(&[t0], 0.8, &mut out).unwrap();
+        assert!(r0 > 0.99 && k0 > 10.0);
+        assert_eq!(out, [28i8; MAX_ATTENTION_HEADS]);
+
+        let t1 = gcso_pointer_trail_t {
+            stigmergic_density: 2.0,
+            attractor_pull_force: 1.0,
+            accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
+            ..Default::default()
+        };
+        let mut t2 = gcso_pointer_trail_t {
+            stigmergic_density: 2.5,
+            attractor_pull_force: 1.0,
+            accumulated_phase_delta: [30i8; MAX_ATTENTION_HEADS],
+            ..Default::default()
+        };
+        t2.accumulated_phase_delta[0] = 34;
+        let (r_m, _k_m) =
+            quantize_persistent_topological_mode(&[t0, t1, t2], 0.8, &mut out).unwrap();
+        assert!(r_m > 0.95);
+        assert!((28..=34).contains(&out[0]));
+        assert!((28..=32).contains(&out[1]));
     }
 }

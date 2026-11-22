@@ -249,7 +249,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         ))
         .unwrap();
     assert_eq!(ev_lane, 1);
-    assert!(wb_substrate.promote_sandbox_lane(ev_lane).unwrap());
+    assert!(wb_substrate.settle_sandbox_lane(ev_lane).unwrap());
     let _ = wb_substrate.decay_and_reclaim_lanes(0.5, 0.25);
     let _ = wb_substrate.release_unpinned_lanes();
     let mut esc_lane = None;
@@ -265,6 +265,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
 
     // Verify label-free AnonymousComputePool dispatch, whole-token bypass, Venn partition,
     // SystemSpine isolation, DistortionDelta P-Frame chain, and DistortionTension remain zero-alloc.
+    ctx.system_spine_mut().pin_compute_slots(0b0001);
     ctx.compute_pool_mut()
         .set_slot_masks(0b1111, 0b0001, 0, 0b1110);
     let mut dispatch = ctx.step_compute_dispatch(liminika_core::drivers::SystemPressureReading {
@@ -306,13 +307,14 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         3,
     );
     let stig = liminika_core::StigmergicGranuleState::new();
+    let mut pframe_target = liminika_core::GatewayFrame::default();
     let _ = net.evaluate_pframe_chain_branchless(
         &ego,
         &spine,
         &part,
         &stig,
         &tension,
-        liminika_core::GatewayFrame::default(),
+        &mut pframe_target,
     );
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

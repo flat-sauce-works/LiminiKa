@@ -86,7 +86,7 @@ use crate::runtime::gateway::{
     synthesize_multi_origin_gateway_frame_with_words, CausalProvenanceReport,
     CausalProvenanceSignal, CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal,
     GatewayFrame, GatewayPhaseSteeringExt, ManifoldGatewaySignal, ObjectiveFact, SubjectivePersona,
-    SystemConstraint,
+    SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
 };
 #[allow(unused_imports)]
 use crate::runtime::horizon::{evaluate_epistemic_horizon_words_64, EpistemicHorizonReading};
@@ -105,10 +105,9 @@ use crate::stigmergy::{
     CrystallizedAttractorRecord, FastPathLedger, PhaseSteeringEngine,
     StigmergicFragmentEnsembleReport, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
     StigmergicReconstitutionReport, StigmergicSubstrate, StigmergicThresholds, SubstrateStepReport,
-    ATTRACTOR_SLOT_REPULSION, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-    MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SYNERGY_RESONANCE,
+    ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.

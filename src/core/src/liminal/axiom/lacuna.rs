@@ -41,6 +41,13 @@ impl Lacuna {
         }
     }
 
+    /// Returns the compact `u8` discriminant (`0` = `Unobserved`, `1` = `SelfRef`, `2` = `Exterior`, `3` = `Undefined`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
     /// Returns `true` when the gap was observed (either [`Self::SelfRef`] or [`Self::Exterior`]).
     #[inline(always)]
     #[must_use]
