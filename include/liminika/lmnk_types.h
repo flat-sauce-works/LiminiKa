@@ -60,8 +60,8 @@ typedef uint8_t lmnk_action_decision_t;
 typedef uint8_t lmnk_attribution_tag_t;
 typedef int32_t lmnk_status_t;
 
-#define LMNK_CONTAINER_MAGIC 0x4B4E4D4CU /* "LMNK" in Little-Endian ASCII */
-#define LMNK_TOPOLOGY_MAGIC 0x504F544CU  /* "LTOP" in Little-Endian ASCII */
+#define LMNK_CONTAINER_MAGIC 0x4B4E4D4CU    /* "LMNK" in Little-Endian ASCII */
+#define LMNK_TOPOLOGY_MAGIC 0x504F544CU     /* "LTOP" in Little-Endian ASCII */
 #define LMNK_PHASE_ANCHOR_MAGIC 0x524B4E4CU /* "LNKR" in Little-Endian ASCII */
 #define LMNK_PHASE_ANCHOR_VERSION 0x00000200U
 #define LMNK_CONTAINER_HEADER_BYTES 64U
@@ -818,15 +818,13 @@ LMNK_STATIC_ASSERT(offsetof(lmnk_container_header_t, topology_crc32) == 8,
 LMNK_STATIC_ASSERT(offsetof(lmnk_container_header_t, header_crc32) == 60,
                    "lmnk_container_header_t header_crc32 offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_section_entry_t) == 16,
-                   "lmnk_section_entry_t must be 16 bytes");
+LMNK_STATIC_ASSERT(sizeof(lmnk_section_entry_t) == 16, "lmnk_section_entry_t must be 16 bytes");
 LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_section_entry_t) == 16,
                    "lmnk_section_entry_t must be 16-byte aligned");
 LMNK_STATIC_ASSERT(offsetof(lmnk_section_entry_t, payload_crc32) == 12,
                    "lmnk_section_entry_t payload_crc32 offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_topology_matrix_t) == 64,
-                   "lmnk_topology_matrix_t must be 64 bytes");
+LMNK_STATIC_ASSERT(sizeof(lmnk_topology_matrix_t) == 64, "lmnk_topology_matrix_t must be 64 bytes");
 LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_topology_matrix_t) == 64,
                    "lmnk_topology_matrix_t must be 64-byte aligned");
 LMNK_STATIC_ASSERT(offsetof(lmnk_topology_matrix_t, dag_edge_matrix) == 12,

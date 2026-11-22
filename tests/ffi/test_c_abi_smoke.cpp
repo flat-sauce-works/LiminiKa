@@ -320,8 +320,8 @@ void test_entropy_lacuna_anchor_and_mermaid() {
     alignas(64) uint8_t container_buf[512]{};
     size_t cont_len = sizeof(container_buf);
     LMNK_TEST_CHECK(lmnk_container_write_zero_copy(&centroid, 1U, nullptr, 0U, nullptr, nullptr,
-                                                  1774900000ULL, container_buf,
-                                                  &cont_len) == LMNK_OK);
+                                                   1774900000ULL, container_buf,
+                                                   &cont_len) == LMNK_OK);
     LMNK_TEST_CHECK(cont_len >= LMNK_CONTAINER_HEADER_BYTES + 128U);
 
     size_t num_anchors = 0U;
@@ -329,16 +329,16 @@ void test_entropy_lacuna_anchor_and_mermaid() {
     const lmnk_phase_anchor_record_t* anchors_ptr = nullptr;
     const lmnk_pointer_trail_t* trails_ptr = nullptr;
     LMNK_TEST_CHECK(lmnk_container_verify_zero_copy(container_buf, cont_len, &num_anchors,
-                                                   &num_trails, &anchors_ptr,
-                                                   &trails_ptr) == LMNK_OK);
+                                                    &num_trails, &anchors_ptr,
+                                                    &trails_ptr) == LMNK_OK);
     LMNK_TEST_CHECK(num_anchors == 1U && anchors_ptr != nullptr);
     LMNK_TEST_CHECK(num_trails == 0U && trails_ptr == nullptr);
 
     alignas(64) uint8_t misalign_backing[512 + 8]{};
     std::memcpy(misalign_backing + 1, container_buf, cont_len);
     LMNK_TEST_CHECK(lmnk_container_verify_zero_copy(misalign_backing + 1, cont_len, &num_anchors,
-                                                   &num_trails, &anchors_ptr,
-                                                   &trails_ptr) == LMNK_ERR_ALIGNMENT);
+                                                    &num_trails, &anchors_ptr,
+                                                    &trails_ptr) == LMNK_ERR_ALIGNMENT);
 }
 
 } // namespace
