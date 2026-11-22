@@ -400,20 +400,19 @@ jobs:
           candle_ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("examples/candle_eval/Cargo.toml"), "examples/candle_eval/Cargo.toml version").group(1)
           root_cmake = must_match(r'project\(LiminiKa\s+VERSION\s+(\d+\.\d+\.\d+)', read("CMakeLists.txt"), "CMakeLists.txt project VERSION").group(1)
 
-          abi_h = read("include/liminika/gcso_abi.h")
-          c_maj = int(must_match(r'#define\s+GCSO_ABI_VERSION_MAJOR\s+(\d+)U', abi_h, "gcso_abi.h MAJOR").group(1))
-          c_min = int(must_match(r'#define\s+GCSO_ABI_VERSION_MINOR\s+(\d+)U', abi_h, "gcso_abi.h MINOR").group(1))
-          c_pat = int(must_match(r'#define\s+GCSO_ABI_VERSION_PATCH\s+(\d+)U', abi_h, "gcso_abi.h PATCH").group(1))
-          c_str = must_match(r'#define\s+GCSO_ABI_VERSION_STRING\s+"([^"]+)"', abi_h, "gcso_abi.h STRING").group(1)
-
-          types_h = read("include/liminika/gcso_types.h")
-          c_crystal_hex = int(must_match(r'#define\s+GCSO_CRYSTAL_RECORD_VERSION\s+(0x[0-9A-Fa-f]+)U?', types_h, "gcso_types.h GCSO_CRYSTAL_RECORD_VERSION").group(1), 16)
+          types_h = read("include/liminika/lmnk_types.h")
+          abi_h = read("include/liminika/lmnk_abi.h")
+          c_maj = int(must_match(r'#define\s+LMNK_ABI_VERSION_MAJOR\s+(\d+)U', types_h, "lmnk_types.h MAJOR").group(1))
+          c_min = int(must_match(r'#define\s+LMNK_ABI_VERSION_MINOR\s+(\d+)U', types_h, "lmnk_types.h MINOR").group(1))
+          c_pat = int(must_match(r'#define\s+LMNK_ABI_VERSION_PATCH\s+(\d+)U', types_h, "lmnk_types.h PATCH").group(1))
+          c_str = must_match(r'#define\s+LMNK_ABI_VERSION_STRING\s+"([^"]+)"', types_h, "lmnk_types.h STRING").group(1)
+          c_anchor_hex = int(must_match(r'#define\s+LMNK_PHASE_ANCHOR_VERSION\s+(0x[0-9A-Fa-f]+)U?', types_h, "lmnk_types.h LMNK_PHASE_ANCHOR_VERSION").group(1), 16)
 
           constants_rs = read("src/core/src/liminal/constants.rs")
-          r_maj = int(must_match(r'pub\s+const\s+GCSO_ABI_VERSION_MAJOR:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs MAJOR").group(1))
-          r_min = int(must_match(r'pub\s+const\s+GCSO_ABI_VERSION_MINOR:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs MINOR").group(1))
-          r_pat = int(must_match(r'pub\s+const\s+GCSO_ABI_VERSION_PATCH:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs PATCH").group(1))
-          r_cstr = must_match(r'pub\s+const\s+GCSO_ABI_VERSION_CSTR:[^=]*=\s*c"([^"]+)"', constants_rs, "liminal/constants.rs CSTR").group(1)
+          r_maj = int(must_match(r'pub\s+const\s+LMNK_ABI_VERSION_MAJOR:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs MAJOR").group(1))
+          r_min = int(must_match(r'pub\s+const\s+LMNK_ABI_VERSION_MINOR:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs MINOR").group(1))
+          r_pat = int(must_match(r'pub\s+const\s+LMNK_ABI_VERSION_PATCH:\s*u32\s*=\s*(\d+)', constants_rs, "liminal/constants.rs PATCH").group(1))
+          r_cstr = must_match(r'pub\s+const\s+LMNK_ABI_VERSION_CSTR:[^=]*=\s*c"([^"]+)"', constants_rs, "liminal/constants.rs CSTR").group(1)
           abi_types_rs = read("src/core/src/runtime/abi/types.rs")
 
           parts = tuple(int(x) for x in ver.split("."))
@@ -422,12 +421,13 @@ jobs:
           checks = [
               ("examples/candle_eval/Cargo.toml", candle_ver == ver),
               ("CMakeLists.txt", root_cmake == ver),
-              ("gcso_abi.h tuple", (c_maj, c_min, c_pat) == parts),
-              ("gcso_abi.h string", c_str == ver),
-              ("gcso_types.h crystal hex", c_crystal_hex == expected_hex),
+              ("lmnk_types.h tuple", (c_maj, c_min, c_pat) == parts),
+              ("lmnk_types.h string", c_str == ver),
+              ("lmnk_types.h anchor hex", c_anchor_hex == expected_hex),
+              ("lmnk_abi.h includes lmnk_types.h", '#include "lmnk_types.h"' in abi_h),
               ("liminal/constants.rs tuple", (r_maj, r_min, r_pat) == parts),
               ("liminal/constants.rs cstr", r_cstr == ver),
-              ("runtime/abi/types.rs re-export", "GCSO_ABI_VERSION_MAJOR" in abi_types_rs and "GCSO_ABI_VERSION_CSTR" in abi_types_rs),
+              ("runtime/abi/types.rs re-export", "LMNK_ABI_VERSION_MAJOR" in abi_types_rs and "LMNK_ABI_VERSION_CSTR" in abi_types_rs),
           ]
           failed = [name for name, ok in checks if not ok]
           if failed:
@@ -514,7 +514,13 @@ jobs:
         with:
           key: cpp-ffi-${{ runner.os }}
 
-      - name: Build Rust liminika-core staticlib
+      - name: Build Rust liminika-core staticlib (Unix)
+        if: runner.os != 'Windows'
+        run: cargo build --locked --release -p liminika-core
+
+      - name: Build Rust liminika-core staticlib (Windows MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: cargo build --locked --release -p liminika-core
 
       - name: Verify C-ABI Header Self-Containment & Layout Static Assertions (Unix C11 & C++20)
@@ -737,8 +743,8 @@ jobs:
         run: |
           cargo build --locked -p liminika-core
           cmake -B build-capi -S . -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          cmake --build build-capi --target gcso_phi4_gguf_hook_example --parallel
-          ./build-capi/examples/c_api/gcso_phi4_gguf_hook_example
+          cmake --build build-capi --target lmnk_phi4_gguf_hook_example --parallel
+          ./build-capi/examples/c_api/lmnk_phi4_gguf_hook_example
 
   # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION

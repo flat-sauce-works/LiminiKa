@@ -1,7 +1,7 @@
 // name: src/core/src/stigmergy/granule.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! 8-granule stigmergic approximation-and-reconstitution engine, overlap/serendipity
+//! 8-granule stigmergic approximation-and-reconstitution engine, overlap/discovery
 //! field analysis, adaptive [`StigmergicGranuleState`], fragmented micro-ensemble summary,
 //! and relative attractor graph coupling ([`RelativeAttractorNode`], [`RelativeCouplingMatrix`]).
 
@@ -20,16 +20,14 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t, GcsoResult,
-    LiminalThresholdState, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    branchless_select_u64, branchless_select_u8, branchless_select_usize, LiminalThresholdState,
+    LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
 };
+use crate::stigmergy::anchor::{DissipativeOverflowReport, PhaseAnchorRecord};
 use crate::stigmergy::circuit::{CognitiveOpKind, CognitiveTrajectoryLedger};
-use crate::stigmergy::crystal::{CrystallizedAttractorRecord, DissipativeOverflowReport};
 use crate::stigmergy::pheromone::StigmergicReconstitutionReport;
-use crate::stigmergy::trail::{
-    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_tagged_ptr_t, trail_phase_words_ref,
-};
+use crate::stigmergy::trail::{trail_phase_words_ref, PagedBitmask, PointerTrail, TaggedPtr};
 use crate::stigmergy::DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) state engine for the 8-granule SWAR
@@ -38,7 +36,7 @@ use crate::stigmergy::DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StigmergicGranuleEngine {
     /// 64-head Q7 phase profile partitioned into 8 myopic SWAR granules of 8 heads each (`offset 0..64`).
-    pub cell_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub cell_phases: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
 
 // SAFETY: `StigmergicGranuleEngine` is a 64-byte aligned array of 64 `i8` values with no padding traps.
@@ -64,7 +62,7 @@ impl StigmergicGranuleEngine {
     /// Constructs a 64-byte [`StigmergicGranuleEngine`] initialized with `cell_phases`.
     #[inline(always)]
     #[must_use]
-    pub const fn from_phases(cell_phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+    pub const fn from_phases(cell_phases: [PhaseQ7; MAX_ATTENTION_HEADS]) -> Self {
         Self { cell_phases }
     }
 
@@ -95,25 +93,25 @@ impl StigmergicGranuleEngine {
     }
 
     /// Fragments, stigmergically drifts, and reconstitutes `trail` against this engine's 8 myopic
-    /// granules via [`gcso_pointer_trail_t::reconstitute_from_stigmergy_words`], keeping
+    /// granules via [`PointerTrail::reconstitute_from_stigmergy_words`], keeping
     /// `self.cell_phases` synchronized with the reconstituted SWAR words in $\mathcal{O}(1)$.
     #[inline(always)]
     pub fn reconstitute_trail_stigmergically(
         &mut self,
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         step_gain_u7: u8,
-        qdps_step_q7: u8,
+        step_filter_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
     ) -> StigmergicReconstitutionReport {
         let target_words = *self.words_ref();
-        let action_ptr = gcso_tagged_ptr_t(trail.current_ptr);
+        let action_ptr = TaggedPtr(trail.current_ptr);
         let (report, next_words) = trail.reconstitute_from_stigmergy_words(
             action_ptr,
             &target_words,
             0xFF,
             step_gain_u7,
-            qdps_step_q7,
+            step_filter_q7,
             tolerance_q7,
             quorum_threshold,
             0.5,
@@ -130,16 +128,16 @@ impl StigmergicGranuleEngine {
     #[inline(always)]
     pub fn resolve_trail_in_swarm(
         &mut self,
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         step_gain_u7: u8,
-        qdps_step_q7: u8,
+        step_filter_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
     ) -> StigmergicReconstitutionReport {
         self.reconstitute_trail_stigmergically(
             trail,
             step_gain_u7,
-            qdps_step_q7,
+            step_filter_q7,
             tolerance_q7,
             quorum_threshold,
         )
@@ -150,11 +148,11 @@ impl StigmergicGranuleEngine {
     /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `chunk_len == 0`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `chunk_len == 0`.
     #[inline(always)]
-    pub fn step_chunk(&mut self, mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
+    pub fn step_chunk(&mut self, mask: &PagedBitmask, chunk_len: u32) -> LmnkResult<()> {
         if chunk_len == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let _active_bits = mask.popcount();
         Ok(())
@@ -167,56 +165,56 @@ const _: () = {
     assert!(offset_of!(StigmergicGranuleEngine, cell_phases) == 0);
 };
 
-/// Branchless 32-byte (`#[repr(C, align(16))]`) report capturing Venn-diagram overlap across the
-/// 8 SWAR granules (`venn_core_mask`, `venn_penumbra_mask`) and serendipitous approximation-noise
-/// excursions into `Liminal` (`serendipity_excursion_mask`, `serendipity_triggered`).
+/// Branchless 32-byte (`#[repr(C, align(16))]`) report capturing set-overlap overlap across the
+/// 8 SWAR granules (`overlap_core_mask`, `overlap_fringe_mask`) and emergent approximation-noise
+/// excursions into `Liminal` (`discovery_excursion_mask`, `discovery_triggered`).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct StigmergicOverlapSerendipityReport {
+pub struct OverlapDiscoveryReport {
     /// Cooperative resonance energy accumulated across granules covered by `>= 2` attractors (`offset 0..4`).
-    pub venn_intersection_energy: f32,
+    pub overlap_core_energy: f32,
     /// Attenuated fringe energy across granules covered by exactly `1` attractor (`offset 4..8`).
-    pub penumbra_attenuation_energy: f32,
+    pub overlap_fringe_energy: f32,
     /// Residual noise excursion energy outside all attractors' apertures (`offset 8..12`).
-    pub void_excursion_energy: f32,
-    /// Dominant attractor anchor ID participating in the highest-overlap Venn region (`offset 12..16`).
+    pub lacuna_excursion_energy: f32,
+    /// Dominant attractor anchor ID participating in the highest-overlap overlap region (`offset 12..16`).
     pub dominant_overlap_anchor_id: u32,
     /// Packed 8-head `u64` SWAR granule word of the strongest noisy excursion in `Liminal` (`offset 16..24`).
-    pub serendipitous_seed_word: u64,
+    pub discovery_seed_word: u64,
     /// 8-bit mask where bit `g == 1` iff granule `g` is covered by `>= 2` attractors (`offset 24`).
-    pub venn_core_mask: u8,
+    pub overlap_core_mask: u8,
     /// 8-bit mask where bit `g == 1` iff granule `g` is covered by exactly `1` attractor (`offset 25`).
-    pub venn_penumbra_mask: u8,
+    pub overlap_fringe_mask: u8,
     /// 8-bit mask where bit `g == 1` iff granule `g` lies outside all attractors (`overlap == 0`, `offset 26`).
-    pub void_exterior_mask: u8,
-    /// 8-bit mask where bit `g == 1` iff granule `g` lies in `void_exterior_mask` with drift `>= floor` (`offset 27`).
-    pub serendipity_excursion_mask: u8,
+    pub lacuna_exterior_mask: u8,
+    /// 8-bit mask where bit `g == 1` iff granule `g` lies in `lacuna_exterior_mask` with drift `>= floor` (`offset 27`).
+    pub discovery_excursion_mask: u8,
     /// Maximum number of attractors overlapping on any single granule (`offset 28`).
     pub max_overlap_depth: u8,
-    /// Granule index (`0..=7`) hosting `serendipitous_seed_word` (`offset 29`).
-    pub serendipitous_granule_idx: u8,
+    /// Granule index (`0..=7`) hosting `discovery_seed_word` (`offset 29`).
+    pub discovery_granule_idx: u8,
     /// `1` if approximation noise in `Liminal` triggered unknown attractor discovery, `0` otherwise (`offset 30`).
-    pub serendipity_triggered: u8,
+    pub discovery_triggered: u8,
     /// Explicit 1-byte alignment padding (`offset 31`).
     pub reserved_align: u8,
 }
 
-/// Evaluates Venn-diagram multi-attractor cognitive aperture overlap and noise-driven serendipity
+/// Evaluates set-overlap multi-attractor cognitive aperture overlap and noise-driven discovery
 /// in `Liminal` across the 8 SWAR granules (`0` allocations, `0` data-dependent branches).
 #[inline]
 #[must_use]
-pub fn evaluate_stigmergic_overlap_and_serendipity_words_64<Node: RelativeAttractorNode>(
+pub fn evaluate_stigmergic_overlap_and_discovery_words_64<Node: RelativeAttractorNode>(
     nodes: &[Node],
     query_words: &[u64; NUM_STIGMERGIC_GRANULES],
     noisy_drifted_words: &[u64; NUM_STIGMERGIC_GRANULES],
     aperture_floor: f32,
-    serendipity_floor_q7: u8,
-) -> StigmergicOverlapSerendipityReport {
+    discovery_floor_q7: u8,
+) -> OverlapDiscoveryReport {
     let safe_floor = branchless_max_f32(branchless_relu_f32(aperture_floor), DEFAULT_ENTROPY_EPS);
-    let safe_serendipity_floor = branchless_select_u8(
-        serendipity_floor_q7 < 4,
+    let safe_discovery_floor = branchless_select_u8(
+        discovery_floor_q7 < 4,
         4,
-        branchless_select_u8(serendipity_floor_q7 > 120, 120, serendipity_floor_q7),
+        branchless_select_u8(discovery_floor_q7 > 120, 120, discovery_floor_q7),
     );
 
     let mut overlap_counts = [0u8; NUM_STIGMERGIC_GRANULES];
@@ -247,43 +245,43 @@ pub fn evaluate_stigmergic_overlap_and_serendipity_words_64<Node: RelativeAttrac
         idx += 1;
     }
 
-    let mut venn_intersection_energy = 0.0_f32;
-    let mut penumbra_attenuation_energy = 0.0_f32;
-    let mut void_excursion_energy = 0.0_f32;
+    let mut overlap_core_energy = 0.0_f32;
+    let mut overlap_fringe_energy = 0.0_f32;
+    let mut lacuna_excursion_energy = 0.0_f32;
     let mut dominant_overlap_anchor_id = 0u32;
     let mut best_core_score = 0.0_f32;
     let mut best_any_anchor_id = 0u32;
     let mut best_any_pull = 0.0_f32;
-    let mut serendipitous_seed_word = 0u64;
-    let mut venn_core_mask = 0u8;
-    let mut venn_penumbra_mask = 0u8;
-    let mut void_exterior_mask = 0u8;
-    let mut serendipity_excursion_mask = 0u8;
+    let mut discovery_seed_word = 0u64;
+    let mut overlap_core_mask = 0u8;
+    let mut overlap_fringe_mask = 0u8;
+    let mut lacuna_exterior_mask = 0u8;
+    let mut discovery_excursion_mask = 0u8;
     let mut max_overlap_depth = 0u8;
     let mut best_serendip_q7 = 0u8;
-    let mut serendipitous_granule_idx = 0u8;
-    let mut serendipity_triggered = 0u8;
+    let mut discovery_granule_idx = 0u8;
+    let mut discovery_triggered = 0u8;
 
     let mut g = 0usize;
     while g < NUM_STIGMERGIC_GRANULES {
         let ov = overlap_counts[g];
         let bit = 1u8 << g;
         let is_core = ov >= 2;
-        let is_penumbra = ov == 1;
-        let is_void = ov == 0;
+        let is_fringe = ov == 1;
+        let is_lacuna = ov == 0;
 
-        venn_core_mask |= branchless_select_u8(is_core, bit, 0);
-        venn_penumbra_mask |= branchless_select_u8(is_penumbra, bit, 0);
-        void_exterior_mask |= branchless_select_u8(is_void, bit, 0);
+        overlap_core_mask |= branchless_select_u8(is_core, bit, 0);
+        overlap_fringe_mask |= branchless_select_u8(is_fringe, bit, 0);
+        lacuna_exterior_mask |= branchless_select_u8(is_lacuna, bit, 0);
 
         let depth_gt = ov > max_overlap_depth;
         max_overlap_depth = branchless_select_u8(depth_gt, ov, max_overlap_depth);
 
         let coop_factor = 1.0 + 0.35 * (f32::from(ov.saturating_sub(1)));
         let core_e = branchless_select_f32(is_core, granule_energy[g] * coop_factor, 0.0);
-        let pen_e = branchless_select_f32(is_penumbra, granule_energy[g] * 0.5, 0.0);
-        venn_intersection_energy += core_e;
-        penumbra_attenuation_energy += pen_e;
+        let pen_e = branchless_select_f32(is_fringe, granule_energy[g] * 0.5, 0.0);
+        overlap_core_energy += core_e;
+        overlap_fringe_energy += pen_e;
 
         let take_core_dom = is_core & (core_e > best_core_score);
         best_core_score = branchless_select_f32(take_core_dom, core_e, best_core_score);
@@ -292,50 +290,46 @@ pub fn evaluate_stigmergic_overlap_and_serendipity_words_64<Node: RelativeAttrac
             granule_best_anchor[g],
             dominant_overlap_anchor_id,
         );
-        let take_any_dom = (!is_void) & (granule_best_pull[g] > best_any_pull);
+        let take_any_dom = (!is_lacuna) & (granule_best_pull[g] > best_any_pull);
         best_any_pull = branchless_select_f32(take_any_dom, granule_best_pull[g], best_any_pull);
         best_any_anchor_id =
             branchless_select_u32(take_any_dom, granule_best_anchor[g], best_any_anchor_id);
 
         let drift_word = swar_q7_circular_diff_x8(noisy_drifted_words[g], query_words[g]);
         let drift_q7 = swar_u8_mean_round_x8(swar_q7_abs_u8_x8(drift_word));
-        let serendip = is_void & (drift_q7 >= safe_serendipity_floor);
-        serendipity_excursion_mask |= branchless_select_u8(serendip, bit, 0);
-        void_excursion_energy +=
-            branchless_select_f32(is_void, f32::from(drift_q7) * (1.0 / 127.0), 0.0);
+        let disc_hit = is_lacuna & (drift_q7 >= safe_discovery_floor);
+        discovery_excursion_mask |= branchless_select_u8(disc_hit, bit, 0);
+        lacuna_excursion_energy +=
+            branchless_select_f32(is_lacuna, f32::from(drift_q7) * (1.0 / 127.0), 0.0);
 
-        let take_serendip = serendip & (drift_q7 > best_serendip_q7);
+        let take_serendip = disc_hit & (drift_q7 > best_serendip_q7);
         best_serendip_q7 = branchless_select_u8(take_serendip, drift_q7, best_serendip_q7);
-        serendipitous_seed_word = branchless_select_u64(
-            take_serendip,
-            noisy_drifted_words[g],
-            serendipitous_seed_word,
-        );
-        serendipitous_granule_idx =
-            branchless_select_u8(take_serendip, g as u8, serendipitous_granule_idx);
-        serendipity_triggered |= u8::from(serendip);
+        discovery_seed_word =
+            branchless_select_u64(take_serendip, noisy_drifted_words[g], discovery_seed_word);
+        discovery_granule_idx = branchless_select_u8(take_serendip, g as u8, discovery_granule_idx);
+        discovery_triggered |= u8::from(disc_hit);
         g += 1;
     }
 
     let final_dom_id = branchless_select_u32(
-        venn_core_mask != 0,
+        overlap_core_mask != 0,
         dominant_overlap_anchor_id,
         best_any_anchor_id,
     );
 
-    StigmergicOverlapSerendipityReport {
-        venn_intersection_energy,
-        penumbra_attenuation_energy,
-        void_excursion_energy,
+    OverlapDiscoveryReport {
+        overlap_core_energy,
+        overlap_fringe_energy,
+        lacuna_excursion_energy,
         dominant_overlap_anchor_id: final_dom_id,
-        serendipitous_seed_word,
-        venn_core_mask,
-        venn_penumbra_mask,
-        void_exterior_mask,
-        serendipity_excursion_mask,
+        discovery_seed_word,
+        overlap_core_mask,
+        overlap_fringe_mask,
+        lacuna_exterior_mask,
+        discovery_excursion_mask,
         max_overlap_depth,
-        serendipitous_granule_idx,
-        serendipity_triggered,
+        discovery_granule_idx,
+        discovery_triggered,
         reserved_align: 0,
     }
 }
@@ -345,7 +339,7 @@ pub fn evaluate_stigmergic_overlap_and_serendipity_words_64<Node: RelativeAttrac
 // ===================================================================
 
 /// Autonomous Core Layer 1 controller (`#[repr(C, align(16))]`, 32 B) governing per-granule
-/// stigmergic approximation parameters, Venn-overlap reinforcement, and serendipitous noise discovery.
+/// stigmergic approximation parameters, overlap-overlap reinforcement, and emergent noise discovery.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StigmergicGranuleState {
@@ -355,14 +349,14 @@ pub struct StigmergicGranuleState {
     pub granule_noise_tolerance_q7: [u8; NUM_STIGMERGIC_GRANULES],
     /// Per-granule local terrain pheromone density in Q0.7 (`[8..=127]`, `offset 16..24`).
     pub granule_pheromone_q7: [u8; NUM_STIGMERGIC_GRANULES],
-    /// Active Venn overlap core mask across the 8 SWAR granules (`offset 24`).
-    pub venn_overlap_mask: u8,
+    /// Active set-overlap core mask across the 8 SWAR granules (`offset 24`).
+    pub overlap_mask: u8,
     /// Mask of granules whose approximation noise reached `Liminal` discovery (`offset 25`).
-    pub serendipity_excursion_mask: u8,
+    pub discovery_excursion_mask: u8,
     /// Adaptive granule consensus quorum requirement (`4..=7` out of 8, `offset 26`).
     pub quorum_threshold: u8,
     /// Q7 threshold above which noisy excursions in `Liminal` nucleate a new attractor (`offset 27`).
-    pub serendipity_floor_q7: u8,
+    pub discovery_floor_q7: u8,
     /// Monotonic count of Core Layer 1 self-adaptation epochs (`offset 28..32`).
     pub adaptation_epochs: u32,
 }
@@ -383,21 +377,21 @@ impl StigmergicGranuleState {
             granule_step_gain_q7: [96; NUM_STIGMERGIC_GRANULES],
             granule_noise_tolerance_q7: [4; NUM_STIGMERGIC_GRANULES],
             granule_pheromone_q7: [32; NUM_STIGMERGIC_GRANULES],
-            venn_overlap_mask: 0,
-            serendipity_excursion_mask: 0,
+            overlap_mask: 0,
+            discovery_excursion_mask: 0,
             quorum_threshold: DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
-            serendipity_floor_q7: 24,
+            discovery_floor_q7: 24,
             adaptation_epochs: 0,
         }
     }
 
     /// Branchlessly adapts per-granule pheromone gains, tolerated approximation noise, and
-    /// serendipity discovery floors from `in_conflict`, `overlap_report`, and `ledger`.
+    /// discovery discovery floors from `in_conflict`, `overlap_report`, and `ledger`.
     #[inline]
     pub fn adapt_from_conflict_and_overlap_branchless(
         &mut self,
         in_conflict: bool,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
         ledger: &CognitiveTrajectoryLedger,
     ) {
         let (op_hist, _depth) = ledger.op_counts();
@@ -406,9 +400,9 @@ impl StigmergicGranuleState {
         let mut g = 0usize;
         while g < NUM_STIGMERGIC_GRANULES {
             let bit = 1u8 << g;
-            let in_core = (venn_report.venn_core_mask & bit) != 0;
-            let in_penumbra = (venn_report.venn_penumbra_mask & bit) != 0;
-            let in_serendip = (venn_report.serendipity_excursion_mask & bit) != 0;
+            let in_core = (overlap_report.overlap_core_mask & bit) != 0;
+            let in_penumbra = (overlap_report.overlap_fringe_mask & bit) != 0;
+            let in_serendip = (overlap_report.discovery_excursion_mask & bit) != 0;
 
             let sg0 = self.granule_step_gain_q7[g];
             let sg_core = branchless_select_u8(in_core, sg0.saturating_add(6).min(127), sg0);
@@ -420,7 +414,7 @@ impl StigmergicGranuleState {
                 sg_ser,
             );
 
-            // High Venn overlap tolerates coarser low-spec noise; edge penumbra tightens precision.
+            // High set-overlap tolerates coarser low-spec noise; edge penumbra tightens precision.
             let nt0 = self.granule_noise_tolerance_q7[g];
             let nt_core = branchless_select_u8(in_core, nt0.saturating_add(2).min(28), nt0);
             let nt_pen =
@@ -442,7 +436,7 @@ impl StigmergicGranuleState {
         }
 
         let (_min_mask, min_cnt, core_le_noncore) =
-            branchless_mask8_min_delta(0xFF, venn_report.venn_core_mask);
+            branchless_mask8_min_delta(0xFF, overlap_report.overlap_core_mask);
         let core_cnt = branchless_select_u8(core_le_noncore, min_cnt, 8 - min_cnt);
         let core_ge_half = (!core_le_noncore) | (min_cnt == 4);
         self.quorum_threshold = branchless_select_u8(
@@ -454,17 +448,17 @@ impl StigmergicGranuleState {
                 self.quorum_threshold,
             ),
         );
-        self.serendipity_floor_q7 = branchless_select_u8(
+        self.discovery_floor_q7 = branchless_select_u8(
             in_conflict,
-            self.serendipity_floor_q7.saturating_add(4).min(64),
+            self.discovery_floor_q7.saturating_add(4).min(64),
             branchless_select_u8(
                 peel_dom & (core_cnt < 3),
-                self.serendipity_floor_q7.saturating_sub(2).max(12),
-                self.serendipity_floor_q7,
+                self.discovery_floor_q7.saturating_sub(2).max(12),
+                self.discovery_floor_q7,
             ),
         );
-        self.venn_overlap_mask = venn_report.venn_core_mask;
-        self.serendipity_excursion_mask = venn_report.serendipity_excursion_mask;
+        self.overlap_mask = overlap_report.overlap_core_mask;
+        self.discovery_excursion_mask = overlap_report.discovery_excursion_mask;
         self.adaptation_epochs = self.adaptation_epochs.wrapping_add(1);
     }
 
@@ -518,7 +512,7 @@ pub struct StigmergicFragmentEnsembleReport {
 }
 
 /// Uniform node abstraction enabling relative signed coupling and epistemic horizon evaluation
-/// across any attractor representation (`CrystallizedAttractorRecord`, `GatewayFrame`, `ObjectiveFact`, etc.).
+/// across any attractor representation (`PhaseAnchorRecord`, `GatewayFrame`, `ObjectiveFact`, etc.).
 pub trait RelativeAttractorNode {
     /// Static cognitive aperture mask for relative attractor participation.
     const RELATIVE_APERTURE_MASK: u32 = THRESHOLD_RELATIVE_COUPLING;
@@ -557,7 +551,7 @@ impl<T: RelativeAttractorNode + ?Sized> RelativeAttractorNode for &T {
     }
 }
 
-impl RelativeAttractorNode for CrystallizedAttractorRecord {
+impl RelativeAttractorNode for PhaseAnchorRecord {
     #[inline(always)]
     fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
@@ -572,7 +566,7 @@ impl RelativeAttractorNode for CrystallizedAttractorRecord {
     }
 }
 
-impl RelativeAttractorNode for gcso_pointer_trail_t {
+impl RelativeAttractorNode for PointerTrail {
     #[inline(always)]
     fn relative_phase_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *trail_phase_words_ref(self)
@@ -865,9 +859,25 @@ impl CorePrimitiveState {
 // SAFETY: `CorePrimitiveState` is `#[repr(C, align(64))]`, exact size 64 bytes with zero padding.
 unsafe impl Pod for CorePrimitiveState {}
 
-// SAFETY: `StigmergicOverlapSerendipityReport` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
-unsafe impl Pod for StigmergicOverlapSerendipityReport {}
+// SAFETY: `OverlapDiscoveryReport` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+unsafe impl Pod for OverlapDiscoveryReport {}
 // SAFETY: `StigmergicGranuleState` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
 unsafe impl Pod for StigmergicGranuleState {}
 // SAFETY: `StigmergicFragmentEnsembleReport` is `#[repr(C, align(16))]`, exact size 16 bytes with zero padding.
 unsafe impl Pod for StigmergicFragmentEnsembleReport {}
+
+const _: () = {
+    assert!(size_of::<OverlapDiscoveryReport>() == 32);
+    assert!(align_of::<OverlapDiscoveryReport>() == 16);
+    assert!(offset_of!(OverlapDiscoveryReport, overlap_core_energy) == 0);
+    assert!(offset_of!(OverlapDiscoveryReport, dominant_overlap_anchor_id) == 12);
+    assert!(offset_of!(OverlapDiscoveryReport, discovery_seed_word) == 16);
+    assert!(offset_of!(OverlapDiscoveryReport, overlap_core_mask) == 24);
+    assert!(offset_of!(OverlapDiscoveryReport, discovery_triggered) == 30);
+
+    assert!(size_of::<StigmergicGranuleState>() == 32);
+    assert!(align_of::<StigmergicGranuleState>() == 16);
+    assert!(offset_of!(StigmergicGranuleState, overlap_mask) == 24);
+    assert!(offset_of!(StigmergicGranuleState, discovery_excursion_mask) == 25);
+    assert!(offset_of!(StigmergicGranuleState, discovery_floor_q7) == 27);
+};

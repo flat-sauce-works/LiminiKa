@@ -18,11 +18,11 @@ use crate::foundation::{
     swar_q7_scale_le128_with_bias_x8, Pod, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, gcso_q7_t, AttributionTag, BitCut8,
-    EpistemicPartition, Scoped, ScopedCut, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
-    SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE, SCOPE_REGION_SHARED_CORE,
+    branchless_select_u32, branchless_select_u8, AttributionTag, BitCut8, LacunaPartition8,
+    PhaseQ7, Scoped, ScopedCut, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR, SCOPE_REGION_SELF_REF,
 };
-use crate::stigmergy::crystal::{CrystallizedAttractorRecord, PhaseProfile64};
+use crate::stigmergy::anchor::{PhaseAnchorRecord, PhaseProfile64};
 use crate::stigmergy::granule::StigmergicGranuleState;
 use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
@@ -35,7 +35,7 @@ pub const DISTORTION_DELTA_NO_NEXT_HOP: u16 = 0xFFFF;
 /// Default maximum hop depth allowed when evaluating branched [`DistortionDelta`] chains (`4`).
 pub const MAX_DISTORTION_CHAIN_HOPS: u8 = 4;
 
-/// Flag bit `0`: [`DistortionDelta`] node is active and eligible for Venn trigger matching.
+/// Flag bit `0`: [`DistortionDelta`] node is active and eligible for lacuna trigger matching.
 pub const DISTORTION_DELTA_FLAG_ACTIVE: u32 = 1 << 0;
 
 /// Flag bit `1`: [`DistortionDelta`] node was consolidated into an I-Frame crystal anchor.
@@ -57,10 +57,10 @@ pub struct DistortionDelta {
     pub next_hop_idx: u16,
     /// Hop depth along the chain (`1..=4`, `offset 10`).
     pub hop_depth: u8,
-    /// 8-granule Venn support bitmask required to trigger this delta (`offset 11`).
-    pub venn_trigger_mask: u8,
-    /// Bitmask of allowed Venn regions (`bit 0=S&O`, `bit 1=S\O`, `bit 2=O\S`, `offset 12`).
-    pub venn_region_selector: u8,
+    /// 8-granule lacuna support bitmask required to trigger this delta (`offset 11`).
+    pub lacuna_trigger_mask: u8,
+    /// Bitmask of allowed scope regions (`bit 0=S&O`, `bit 1=S\O`, `bit 2=O\S`, `offset 12`).
+    pub scope_region_selector: u8,
     /// Stigmergic trace density in Q0.7 (`0..=127`, `offset 13`).
     pub pheromone_q7: u8,
     /// Directed delta scaling gain in Q0.7 (`0..=127`, `offset 14`).
@@ -80,7 +80,7 @@ pub struct DistortionDelta {
     /// Reserved aligned header bytes (`offset 48..64`).
     pub reserved_header: [u8; 16],
     /// Model-baked 64-head gauge-relative phase delta $\vec{\Delta}_t$ (`offset 64..128`).
-    pub delta_phase_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub delta_phase_q7: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
 
 impl Default for DistortionDelta {
@@ -100,8 +100,8 @@ impl DistortionDelta {
             anchor_ref_id,
             next_hop_idx: DISTORTION_DELTA_NO_NEXT_HOP,
             hop_depth: 1,
-            venn_trigger_mask: 0xFF,
-            venn_region_selector: SCOPE_REGION_SHARED_CORE | SCOPE_REGION_SELF_EXCLUSIVE,
+            lacuna_trigger_mask: 0xFF,
+            scope_region_selector: SCOPE_REGION_SELF_REF | SCOPE_REGION_INTERIOR,
             pheromone_q7: 64,
             gain_q7: 64,
             attribution_tag: AttributionTag::STIGMERGY_EGO.raw(),
@@ -147,10 +147,10 @@ pub struct PFrameRoutingMeta {
     pub next_hop_idx: u16,
     /// Hop depth along the chain (`1..=4`, `offset 2`).
     pub hop_depth: u8,
-    /// 8-granule Venn support bitmask required to trigger this delta (`offset 3`).
-    pub venn_trigger_mask: u8,
-    /// Bitmask of allowed Venn regions (`bit 0=S&O`, `bit 1=S\O`, `bit 2=O\S`, `offset 4`).
-    pub venn_region_selector: u8,
+    /// 8-granule lacuna support bitmask required to trigger this delta (`offset 3`).
+    pub lacuna_trigger_mask: u8,
+    /// Bitmask of allowed scope regions (`bit 0=S&O`, `bit 1=S\O`, `bit 2=O\S`, `offset 4`).
+    pub scope_region_selector: u8,
     /// Stigmergic trace density in Q0.7 (`0..=127`, `offset 5`).
     pub pheromone_q7: u8,
     /// Directed delta scaling gain in Q0.7 (`0..=127`, `offset 6`).
@@ -160,7 +160,7 @@ pub struct PFrameRoutingMeta {
 }
 
 impl PFrameRoutingMeta {
-    /// Bit `2`: node is active and eligible for Venn trigger matching.
+    /// Bit `2`: node is active and eligible for lacuna trigger matching.
     pub const FLAG_ACTIVE_BIT: u8 = 1 << 2;
     /// Bit `3`: node was consolidated into an I-Frame crystal anchor.
     pub const FLAG_CONSOLIDATED_BIT: u8 = 1 << 3;
@@ -176,8 +176,8 @@ impl PFrameRoutingMeta {
         Self {
             next_hop_idx: DISTORTION_DELTA_NO_NEXT_HOP,
             hop_depth: 1,
-            venn_trigger_mask: 0xFF,
-            venn_region_selector: SCOPE_REGION_SHARED_CORE | SCOPE_REGION_SELF_EXCLUSIVE,
+            lacuna_trigger_mask: 0xFF,
+            scope_region_selector: SCOPE_REGION_SELF_REF | SCOPE_REGION_INTERIOR,
             pheromone_q7: 64,
             gain_q7: 64,
             flags_and_tag: AttributionTag::STIGMERGY_EGO.raw() & Self::TAG_MASK,
@@ -333,11 +333,11 @@ unsafe impl Pod for PFrameColdMeta {}
 
 /// Inline fixed-capacity (`8` nodes, `0` heap allocations) non-parametric P-Frame residual
 /// neural network evaluating directed [`DistortionDelta`] pointer chains (up to `max_hops`
-/// in `1..=4`) triggered by Venn region support and stigmergic density.
+/// in `1..=4`) triggered by scope region support and stigmergic density.
 ///
 /// Stored in Structure-of-Arrays (SoA) cacheline layout (`896 B`, `#[repr(C, align(64))]`):
 /// - CL0 (`0..64`): `node_routing` (`[PFrameRoutingMeta; 8]`) for 1-CL Hot-Path screening
-/// - CL1..8 (`64..576`): `node_phases` (`[[gcso_q7_t; 64]; 8]`) for zero-copy ensemble evaluation
+/// - CL1..8 (`64..576`): `node_phases` (`[[PhaseQ7; 64]; 8]`) for zero-copy ensemble evaluation
 /// - CL9..12 (`576..832`): `node_cold` (`[PFrameColdMeta; 8]`) for Cold-Path rebake/consolidation
 /// - CL13 (`832..896`): network control scalars
 #[repr(C, align(64))]
@@ -346,7 +346,7 @@ pub struct EgoDifferentialNet {
     /// Hot-path routing and gating metadata (`64 B` = CL0 `0..64`).
     pub node_routing: [PFrameRoutingMeta; MAX_EGO_PFRAME_NODES],
     /// Contiguous 64-head Q7 delta profiles (`512 B` = CL1..8 `64..576`).
-    pub node_phases: [[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_EGO_PFRAME_NODES],
+    pub node_phases: [[PhaseQ7; MAX_ATTENTION_HEADS]; MAX_EGO_PFRAME_NODES],
     /// Cold-path intent, anchor, and epoch metadata (`256 B` = CL9..12 `576..832`).
     pub node_cold: [PFrameColdMeta; MAX_EGO_PFRAME_NODES],
     /// Monotonic Cold-Path maintenance epoch counter (`offset 832..836`).
@@ -414,6 +414,38 @@ impl EgoDifferentialNet {
         }
     }
 
+    /// Initializes a zeroed `dst` allocation of [`EgoDifferentialNet`] in-place without
+    /// materializing the full 896-byte struct on the stack.
+    ///
+    /// # Safety
+    /// Caller must ensure `dst` points to writable, zero-initialized, properly aligned memory
+    /// for one `EgoDifferentialNet`.
+    #[inline]
+    pub unsafe fn init_in_place_on_zeroed(dst: *mut Self, max_hops: u8) {
+        let clamped_hops = if max_hops == 0 {
+            1
+        } else if max_hops > MAX_DISTORTION_CHAIN_HOPS {
+            MAX_DISTORTION_CHAIN_HOPS
+        } else {
+            max_hops
+        };
+        // SAFETY: Caller guarantees `dst` is valid, writable, aligned, and zero-initialized.
+        unsafe {
+            let routing_ptr = core::ptr::addr_of_mut!((*dst).node_routing);
+            let mut idx = 0usize;
+            while idx < MAX_EGO_PFRAME_NODES {
+                core::ptr::write(
+                    (*routing_ptr).as_mut_ptr().add(idx),
+                    PFrameRoutingMeta::new_empty(),
+                );
+                idx += 1;
+            }
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).max_hops), clamped_hops);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).consolidation_hop_limit), 3);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).evaporation_floor_q7), 16);
+        }
+    }
+
     /// Returns `true` when slot `idx` is active in both `active_node_mask` and routing metadata.
     #[inline(always)]
     #[must_use]
@@ -448,8 +480,8 @@ impl EgoDifferentialNet {
             anchor_ref_id: c.anchor_ref_id,
             next_hop_idx: r.next_hop_idx,
             hop_depth: r.hop_depth,
-            venn_trigger_mask: r.venn_trigger_mask,
-            venn_region_selector: r.venn_region_selector,
+            lacuna_trigger_mask: r.lacuna_trigger_mask,
+            scope_region_selector: r.scope_region_selector,
             pheromone_q7: r.pheromone_q7,
             gain_q7: r.gain_q7,
             attribution_tag: r.attribution_tag(),
@@ -472,8 +504,8 @@ impl EgoDifferentialNet {
         self.node_routing[idx] = PFrameRoutingMeta {
             next_hop_idx: delta.next_hop_idx,
             hop_depth: delta.hop_depth,
-            venn_trigger_mask: delta.venn_trigger_mask,
-            venn_region_selector: delta.venn_region_selector,
+            lacuna_trigger_mask: delta.lacuna_trigger_mask,
+            scope_region_selector: delta.scope_region_selector,
             pheromone_q7: delta.pheromone_q7,
             gain_q7: delta.gain_q7,
             flags_and_tag: PFrameRoutingMeta::pack_flags_and_tag(
@@ -515,11 +547,11 @@ impl EgoDifferentialNet {
             return net;
         }
 
-        let make_phase = |base: &[gcso_q7_t; NUM_STIGMERGIC_GRANULES],
+        let make_phase = |base: &[PhaseQ7; NUM_STIGMERGIC_GRANULES],
                           shift: i8,
                           flip_odd: bool|
-         -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
-            let mut out = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
+         -> [PhaseQ7; MAX_ATTENTION_HEADS] {
+            let mut out = [0 as PhaseQ7; MAX_ATTENTION_HEADS];
             let mut g = 0usize;
             while g < NUM_STIGMERGIC_GRANULES {
                 let gval = i32::from(base[g]);
@@ -533,7 +565,7 @@ impl EgoDifferentialNet {
                 let mut k = 0usize;
                 while k < 8 {
                     let mod_off = ((k as i32) - 3) * (i32::from(shift) >> 4);
-                    out[base_h + k] = (i32::from(s) + mod_off).clamp(-127, 127) as gcso_q7_t;
+                    out[base_h + k] = (i32::from(s) + mod_off).clamp(-127, 127) as PhaseQ7;
                     k += 1;
                 }
                 g += 1;
@@ -544,12 +576,12 @@ impl EgoDifferentialNet {
         let mut n0 = DistortionDelta::new_empty(1, u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE) + 1);
         n0.next_hop_idx = 1;
         n0.hop_depth = 1;
-        n0.venn_trigger_mask = if axes.active_granule_bias_mask == 0 {
+        n0.lacuna_trigger_mask = if axes.active_granule_bias_mask == 0 {
             0xFF
         } else {
             axes.active_granule_bias_mask
         };
-        n0.venn_region_selector = SCOPE_REGION_SHARED_CORE;
+        n0.scope_region_selector = SCOPE_REGION_SELF_REF;
         n0.pheromone_q7 = 88;
         n0.gain_q7 = ego.counter_basin_thrust_q7.clamp(32, 127);
         n0.intent_delta = *axes;
@@ -559,8 +591,8 @@ impl EgoDifferentialNet {
         let mut n1 = DistortionDelta::new_empty(2, u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE) + 2);
         n1.next_hop_idx = 2;
         n1.hop_depth = 2;
-        n1.venn_trigger_mask = 0xAA;
-        n1.venn_region_selector = SCOPE_REGION_SHARED_CORE | SCOPE_REGION_SELF_EXCLUSIVE;
+        n1.lacuna_trigger_mask = 0xAA;
+        n1.scope_region_selector = SCOPE_REGION_SELF_REF | SCOPE_REGION_INTERIOR;
         n1.pheromone_q7 = 76;
         n1.gain_q7 = ego.irrational_defiance_q7.clamp(24, 127);
         n1.intent_delta = *axes;
@@ -574,9 +606,9 @@ impl EgoDifferentialNet {
         let mut n2 = DistortionDelta::new_empty(3, u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE) + 3);
         n2.next_hop_idx = DISTORTION_DELTA_NO_NEXT_HOP;
         n2.hop_depth = 3;
-        n2.venn_trigger_mask = 0x55;
-        n2.venn_region_selector =
-            SCOPE_REGION_KNOWN_UNKNOWN | SCOPE_REGION_SELF_EXCLUSIVE | SCOPE_REGION_SHARED_CORE;
+        n2.lacuna_trigger_mask = 0x55;
+        n2.scope_region_selector =
+            SCOPE_REGION_EXTERIOR | SCOPE_REGION_INTERIOR | SCOPE_REGION_SELF_REF;
         n2.pheromone_q7 = 64;
         n2.gain_q7 = ego.transgression_bias_q7.unsigned_abs().clamp(24, 127);
         n2.intent_delta = *axes;
@@ -641,14 +673,14 @@ impl EgoDifferentialNet {
     }
 
     /// Cold-Path GOP maintenance: consolidates reinforced multi-hop P-Frame chains into an I-Frame
-    /// [`CrystallizedAttractorRecord`] and evaporates stale unreinforced P-Frame nodes below `evaporation_floor_q7`.
+    /// [`PhaseAnchorRecord`] and evaporates stale unreinforced P-Frame nodes below `evaporation_floor_q7`.
     #[inline]
     pub fn consolidate_and_evaporate_cold_path(
         &mut self,
         current_epoch: u32,
-    ) -> Option<CrystallizedAttractorRecord> {
+    ) -> Option<PhaseAnchorRecord> {
         self.epoch = current_epoch;
-        let mut crystallized: Option<CrystallizedAttractorRecord> = None;
+        let mut crystallized: Option<PhaseAnchorRecord> = None;
 
         for (idx, ((routing, phases), cold)) in self
             .node_routing
@@ -682,7 +714,7 @@ impl EgoDifferentialNet {
                     ScopedCut::Unmarked(_) | ScopedCut::Bottom(_) => None,
                 };
                 if let Some(grounded) = grounded_profile {
-                    let rec = CrystallizedAttractorRecord::from_grounded_delta_64(
+                    let rec = PhaseAnchorRecord::from_grounded_delta_64(
                         cold.anchor_ref_id,
                         ATTRACTOR_SLOT_SYSTEM_BASELINE,
                         cold.reinforce_count,
@@ -710,7 +742,7 @@ impl EgoDifferentialNet {
     /// `DistortionTension`, and `GatewayFrame`.
     ///
     /// - When `self.max_hops <= 1`, executes the **1-Hop Parallel Perspective Ensemble**: evaluates
-    ///   all active baked nodes against `epistemic` in parallel, accumulates weighted per-head
+    ///   all active baked nodes against `partition` in parallel, accumulates weighted per-head
     ///   Q7 deltas in `i32`, and normalizes by an integer reciprocal LUT (`0 fdiv`, `0` heap alloc)
     ///   before circular Q7 addition onto `base_words`.
     /// - When `self.max_hops >= 2`, executes the **Multi-Hop Sequential Chain**: selects the
@@ -723,7 +755,7 @@ impl EgoDifferentialNet {
     pub fn evaluate_pframe_words_branchless(
         &self,
         ego: &LiminalEgoState,
-        epistemic: &EpistemicPartition,
+        partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         effective_ego_scale_q7: u8,
         base_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -733,28 +765,19 @@ impl EgoDifferentialNet {
         }
 
         let region_bits =
-            branchless_select_u8(epistemic.shared_core_mask != 0, SCOPE_REGION_SHARED_CORE, 0)
-                | branchless_select_u8(
-                    epistemic.self_exclusive_mask != 0,
-                    SCOPE_REGION_SELF_EXCLUSIVE,
-                    0,
-                )
-                | branchless_select_u8(
-                    epistemic.known_unknown_mask != 0,
-                    SCOPE_REGION_KNOWN_UNKNOWN,
-                    0,
-                );
+            branchless_select_u8(partition.self_ref_mask != 0, SCOPE_REGION_SELF_REF, 0)
+                | branchless_select_u8(partition.interior_mask != 0, SCOPE_REGION_INTERIOR, 0)
+                | branchless_select_u8(partition.exterior_mask != 0, SCOPE_REGION_EXTERIOR, 0);
         let region_fallback = branchless_select_u8(
             region_bits != 0,
             region_bits,
-            SCOPE_REGION_SHARED_CORE | SCOPE_REGION_SELF_EXCLUSIVE,
+            SCOPE_REGION_SELF_REF | SCOPE_REGION_INTERIOR,
         );
-        let combined_support = epistemic.shared_core_mask
-            | epistemic.self_exclusive_mask
-            | epistemic.known_unknown_mask;
+        let combined_support =
+            partition.self_ref_mask | partition.interior_mask | partition.exterior_mask;
         let support_mask = branchless_select_u8(combined_support != 0, combined_support, 0xFF);
 
-        let sens_boost_q7 = u32::from(epistemic.boundary_sensitivity_q7).max(48);
+        let sens_boost_q7 = u32::from(partition.boundary_sensitivity_q7).max(48);
         let eff_scale = u32::from(effective_ego_scale_q7);
         let mut ph_sum = 0u32;
         for &ph in stigmergy
@@ -778,8 +801,8 @@ impl EgoDifferentialNet {
             {
                 let active = ((self.active_node_mask >> i) & 1) != 0 && routing.is_baked_active();
                 let reg_ok =
-                    BitCut8::split(routing.venn_region_selector, region_fallback).inside != 0;
-                let trig_ok = BitCut8::split(routing.venn_trigger_mask, support_mask).inside != 0;
+                    BitCut8::split(routing.scope_region_selector, region_fallback).inside != 0;
+                let trig_ok = BitCut8::split(routing.lacuna_trigger_mask, support_mask).inside != 0;
                 if active && reg_ok && trig_ok {
                     matched_mask |= 1u8 << i;
                     let hop_weight_q7 =
@@ -813,8 +836,8 @@ impl EgoDifferentialNet {
             .take(MAX_EGO_PFRAME_NODES)
         {
             let active = ((self.active_node_mask >> i) & 1) != 0 && routing.is_baked_active();
-            let reg_ok = BitCut8::split(routing.venn_region_selector, region_fallback).inside != 0;
-            let trig_overlap = BitCut8::split(routing.venn_trigger_mask, support_mask)
+            let reg_ok = BitCut8::split(routing.scope_region_selector, region_fallback).inside != 0;
+            let trig_overlap = BitCut8::split(routing.lacuna_trigger_mask, support_mask)
                 .inside
                 .count_ones();
             let score = if active && reg_ok && trig_overlap > 0 {
@@ -897,21 +920,21 @@ mod tests {
             .with_transgression_q7(48);
         let mut net_1 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 1);
         let net_3 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 3);
-        let epistemic = EpistemicPartition {
-            shared_core_mask: 0x0F,
-            self_exclusive_mask: 0x30,
-            known_unknown_mask: 0x40,
-            true_void_mask: 0x80,
+        let partition = LacunaPartition8 {
+            self_ref_mask: 0x0F,
+            interior_mask: 0x30,
+            exterior_mask: 0x40,
+            unobserved_mask: 0x80,
             boundary_sensitivity_q7: 96,
-            ..EpistemicPartition::default()
+            ..LacunaPartition8::default()
         };
         let stig = StigmergicGranuleState::new();
         let base_words = [0u64; NUM_STIGMERGIC_GRANULES];
 
         let (w1, norm1, hops1, entry1, mask1) =
-            net_1.evaluate_pframe_words_branchless(&ego, &epistemic, &stig, 96, &base_words);
+            net_1.evaluate_pframe_words_branchless(&ego, &partition, &stig, 96, &base_words);
         let (w3, _norm3, hops3, _entry3, mask3) =
-            net_3.evaluate_pframe_words_branchless(&ego, &epistemic, &stig, 96, &base_words);
+            net_3.evaluate_pframe_words_branchless(&ego, &partition, &stig, 96, &base_words);
 
         assert_eq!(hops1, 1);
         assert!(norm1 > 0);

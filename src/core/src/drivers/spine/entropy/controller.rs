@@ -10,7 +10,7 @@ use crate::drivers::spine::entropy::kernels::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_temperature_for_mode,
 };
 use crate::drivers::spine::entropy::{
-    gcso_edbc_state_t, DEFAULT_BIFURCATION_THRESHOLD, DEFAULT_HYSTERESIS_BAND,
+    EntropyState, DEFAULT_BIFURCATION_THRESHOLD, DEFAULT_HYSTERESIS_BAND,
     DEFAULT_SAMPLE_TEMPERATURE, DEFAULT_SINGULARITY_EPS, DEFAULT_TAU_FLUX, EMA_ALPHA_ENTROPY,
     ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
     ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION, ENTROPY_GATE_SLIDING_WINDOW_HORIZON,
@@ -20,64 +20,68 @@ use crate::drivers::spine::entropy::{
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_relu_f32, branchless_sanitize_z_score_f32,
-    fast_inv_len_f32, fast_inv_pos_normal_f32, gcso_tagged_ptr_t, sum_sq_f32_simd8, AlignedSlice32,
-    Pod, ATTRACTOR_SLOT_ID_MASK, F32_MIN_POSITIVE_NORMAL,
+    fast_inv_len_f32, fast_inv_pos_normal_f32, sum_sq_f32_simd8, AlignedSlice32, Pod, TaggedPtr,
+    ATTRACTOR_SLOT_ID_MASK, F32_MIN_POSITIVE_NORMAL,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, GcsoResult,
-    GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
+    branchless_select_f32, branchless_select_u32, branchless_select_u8, LmnkResult,
+    LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
 };
 
-/// `EntropyController` stateful engine (128 bytes = 2 cachelines, 32B aligned).
-#[repr(C, align(32))]
+/// `EntropyController` stateful engine (128 bytes = 2 cache lines, 64B aligned).
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EntropyController {
-    /// Active C-ABI `EntropyController` state descriptor (64 bytes, 32-byte aligned).
-    pub state: gcso_edbc_state_t,
-    /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds.
-    pub hysteresis_band: f32,
-    /// Threshold for sliding-window entropy rate flux ($\tau_{\mathrm{flux}}$).
-    pub tau_flux: f32,
-    /// Fixed-size 8-slot ring buffer for Sliding-Window Entropy Rate Integrator ($\Phi_M(t)$, $M=5$).
-    pub(crate) window_buf: [f32; ENTROPY_GATE_WINDOW_RING_CAPACITY],
-    /// Total stateful evaluation steps processed.
+    /// Active C-ABI `EntropyController` state descriptor (32 bytes, 32-byte aligned, `offset 0..32`).
+    pub state: EntropyState,
+    /// Total stateful evaluation steps processed (`offset 32..40`).
     pub step_count: u64,
-    /// Consecutive token steps spent in the currently active branch mode.
+    /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds (`offset 40..44`).
+    pub hysteresis_band: f32,
+    /// Threshold for sliding-window entropy rate flux ($\tau_{\mathrm{flux}}$, `offset 44..48`).
+    pub tau_flux: f32,
+    /// Consecutive token steps spent in the currently active branch mode (`offset 48..52`).
     pub mode_dwell_steps: u32,
-    /// Minimum token dwell steps required before relaxing to a lower branch mode (`0` = immediate).
+    /// Minimum token dwell steps required before relaxing to a lower branch mode (`0` = immediate, `offset 52..56`).
     pub min_mode_dwell_steps: u32,
-    /// Ring buffer write index (`0..=255`, masked with `& 7`).
+    /// Ring buffer write index (`0..=255`, masked with `& 7`, `offset 56`).
     pub(crate) window_idx: u8,
-    /// Number of valid elements currently populated in `window_buf` (`0..=8`).
+    /// Number of valid elements currently populated in `window_buf` (`0..=8`, `offset 57`).
     pub(crate) window_len: u8,
-    /// Controller active lifecycle flag (`1` = active, `0` = passive).
+    /// Controller active lifecycle flag (`1` = active, `0` = passive, `offset 58`).
     pub is_active: bool,
-    /// Explicit alignment padding to guarantee exact 128-byte (2-cacheline) POD layout.
-    pub(crate) reserved_pad: [u8; 5],
+    /// Explicit cache-line 0 padding (`offset 59..64`).
+    pub(crate) reserved_cl0: [u8; 5],
+    /// Fixed-size 8-slot ring buffer for Sliding-Window Entropy Rate Integrator ($\Phi_M(t)$, $M=5$, `offset 64..96`).
+    pub(crate) window_buf: [f32; ENTROPY_GATE_WINDOW_RING_CAPACITY],
+    /// Explicit cache-line 1 reserved expansion space (`offset 96..128`).
+    pub(crate) reserved_cl1: [u8; 32],
 }
 
-// SAFETY: `EntropyController` is `#[repr(C, align(32))]` of size 128 bytes where every field is `Pod`.
+// SAFETY: `EntropyController` is `#[repr(C, align(64))]` of size 128 bytes where every field is `Pod`.
 unsafe impl Pod for EntropyController {}
 
 const _: () = {
     assert!(size_of::<EntropyController>() == 128);
-    assert!(align_of::<EntropyController>() == 32);
+    assert!(align_of::<EntropyController>() == 64);
     assert!(offset_of!(EntropyController, state) == 0);
-    assert!(offset_of!(EntropyController, hysteresis_band) == 64);
-    assert!(offset_of!(EntropyController, tau_flux) == 68);
-    assert!(offset_of!(EntropyController, window_buf) == 72);
-    assert!(offset_of!(EntropyController, step_count) == 104);
-    assert!(offset_of!(EntropyController, mode_dwell_steps) == 112);
-    assert!(offset_of!(EntropyController, min_mode_dwell_steps) == 116);
-    assert!(offset_of!(EntropyController, window_idx) == 120);
-    assert!(offset_of!(EntropyController, window_len) == 121);
-    assert!(offset_of!(EntropyController, is_active) == 122);
+    assert!(offset_of!(EntropyController, step_count) == 32);
+    assert!(offset_of!(EntropyController, hysteresis_band) == 40);
+    assert!(offset_of!(EntropyController, tau_flux) == 44);
+    assert!(offset_of!(EntropyController, mode_dwell_steps) == 48);
+    assert!(offset_of!(EntropyController, min_mode_dwell_steps) == 52);
+    assert!(offset_of!(EntropyController, window_idx) == 56);
+    assert!(offset_of!(EntropyController, window_len) == 57);
+    assert!(offset_of!(EntropyController, is_active) == 58);
+    assert!(offset_of!(EntropyController, reserved_cl0) == 59);
+    assert!(offset_of!(EntropyController, window_buf) == 64);
+    assert!(offset_of!(EntropyController, reserved_cl1) == 96);
 };
 
 impl EntropyController {
     /// Constructs a new [`EntropyController`] with sanitized initial state configuration in branchless mode.
     #[inline(always)]
-    pub const fn new(mut initial_state: gcso_edbc_state_t) -> Self {
+    pub const fn new(mut initial_state: EntropyState) -> Self {
         let valid_bif = branchless_is_finite_f32(initial_state.bifurcation_threshold)
             & (initial_state.bifurcation_threshold > 0.0);
         initial_state.bifurcation_threshold = branchless_select_f32(
@@ -104,16 +108,17 @@ impl EntropyController {
 
         Self {
             state: initial_state,
+            step_count: 0,
             hysteresis_band: DEFAULT_HYSTERESIS_BAND,
             tau_flux: DEFAULT_TAU_FLUX,
-            window_buf: [0.0; ENTROPY_GATE_WINDOW_RING_CAPACITY],
-            step_count: 0,
             mode_dwell_steps: 0,
             min_mode_dwell_steps: 0,
             window_idx: 0,
             window_len: 0,
             is_active: true,
-            reserved_pad: [0; 5],
+            reserved_cl0: [0; 5],
+            window_buf: [0.0; ENTROPY_GATE_WINDOW_RING_CAPACITY],
+            reserved_cl1: [0; 32],
         }
     }
 
@@ -127,7 +132,7 @@ impl EntropyController {
 
     /// Returns the current active C-ABI state descriptor snapshot.
     #[inline(always)]
-    pub const fn state(&self) -> gcso_edbc_state_t {
+    pub const fn state(&self) -> EntropyState {
         self.state
     }
 
@@ -327,6 +332,7 @@ impl EntropyController {
         self.state.repulsion_gain = src.state.repulsion_gain;
         self.state.sample_temperature = src.state.sample_temperature;
         self.state.active_branch_mode = src.state.active_branch_mode;
+        self.state.flags = src.state.flags;
         self.hysteresis_band = src.hysteresis_band;
         self.tau_flux = src.tau_flux;
         let mut i = 0usize;
@@ -394,13 +400,13 @@ impl EntropyController {
     }
 
     /// Internal register-pipelined implementation of `eval_stateful` assuming `token_z_score`
-    /// has already been verified finite, writing only the 7 active scalar fields (28 bytes) into
-    /// `state_out` without copying the 36-byte `reserved` padding array.
+    /// has already been verified finite, writing only the active scalar fields into
+    /// `state_out` with width-matched stores (`flags` preserved).
     #[inline(always)]
     fn eval_stateful_finite_into(
         &mut self,
         token_z_score: f32,
-        state_out: &mut gcso_edbc_state_t,
+        state_out: &mut EntropyState,
     ) -> f32 {
         let current_mode = self.state.active_branch_mode;
         let tau = self.state.bifurcation_threshold;
@@ -479,21 +485,21 @@ impl EntropyController {
         new_entropy
     }
 
-    /// Internal register-pipelined implementation of `eval_stateful_with_liminal_void_and_pointer`
-    /// assuming `token_z_score` and `void_score` have already been verified finite.
+    /// Internal register-pipelined implementation of `eval_stateful_with_lacuna_and_pointer`
+    /// assuming `token_z_score` and `lacuna_score` have already been verified finite.
     #[inline]
-    fn eval_stateful_with_liminal_void_and_pointer_finite(
+    fn eval_stateful_with_lacuna_and_pointer_finite(
         &mut self,
         token_z_score: f32,
-        void_score: f32,
+        lacuna_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         trail_density: f32,
         dominant_attractor_slot: u8,
         high_density_rank1_thresh: f32,
-    ) -> (gcso_edbc_state_t, gcso_tagged_ptr_t) {
+    ) -> (EntropyState, TaggedPtr) {
         let prev_mode = self.state.active_branch_mode;
         let prev_dwell = self.mode_dwell_steps;
         let min_dwell = self.min_mode_dwell_steps;
@@ -508,7 +514,7 @@ impl EntropyController {
             prev_mode,
             new_entropy,
             sliding_rate,
-            void_score,
+            lacuna_score,
             tau,
             tau_flux,
             delta,
@@ -539,7 +545,7 @@ impl EntropyController {
             resolved_mode,
             DEFAULT_SAMPLE_TEMPERATURE,
             new_entropy,
-            void_score,
+            lacuna_score,
             tau,
             alpha,
             beta,
@@ -555,7 +561,7 @@ impl EntropyController {
         self.mode_dwell_steps = final_dwell;
         self.step_count = self.step_count.wrapping_add(1);
 
-        let out_state = gcso_edbc_state_t {
+        let out_state = EntropyState {
             moving_z_entropy: new_entropy,
             bifurcation_threshold: tau,
             singularity_eps: eps,
@@ -563,37 +569,37 @@ impl EntropyController {
             repulsion_gain: rep_gain,
             sample_temperature: sample_temp,
             active_branch_mode: resolved_mode,
-            reserved: [0u8; 36],
+            flags: self.state.flags,
         };
         (out_state, evolved_ptr)
     }
 
-    /// Executes a single-writeback stateful `EntropyController` step coupled with $\mathcal{C}_{\mathrm{void}}$
-    /// dual-branch routing (Section 3.3), dwell-step anti-chattering inertia across all downward
+    /// Executes a single-writeback stateful `EntropyController` step coupled with $\mathcal{C}_{\mathrm{lacuna}}$
+    /// dual-branch routing, dwell-step anti-chattering inertia across all downward
     /// transitions (`candidate_mode < prev_mode`), Eyring-Kramers temperature modulation, and
-    /// $\mathcal{O}(1)$ [`gcso_tagged_ptr_t`] mode evolution.
+    /// $\mathcal{O}(1)$ [`TaggedPtr`] mode evolution.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` or `void_score` is non-finite.
+    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if `token_z_score` or `lacuna_score` is non-finite.
     #[inline(always)]
-    pub fn eval_stateful_with_liminal_void_and_pointer(
+    pub fn eval_stateful_with_lacuna_and_pointer(
         &mut self,
         token_z_score: f32,
-        void_score: f32,
+        lacuna_score: f32,
         alpha: f32,
         beta: f32,
         d0: f32,
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         trail_density: f32,
         dominant_attractor_slot: u8,
         high_density_rank1_thresh: f32,
-    ) -> GcsoResult<(gcso_edbc_state_t, gcso_tagged_ptr_t)> {
-        if !branchless_is_finite_f32(token_z_score) || !branchless_is_finite_f32(void_score) {
-            return Err(GCSO_ERROR_EDBC_SINGULARITY);
+    ) -> LmnkResult<(EntropyState, TaggedPtr)> {
+        if !branchless_is_finite_f32(token_z_score) || !branchless_is_finite_f32(lacuna_score) {
+            return Err(LMNK_ERR_ENTROPY_SINGULARITY);
         }
-        Ok(self.eval_stateful_with_liminal_void_and_pointer_finite(
+        Ok(self.eval_stateful_with_lacuna_and_pointer_finite(
             token_z_score,
-            void_score,
+            lacuna_score,
             alpha,
             beta,
             d0,
@@ -621,8 +627,8 @@ impl EntropyController {
         sigma_dist: f32,
         alpha_z: f32,
         gamma_mod: f32,
-        state_out: &mut gcso_edbc_state_t,
-    ) -> GcsoResult<f32> {
+        state_out: &mut EntropyState,
+    ) -> LmnkResult<f32> {
         let eps = self.state.singularity_eps;
         let h_surr = compute_sparse_surrogate_entropy(p_max, p_2nd, eps);
         let h_tilde = compute_moving_z_score_entropy(
@@ -641,7 +647,7 @@ impl EntropyController {
 impl Default for EntropyController {
     #[inline(always)]
     fn default() -> Self {
-        Self::new(gcso_edbc_state_t::default())
+        Self::new(EntropyState::default())
     }
 }
 
@@ -672,59 +678,59 @@ impl EntropyController {
     /// in a single register-pipelined pass with a 3-`cmov` state machine and zero Store-to-Load stalls.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if `token_z_score` is `NaN` or `Inf`.
+    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if `token_z_score` is `NaN` or `Inf`.
     #[inline(always)]
     pub fn eval_stateful(
         &mut self,
         token_z_score: f32,
-        state_out: &mut gcso_edbc_state_t,
-    ) -> GcsoResult<()> {
+        state_out: &mut EntropyState,
+    ) -> LmnkResult<()> {
         if !branchless_is_finite_f32(token_z_score) {
-            return Err(GCSO_ERROR_EDBC_SINGULARITY);
+            return Err(LMNK_ERR_ENTROPY_SINGULARITY);
         }
         let _ = self.eval_stateful_finite_into(token_z_score, state_out);
         Ok(())
     }
 
-    /// Computes $\mathcal{C}_{\mathrm{void}}$ mean-square latent energy over a 32-byte aligned Key vector
+    /// Computes $\mathcal{E}_{\mathrm{lat}}$ mean-square latent energy over a 32-byte aligned Key vector
     /// using the AVX2 tree-reduced accumulator (`sum_sq_f32_simd8`) and division-free reciprocal scaling.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `key_vector` is empty.
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if the accumulated sum-of-squares is `NaN` or `Inf`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `key_vector` is empty.
+    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if the accumulated sum-of-squares is `NaN` or `Inf`.
     #[inline(always)]
-    pub fn eval_liminal_void_dyadic128(
+    pub fn eval_lacuna_energy_dyadic128(
         &self,
         key_vector: &AlignedSlice32<'_, f32>,
-        void_score_out: &mut f32,
-    ) -> GcsoResult<()> {
+        lacuna_score_out: &mut f32,
+    ) -> LmnkResult<()> {
         let slice = key_vector.as_slice();
         let len = slice.len();
         if len == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let sum_sq = sum_sq_f32_simd8(slice);
         if !branchless_is_finite_f32(sum_sq) {
-            return Err(GCSO_ERROR_EDBC_SINGULARITY);
+            return Err(LMNK_ERR_ENTROPY_SINGULARITY);
         }
-        *void_score_out = branchless_flush_subnormal_f32(sum_sq * fast_inv_len_f32(len));
+        *lacuna_score_out = branchless_flush_subnormal_f32(sum_sq * fast_inv_len_f32(len));
         Ok(())
     }
 
     /// Calculates Eyring-Kramers potential barrier height:
-    /// $\Delta V = \min\left(\frac{\tau_{\mathrm{eff}}}{\max(0, \mathcal{C}_{\mathrm{void}}) + \epsilon_{\mathrm{log}}}, \Delta V_{\max}\right)$
+    /// $\Delta V = \min\left(\frac{\tau_{\mathrm{eff}}}{\max(0, \mathcal{E}_{\mathrm{lat}}) + \epsilon_{\mathrm{log}}}, \Delta V_{\max}\right)$
     /// in division-free (`0 fdiv`) mode, clamping `denom` to `F32_MIN_POSITIVE_NORMAL` and
     /// evaluating `fast_inv_pos_normal_f32` to eliminate subnormal-branch jitter near epsilon singularities.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if inputs are non-finite or `tau_eff <= 0.0`.
+    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if inputs are non-finite or `tau_eff <= 0.0`.
     #[inline(always)]
-    pub fn eval_barrier(&self, void_score: f32, tau_eff: f32) -> GcsoResult<f32> {
-        let valid = branchless_is_finite_f32(void_score)
+    pub fn eval_barrier(&self, lacuna_score: f32, tau_eff: f32) -> LmnkResult<f32> {
+        let valid = branchless_is_finite_f32(lacuna_score)
             & branchless_is_finite_f32(tau_eff)
             & (tau_eff > 0.0);
         if !valid {
-            return Err(GCSO_ERROR_EDBC_SINGULARITY);
+            return Err(LMNK_ERR_ENTROPY_SINGULARITY);
         }
         let eps_raw = self.state.singularity_eps;
         let eps = branchless_select_f32(
@@ -733,13 +739,13 @@ impl EntropyController {
             DEFAULT_SINGULARITY_EPS,
         );
         let denom = branchless_max_f32(
-            branchless_relu_f32(void_score) + eps,
+            branchless_relu_f32(lacuna_score) + eps,
             F32_MIN_POSITIVE_NORMAL,
         );
         let inv_denom = fast_inv_pos_normal_f32(denom);
         let barrier = tau_eff * inv_denom;
         if !branchless_is_finite_f32(barrier) {
-            return Err(GCSO_ERROR_EDBC_SINGULARITY);
+            return Err(LMNK_ERR_ENTROPY_SINGULARITY);
         }
         Ok(branchless_flush_subnormal_f32(branchless_min_f32(
             barrier,
@@ -755,7 +761,7 @@ impl EntropyController {
         current_mode: u32,
         moving_z_entropy: f32,
         sliding_flux: f32,
-        void_score: f32,
+        lacuna_score: f32,
         bifurcation_threshold: f32,
         tau_flux: f32,
         hysteresis_band: f32,
@@ -766,11 +772,11 @@ impl EntropyController {
 
         let surge_triggered = (moving_z_entropy > upper_thresh)
             | (sliding_flux > (tau_flux + hyst))
-            | ((moving_z_entropy > bifurcation_threshold) & (void_score >= upper_thresh));
+            | ((moving_z_entropy > bifurcation_threshold) & (lacuna_score >= upper_thresh));
         let stay_active = (current_mode != 0) & (moving_z_entropy > lower_thresh);
         let active_non_normal = surge_triggered | stay_active;
 
-        let active_target = branchless_select_u32(void_score >= bifurcation_threshold, 1, 2);
+        let active_target = branchless_select_u32(lacuna_score >= bifurcation_threshold, 1, 2);
         branchless_select_u32(active_non_normal, active_target, 0)
     }
 
@@ -781,7 +787,7 @@ impl EntropyController {
         &self,
         base_temperature: f32,
         moving_z_entropy: f32,
-        void_score: f32,
+        lacuna_score: f32,
         tau_eff: f32,
         alpha: f32,
         beta: f32,
@@ -791,7 +797,7 @@ impl EntropyController {
             self.state.active_branch_mode,
             base_temperature,
             moving_z_entropy,
-            void_score,
+            lacuna_score,
             tau_eff,
             alpha,
             beta,

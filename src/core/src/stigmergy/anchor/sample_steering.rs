@@ -1,8 +1,9 @@
-// name: src/core/src/stigmergy/attractor/sample_steering.rs
+// name: src/core/src/stigmergy/anchor/sample_steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Coherence-safe [`EpisodicPhaseSample`] and blanket [`EpisodicSampleSteering`].
 
+use super::PhaseAnchorRecord;
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
     branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
@@ -14,16 +15,11 @@ use crate::foundation::{
     SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, gcso_q7_t, GcsoResult, Scoped,
-    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    branchless_select_f32, branchless_select_i32, LmnkResult, PhaseQ7, Scoped,
+    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
-use crate::stigmergy::attractor::{
-    gcso_anchor_type_t, GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING,
-    GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
-};
-use crate::stigmergy::crystal::CrystallizedAttractorRecord;
 use crate::stigmergy::gate::{PhaseDeltaSlice, PhaseSteeringActiveExt};
-use crate::stigmergy::trail::{gcso_pointer_trail_t, gcso_tagged_ptr_t, trail_phase_words_ref};
+use crate::stigmergy::trail::{trail_phase_words_ref, PointerTrail, TaggedPtr};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_REPULSION_ACTIVE,
@@ -40,7 +36,7 @@ use crate::stigmergy::{
 pub const fn hash_bytes_to_q7_phases(
     bytes: &[u8],
     domain_salt: u32,
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     let mut seed = 0xCBF2_9CE4_8422_2325_u64 ^ ((domain_salt as u64) << 32);
     let len = bytes.len();
     let mut i = 0usize;
@@ -80,7 +76,7 @@ pub const fn hash_bytes_to_q7_phases(
 pub(crate) const fn hash_prompt_to_q7_phases(
     prompt: &str,
     domain_salt: u32,
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     hash_bytes_to_q7_phases(prompt.as_bytes(), domain_salt)
 }
 
@@ -88,7 +84,7 @@ pub(crate) const fn hash_prompt_to_q7_phases(
 /// in branchless `const fn` mode.
 #[inline]
 #[must_use]
-pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     let mut out = [0i8; MAX_ATTENTION_HEADS];
     let len = embedding.len();
     if len == 0 {
@@ -103,7 +99,7 @@ pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [gcso_q7_t; MA
                 q7_val < -128,
                 -128,
                 branchless_select_i32(q7_val > 127, 127, q7_val),
-            ) as gcso_q7_t;
+            ) as PhaseQ7;
             h += 1;
         }
     } else {
@@ -114,7 +110,7 @@ pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [gcso_q7_t; MA
                 q7_val < -128,
                 -128,
                 branchless_select_i32(q7_val > 127, 127, q7_val),
-            ) as gcso_q7_t;
+            ) as PhaseQ7;
             h += 1;
         }
     }
@@ -132,13 +128,13 @@ pub const fn project_f32_slice_to_q7_phases(embedding: &[f32]) -> [gcso_q7_t; MA
 /// # Coherence-Safe Blanket Architecture (`E0119` Prevention)
 /// Instead of an unconstrained upstream `impl<T: AsRef<[u8]>>` (which collides with `[i8; 64]`
 /// and tuples under Rust's orphan/coherence rules), `EpisodicPhaseSample` is implemented for
-/// disjoint concrete head types (`str`, `[u8]`, `[u8; N]`, `[gcso_q7_t; 64]`, `[f32]`, `[f32; N]`,
-/// `AlignedSlice`, `gcso_pointer_trail_t`, `gcso_tagged_ptr_t`, `CrystallizedAttractorRecord`)
+/// disjoint concrete head types (`str`, `[u8]`, `[u8; N]`, `[PhaseQ7; 64]`, `[f32]`, `[f32; N]`,
+/// `AlignedSlice`, `PointerTrail`, `TaggedPtr`, `PhaseAnchorRecord`)
 /// combined with blanket reference delegators (`&T`, `&mut T`) and
 /// tuple decorators (`(S, f32)`, `(S, f32, u32)`).
 pub trait EpisodicPhaseSample {
     /// Extracts or deterministically projects the sample's 64-head Q7 phase coordinates on $SO(2)^{64}$.
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS];
+    fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS];
 
     /// Returns the initial mass / emotional or semantic salience of this sample point (`>= 0.0`).
     #[inline(always)]
@@ -157,12 +153,6 @@ pub trait EpisodicPhaseSample {
     fn preferred_working_lane(&self) -> u32 {
         u32::from(ATTRACTOR_SLOT_PERSONA)
     }
-
-    /// Returns the C-ABI anchor classification type when this sample crystallizes into a permanent anchor.
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_CRYSTALLIZED
-    }
 }
 
 macro_rules! impl_episodic_ref_delegator {
@@ -170,7 +160,7 @@ macro_rules! impl_episodic_ref_delegator {
         $(
             impl<T: EpisodicPhaseSample + ?Sized> EpisodicPhaseSample for $ty {
                 #[inline(always)]
-                fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+                fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
                     (**self).sample_phase_coords(domain_salt)
                 }
                 #[inline(always)]
@@ -185,11 +175,7 @@ macro_rules! impl_episodic_ref_delegator {
                 fn preferred_working_lane(&self) -> u32 {
                     (**self).preferred_working_lane()
                 }
-                #[inline(always)]
-                fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-                    (**self).sample_anchor_type()
                 }
-            }
         )+
     };
 }
@@ -200,7 +186,7 @@ macro_rules! impl_episodic_f32_seq {
     ($ty:ty $(; const $n:ident)? ; |$self_arg:ident| $as_slice:expr, $is_nonempty:expr) => {
         impl $(<const $n: usize>)? EpisodicPhaseSample for $ty {
             #[inline(always)]
-            fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+            fn sample_phase_coords(&self, _domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
                 let $self_arg = self;
                 project_f32_slice_to_q7_phases($as_slice)
             }
@@ -214,17 +200,13 @@ macro_rules! impl_episodic_f32_seq {
             fn preferred_working_lane(&self) -> u32 {
                 u32::from(ATTRACTOR_SLOT_KNOWLEDGE)
             }
-            #[inline(always)]
-            fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-                GCSO_ANCHOR_TYPE_EMBEDDING
-            }
         }
     };
 }
 
 impl EpisodicPhaseSample for str {
     #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         hash_prompt_to_q7_phases(self, domain_salt)
     }
 
@@ -232,16 +214,11 @@ impl EpisodicPhaseSample for str {
     fn sample_mass(&self) -> f32 {
         branchless_select_f32(!self.is_empty(), 1.0, 0.0)
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_SYSTEM_PROMPT
-    }
 }
 
 impl EpisodicPhaseSample for [u8] {
     #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         hash_bytes_to_q7_phases(self, domain_salt)
     }
 
@@ -249,16 +226,11 @@ impl EpisodicPhaseSample for [u8] {
     fn sample_mass(&self) -> f32 {
         branchless_select_f32(!self.is_empty(), 1.0, 0.0)
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_SYSTEM_PROMPT
-    }
 }
 
 impl<const N: usize> EpisodicPhaseSample for [u8; N] {
     #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         hash_bytes_to_q7_phases(self.as_slice(), domain_salt)
     }
 
@@ -266,16 +238,11 @@ impl<const N: usize> EpisodicPhaseSample for [u8; N] {
     fn sample_mass(&self) -> f32 {
         branchless_select_f32(N > 0, 1.0, 0.0)
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_SYSTEM_PROMPT
-    }
 }
 
-impl EpisodicPhaseSample for [gcso_q7_t; MAX_ATTENTION_HEADS] {
+impl EpisodicPhaseSample for [PhaseQ7; MAX_ATTENTION_HEADS] {
     #[inline(always)]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, _domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         *self
     }
 
@@ -289,16 +256,11 @@ impl EpisodicPhaseSample for [gcso_q7_t; MAX_ATTENTION_HEADS] {
         let r_bar = circular_r_bar_from_words_64(&load_q7_words_64(self));
         branchless_clamp_f32(r_bar, 0.25, 1.0)
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_TOPOLOGICAL
-    }
 }
 
-impl<const ALIGN: usize> EpisodicPhaseSample for AlignedSlice<'_, gcso_q7_t, ALIGN> {
+impl<const ALIGN: usize> EpisodicPhaseSample for AlignedSlice<'_, PhaseQ7, ALIGN> {
     #[inline]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, _domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         let mut out = [0i8; MAX_ATTENTION_HEADS];
         let s = self.as_slice();
         let len = s.len();
@@ -321,20 +283,15 @@ impl<const ALIGN: usize> EpisodicPhaseSample for AlignedSlice<'_, gcso_q7_t, ALI
     fn sample_mass(&self) -> f32 {
         branchless_select_f32(!self.is_empty(), 1.0, 0.0)
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_TOPOLOGICAL
-    }
 }
 
 impl_episodic_f32_seq!([f32]; |s| s, !s.is_empty());
 impl_episodic_f32_seq!([f32; N]; const N; |s| s.as_slice(), N > 0);
 impl_episodic_f32_seq!(AlignedSlice<'_, f32, ALIGN>; const ALIGN; |s| s.as_slice(), !s.is_empty());
 
-impl EpisodicPhaseSample for gcso_pointer_trail_t {
+impl EpisodicPhaseSample for PointerTrail {
     #[inline(always)]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, _domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.accumulated_phase_delta
     }
 
@@ -364,16 +321,11 @@ impl EpisodicPhaseSample for gcso_pointer_trail_t {
     fn preferred_working_lane(&self) -> u32 {
         u32::from(self.target_attractor_slot())
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_CRYSTALLIZED
-    }
 }
 
-impl EpisodicPhaseSample for gcso_tagged_ptr_t {
+impl EpisodicPhaseSample for TaggedPtr {
     #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         let base_q7 = self.unpack_phase();
         let addr_bytes = (self.unpack_addr() ^ u64::from(domain_salt)).to_le_bytes();
         let mut out = hash_bytes_to_q7_phases(&addr_bytes, domain_salt);
@@ -392,15 +344,11 @@ impl EpisodicPhaseSample for gcso_tagged_ptr_t {
     fn preferred_working_lane(&self) -> u32 {
         u32::from(self.target_attractor_slot())
     }
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_TOPOLOGICAL
-    }
 }
 
-impl EpisodicPhaseSample for CrystallizedAttractorRecord {
+impl EpisodicPhaseSample for PhaseAnchorRecord {
     #[inline(always)]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, _domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.phase_profile
     }
 
@@ -426,16 +374,11 @@ impl EpisodicPhaseSample for CrystallizedAttractorRecord {
     fn preferred_working_lane(&self) -> u32 {
         u32::from(self.dominant_slot) & ((MAX_ATTRACTOR_DOMAINS as u32) - 1)
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_CRYSTALLIZED
-    }
 }
 
 impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32) {
     #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.0.sample_phase_coords(domain_salt)
     }
 
@@ -453,16 +396,11 @@ impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32) {
     fn preferred_working_lane(&self) -> u32 {
         self.0.preferred_working_lane()
     }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        self.0.sample_anchor_type()
-    }
 }
 
 impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32, u32) {
     #[inline(always)]
-    fn sample_phase_coords(&self, domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.0.sample_phase_coords(domain_salt ^ self.2)
     }
 
@@ -479,11 +417,6 @@ impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32, u32) {
     #[inline(always)]
     fn preferred_working_lane(&self) -> u32 {
         self.2 & ((MAX_ATTRACTOR_DOMAINS as u32) - 1)
-    }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        self.0.sample_anchor_type()
     }
 }
 
@@ -511,9 +444,9 @@ unsafe impl Pod for AttractorGrowthReport {}
 
 /// Blanket-implemented behavioral trait (`impl<T: EpisodicPhaseSample + ?Sized> EpisodicSampleSteering for T {}`)
 /// that automatically equips every [`EpisodicPhaseSample`] type with:
-/// 1. Direct conversion to SWAR-scaled, `PhaseStepFilter`-filtered RoPE phase deltas (`[gcso_q7_t; 64]`),
+/// 1. Direct conversion to SWAR-scaled, `PhaseStepFilter`-filtered RoPE phase deltas (`[PhaseQ7; 64]`),
 /// 2. Direct in-place `PhaseClamp` RoPE steering of Query/Key tensors via [`PhaseSteering`], and
-/// 3. Constant-time $S^1$ geodesic resonance absorption into [`gcso_pointer_trail_t`].
+/// 3. Constant-time $S^1$ geodesic resonance absorption into [`PointerTrail`].
 pub trait EpisodicSampleSteering: EpisodicPhaseSample {
     /// Projects `self` onto $SO(2)^{64}$, scales all 64 heads by its bounded mass $\times$ coherence
     /// prior using 8-lane SWAR (`branchless_q7_scale_64`), and filters sub-grid phase jitter via
@@ -523,8 +456,8 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
     fn to_rope_phase_deltas(
         &self,
         domain_salt: u32,
-        qdps_min_step_rad: f32,
-    ) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+        min_step_rad: f32,
+    ) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         let mut phases = self.sample_phase_coords(domain_salt);
         let mass = branchless_clamp_f32(branchless_relu_f32(self.sample_mass()), 0.0, 2.0);
         let coh_prior =
@@ -534,7 +467,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         if scale_u7 == 0 {
             return [0i8; MAX_ATTENTION_HEADS];
         }
-        let step_u8 = branchless_rad_to_phase_step_u8(qdps_min_step_rad);
+        let step_u8 = branchless_rad_to_phase_step_u8(min_step_rad);
         let mut w = load_q7_words_64(&phases);
         if is_word_array_uniform_64(&w) {
             let mut w0 = w[0];
@@ -575,7 +508,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
     /// the applied 64-head Q7 phase delta vector.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `ripa_max_rad` is non-finite or `<= 0.0`, or
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `max_rad` is non-finite or `<= 0.0`, or
     /// propagates any error from [`PhaseSteeringActiveExt::apply_phase_steering_safe_active`] or
     /// [`PhaseSteeringActiveExt::apply_phase_steering_fused_safe_active`].
     #[inline]
@@ -583,19 +516,19 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         &self,
         engine: &P,
         domain_salt: u32,
-        qdps_min_step_rad: f32,
-        ripa_max_rad: f32,
+        min_step_rad: f32,
+        max_rad: f32,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<[gcso_q7_t; MAX_ATTENTION_HEADS]> {
-        if !ripa_max_rad.is_finite() || ripa_max_rad <= 0.0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    ) -> LmnkResult<[PhaseQ7; MAX_ATTENTION_HEADS]> {
+        if !max_rad.is_finite() || max_rad <= 0.0 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let phases = self.to_rope_phase_deltas(domain_salt, qdps_min_step_rad);
+        let phases = self.to_rope_phase_deltas(domain_salt, min_step_rad);
         let aligned_phases = AlignedBuffer16::new(phases);
         let phase_slice = aligned_phases.as_aligned_slice();
         if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(phase_slice))
-            .cut_by_lacuna(true, ripa_max_rad, 0.0)
+            .cut_by_lacuna(true, max_rad, 0.0)
             .into_active()
         {
             if let Some(k) = key_tensor {
@@ -603,14 +536,10 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
                     query_tensor,
                     k,
                     active_deltas,
-                    ripa_max_rad,
+                    max_rad,
                 )?;
             } else {
-                engine.apply_phase_steering_safe_active(
-                    query_tensor,
-                    active_deltas,
-                    ripa_max_rad,
-                )?;
+                engine.apply_phase_steering_safe_active(query_tensor, active_deltas, max_rad)?;
             }
         }
         Ok(phases)
@@ -626,7 +555,7 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
         domain_salt: u32,
         crystallize_density_thresh: f32,
         crystallize_r_bar_thresh: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
     ) -> AttractorGrowthReport {
         let coords = self.sample_phase_coords(domain_salt);
         let raw_mass = branchless_flush_subnormal_f32(branchless_relu_f32(self.sample_mass()));
@@ -671,3 +600,47 @@ pub trait EpisodicSampleSteering: EpisodicPhaseSample {
 }
 
 impl<T: EpisodicPhaseSample + ?Sized> EpisodicSampleSteering for T {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::foundation::{
+        is_phase_profile_nonzero_64, AlignedBuffer32, PhaseSteering, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    };
+    use crate::liminal::{PhaseQ7, MAX_ATTENTION_HEADS};
+
+    struct DummyPhaseSteerer;
+    impl PhaseSteering for DummyPhaseSteerer {
+        fn head_dim(&self) -> u32 {
+            8
+        }
+        fn num_heads(&self) -> u32 {
+            2
+        }
+    }
+
+    #[test]
+    fn test_episodic_sample_steering_blanket_projections() {
+        let steerer = DummyPhaseSteerer;
+        let mut q_tensor = AlignedBuffer32::new([1.0f32; 16]);
+        let str_deltas = "persistent persona anchor sample"
+            .steer_rope_tensors_direct(
+                &steerer,
+                1,
+                0.01,
+                DEFAULT_PHASE_CLAMP_MAX_RAD,
+                &mut q_tensor.as_aligned_slice_mut(),
+                None,
+            )
+            .unwrap();
+        assert!(is_phase_profile_nonzero_64(&str_deltas));
+
+        let raw_q7_sample: [PhaseQ7; MAX_ATTENTION_HEADS] = [32i8; MAX_ATTENTION_HEADS];
+        let q7_deltas = raw_q7_sample.to_rope_phase_deltas(1, 0.01);
+        assert_eq!(q7_deltas[0], 32);
+
+        let f32_sample = [0.25f32; 16];
+        let f32_deltas = f32_sample.to_rope_phase_deltas(2, 0.01);
+        assert_eq!(f32_deltas[0], 32);
+    }
+}

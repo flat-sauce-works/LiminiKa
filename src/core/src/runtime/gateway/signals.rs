@@ -6,26 +6,26 @@
 //! [`SubjectivePersonaSignal`], [`ContradictionGuardSignal`]) and [`CausalProvenanceReport`].
 
 use super::*;
-use crate::drivers::gcso_edbc_state_t;
+use crate::drivers::EntropyState;
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
     branchless_is_finite_f32, branchless_max_f32, branchless_relu_f32, fast_inv_pos_normal_f32,
-    gcso_tagged_ptr_t, load_q7_words_64, Pod, RawPhaseProjectable, DEFAULT_PHASE_STEP_MIN_RAD,
+    load_q7_words_64, Pod, RawPhaseProjectable, TaggedPtr, DEFAULT_PHASE_STEP_MIN_RAD,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_u32, branchless_select_u8,
-    gcso_config_t, gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, RuntimeConfig, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
     THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_OBJECTIVE_FACT,
     THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
 };
-use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::context::CoreStateStack;
 use crate::stigmergy::{
-    gcso_pointer_trail_t, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
+    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, PointerTrail,
     StigmergicScaleGranularity, StigmergicThresholds, DEFAULT_FACT_PHASE_CLAMP_RAD,
     DEFAULT_PERSONA_PHASE_CLAMP_RAD,
 };
 
-pub(super) const INV_FACT_RIPA_CLAMP_RAD: f32 = 1.0 / DEFAULT_FACT_PHASE_CLAMP_RAD;
+pub(super) const INV_FACT_PHASE_CLAMP_RAD: f32 = 1.0 / DEFAULT_FACT_PHASE_CLAMP_RAD;
 
 /// Provenance axis bit (`bit 0`): Origin 1 (`SystemConstraintSignal`) contributed to this frame.
 pub const CAUSAL_AXIS_SYSTEM_CONSTRAINT: u32 = 1 << 0;
@@ -44,7 +44,7 @@ pub const CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK: u32 = 1 << 9;
 pub const CAUSAL_CAUSE_PERSONA_FACT_COLLISION: u32 = 1 << 10;
 /// Provenance cause bit (`bit 11`): Cohomological obstruction ($H^1 \neq 0$) or Bloom repulsion triggered.
 pub const CAUSAL_CAUSE_COHOMOLOGY_REPULSION: u32 = 1 << 11;
-/// Provenance cause bit (`bit 12`): Attractor sample count & coherence reached `.gcso` crystallization maturity.
+/// Provenance cause bit (`bit 12`): Attractor sample count & coherence reached `.lmnk` crystallization maturity.
 pub const CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED: u32 = 1 << 12;
 
 /// Root-cause diagnosis code `0`: Nominal synergistic orchestration across active origins.
@@ -59,8 +59,8 @@ pub const ROOT_CAUSE_PERSONA_FACT_COLLISION: u8 = 3;
 pub const ROOT_CAUSE_COHOMOLOGY_REPULSION: u8 = 4;
 
 const _: () = {
-    assert!(ROOT_CAUSE_NOMINAL == crate::stigmergy::CRYSTAL_CAUSE_CODE_NOMINAL);
-    assert!(CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED == crate::stigmergy::CRYSTAL_PROVENANCE_MATURE_BIT);
+    assert!(ROOT_CAUSE_NOMINAL == crate::stigmergy::ANCHOR_ATTRIBUTION_NOMINAL);
+    assert!(CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED == crate::stigmergy::ANCHOR_LINEAGE_MATURE_BIT);
 };
 
 // ===================================================================
@@ -74,13 +74,13 @@ const _: () = {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct CausalProvenanceReport {
     /// Bitwise OR of active origin axes (`CAUSAL_AXIS_*`) and diagnostic causes (`CAUSAL_CAUSE_*`).
-    pub provenance_bits: u32,
+    pub lineage_flags: u32,
     /// Cosine phase coherence $\mathcal{C}_{\mathrm{FP}} \in [-1, 1]$ between Objective Fact and Subjective Persona.
     pub fact_persona_coherence: f32,
     /// Peak anomaly or repulsion severity in $[0, 1]$ across all contributing signals.
     pub anomaly_severity: f32,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`).
-    pub dominant_cause_code: u8,
+    pub attribution_tag: u8,
     /// Dominant 3-bit working lane ID (`ATTRACTOR_SLOT_*`, `0..=7`).
     pub dominant_slot: u8,
     /// Resolved 5-bit `ACTION_MODE_*` execution flags.
@@ -93,43 +93,43 @@ pub struct CausalProvenanceReport {
 unsafe impl Pod for CausalProvenanceReport {}
 
 impl CausalProvenanceReport {
-    /// Returns `true` if all bits in `flag_mask` are set in `self.provenance_bits`.
+    /// Returns `true` if all bits in `flag_mask` are set in `self.lineage_flags`.
     #[inline(always)]
     #[must_use]
     pub const fn has_flag(&self, flag_mask: u32) -> bool {
-        (self.provenance_bits & flag_mask) == flag_mask
+        (self.lineage_flags & flag_mask) == flag_mask
     }
 
     /// Returns `true` when a destructive phase collision between Objective Fact and Subjective Persona was detected.
     #[inline(always)]
     #[must_use]
     pub const fn is_persona_fact_collision(&self) -> bool {
-        (self.provenance_bits & CAUSAL_CAUSE_PERSONA_FACT_COLLISION) != 0
+        (self.lineage_flags & CAUSAL_CAUSE_PERSONA_FACT_COLLISION) != 0
     }
 
     /// Returns `true` when cohomological obstruction ($H^1 \neq 0$) or Bloom repetition repulsion was triggered.
     #[inline(always)]
     #[must_use]
     pub const fn is_cohomology_repulsion(&self) -> bool {
-        (self.provenance_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0
+        (self.lineage_flags & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0
     }
 }
 
 /// Root causal signal supertrait defining a finite 4-axis causal window
-/// for all signals entering the GCSO Manifold Gateway.
+/// for all signals entering the LiminiKa Manifold Gateway.
 pub trait CausalProvenanceSignal {
     /// Static causal provenance cognitive aperture across system and grounding origins (`0x0000_000F`).
     const CAUSAL_APERTURE_MASK: u32 = THRESHOLD_CAUSAL_PROVENANCE;
 
     /// Type-level complement identifying axes outside this causal window as unknowable (`!APERTURE`).
-    const CAUSAL_UNKNOWABLE_VOID_MASK: u32 = !Self::CAUSAL_APERTURE_MASK;
+    const CAUSAL_UNOBSERVED_LACUNA_MASK: u32 = !Self::CAUSAL_APERTURE_MASK;
 
     /// Returns the bitwise provenance flags (`CAUSAL_AXIS_* | CAUSAL_CAUSE_*`) contributed by `self`.
     fn causal_provenance_bits(&self) -> u32;
 
     /// Returns the active unknowable complement bitmask derived strictly as `!self.causal_provenance_bits()`.
     #[inline(always)]
-    fn active_unknowable_void_bits(&self) -> u32 {
+    fn active_unobserved_lacuna_bits(&self) -> u32 {
         !self.causal_provenance_bits()
     }
 
@@ -141,12 +141,12 @@ pub trait CausalProvenanceSignal {
 
     /// Branchlessly resolves this signal's live dynamic cognitive aperture
     /// `(active_granule_mask, effective_gain_q7, phase_shift_q7)` across all three sheets of
-    /// [`AutonomousCoreLayerStack`] (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
+    /// [`CoreStateStack`] (`Layer 0: Liminal`, `Layer 1: Stigmergic`, `Layer 2: Ego`).
     #[inline]
-    fn resolve_dynamic_core_aperture(&self, stack: &AutonomousCoreLayerStack) -> (u8, u8, i8) {
+    fn resolve_dynamic_core_aperture(&self, stack: &CoreStateStack) -> (u8, u8, i8) {
         let bits = self.causal_provenance_bits();
-        let ego_active = stack.ego_layer.is_active();
-        let ego_trans_pos = ego_active & (stack.ego_layer.transgression_bias_q7 > 0);
+        let ego_active = stack.ego.is_active();
+        let ego_trans_pos = ego_active & (stack.ego.transgression_bias_q7 > 0);
         let mut active_granule_mask = 0u8;
         let mut weighted_gain_sum = 0u32;
         let mut weighted_shift_sum = 0i32;
@@ -155,34 +155,27 @@ pub trait CausalProvenanceSignal {
         let mut ch = 0usize;
         while ch < 4 {
             let axis_on = ((bits >> ch) & 1) != 0;
-            let base_floor = i32::from(stack.liminal_layer.threshold_floor_q7[ch]);
-            let base_gain = i32::from(stack.liminal_layer.aperture_gain_q7[ch]);
-            let ego_floor_bias = branchless_select_i32(
-                ego_active,
-                i32::from(stack.ego_layer.trait_floor_bias_q7[ch]),
-                0,
-            );
-            let ego_gain_bias = branchless_select_i32(
-                ego_active,
-                i32::from(stack.ego_layer.trait_gain_bias_q7[ch]),
-                0,
-            );
+            let base_floor = i32::from(stack.liminal.threshold_floor_q7[ch]);
+            let base_gain = i32::from(stack.liminal.aperture_gain_q7[ch]);
+            let ego_floor_bias =
+                branchless_select_i32(ego_active, i32::from(stack.ego.trait_floor_bias_q7[ch]), 0);
+            let ego_gain_bias =
+                branchless_select_i32(ego_active, i32::from(stack.ego.trait_gain_bias_q7[ch]), 0);
             let eff_floor = (base_floor + ego_floor_bias).clamp(4, 127) as u8;
             let eff_gain = (base_gain + ego_gain_bias).clamp(16, 127) as u8;
-            let ap_open = ((stack.liminal_layer.active_aperture_mask >> ch) & 1) != 0;
+            let ap_open = ((stack.liminal.active_aperture_mask >> ch) & 1) != 0;
 
             let mut ch_mask = 0u8;
             let mut g = 0usize;
             while g < NUM_STIGMERGIC_GRANULES {
                 let bit = 1u8 << g;
-                let pher = stack.stigmergic_layer.granule_pheromone_q7[g];
-                let in_venn_core = (stack.stigmergic_layer.venn_overlap_mask & bit) != 0;
-                let in_serendip = (stack.stigmergic_layer.serendipity_excursion_mask & bit) != 0;
-                let ego_auto = stack.ego_layer.granule_autonomy_q7[g];
+                let pher = stack.stigmergy.granule_pheromone_q7[g];
+                let in_venn_core = (stack.stigmergy.overlap_mask & bit) != 0;
+                let in_serendip = (stack.stigmergy.discovery_excursion_mask & bit) != 0;
+                let ego_auto = stack.ego.granule_autonomy_q7[g];
 
                 let venn_bonus = branchless_select_u8(in_venn_core, 24, 0);
-                let ch_accepts_ego_transgress =
-                    (ch == 2) | (stack.ego_layer.trait_floor_bias_q7[ch] < 0);
+                let ch_accepts_ego_transgress = (ch == 2) | (stack.ego.trait_floor_bias_q7[ch] < 0);
                 let ego_bonus = branchless_select_u8(
                     ego_trans_pos & ch_accepts_ego_transgress & (ego_auto >= 24),
                     ego_auto >> 1,
@@ -202,32 +195,28 @@ pub trait CausalProvenanceSignal {
 
             active_granule_mask |= branchless_select_u8(axis_on, ch_mask, 0);
             weighted_gain_sum += branchless_select_u32(axis_on, u32::from(eff_gain), 0);
-            weighted_shift_sum += branchless_select_i32(
-                axis_on,
-                i32::from(stack.liminal_layer.phase_shift_q7[ch]),
-                0,
-            );
+            weighted_shift_sum +=
+                branchless_select_i32(axis_on, i32::from(stack.liminal.phase_shift_q7[ch]), 0);
             active_axis_count += u32::from(axis_on);
             ch += 1;
         }
 
         let unattributed = active_axis_count == 0;
-        let has_layer1_mask = (stack.stigmergic_layer.venn_overlap_mask
-            | stack.stigmergic_layer.serendipity_excursion_mask)
-            != 0;
-        let fallback_mask = stack.stigmergic_layer.venn_overlap_mask
-            | stack.stigmergic_layer.serendipity_excursion_mask
+        let has_layer1_mask =
+            (stack.stigmergy.overlap_mask | stack.stigmergy.discovery_excursion_mask) != 0;
+        let fallback_mask = stack.stigmergy.overlap_mask
+            | stack.stigmergy.discovery_excursion_mask
             | branchless_select_u8(ego_trans_pos | !has_layer1_mask, 0xFF, 0);
         let out_mask = branchless_select_u8(unattributed, fallback_mask, active_granule_mask);
         let out_gain = match active_axis_count {
-            0 => stack.liminal_layer.aperture_gain_q7[7],
+            0 => stack.liminal.aperture_gain_q7[7],
             1 => weighted_gain_sum.min(127) as u8,
             2 => (weighted_gain_sum >> 1).min(127) as u8,
             3 => ((weighted_gain_sum * 43) >> 7).min(127) as u8,
             _ => (weighted_gain_sum >> 2).min(127) as u8,
         };
         let out_shift = match active_axis_count {
-            0 => stack.liminal_layer.phase_shift_q7[7],
+            0 => stack.liminal.phase_shift_q7[7],
             1 => weighted_shift_sum.clamp(-127, 127) as i8,
             2 => (weighted_shift_sum >> 1).clamp(-127, 127) as i8,
             3 => ((weighted_shift_sum * 43) >> 7).clamp(-127, 127) as i8,
@@ -247,7 +236,7 @@ impl<T: CausalProvenanceSignal + ?Sized> CausalProvenanceSignal for &T {
         (**self).causal_anomaly_severity()
     }
     #[inline(always)]
-    fn resolve_dynamic_core_aperture(&self, stack: &AutonomousCoreLayerStack) -> (u8, u8, i8) {
+    fn resolve_dynamic_core_aperture(&self, stack: &CoreStateStack) -> (u8, u8, i8) {
         (**self).resolve_dynamic_core_aperture(stack)
     }
 }
@@ -263,7 +252,7 @@ pub trait SystemConstraintSignal: CausalProvenanceSignal {
     const SYSTEM_APERTURE_MASK: u32 = THRESHOLD_SYSTEM_CONSTRAINT;
 
     /// Complement bitmask outside Origin 1 (`!THRESHOLD_SYSTEM_CONSTRAINT`).
-    const SYSTEM_UNKNOWABLE_VOID_MASK: u32 = !Self::SYSTEM_APERTURE_MASK;
+    const SYSTEM_UNOBSERVED_LACUNA_MASK: u32 = !Self::SYSTEM_APERTURE_MASK;
 
     /// Normalized VRAM / system memory pressure in $[0.0, 1.0]$.
     fn system_vram_pressure(&self) -> f32;
@@ -298,7 +287,7 @@ pub trait SystemConstraintSignal: CausalProvenanceSignal {
 
     /// Recommended `PhaseStepFilter` minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
     #[inline(always)]
-    fn qdps_min_step_rad_override(&self) -> f32 {
+    fn phase_step_min_rad_override(&self) -> f32 {
         let pressure = branchless_max_f32(
             branchless_clamp_f32(self.system_vram_pressure(), 0.0, 1.0),
             branchless_clamp_f32(self.system_gpu_frame_overrun(), 0.0, 1.0),
@@ -325,8 +314,8 @@ impl<T: SystemConstraintSignal + ?Sized> SystemConstraintSignal for &T {
         (**self).recommend_layer_skip()
     }
     #[inline(always)]
-    fn qdps_min_step_rad_override(&self) -> f32 {
-        (**self).qdps_min_step_rad_override()
+    fn phase_step_min_rad_override(&self) -> f32 {
+        (**self).phase_step_min_rad_override()
     }
 }
 
@@ -341,7 +330,7 @@ pub struct SystemConstraint<T = ()> {
     /// Normalized GPU/CPU frame overrun in $[0.0, 1.0]$.
     pub gpu_frame_overrun: f32,
     /// Explicit `PhaseStepFilter` minimum step cutoff in radians.
-    pub qdps_min_step_rad: f32,
+    pub phase_step_min_rad: f32,
     /// Active 8-cell Micro-Swarm bitmask (`0x00..=0xFF`).
     pub active_swarm_mask: u8,
     /// Explicit inertial layer-skip recommendation flag.
@@ -365,7 +354,7 @@ impl<T> SystemConstraint<T> {
             inner,
             vram_pressure: p_vram,
             gpu_frame_overrun: p_gpu,
-            qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD * (1.0 + 2.0 * max_p),
+            phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD * (1.0 + 2.0 * max_p),
             active_swarm_mask: branchless_select_u8(
                 active_swarm_mask != 0,
                 active_swarm_mask,
@@ -383,12 +372,12 @@ impl<T> SystemConstraint<T> {
         self
     }
 
-    /// Builder method overriding `qdps_min_step_rad`.
+    /// Builder method overriding `phase_step_min_rad`.
     #[inline(always)]
     #[must_use]
     pub const fn with_phase_step_min_rad(mut self, step_rad: f32) -> Self {
         let valid = branchless_is_finite_f32(step_rad) & (step_rad >= 0.0);
-        self.qdps_min_step_rad = branchless_select_f32(valid, step_rad, self.qdps_min_step_rad);
+        self.phase_step_min_rad = branchless_select_f32(valid, step_rad, self.phase_step_min_rad);
         self
     }
 }
@@ -427,12 +416,12 @@ impl<T> SystemConstraintSignal for SystemConstraint<T> {
         self.force_layer_skip
     }
     #[inline(always)]
-    fn qdps_min_step_rad_override(&self) -> f32 {
-        self.qdps_min_step_rad
+    fn phase_step_min_rad_override(&self) -> f32 {
+        self.phase_step_min_rad
     }
 }
 
-impl CausalProvenanceSignal for gcso_edbc_state_t {
+impl CausalProvenanceSignal for EntropyState {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let is_rep = self.active_branch_mode == 2;
@@ -449,7 +438,7 @@ impl CausalProvenanceSignal for gcso_edbc_state_t {
     }
 }
 
-impl SystemConstraintSignal for gcso_edbc_state_t {
+impl SystemConstraintSignal for EntropyState {
     #[inline(always)]
     fn system_vram_pressure(&self) -> f32 {
         branchless_clamp_f32(branchless_relu_f32(self.moving_z_entropy) * 0.25, 0.0, 1.0)
@@ -473,23 +462,23 @@ impl SystemConstraintSignal for gcso_edbc_state_t {
     }
 }
 
-impl CausalProvenanceSignal for gcso_config_t {
+impl CausalProvenanceSignal for RuntimeConfig {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         CAUSAL_AXIS_SYSTEM_CONSTRAINT
     }
 }
 
-impl SystemConstraintSignal for gcso_config_t {
+impl SystemConstraintSignal for RuntimeConfig {
     #[inline(always)]
     fn system_vram_pressure(&self) -> f32 {
         0.0
     }
     #[inline(always)]
-    fn qdps_min_step_rad_override(&self) -> f32 {
+    fn phase_step_min_rad_override(&self) -> f32 {
         let valid =
-            branchless_is_finite_f32(self.qdps_min_step_rad) & (self.qdps_min_step_rad >= 0.0);
-        branchless_select_f32(valid, self.qdps_min_step_rad, DEFAULT_PHASE_STEP_MIN_RAD)
+            branchless_is_finite_f32(self.phase_step_min_rad) & (self.phase_step_min_rad >= 0.0);
+        branchless_select_f32(valid, self.phase_step_min_rad, DEFAULT_PHASE_STEP_MIN_RAD)
     }
 }
 
@@ -547,7 +536,7 @@ pub trait StigmergicThresholdPolicy {
         &self,
         system: &C,
         probe: &ManifoldProbeBaseline,
-        trail: &gcso_pointer_trail_t,
+        trail: &PointerTrail,
         entropy_h_tilde: f32,
     ) -> StigmergicThresholds;
 
@@ -562,7 +551,7 @@ pub trait StigmergicThresholdPolicy {
         &self,
         system: &C,
         probe: &ManifoldProbeBaseline,
-        trail: &gcso_pointer_trail_t,
+        trail: &PointerTrail,
         entropy_h_tilde: f32,
         circuit: Option<&CognitiveTrajectoryLedger>,
         scale: StigmergicScaleGranularity,
@@ -581,7 +570,7 @@ impl<T: StigmergicThresholdPolicy + ?Sized> StigmergicThresholdPolicy for &T {
         &self,
         system: &C,
         probe: &ManifoldProbeBaseline,
-        trail: &gcso_pointer_trail_t,
+        trail: &PointerTrail,
         entropy_h_tilde: f32,
     ) -> StigmergicThresholds {
         (**self).resolve_thresholds(system, probe, trail, entropy_h_tilde)
@@ -592,7 +581,7 @@ impl<T: StigmergicThresholdPolicy + ?Sized> StigmergicThresholdPolicy for &T {
         &self,
         system: &C,
         probe: &ManifoldProbeBaseline,
-        trail: &gcso_pointer_trail_t,
+        trail: &PointerTrail,
         entropy_h_tilde: f32,
         circuit: Option<&CognitiveTrajectoryLedger>,
         scale: StigmergicScaleGranularity,
@@ -614,7 +603,7 @@ impl StigmergicThresholdPolicy for StigmergicThresholds {
         &self,
         _system: &C,
         _probe: &ManifoldProbeBaseline,
-        _trail: &gcso_pointer_trail_t,
+        _trail: &PointerTrail,
         _entropy_h_tilde: f32,
     ) -> StigmergicThresholds {
         *self
@@ -691,7 +680,7 @@ pub trait CognitiveCircuitThresholdPolicy {
         active_heads: u16,
         occupied_slots: usize,
         capacity: usize,
-    ) -> gcso_q7_t {
+    ) -> PhaseQ7 {
         let h = f32::from(active_heads.clamp(1, MAX_ATTENTION_HEADS as u16));
         let half = 0.5_f32 * h;
         let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(h.to_bits() >> 1));
@@ -706,7 +695,7 @@ pub trait CognitiveCircuitThresholdPolicy {
         );
         let pressure_relax = 1.0_f32 - 0.15_f32 * occ_ratio;
         let raw = (base_floor * pressure_relax + 0.5_f32) as i32;
-        raw.clamp(24, 96) as gcso_q7_t
+        raw.clamp(24, 96) as PhaseQ7
     }
 
     /// Returns the circular coherence threshold below which P-Frame seek steps trigger repulsion.
@@ -757,7 +746,7 @@ impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
         active_heads: u16,
         occupied_slots: usize,
         capacity: usize,
-    ) -> gcso_q7_t {
+    ) -> PhaseQ7 {
         let h = f32::from(active_heads.clamp(1, MAX_ATTENTION_HEADS as u16));
         let half = 0.5_f32 * h;
         let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(h.to_bits() >> 1));
@@ -773,7 +762,7 @@ impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
             1.0,
         );
         let base_floor = 2.0_f32 * inv_sqrt_h * 127.0_f32 * (1.0_f32 - 0.15_f32 * occ_ratio);
-        ((base_floor + 0.5_f32) as i32 + gain_shift).clamp(24, 96) as gcso_q7_t
+        ((base_floor + 0.5_f32) as i32 + gain_shift).clamp(24, 96) as PhaseQ7
     }
 
     #[inline(always)]
@@ -788,7 +777,7 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
         &self,
         system: &C,
         probe: &ManifoldProbeBaseline,
-        trail: &gcso_pointer_trail_t,
+        trail: &PointerTrail,
         entropy_h_tilde: f32,
     ) -> StigmergicThresholds {
         let p_vram =
@@ -917,21 +906,21 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
 // ===================================================================
 
 /// **Origin 2 Parent Supertrait (`CognitiveGroundingSignal: CausalProvenanceSignal`)**:
-/// Common phase-projection and `.gcso` (mapped-storage) 48-bit section-offset addressing foundation.
+/// Common phase-projection and `.lmnk` (mapped-storage) 48-bit section-offset addressing foundation.
 pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
     /// Static cognitive aperture spanning Origin 2A (Fact), 2B (Persona), and 2C (Guard) (`0x0E`).
     const GROUNDING_APERTURE_MASK: u32 =
         THRESHOLD_OBJECTIVE_FACT | THRESHOLD_SUBJECTIVE_PERSONA | THRESHOLD_CONTRADICTION_GUARD;
 
     /// Complement bitmask outside Origin 2 semantic grounding (`!GROUNDING_APERTURE_MASK`).
-    const GROUNDING_UNKNOWABLE_VOID_MASK: u32 = !Self::GROUNDING_APERTURE_MASK;
+    const GROUNDING_UNOBSERVED_LACUNA_MASK: u32 = !Self::GROUNDING_APERTURE_MASK;
 
     /// Projects this grounding signal onto the 64-head $SO(2)^{64}$ Q7 phase manifold.
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS];
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS];
 
     /// Fast zero-copy borrow of the 64-head Q7 phase profile when already materialized in memory.
     #[inline(always)]
-    fn grounding_phases_ref_64(&self) -> Option<&[gcso_q7_t; MAX_ATTENTION_HEADS]> {
+    fn grounding_phases_ref_64(&self) -> Option<&[PhaseQ7; MAX_ATTENTION_HEADS]> {
         None
     }
 
@@ -947,7 +936,7 @@ pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
     /// Base gravitational pull energy $E_{\mathrm{base}} \ge 0$ of this grounding signal.
     fn grounding_base_energy(&self) -> f32;
 
-    /// Canonical 48-bit `.gcso` (mapped-storage) section or RAG record offset (`bits 0..=47` of `gcso_tagged_ptr_t`).
+    /// Canonical 48-bit `.lmnk` (mapped-storage) section or RAG record offset (`bits 0..=47` of `TaggedPtr`).
     #[inline(always)]
     fn mapped_section_offset48(&self) -> u64 {
         0
@@ -983,11 +972,11 @@ pub trait CognitiveGroundingSignal: CausalProvenanceSignal {
 
 impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         (**self).project_grounding_phases_64()
     }
     #[inline(always)]
-    fn grounding_phases_ref_64(&self) -> Option<&[gcso_q7_t; MAX_ATTENTION_HEADS]> {
+    fn grounding_phases_ref_64(&self) -> Option<&[PhaseQ7; MAX_ATTENTION_HEADS]> {
         (**self).grounding_phases_ref_64()
     }
     #[inline(always)]
@@ -1025,11 +1014,11 @@ pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
     const FACT_APERTURE_MASK: u32 = THRESHOLD_OBJECTIVE_FACT;
 
     /// Complement bitmask treating non-factual axes as unknowable (`!THRESHOLD_OBJECTIVE_FACT`).
-    const FACT_UNKNOWABLE_VOID_MASK: u32 = !Self::FACT_APERTURE_MASK;
+    const FACT_UNOBSERVED_LACUNA_MASK: u32 = !Self::FACT_APERTURE_MASK;
 
     /// `PhaseClamp` limit in radians for objective factual grounding (defaults to `0.14 rad`).
     #[inline(always)]
-    fn fact_ripa_clamp_rad(&self) -> f32 {
+    fn fact_phase_clamp_rad(&self) -> f32 {
         DEFAULT_FACT_PHASE_CLAMP_RAD
     }
 
@@ -1042,8 +1031,8 @@ pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
 
 impl<T: ObjectiveFactSignal + ?Sized> ObjectiveFactSignal for &T {
     #[inline(always)]
-    fn fact_ripa_clamp_rad(&self) -> f32 {
-        (**self).fact_ripa_clamp_rad()
+    fn fact_phase_clamp_rad(&self) -> f32 {
+        (**self).fact_phase_clamp_rad()
     }
     #[inline(always)]
     fn fact_subhead_gain(&self) -> f32 {
@@ -1058,11 +1047,11 @@ pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
     const PERSONA_APERTURE_MASK: u32 = THRESHOLD_SUBJECTIVE_PERSONA;
 
     /// Complement bitmask treating non-persona axes as unknowable (`!THRESHOLD_SUBJECTIVE_PERSONA`).
-    const PERSONA_UNKNOWABLE_VOID_MASK: u32 = !Self::PERSONA_APERTURE_MASK;
+    const PERSONA_UNOBSERVED_LACUNA_MASK: u32 = !Self::PERSONA_APERTURE_MASK;
 
     /// `PhaseClamp` limit in radians for subjective persona modulation (defaults to `0.24 rad`).
     #[inline(always)]
-    fn persona_ripa_clamp_rad(&self) -> f32 {
+    fn persona_phase_clamp_rad(&self) -> f32 {
         DEFAULT_PERSONA_PHASE_CLAMP_RAD
     }
 
@@ -1075,8 +1064,8 @@ pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
 
 impl<T: SubjectivePersonaSignal + ?Sized> SubjectivePersonaSignal for &T {
     #[inline(always)]
-    fn persona_ripa_clamp_rad(&self) -> f32 {
-        (**self).persona_ripa_clamp_rad()
+    fn persona_phase_clamp_rad(&self) -> f32 {
+        (**self).persona_phase_clamp_rad()
     }
     #[inline(always)]
     fn persona_subhead_gain(&self) -> f32 {
@@ -1092,20 +1081,18 @@ pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
     const GUARD_APERTURE_MASK: u32 = THRESHOLD_CONTRADICTION_GUARD;
 
     /// Complement bitmask treating non-guard axes as unknowable (`!THRESHOLD_CONTRADICTION_GUARD`).
-    const GUARD_UNKNOWABLE_VOID_MASK: u32 = !Self::GUARD_APERTURE_MASK;
+    const GUARD_UNOBSERVED_LACUNA_MASK: u32 = !Self::GUARD_APERTURE_MASK;
 
     /// Evaluates repulsive severity in $[0.0, 1.0]$ against `candidate_phases`.
-    fn evaluate_repulsion_severity(
-        &self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> f32;
+    fn evaluate_repulsion_severity(&self, candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS])
+        -> f32;
 
     /// Evaluates repulsive severity directly from 8 register-resident `u64` SWAR words (`candidate_words`).
     #[inline(always)]
     fn evaluate_repulsion_severity_from_words(
         &self,
         candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let _ = candidate_words;
         self.evaluate_repulsion_severity(candidate_phases)
@@ -1123,7 +1110,7 @@ impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
     #[inline(always)]
     fn evaluate_repulsion_severity(
         &self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         (**self).evaluate_repulsion_severity(candidate_phases)
     }
@@ -1132,7 +1119,7 @@ impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
     fn evaluate_repulsion_severity_from_words(
         &self,
         candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         (**self).evaluate_repulsion_severity_from_words(candidate_words, candidate_phases)
     }
@@ -1147,16 +1134,16 @@ impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ObjectiveFact<T> {
-    /// Underlying raw payload (`&str`, `&[u8]`, `&[f32]`, or `[gcso_q7_t; 64]`).
+    /// Underlying raw payload (`&str`, `&[u8]`, `&[f32]`, or `[PhaseQ7; 64]`).
     pub payload: T,
     /// Base gravitational pull energy $E_{\mathrm{fact}} \ge 0$.
     pub base_energy: f32,
-    /// Direct 48-bit `.gcso` (mapped-storage) section offset (`bits 0..=47`).
+    /// Direct 48-bit `.lmnk` (mapped-storage) section offset (`bits 0..=47`).
     pub mapped_storage_offset48: u64,
     /// Full 32-bit macro anchor ID on the unified manifold.
     pub anchor_id: u32,
     /// `PhaseClamp` limit in radians (defaults to [`DEFAULT_FACT_PHASE_CLAMP_RAD`]).
-    pub ripa_clamp_rad: f32,
+    pub phase_clamp_rad: f32,
 }
 
 impl<T> ObjectiveFact<T> {
@@ -1172,18 +1159,18 @@ impl<T> ObjectiveFact<T> {
         Self {
             payload,
             base_energy: branchless_flush_subnormal_f32(branchless_relu_f32(base_energy)),
-            mapped_storage_offset48: mapped_storage_offset48 & gcso_tagged_ptr_t::ADDR_MASK,
+            mapped_storage_offset48: mapped_storage_offset48 & TaggedPtr::ADDR_MASK,
             anchor_id,
-            ripa_clamp_rad: DEFAULT_FACT_PHASE_CLAMP_RAD,
+            phase_clamp_rad: DEFAULT_FACT_PHASE_CLAMP_RAD,
         }
     }
 
     /// Builder method overriding the `PhaseClamp` limit in radians.
     #[inline(always)]
     #[must_use]
-    pub const fn with_ripa_clamp_rad(mut self, max_rad: f32) -> Self {
+    pub const fn with_phase_clamp_rad(mut self, max_rad: f32) -> Self {
         let valid = branchless_is_finite_f32(max_rad) & (max_rad > 0.0);
-        self.ripa_clamp_rad = branchless_select_f32(valid, max_rad, self.ripa_clamp_rad);
+        self.phase_clamp_rad = branchless_select_f32(valid, max_rad, self.phase_clamp_rad);
         self
     }
 }
@@ -1203,7 +1190,7 @@ impl<T: RawPhaseProjectable> CausalProvenanceSignal for ObjectiveFact<T> {
 
 impl<T: RawPhaseProjectable> CognitiveGroundingSignal for ObjectiveFact<T> {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.payload.project_to_q7_64()
     }
     #[inline(always)]
@@ -1226,8 +1213,8 @@ impl<T: RawPhaseProjectable> CognitiveGroundingSignal for ObjectiveFact<T> {
 
 impl<T: RawPhaseProjectable> ObjectiveFactSignal for ObjectiveFact<T> {
     #[inline(always)]
-    fn fact_ripa_clamp_rad(&self) -> f32 {
-        self.ripa_clamp_rad
+    fn fact_phase_clamp_rad(&self) -> f32 {
+        self.phase_clamp_rad
     }
 }
 
@@ -1235,16 +1222,16 @@ impl<T: RawPhaseProjectable> ObjectiveFactSignal for ObjectiveFact<T> {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SubjectivePersona<T> {
-    /// Underlying raw payload (`&str`, `&[u8]`, `&[f32]`, or `[gcso_q7_t; 64]`).
+    /// Underlying raw payload (`&str`, `&[u8]`, `&[f32]`, or `[PhaseQ7; 64]`).
     pub payload: T,
     /// Base gravitational pull energy $E_{\mathrm{persona}} \ge 0$.
     pub base_energy: f32,
-    /// Direct 48-bit `.gcso` (mapped-storage) persona section offset (`bits 0..=47`).
+    /// Direct 48-bit `.lmnk` (mapped-storage) persona section offset (`bits 0..=47`).
     pub mapped_storage_offset48: u64,
     /// Full 32-bit macro anchor ID on the unified manifold.
     pub anchor_id: u32,
     /// `PhaseClamp` limit in radians (defaults to [`DEFAULT_PERSONA_PHASE_CLAMP_RAD`]).
-    pub ripa_clamp_rad: f32,
+    pub phase_clamp_rad: f32,
 }
 
 impl<T> SubjectivePersona<T> {
@@ -1260,18 +1247,18 @@ impl<T> SubjectivePersona<T> {
         Self {
             payload,
             base_energy: branchless_flush_subnormal_f32(branchless_relu_f32(base_energy)),
-            mapped_storage_offset48: mapped_storage_offset48 & gcso_tagged_ptr_t::ADDR_MASK,
+            mapped_storage_offset48: mapped_storage_offset48 & TaggedPtr::ADDR_MASK,
             anchor_id,
-            ripa_clamp_rad: DEFAULT_PERSONA_PHASE_CLAMP_RAD,
+            phase_clamp_rad: DEFAULT_PERSONA_PHASE_CLAMP_RAD,
         }
     }
 
     /// Builder method overriding the `PhaseClamp` limit in radians.
     #[inline(always)]
     #[must_use]
-    pub const fn with_ripa_clamp_rad(mut self, max_rad: f32) -> Self {
+    pub const fn with_phase_clamp_rad(mut self, max_rad: f32) -> Self {
         let valid = branchless_is_finite_f32(max_rad) & (max_rad > 0.0);
-        self.ripa_clamp_rad = branchless_select_f32(valid, max_rad, self.ripa_clamp_rad);
+        self.phase_clamp_rad = branchless_select_f32(valid, max_rad, self.phase_clamp_rad);
         self
     }
 }
@@ -1285,7 +1272,7 @@ impl<T: RawPhaseProjectable> CausalProvenanceSignal for SubjectivePersona<T> {
 
 impl<T: RawPhaseProjectable> CognitiveGroundingSignal for SubjectivePersona<T> {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.payload.project_to_q7_64()
     }
     #[inline(always)]
@@ -1308,8 +1295,8 @@ impl<T: RawPhaseProjectable> CognitiveGroundingSignal for SubjectivePersona<T> {
 
 impl<T: RawPhaseProjectable> SubjectivePersonaSignal for SubjectivePersona<T> {
     #[inline(always)]
-    fn persona_ripa_clamp_rad(&self) -> f32 {
-        self.ripa_clamp_rad
+    fn persona_phase_clamp_rad(&self) -> f32 {
+        self.phase_clamp_rad
     }
 }
 
@@ -1384,7 +1371,7 @@ impl<B> CausalProvenanceSignal for ContradictionGuard<B> {
 
 impl<B> CognitiveGroundingSignal for ContradictionGuard<B> {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         [0i8; MAX_ATTENTION_HEADS]
     }
     #[inline(always)]
@@ -1401,7 +1388,7 @@ impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter
     #[inline(always)]
     fn evaluate_repulsion_severity(
         &self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let words = load_q7_words_64(candidate_phases);
         self.evaluate_repulsion_severity_from_words(&words, candidate_phases)
@@ -1411,7 +1398,7 @@ impl ContradictionGuardSignal for ContradictionGuard<ContrastivePhaseBloomFilter
     fn evaluate_repulsion_severity_from_words(
         &self,
         candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        _candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
         let obs_sev = branchless_select_f32(
@@ -1448,7 +1435,7 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
     #[inline(always)]
     fn evaluate_repulsion_severity(
         &self,
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        _candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
         branchless_select_f32(
@@ -1466,7 +1453,7 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
     fn evaluate_repulsion_severity_from_words(
         &self,
         _candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        _candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
         branchless_select_f32(
@@ -1491,7 +1478,7 @@ impl ContradictionGuardSignal for ContradictionGuard<()> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GuardPhaseAnchor {
     /// Per-head Q7 phase deltas (`[i8; 64]`).
-    pub phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub phase_deltas: [PhaseQ7; MAX_ATTENTION_HEADS],
     /// Observed cohomological obstruction residual norm $\| \mathbf{r}_{\mathrm{obs}} \| \ge 0$.
     pub cohomology_obstruction: f32,
     /// Threshold above which `cohomology_obstruction` triggers repulsive escape.
@@ -1503,7 +1490,7 @@ impl GuardPhaseAnchor {
     #[inline(always)]
     #[must_use]
     pub const fn new(
-        phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        phase_deltas: [PhaseQ7; MAX_ATTENTION_HEADS],
         cohomology_obstruction: f32,
         obstruction_threshold: f32,
     ) -> Self {
@@ -1538,7 +1525,7 @@ impl CausalProvenanceSignal for GuardPhaseAnchor {
 
 impl CognitiveGroundingSignal for GuardPhaseAnchor {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.phase_deltas
     }
 
@@ -1557,7 +1544,7 @@ impl ContradictionGuardSignal for GuardPhaseAnchor {
     #[inline(always)]
     fn evaluate_repulsion_severity(
         &self,
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        _candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
         branchless_select_f32(
@@ -1575,7 +1562,7 @@ impl ContradictionGuardSignal for GuardPhaseAnchor {
     fn evaluate_repulsion_severity_from_words(
         &self,
         _candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        _candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let obs_exceeded = self.cohomology_obstruction > self.obstruction_threshold;
         branchless_select_f32(
@@ -1604,7 +1591,7 @@ impl CausalProvenanceSignal for ContrastivePhaseBloomFilter {
 
 impl CognitiveGroundingSignal for ContrastivePhaseBloomFilter {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         [0i8; MAX_ATTENTION_HEADS]
     }
     #[inline(always)]
@@ -1621,7 +1608,7 @@ impl ContradictionGuardSignal for ContrastivePhaseBloomFilter {
     #[inline(always)]
     fn evaluate_repulsion_severity(
         &self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let words = load_q7_words_64(candidate_phases);
         self.evaluate_repulsion_severity_from_words(&words, candidate_phases)
@@ -1630,7 +1617,7 @@ impl ContradictionGuardSignal for ContrastivePhaseBloomFilter {
     fn evaluate_repulsion_severity_from_words(
         &self,
         candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        _candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let density = self.query_repulsive_density_from_words(candidate_words);
         branchless_select_f32(

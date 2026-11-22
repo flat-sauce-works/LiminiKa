@@ -1,16 +1,17 @@
 // name: tests/core/test_zero_alloc.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Integration test enforcing zero dynamic heap allocation on the GCSO Hot Path.
+//! Integration test enforcing zero dynamic heap allocation on the LiminiKa Hot Path.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use liminika_core::abi::{
-    gcso_action_hub_resolve_trail_in_swarm, gcso_config_init_default, gcso_config_t,
-    gcso_context_create, gcso_context_destroy, gcso_context_step_token,
-    gcso_dpsr_apply_phase_steering_fused_safe, gcso_pointer_trail_t, GcsoContextHandle,
-    GCSO_SUCCESS,
+    lmnk_config_init_default, lmnk_config_t, lmnk_context_align, lmnk_context_create,
+    lmnk_context_deinit_in_place, lmnk_context_destroy, lmnk_context_init_in_place,
+    lmnk_context_reset, lmnk_context_size, lmnk_context_step_token,
+    lmnk_phase_steering_apply_fused_safe, lmnk_pointer_trail_t,
+    lmnk_substrate_resolve_trail_in_swarm, LmnkContextHandle, LMNK_OK,
 };
 use liminika_core::foundation::{
     AlignedBuffer16, AlignedBuffer32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
@@ -49,20 +50,20 @@ static A: ZeroAllocGuardAllocator = ZeroAllocGuardAllocator;
 #[test]
 fn test_context_step_token_zero_allocation_guarantee() {
     // 1. Setup Context and aligned buffers in Cold Path (allocations allowed here).
-    let mut config = gcso_config_t::default();
+    let mut config = lmnk_config_t::default();
     // SAFETY: `config` is a valid mutable stack reference.
-    let status = unsafe { gcso_config_init_default(&mut config) };
-    assert_eq!(status, GCSO_SUCCESS);
+    let status = unsafe { lmnk_config_init_default(&mut config) };
+    assert_eq!(status, LMNK_OK);
 
-    let mut ctx_handle: GcsoContextHandle = std::ptr::null_mut();
+    let mut ctx_handle: LmnkContextHandle = std::ptr::null_mut();
     // SAFETY: `config` is initialized and `ctx_handle` is a valid out-pointer.
-    let status = unsafe { gcso_context_create(&config, &mut ctx_handle) };
-    assert_eq!(status, GCSO_SUCCESS);
+    let status = unsafe { lmnk_context_create(&config, &mut ctx_handle) };
+    assert_eq!(status, LMNK_OK);
     assert!(!ctx_handle.is_null());
 
     let mut query_buf = AlignedBuffer32::<f32, 128>::new([0.5; 128]);
     let mut key_buf = AlignedBuffer32::<f32, 128>::new([0.25; 128]);
-    let mut trail_out = gcso_pointer_trail_t::default();
+    let mut trail_out = lmnk_pointer_trail_t::default();
 
     const HEAD_DIM: usize = 128;
     const NUM_HEADS: usize = 16;
@@ -83,9 +84,9 @@ fn test_context_step_token_zero_allocation_guarantee() {
     // 3. Execute Hot Path step loop (verified zero-allocation).
     for token_id in 0..100 {
         // SAFETY: `ctx_handle` is valid, `query_buf`/`key_buf` are disjoint 32-byte-aligned
-        // 128-element buffers, and `trail_out` is 128-byte aligned.
+        // 128-element buffers, and `trail_out` is 64-byte aligned.
         let step_status = unsafe {
-            gcso_context_step_token(
+            lmnk_context_step_token(
                 ctx_handle,
                 token_id,
                 query_buf.as_mut_slice().as_mut_ptr(),
@@ -93,11 +94,11 @@ fn test_context_step_token_zero_allocation_guarantee() {
                 &mut trail_out,
             )
         };
-        assert_eq!(step_status, GCSO_SUCCESS);
+        assert_eq!(step_status, LMNK_OK);
 
         // SAFETY: `steer_q` and `steer_k` are disjoint 32B-aligned tensors, `phase_buf` is 16B-aligned.
         let steer_status = unsafe {
-            gcso_dpsr_apply_phase_steering_fused_safe(
+            lmnk_phase_steering_apply_fused_safe(
                 steer_q.as_mut_slice().as_mut_ptr(),
                 steer_k.as_mut_slice().as_mut_ptr(),
                 phase_buf.as_slice().as_ptr(),
@@ -106,11 +107,11 @@ fn test_context_step_token_zero_allocation_guarantee() {
                 DEFAULT_PHASE_CLAMP_MAX_RAD,
             )
         };
-        assert_eq!(steer_status, GCSO_SUCCESS);
+        assert_eq!(steer_status, LMNK_OK);
 
         // SAFETY: `trail_out`, `phase_buf`, and `swarm_report` are valid, aligned, and disjoint.
         let swarm_status = unsafe {
-            gcso_action_hub_resolve_trail_in_swarm(
+            lmnk_substrate_resolve_trail_in_swarm(
                 &mut trail_out,
                 u64::from(token_id) + 1,
                 phase_buf.as_slice().as_ptr(),
@@ -124,14 +125,60 @@ fn test_context_step_token_zero_allocation_guarantee() {
                 &mut swarm_report,
             )
         };
-        assert_eq!(swarm_status, GCSO_SUCCESS);
+        assert_eq!(swarm_status, LMNK_OK);
     }
 
     // 4. Disable Guard before Cold Path cleanup.
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
-    // SAFETY: `ctx_handle` was created by `gcso_context_create` and is destroyed once.
-    let destroy_status = unsafe { gcso_context_destroy(ctx_handle) };
-    assert_eq!(destroy_status, GCSO_SUCCESS);
+    // SAFETY: `ctx_handle` was created by `lmnk_context_create` and is destroyed once.
+    let destroy_status = unsafe { lmnk_context_destroy(ctx_handle) };
+    assert_eq!(destroy_status, LMNK_OK);
+}
+
+#[test]
+fn test_zero_alloc_in_place_context_lifecycle() {
+    #[repr(C, align(64))]
+    struct AlignedContextBacking([u8; 8192]);
+
+    let mut config = lmnk_config_t::default();
+    let mut backing = AlignedContextBacking([0u8; 8192]);
+    let mut q_buf = AlignedBuffer32::<f32, 128>::new([0.5; 128]);
+    let mut k_buf = AlignedBuffer32::<f32, 128>::new([0.25; 128]);
+    let mut trail_out = lmnk_pointer_trail_t::default();
+
+    ENFORCE_ZERO_ALLOC.with(|flag| flag.set(true));
+
+    // SAFETY: Stack backing satisfies `lmnk_context_size()` and 64-byte alignment without heap ops.
+    unsafe {
+        assert_eq!(lmnk_config_init_default(&mut config), LMNK_OK);
+        let req_size = lmnk_context_size();
+        let req_align = lmnk_context_align();
+        assert_eq!(req_align, 64);
+        assert!(req_size > 0 && req_size <= backing.0.len());
+        assert_eq!(
+            lmnk_context_init_in_place(&config, backing.0.as_mut_ptr(), req_size),
+            LMNK_OK
+        );
+        let ctx_handle = backing
+            .0
+            .as_mut_ptr()
+            .cast::<liminika_core::abi::LmnkContextOpaque>();
+        assert_eq!(
+            lmnk_context_step_token(
+                ctx_handle,
+                77,
+                q_buf.as_mut_slice().as_mut_ptr(),
+                k_buf.as_mut_slice().as_mut_ptr(),
+                &mut trail_out,
+            ),
+            LMNK_OK
+        );
+        assert_eq!(trail_out.step_count, 1);
+        assert_eq!(lmnk_context_reset(ctx_handle), LMNK_OK);
+        assert_eq!(lmnk_context_deinit_in_place(ctx_handle), LMNK_OK);
+    }
+
+    ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }
 
 #[test]
@@ -139,8 +186,8 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     use liminika_core::drivers::EGO_TRIGGER_BOUNDARY_CHATTER;
     use liminika_core::foundation::{RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget};
     use liminika_core::runtime::{
-        AutonomousCoreLayerStack, GatewayFrame, HorizonTriggerInput, LatentHorizonSlot,
-        ObjectiveFact, SubjectivePersona, SystemConstraint,
+        CoreStateStack, GatewayFrame, HorizonTriggerInput, LatentHorizonSlot, ObjectiveFact,
+        SubjectivePersona, SystemConstraint,
     };
     use liminika_core::{Config, RuntimeContext};
 
@@ -165,17 +212,17 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         fn on_slide_in_modulate(
             &mut self,
             frame: &mut GatewayFrame,
-            stack: &mut AutonomousCoreLayerStack,
+            stack: &mut CoreStateStack,
             _trigger: &HorizonTriggerInput,
         ) {
-            stack.liminal_layer.active_aperture_mask |= 1 << 5;
+            stack.liminal.active_aperture_mask |= 1 << 5;
             frame.phase_deltas[0] = 16;
         }
     }
 
     let mut ctx = RuntimeContext::new(Config::new()).unwrap();
     let mut q_buf = AlignedBuffer32::<f32, { 128 * 32 }>::new([1.0_f32; 128 * 32]);
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
     let signal = (
         SystemConstraint::new((), 0.2, 0.0, 0xFF),
         ObjectiveFact::new([10i8; 64], 1.2, 0x2000, 11),
@@ -186,7 +233,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
 
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(true));
     for step in 0..32 {
-        ctx.core_layers_mut().ego_layer.last_intervened_mask = if (step & 1) == 0 {
+        ctx.core_layers_mut().ego.last_intervened_mask = if (step & 1) == 0 {
             EGO_TRIGGER_BOUNDARY_CHATTER
         } else {
             0
@@ -203,13 +250,13 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         assert!(res.is_ok());
     }
     let snap = ctx.telemetry_snapshot();
-    assert_eq!(snap.system.total_steps, 32);
+    assert_eq!(snap.spine.total_steps, 32);
 
     // Verify ResidualSpilloverHorizonSlot<4> + Tier-1 cache stays strictly zero-alloc.
     let mut spillover = liminika_core::ResidualSpilloverHorizonSlot::<4>::new();
     let mut no_esc2 = ();
     for _ in 0..8 {
-        ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
+        ctx.core_layers_mut().ego.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
         let res = ctx.pierce_and_orchestrate_step(
             &signal,
             &TestGeom,
@@ -289,14 +336,14 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         },
         &mut dispatch,
     );
-    let part = liminika_core::evaluate_epistemic_partition_branchless(
+    let part = liminika_core::evaluate_lacuna_partition_branchless(
         0b0000_0011,
         &[80, 72, 0, 0, 96, 88, 0, 0],
         &[4; 8],
         40,
     );
-    assert_eq!(part.shared_core_mask, 0b0000_0011);
-    assert_eq!(part.known_unknown_mask, 0b0011_0000);
+    assert_eq!(part.self_ref_mask, 0b0000_0011);
+    assert_eq!(part.exterior_mask, 0b0011_0000);
     let mut tension = liminika_core::DistortionTension::new(true);
     tension.step_hot_path_branchless(40, part.boundary_sensitivity_q7, 32, 16, false);
     let spine = liminika_core::SystemSpineState::new();

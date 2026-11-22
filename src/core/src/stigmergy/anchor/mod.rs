@@ -1,7 +1,7 @@
-// name: src/core/src/stigmergy/crystal/mod.rs
+// name: src/core/src/stigmergy/anchor/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! `.gcso` Crystallized Attractor Record (`CrystallizedAttractorRecord`, 128B `Pod` `"CSTL"`),
+//! `.lmnk` Crystallized Attractor Record (`PhaseAnchorRecord`, 128B `Pod` `"LNKR"`),
 //! Online Toroidal $k$-Means / DP-Means Macro Clustering, Coarse-to-Fine & Top-2 Liminal
 //! Bifurcation Routing, and trail crystallization coordination.
 
@@ -31,8 +31,8 @@ use crate::foundation::{
     coherence_from_uniform_words_x8, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
     crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
     crc32_step_block64_words, crc32_step_l3, crc32_step_l4, crc32_step_l5, crc32_step_l6,
-    gcso_tagged_ptr_t, is_aligned_to, is_word_array_uniform_64, load_q7_words_64,
-    step_toroidal_centroid_words_cached_64, store_q7_words_64, Pod, RawPhaseProjectable,
+    is_aligned_to, is_word_array_uniform_64, load_q7_words_64,
+    step_toroidal_centroid_words_cached_64, store_q7_words_64, Pod, RawPhaseProjectable, TaggedPtr,
     CRC32_IEEE_SLICE16_REF, Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::foundation::{
@@ -40,17 +40,16 @@ use crate::foundation::{
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_q7, branchless_select_usize, gcso_q7_t,
-    AbstractDomain, GcsoResult, Grounded, Indivisible, Scoped, DEFAULT_ENTROPY_EPS,
-    GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED,
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, branchless_select_q7, branchless_select_usize, AbstractDomain, Grounded,
+    Indivisible, LmnkResult, PhaseQ7, Scoped, DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 
 /// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PhaseProfile64(pub [gcso_q7_t; MAX_ATTENTION_HEADS]);
+pub struct PhaseProfile64(pub [PhaseQ7; MAX_ATTENTION_HEADS]);
 
 impl AbstractDomain for PhaseProfile64 {
     const DOMAIN_ID: &'static str = "stigmergy.phase_profile_64";
@@ -59,7 +58,7 @@ impl AbstractDomain for PhaseProfile64 {
 /// Zero-byte domain-tagged borrowed 64-head Q7 phase profile for grounded sample absorption (`Grounded` phase).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct PhaseProfileRef64<'a>(pub &'a [gcso_q7_t; MAX_ATTENTION_HEADS]);
+pub struct PhaseProfileRef64<'a>(pub &'a [PhaseQ7; MAX_ATTENTION_HEADS]);
 
 impl AbstractDomain for PhaseProfileRef64<'_> {
     const DOMAIN_ID: &'static str = "stigmergy.phase_profile_ref_64";
@@ -78,15 +77,15 @@ const _: () = {
     assert!(size_of::<Indivisible<Grounded, PhaseProfile64>>() == MAX_ATTENTION_HEADS);
     assert!(
         align_of::<Indivisible<Grounded, PhaseProfile64>>()
-            == align_of::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+            == align_of::<[PhaseQ7; MAX_ATTENTION_HEADS]>()
     );
     assert!(
         size_of::<Indivisible<Grounded, PhaseProfileRef64<'static>>>()
-            == size_of::<&[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+            == size_of::<&[PhaseQ7; MAX_ATTENTION_HEADS]>()
     );
     assert!(
         align_of::<Indivisible<Grounded, PhaseProfileRef64<'static>>>()
-            == align_of::<&[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+            == align_of::<&[PhaseQ7; MAX_ATTENTION_HEADS]>()
     );
     assert!(
         size_of::<Indivisible<Grounded, PhaseWordsRef64<'static>>>()
@@ -97,15 +96,15 @@ const _: () = {
             == align_of::<&[u64; NUM_STIGMERGIC_GRANULES]>()
     );
 };
-use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_ref};
+use crate::stigmergy::trail::{trail_phase_words_ref, PointerTrail};
 use crate::stigmergy::{ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY};
 
-/// Nominal cause code (`0`) stored in [`CrystallizedAttractorRecord::dominant_cause_code`].
-pub const CRYSTAL_CAUSE_CODE_NOMINAL: u8 = 0;
+/// Nominal cause code (`0`) stored in [`PhaseAnchorRecord::attribution_tag`].
+pub const ANCHOR_ATTRIBUTION_NOMINAL: u8 = 0;
 
-/// Provenance maturity flag (`bit 12`) stamped on [`CrystallizedAttractorRecord::provenance_bits`]
+/// Provenance maturity flag (`bit 12`) stamped on [`PhaseAnchorRecord::lineage_flags`]
 /// once sample count and circular coherence cross the crystallization gate.
-pub const CRYSTAL_PROVENANCE_MATURE_BIT: u32 = 1 << 12;
+pub const ANCHOR_LINEAGE_MATURE_BIT: u32 = 1 << 12;
 
 /// Narrow phase clamp authority (`0.14 rad`) for Objective Fact grounding (`Fact` sub-heads).
 pub const DEFAULT_FACT_PHASE_CLAMP_RAD: f32 = 0.14;
@@ -122,25 +121,37 @@ pub const DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE: f32 = 0.85;
 /// Default secondary-to-primary gravity ratio threshold (`0.55`) triggering Top-2 Liminal Bifurcation Routing.
 pub const DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO: f32 = 0.55;
 
-/// Magic identifier (`0x4C545343` = ASCII `"CSTL"`) for `.gcso` `CrystallizedAttractorRecord` blocks.
-pub const GCSO_CRYSTAL_RECORD_MAGIC: u32 = 0x4C54_5343;
+/// Magic identifier (`0x524B4E4C` = ASCII `"LNKR"`) for `.lmnk` `PhaseAnchorRecord` blocks.
+pub const LMNK_PHASE_ANCHOR_MAGIC: u32 = 0x524B_4E4C;
 
-/// Version constant for `CrystallizedAttractorRecord` binary serialization ([`GCSO_ABI_VERSION_HEX`]).
-pub const GCSO_CRYSTAL_RECORD_VERSION: u32 = GCSO_ABI_VERSION_HEX;
+/// Version constant for `PhaseAnchorRecord` binary serialization ([`LMNK_ABI_VERSION_HEX`]).
+pub const LMNK_PHASE_ANCHOR_VERSION: u32 = LMNK_ABI_VERSION_HEX;
+
+/// Fixed capacity of phase anchors per accumulator (`64`).
+pub const MAX_PHASE_ANCHORS: usize = 64;
+
+/// Maximum dimension supported for embedding vectors in inline zero-alloc storage (`128`).
+pub const MAX_EMBEDDING_DIM: usize = 128;
 
 #[allow(dead_code)]
 pub(crate) const MAX_REGISTER_CACHED_CENTROIDS: usize = 16;
 
 pub(crate) mod crc32_delta;
+/// Online toroidal $k$-means / DP-Means merging and pruning.
 pub mod kmeans;
+/// Coarse-to-fine and Top-2 bifurcation routing over phase anchors.
 pub mod routing;
+/// Episodic phase sample projection and steering traits.
+pub mod sample_steering;
+
+pub use self::sample_steering::*;
 
 pub(crate) use self::crc32_delta::{
     crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b,
 };
 
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous
-/// daughter-attractor birth (`CrystallizedAttractorRecord::step_dissipative_overflow_scatter_or_spawn_64`).
+/// daughter-attractor birth (`PhaseAnchorRecord::step_dissipative_overflow_scatter_or_spawn_64`).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DissipativeOverflowReport {
@@ -200,19 +211,19 @@ impl Default for DissipativeOverflowReport {
 }
 
 /// 128-byte (`#[repr(C, align(64))]`) [`Pod`] record representing a bottom-up crystallized
-/// macro attractor centroid on $SO(2)^{64}$ persisted inside `.gcso` (mapped-storage) containers.
+/// macro attractor centroid on $SO(2)^{64}$ persisted inside `.lmnk` (mapped-storage) containers.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CrystallizedAttractorRecord {
-    /// Format magic identifier (`GCSO_CRYSTAL_RECORD_MAGIC` = `0x4C545343` `"CSTL"`, `offset 0..4`).
+pub struct PhaseAnchorRecord {
+    /// Format magic identifier (`LMNK_PHASE_ANCHOR_MAGIC` = `0x524B4E4C` `"LNKR"`, `offset 0..4`).
     pub magic: u32,
-    /// Record ABI version (`GCSO_CRYSTAL_RECORD_VERSION` = [`crate::liminal::GCSO_ABI_VERSION_HEX`], `offset 4..8`).
+    /// Record ABI version (`LMNK_PHASE_ANCHOR_VERSION` = [`crate::liminal::LMNK_ABI_VERSION_HEX`], `offset 4..8`).
     pub version: u32,
     /// Full 32-bit macro attractor anchor ID on the Single Unified Attractor Manifold (`offset 8..12`).
     pub anchor_id: u32,
     /// Number of coherent sample points absorbed into this centroid (`offset 12..16`).
     pub sample_count: u32,
-    /// Canonical 48-bit `.gcso` (mapped-storage) section offset (`bits 0..=47`, `offset 16..24`).
+    /// Canonical 48-bit `.lmnk` (mapped-storage) section offset (`bits 0..=47`, `offset 16..24`).
     pub mapped_section_offset48: u64,
     /// Accumulated base gravitational energy $E_{\mathrm{base}} \ge 0$ (`offset 24..28`).
     pub base_energy: f32,
@@ -223,11 +234,11 @@ pub struct CrystallizedAttractorRecord {
     /// Phase-Proximity Gravity mass $M_{\mathrm{grav}} = E_{\mathrm{base}} \cdot \bar{R}_c (1 + 0.1 \ln(1 + N))$ (`offset 36..40`).
     pub phase_gravity_mass: f32,
     /// Effective `PhaseClamp` limit in radians ($\theta_{\max}$, `offset 40..44`).
-    pub ripa_clamp_rad: f32,
+    pub phase_clamp_rad: f32,
     /// Effective multiplicative inverse-temperature scale $\beta_{\mathrm{eff}}$ (`offset 44..48`).
     pub effective_inv_temp: f32,
     /// Accumulated causal provenance bitmask (`CAUSAL_AXIS_* | CAUSAL_CAUSE_*`, `offset 48..52`).
-    pub provenance_bits: u32,
+    pub lineage_flags: u32,
     /// IEEE 802.3 CRC32 checksum computed over bytes `[0..52]` and `[56..128]` (`offset 52..56`).
     pub checksum_crc32: u32,
     /// Dominant 3-bit working lane ID (`ATTRACTOR_SLOT_*`, `0..=7`, `offset 56`).
@@ -237,34 +248,34 @@ pub struct CrystallizedAttractorRecord {
     /// Active 8-cell Micro-Swarm mask (`0x00..=0xFF`, `offset 58`).
     pub active_swarm_mask: u8,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`, `offset 59`).
-    pub dominant_cause_code: u8,
+    pub attribution_tag: u8,
     /// Reserved 32-bit zero field aligning `phase_profile` to exact byte offset `64` (`offset 60..64`).
     pub reserved_align64: u32,
     /// Crystallized 64-head Q7 centroid phase profile on $SO(2)^{64}$ (`64` bytes at `offset 64..128`).
-    pub phase_profile: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub phase_profile: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
 
-// SAFETY: `CrystallizedAttractorRecord` is `#[repr(C, align(64))]` of exact size 128 bytes with zero padding.
-unsafe impl Pod for CrystallizedAttractorRecord {}
+// SAFETY: `PhaseAnchorRecord` is `#[repr(C, align(64))]` of exact size 128 bytes with zero padding.
+unsafe impl Pod for PhaseAnchorRecord {}
 
-impl Default for CrystallizedAttractorRecord {
+impl Default for PhaseAnchorRecord {
     #[inline(always)]
     fn default() -> Self {
         Self::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0)
     }
 }
 
-impl CrystallizedAttractorRecord {
+impl PhaseAnchorRecord {
     /// Borrows `self.phase_profile` (`offset 64` of `#[repr(C, align(64))]` [`Self`], guaranteed
     /// 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR reference on little-endian targets,
     /// eliminating 64-byte stack copies and 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls.
     /// Borrows `self.phase_profile` (`offset 64` of `#[repr(C, align(64))]`
-    /// [`CrystallizedAttractorRecord`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
+    /// [`PhaseAnchorRecord`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
     pub const fn phase_words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
         const _: () = assert!(cfg!(target_endian = "little"));
-        // SAFETY: `CrystallizedAttractorRecord` is `#[repr(C, align(64))]` and `phase_profile`
+        // SAFETY: `PhaseAnchorRecord` is `#[repr(C, align(64))]` and `phase_profile`
         // is at exact byte offset 64 (`64 % 8 == 0`), with identical 64-byte layout to `[u64; 8]`.
         unsafe {
             &*(self
@@ -275,12 +286,12 @@ impl CrystallizedAttractorRecord {
     }
 
     /// Mutably borrows `self.phase_profile` (`offset 64` of `#[repr(C, align(64))]`
-    /// [`CrystallizedAttractorRecord`], guaranteed 64-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
+    /// [`PhaseAnchorRecord`], guaranteed 64-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
     pub const fn phase_words_mut(&mut self) -> &mut [u64; NUM_STIGMERGIC_GRANULES] {
         const _: () = assert!(cfg!(target_endian = "little"));
-        // SAFETY: `CrystallizedAttractorRecord` is `#[repr(C, align(64))]` and `phase_profile`
+        // SAFETY: `PhaseAnchorRecord` is `#[repr(C, align(64))]` and `phase_profile`
         // is at exact byte offset 64 (`64 % 8 == 0`), with identical 64-byte layout to `[u64; 8]`.
         unsafe {
             &mut *(self
@@ -304,23 +315,23 @@ impl CrystallizedAttractorRecord {
         mapped_section_offset48: u64,
     ) -> Self {
         Self {
-            magic: GCSO_CRYSTAL_RECORD_MAGIC,
-            version: GCSO_CRYSTAL_RECORD_VERSION,
+            magic: LMNK_PHASE_ANCHOR_MAGIC,
+            version: LMNK_PHASE_ANCHOR_VERSION,
             anchor_id,
             sample_count: 0,
-            mapped_section_offset48: mapped_section_offset48 & gcso_tagged_ptr_t::ADDR_MASK,
+            mapped_section_offset48: mapped_section_offset48 & TaggedPtr::ADDR_MASK,
             base_energy: 0.0,
             resultant_r_bar: 0.0,
             von_mises_kappa: 0.0,
             phase_gravity_mass: 0.0,
-            ripa_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+            phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
             effective_inv_temp: 1.0,
-            provenance_bits: 0,
+            lineage_flags: 0,
             checksum_crc32: 0,
             dominant_slot: dominant_slot & ATTRACTOR_SLOT_ID_MASK,
             action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
             active_swarm_mask: 0xFF,
-            dominant_cause_code: CRYSTAL_CAUSE_CODE_NOMINAL,
+            attribution_tag: ANCHOR_ATTRIBUTION_NOMINAL,
             reserved_align64: 0,
             phase_profile: [0i8; MAX_ATTENTION_HEADS],
         }
@@ -333,7 +344,7 @@ impl CrystallizedAttractorRecord {
             self.dominant_slot,
             self.action_mode_flags,
             self.active_swarm_mask,
-            self.dominant_cause_code,
+            self.attribution_tag,
         ])
     }
 
@@ -348,13 +359,13 @@ impl CrystallizedAttractorRecord {
         let rb_bits = self.resultant_r_bar.to_bits();
         let kp_bits = self.von_mises_kappa.to_bits();
         let gm_bits = self.phase_gravity_mass.to_bits();
-        let cl_bits = self.ripa_clamp_rad.to_bits();
+        let cl_bits = self.phase_clamp_rad.to_bits();
         let tm_bits = self.effective_inv_temp.to_bits();
         let lut = CRC32_IEEE_SLICE16_REF;
         let mut final_acc = 0u32;
 
-        let c0 = if (self.magic == GCSO_CRYSTAL_RECORD_MAGIC)
-            & (self.version == GCSO_CRYSTAL_RECORD_VERSION)
+        let c0 = if (self.magic == LMNK_PHASE_ANCHOR_MAGIC)
+            & (self.version == LMNK_PHASE_ANCHOR_VERSION)
         {
             final_acc ^= CRYSTAL_CRC32_W0_FINAL_CONTRIB;
             if ((self.anchor_id >> 16) == 0) & ((self.sample_count >> 8) == 0) {
@@ -455,20 +466,20 @@ impl CrystallizedAttractorRecord {
             final_acc ^= crc32_step_l5(c2);
         }
 
-        let prov_c = if (self.provenance_bits >> 16) == 0 {
-            final_acc ^= CRC32_CRYSTAL_PROV_BYTE0_REF[(self.provenance_bits & 0xFF) as usize]
-                ^ CRC32_CRYSTAL_PROV_BYTE1_REF[((self.provenance_bits >> 8) & 0xFF) as usize];
+        let prov_c = if (self.lineage_flags >> 16) == 0 {
+            final_acc ^= CRC32_CRYSTAL_PROV_BYTE0_REF[(self.lineage_flags & 0xFF) as usize]
+                ^ CRC32_CRYSTAL_PROV_BYTE1_REF[((self.lineage_flags >> 8) & 0xFF) as usize];
             0
         } else {
-            crc32_slice16_dep_lo0(self.provenance_bits)
+            crc32_slice16_dep_lo0(self.lineage_flags)
         };
         const DEFAULT_W7_MASK_CAUSE_CRC_C3: u32 = CRC32_IEEE_SLICE16_REF[5][0xFF]
-            ^ CRC32_IEEE_SLICE16_REF[4][CRYSTAL_CAUSE_CODE_NOMINAL as usize];
+            ^ CRC32_IEEE_SLICE16_REF[4][ANCHOR_ATTRIBUTION_NOMINAL as usize];
         const DEFAULT_W7_MASK_CAUSE_FINAL_CONTRIB: u32 =
             crc32_step_l4(DEFAULT_W7_MASK_CAUSE_CRC_C3);
         let slot_fast = (self.dominant_slot & 0xF8) == 0;
-        let mask_cause_default = (self.active_swarm_mask == 0xFF)
-            & (self.dominant_cause_code == CRYSTAL_CAUSE_CODE_NOMINAL);
+        let mask_cause_default =
+            (self.active_swarm_mask == 0xFF) & (self.attribution_tag == ANCHOR_ATTRIBUTION_NOMINAL);
         let w7_c = if slot_fast & mask_cause_default {
             final_acc ^= CRC32_CRYSTAL_SLOT_BYTE56_LUT_8[(self.dominant_slot & 7) as usize]
                 ^ CRC32_CRYSTAL_ACTION_BYTE57_REF[self.action_mode_flags as usize]
@@ -479,8 +490,7 @@ impl CrystallizedAttractorRecord {
                 ^ if mask_cause_default {
                     DEFAULT_W7_MASK_CAUSE_CRC_C3
                 } else {
-                    lut[5][self.active_swarm_mask as usize]
-                        ^ lut[4][self.dominant_cause_code as usize]
+                    lut[5][self.active_swarm_mask as usize] ^ lut[4][self.attribution_tag as usize]
                 }
         };
         let res_c = if self.reserved_align64 == 0 {
@@ -513,7 +523,7 @@ impl CrystallizedAttractorRecord {
             .compute_payload_crc32_with_words_raw(&[0u64; NUM_STIGMERGIC_GRANULES]),
     ];
 
-    /// Creates an empty, CRC32-stamped [`CrystallizedAttractorRecord`] ready to absorb sample points.
+    /// Creates an empty, CRC32-stamped [`PhaseAnchorRecord`] ready to absorb sample points.
     #[inline]
     #[must_use]
     pub const fn new_empty(
@@ -624,14 +634,14 @@ impl CrystallizedAttractorRecord {
         self.resultant_r_bar = src.resultant_r_bar;
         self.von_mises_kappa = src.von_mises_kappa;
         self.phase_gravity_mass = src.phase_gravity_mass;
-        self.ripa_clamp_rad = src.ripa_clamp_rad;
+        self.phase_clamp_rad = src.phase_clamp_rad;
         self.effective_inv_temp = src.effective_inv_temp;
-        self.provenance_bits = src.provenance_bits;
+        self.lineage_flags = src.lineage_flags;
         self.checksum_crc32 = src.checksum_crc32;
         self.dominant_slot = src.dominant_slot;
         self.action_mode_flags = src.action_mode_flags;
         self.active_swarm_mask = src.active_swarm_mask;
-        self.dominant_cause_code = src.dominant_cause_code;
+        self.attribution_tag = src.attribution_tag;
         self.reserved_align64 = src.reserved_align64;
         *self.phase_words_mut() = *src.phase_words_ref();
     }
@@ -640,8 +650,7 @@ impl CrystallizedAttractorRecord {
     #[inline(always)]
     #[must_use]
     pub const fn verify_integrity(&self) -> bool {
-        if (self.magic != GCSO_CRYSTAL_RECORD_MAGIC) | (self.version != GCSO_CRYSTAL_RECORD_VERSION)
-        {
+        if (self.magic != LMNK_PHASE_ANCHOR_MAGIC) | (self.version != LMNK_PHASE_ANCHOR_VERSION) {
             return false;
         }
         let pw = self.phase_words_ref();
@@ -651,16 +660,16 @@ impl CrystallizedAttractorRecord {
                 | self.resultant_r_bar.to_bits()
                 | self.von_mises_kappa.to_bits()
                 | self.phase_gravity_mass.to_bits()
-                | self.provenance_bits
+                | self.lineage_flags
                 | self.reserved_align64)
                 == 0)
             && (self.mapped_section_offset48 == 0)
-            && (self.ripa_clamp_rad.to_bits() == DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits())
+            && (self.phase_clamp_rad.to_bits() == DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits())
             && (self.effective_inv_temp.to_bits() == 0x3F80_0000u32)
             && ((self.dominant_slot & !ATTRACTOR_SLOT_ID_MASK) == 0)
             && (self.action_mode_flags == ACTION_PRESET_PASSIVE_SIDECAR)
             && (self.active_swarm_mask == 0xFF)
-            && (self.dominant_cause_code == CRYSTAL_CAUSE_CODE_NOMINAL)
+            && (self.attribution_tag == ANCHOR_ATTRIBUTION_NOMINAL)
             && ((((pw[0] | pw[1]) | (pw[2] | pw[3])) | ((pw[4] | pw[5]) | (pw[6] | pw[7]))) == 0)
         {
             return self.checksum_crc32
@@ -741,7 +750,7 @@ impl CrystallizedAttractorRecord {
         }
 
         if (next_count >= 2) & (r_bar >= 0.45) {
-            self.provenance_bits |= CRYSTAL_PROVENANCE_MATURE_BIT;
+            self.lineage_flags |= ANCHOR_LINEAGE_MATURE_BIT;
         }
         (next_w, grav_mass, words_changed)
     }
@@ -770,7 +779,7 @@ impl CrystallizedAttractorRecord {
             let delta_zoff = prev_zoff ^ self.mapped_section_offset48;
             let delta_rb = prev_rb_bits ^ self.resultant_r_bar.to_bits();
             let delta_kp = prev_kp_bits ^ self.von_mises_kappa.to_bits();
-            let delta_cl = prev_clamp_bits ^ self.ripa_clamp_rad.to_bits();
+            let delta_cl = prev_clamp_bits ^ self.phase_clamp_rad.to_bits();
             let delta_tm = prev_temp_bits ^ self.effective_inv_temp.to_bits();
             let delta_w7 = prev_w7_lo ^ self.pack_w7_lo();
             if (!words_changed)
@@ -786,7 +795,7 @@ impl CrystallizedAttractorRecord {
                     prev_gm_bits ^ self.phase_gravity_mass.to_bits(),
                     delta_cl,
                     delta_tm,
-                    prev_prov ^ self.provenance_bits,
+                    prev_prov ^ self.lineage_flags,
                     delta_w7,
                 );
             } else {
@@ -801,7 +810,7 @@ impl CrystallizedAttractorRecord {
                     prev_gm_bits ^ self.phase_gravity_mass.to_bits(),
                     delta_cl,
                     delta_tm,
-                    prev_prov ^ self.provenance_bits,
+                    prev_prov ^ self.lineage_flags,
                     delta_w7,
                     cur_w,
                     next_w,
@@ -832,9 +841,9 @@ impl CrystallizedAttractorRecord {
         let prev_rb_bits = self.resultant_r_bar.to_bits();
         let prev_kp_bits = self.von_mises_kappa.to_bits();
         let prev_gm_bits = self.phase_gravity_mass.to_bits();
-        let prev_clamp_bits = self.ripa_clamp_rad.to_bits();
+        let prev_clamp_bits = self.phase_clamp_rad.to_bits();
         let prev_temp_bits = self.effective_inv_temp.to_bits();
-        let prev_prov = self.provenance_bits;
+        let prev_prov = self.lineage_flags;
         let prev_w7_lo = self.pack_w7_lo();
         let cur_w = *self.phase_words_ref();
         let sample_w = load_q7_words_64(sample_phases.as_ref().0);
@@ -869,7 +878,7 @@ impl CrystallizedAttractorRecord {
     }
 
     /// Non-generic [`Indivisible<Grounded, _>`] closure constructor crystallizing a verified phase
-    /// profile into a CRC32-stamped I-Frame [`CrystallizedAttractorRecord`].
+    /// profile into a CRC32-stamped I-Frame [`PhaseAnchorRecord`].
     #[inline(always)]
     #[must_use]
     pub fn from_grounded_delta_64(
@@ -1043,24 +1052,24 @@ impl CrystallizedAttractorRecord {
         zoff48: u64,
     ) {
         let slot = dominant_slot & ATTRACTOR_SLOT_ID_MASK;
-        let was_active = (self.sample_count != 0) | (self.magic != GCSO_CRYSTAL_RECORD_MAGIC);
-        self.magic = GCSO_CRYSTAL_RECORD_MAGIC;
-        self.version = GCSO_CRYSTAL_RECORD_VERSION;
+        let was_active = (self.sample_count != 0) | (self.magic != LMNK_PHASE_ANCHOR_MAGIC);
+        self.magic = LMNK_PHASE_ANCHOR_MAGIC;
+        self.version = LMNK_PHASE_ANCHOR_VERSION;
         self.anchor_id = assigned_id;
         self.sample_count = 0;
-        self.mapped_section_offset48 = zoff48 & gcso_tagged_ptr_t::ADDR_MASK;
+        self.mapped_section_offset48 = zoff48 & TaggedPtr::ADDR_MASK;
         self.base_energy = 0.0;
         self.resultant_r_bar = 0.0;
         self.von_mises_kappa = 0.0;
         self.phase_gravity_mass = 0.0;
-        self.ripa_clamp_rad = DEFAULT_PHASE_CLAMP_MAX_RAD;
+        self.phase_clamp_rad = DEFAULT_PHASE_CLAMP_MAX_RAD;
         self.effective_inv_temp = 1.0;
-        self.provenance_bits = 0;
+        self.lineage_flags = 0;
         self.checksum_crc32 = Self::EMPTY_CRYSTAL_CRC32_BY_SLOT[slot as usize];
         self.dominant_slot = slot;
         self.action_mode_flags = ACTION_PRESET_PASSIVE_SIDECAR;
         self.active_swarm_mask = 0xFF;
-        self.dominant_cause_code = CRYSTAL_CAUSE_CODE_NOMINAL;
+        self.attribution_tag = ANCHOR_ATTRIBUTION_NOMINAL;
         self.reserved_align64 = 0;
         if was_active {
             *self.phase_words_mut() = [0u64; NUM_STIGMERGIC_GRANULES];
@@ -1068,55 +1077,55 @@ impl CrystallizedAttractorRecord {
     }
 }
 
-impl CrystallizedAttractorRecord {
-    /// Zero-copy deserialization of `count` [`CrystallizedAttractorRecord`]s from a 64-byte aligned
-    /// `.gcso` (mapped-storage) memory-mapped byte slice with header magic/version and CRC32 validation.
+impl PhaseAnchorRecord {
+    /// Zero-copy deserialization of `count` [`PhaseAnchorRecord`]s from a 64-byte aligned
+    /// `.lmnk` (mapped-storage) memory-mapped byte slice with header magic/version and CRC32 validation.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`], [`GCSO_ERROR_BUFFER_TOO_SMALL`], or
-    /// [`GCSO_ERROR_CONTAINER_CORRUPTED`] on validation failure.
+    /// Returns [`LMNK_ERR_ALIGNMENT`], [`LMNK_ERR_BUFFER_TOO_SMALL`], or
+    /// [`LMNK_ERR_CONTAINER_CORRUPTED`] on validation failure.
     #[inline]
-    pub fn slice_from_container_bytes_zero_copy(bytes: &[u8], count: usize) -> GcsoResult<&[Self]> {
+    pub fn slice_from_container_bytes_zero_copy(bytes: &[u8], count: usize) -> LmnkResult<&[Self]> {
         if count == 0 {
             return Ok(&[]);
         }
         let req_bytes = count
             .checked_mul(size_of::<Self>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         if bytes.len() < req_bytes {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if !is_aligned_to(bytes, align_of::<Self>()) {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: `bytes` is verified 64-byte aligned and at least `count * 128` bytes long, and `Self: Pod`.
         let recs = unsafe { core::slice::from_raw_parts(bytes.as_ptr().cast::<Self>(), count) };
         let mut i = 0usize;
         while i < count {
             if !recs[i].verify_integrity() {
-                return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
             }
             i += 1;
         }
         Ok(recs)
     }
 
-    /// Serializes `records` into a `.gcso` (mapped-storage) byte slice (`dst_bytes`), stamping each
+    /// Serializes `records` into a `.lmnk` (mapped-storage) byte slice (`dst_bytes`), stamping each
     /// record's IEEE 802.3 CRC32 checksum when not already stamped.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < records.len() * 128`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < records.len() * 128`.
     #[inline]
     pub fn write_records_to_container_bytes(
         records: &[Self],
         dst_bytes: &mut [u8],
-    ) -> GcsoResult<usize> {
+    ) -> LmnkResult<usize> {
         let total_bytes = records
             .len()
             .checked_mul(size_of::<Self>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         if dst_bytes.len() < total_bytes {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if total_bytes == 0 {
             return Ok(0);
@@ -1127,12 +1136,12 @@ impl CrystallizedAttractorRecord {
             // in `from_container_bytes_zero_copy` forward cleanly from the x86 Store Buffer with zero
             // 256-bit-to-64-bit Store-to-Load Forwarding (STLF) stalls.
             let expected_w0 =
-                (GCSO_CRYSTAL_RECORD_MAGIC as u64) | ((GCSO_CRYSTAL_RECORD_VERSION as u64) << 32);
+                (LMNK_PHASE_ANCHOR_MAGIC as u64) | ((LMNK_PHASE_ANCHOR_VERSION as u64) << 32);
             let dst_ptr = dst_bytes.as_mut_ptr().cast::<u64>();
             let mut idx = 0usize;
             while idx < records.len() {
                 let r = &records[idx];
-                // SAFETY: `CrystallizedAttractorRecord` is a 128-byte `Pod` with `align >= 8`, so reading as `[u64; 16]` is valid.
+                // SAFETY: `PhaseAnchorRecord` is a 128-byte `Pod` with `align >= 8`, so reading as `[u64; 16]` is valid.
                 let src_w = unsafe { &*core::ptr::from_ref(r).cast::<[u64; 16]>() };
                 let mut w0 = src_w[0];
                 let mut w6 = src_w[6];
@@ -1142,8 +1151,8 @@ impl CrystallizedAttractorRecord {
                         r.compute_payload_crc32()
                     } else {
                         let mut rec = *r;
-                        rec.magic = GCSO_CRYSTAL_RECORD_MAGIC;
-                        rec.version = GCSO_CRYSTAL_RECORD_VERSION;
+                        rec.magic = LMNK_PHASE_ANCHOR_MAGIC;
+                        rec.version = LMNK_PHASE_ANCHOR_VERSION;
                         w0 = expected_w0;
                         rec.compute_payload_crc32()
                     };
@@ -1176,19 +1185,19 @@ impl CrystallizedAttractorRecord {
         while idx < records.len() {
             let r = &records[idx];
             let valid_hdr =
-                (r.magic == GCSO_CRYSTAL_RECORD_MAGIC) & (r.version == GCSO_CRYSTAL_RECORD_VERSION);
+                (r.magic == LMNK_PHASE_ANCHOR_MAGIC) & (r.version == LMNK_PHASE_ANCHOR_VERSION);
             if (!valid_hdr) | (r.checksum_crc32 == 0) {
                 let base_off = idx * size_of::<Self>();
                 let crc = if valid_hdr {
                     r.compute_payload_crc32()
                 } else {
                     let mut rec = *r;
-                    rec.magic = GCSO_CRYSTAL_RECORD_MAGIC;
-                    rec.version = GCSO_CRYSTAL_RECORD_VERSION;
+                    rec.magic = LMNK_PHASE_ANCHOR_MAGIC;
+                    rec.version = LMNK_PHASE_ANCHOR_VERSION;
                     dst_bytes[base_off..base_off + 4]
-                        .copy_from_slice(&GCSO_CRYSTAL_RECORD_MAGIC.to_le_bytes());
+                        .copy_from_slice(&LMNK_PHASE_ANCHOR_MAGIC.to_le_bytes());
                     dst_bytes[base_off + 4..base_off + 8]
-                        .copy_from_slice(&GCSO_CRYSTAL_RECORD_VERSION.to_le_bytes());
+                        .copy_from_slice(&LMNK_PHASE_ANCHOR_VERSION.to_le_bytes());
                     rec.compute_payload_crc32()
                 };
                 dst_bytes[base_off + 52..base_off + 56].copy_from_slice(&crc.to_le_bytes());
@@ -1200,22 +1209,31 @@ impl CrystallizedAttractorRecord {
 }
 
 const _: () = {
-    assert!(size_of::<CrystallizedAttractorRecord>() == 128);
-    assert!(align_of::<CrystallizedAttractorRecord>() == 64);
-    assert!(offset_of!(CrystallizedAttractorRecord, magic) == 0);
-    assert!(offset_of!(CrystallizedAttractorRecord, version) == 4);
-    assert!(offset_of!(CrystallizedAttractorRecord, anchor_id) == 8);
-    assert!(offset_of!(CrystallizedAttractorRecord, sample_count) == 12);
-    assert!(offset_of!(CrystallizedAttractorRecord, mapped_section_offset48) == 16);
-    assert!(offset_of!(CrystallizedAttractorRecord, checksum_crc32) == 52);
-    assert!(offset_of!(CrystallizedAttractorRecord, dominant_slot) == 56);
-    assert!(offset_of!(CrystallizedAttractorRecord, reserved_align64) == 60);
-    assert!(offset_of!(CrystallizedAttractorRecord, phase_profile) == 64);
+    assert!(MAX_PHASE_ANCHORS == 64);
+    assert!(size_of::<PhaseAnchorRecord>() == 128);
+    assert!(align_of::<PhaseAnchorRecord>() == 64);
+    assert!(offset_of!(PhaseAnchorRecord, magic) == 0);
+    assert!(offset_of!(PhaseAnchorRecord, version) == 4);
+    assert!(offset_of!(PhaseAnchorRecord, anchor_id) == 8);
+    assert!(offset_of!(PhaseAnchorRecord, sample_count) == 12);
+    assert!(offset_of!(PhaseAnchorRecord, mapped_section_offset48) == 16);
+    assert!(offset_of!(PhaseAnchorRecord, base_energy) == 24);
+    assert!(offset_of!(PhaseAnchorRecord, resultant_r_bar) == 28);
+    assert!(offset_of!(PhaseAnchorRecord, von_mises_kappa) == 32);
+    assert!(offset_of!(PhaseAnchorRecord, phase_gravity_mass) == 36);
+    assert!(offset_of!(PhaseAnchorRecord, phase_clamp_rad) == 40);
+    assert!(offset_of!(PhaseAnchorRecord, effective_inv_temp) == 44);
+    assert!(offset_of!(PhaseAnchorRecord, lineage_flags) == 48);
+    assert!(offset_of!(PhaseAnchorRecord, checksum_crc32) == 52);
+    assert!(offset_of!(PhaseAnchorRecord, dominant_slot) == 56);
+    assert!(offset_of!(PhaseAnchorRecord, attribution_tag) == 59);
+    assert!(offset_of!(PhaseAnchorRecord, reserved_align64) == 60);
+    assert!(offset_of!(PhaseAnchorRecord, phase_profile) == 64);
 };
 
-impl RawPhaseProjectable for CrystallizedAttractorRecord {
+impl RawPhaseProjectable for PhaseAnchorRecord {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.phase_profile
     }
     #[inline(always)]
@@ -1228,15 +1246,15 @@ impl RawPhaseProjectable for CrystallizedAttractorRecord {
 /// returning `Ok((0.0, 0.0))` with zeroed `profile_out` if total trail weight is zero.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `coherent_trails` is empty or `min_coherence_r_bar` is non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `coherent_trails` is empty or `min_coherence_r_bar` is non-finite.
 #[inline]
 pub fn quantize_persistent_topological_mode(
-    coherent_trails: &[gcso_pointer_trail_t],
+    coherent_trails: &[PointerTrail],
     min_coherence_r_bar: f32,
-    profile_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> GcsoResult<(f32, f32)> {
+    profile_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+) -> LmnkResult<(f32, f32)> {
     if coherent_trails.is_empty() || !branchless_is_finite_f32(min_coherence_r_bar) {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let mut candidate = [0i8; MAX_ATTENTION_HEADS];
@@ -1276,7 +1294,7 @@ pub fn quantize_persistent_topological_mode(
                 let w0 = tw[0];
                 if is_word_array_uniform_64(&tw) {
                     if w0 == w0.rotate_right(8) {
-                        let (s, c) = branchless_sincos_q7(w0 as gcso_q7_t);
+                        let (s, c) = branchless_sincos_q7(w0 as PhaseQ7);
                         uniform_s += w * s;
                         uniform_c += w * c;
                     } else {
@@ -1284,7 +1302,7 @@ pub fn quantize_persistent_topological_mode(
                         let b = w0.to_le_bytes();
                         let mut lane = 0usize;
                         while lane < 8 {
-                            let (s, c) = branchless_sincos_q7(b[lane] as gcso_q7_t);
+                            let (s, c) = branchless_sincos_q7(b[lane] as PhaseQ7);
                             word_s[lane] += w * s;
                             word_c[lane] += w * c;
                             lane += 1;
@@ -1298,7 +1316,7 @@ pub fn quantize_persistent_topological_mode(
                         let b = tw[cell].to_le_bytes();
                         let mut lane = 0usize;
                         while lane < 8 {
-                            let (s, c) = branchless_sincos_q7(b[lane] as gcso_q7_t);
+                            let (s, c) = branchless_sincos_q7(b[lane] as PhaseQ7);
                             sum_s[cell][lane] += w * s;
                             sum_c[cell][lane] += w * c;
                             lane += 1;
@@ -1387,7 +1405,7 @@ mod grounded_gate_tests {
     fn test_grounded_closure_gate_allows_verified_and_bridged_blocks_unbridged() {
         let phases = [18_i8; MAX_ATTENTION_HEADS];
 
-        let mut direct = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
+        let mut direct = PhaseAnchorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
         let direct_grounded = Scoped::interior(PhaseProfileRef64(&phases)).into_grounded();
         assert_eq!(
             direct_grounded.domain_id(),
@@ -1395,7 +1413,7 @@ mod grounded_gate_tests {
         );
         let direct_mass = direct.absorb_sample_point_64(direct_grounded, 1.5);
 
-        let mut aligned_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
+        let mut aligned_rec = PhaseAnchorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
         let verified: VerifiedAligned<PhaseProfileRef64<'_>> =
             match Scoped::from_boundary(PhaseProfileRef64(&phases)).cut_by_lacuna_q7(true, 1, 4) {
                 ScopedCut::SelfRef(s) => s,
@@ -1413,7 +1431,7 @@ mod grounded_gate_tests {
         let blocked = spec.bridge_to_shared(0).unwrap_err();
         let bridged: BridgedDiscovery<PhaseProfileRef64<'_>> = blocked.bridge_to_shared(1).unwrap();
 
-        let mut bridged_rec = CrystallizedAttractorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
+        let mut bridged_rec = PhaseAnchorRecord::new_empty(7, ATTRACTOR_SLOT_PERSONA, 0);
         let bridged_mass = bridged_rec.absorb_sample_point_64(bridged.into_grounded(), 1.5);
         assert_eq!(bridged_mass.to_bits(), direct_mass.to_bits());
         assert_eq!(bridged_rec, direct);
@@ -1424,18 +1442,14 @@ mod grounded_gate_tests {
         let mut out = [0i8; MAX_ATTENTION_HEADS];
         assert_eq!(
             quantize_persistent_topological_mode(&[], 0.5, &mut out),
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
+            Err(LMNK_ERR_INVALID_ARGUMENT)
         );
         assert_eq!(
-            quantize_persistent_topological_mode(
-                &[gcso_pointer_trail_t::default()],
-                f32::NAN,
-                &mut out
-            ),
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
+            quantize_persistent_topological_mode(&[PointerTrail::default()], f32::NAN, &mut out),
+            Err(LMNK_ERR_INVALID_ARGUMENT)
         );
 
-        let t0 = gcso_pointer_trail_t {
+        let t0 = PointerTrail {
             stigmergic_density: 1.5,
             attractor_pull_force: 1.0,
             accumulated_phase_delta: [28i8; MAX_ATTENTION_HEADS],
@@ -1445,13 +1459,13 @@ mod grounded_gate_tests {
         assert!(r0 > 0.99 && k0 > 10.0);
         assert_eq!(out, [28i8; MAX_ATTENTION_HEADS]);
 
-        let t1 = gcso_pointer_trail_t {
+        let t1 = PointerTrail {
             stigmergic_density: 2.0,
             attractor_pull_force: 1.0,
             accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
             ..Default::default()
         };
-        let mut t2 = gcso_pointer_trail_t {
+        let mut t2 = PointerTrail {
             stigmergic_density: 2.5,
             attractor_pull_force: 1.0,
             accumulated_phase_delta: [30i8; MAX_ATTENTION_HEADS],

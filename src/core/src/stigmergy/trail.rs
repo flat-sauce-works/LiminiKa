@@ -1,7 +1,7 @@
 // name: src/core/src/stigmergy/trail.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Canonical Layer 2 [`gcso_pointer_trail_t`] POD descriptor, word accessors,
+//! Canonical Layer 2 [`PointerTrail`] POD descriptor, word accessors,
 //! tagged-pointer action mode orchestration, pointer-trail operations, Bayesian trail attention modulation,
 //! trail chain cohomology, [`PointerSubstrate`], and [`StigmergicSubstrateOps`].
 
@@ -9,7 +9,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(non_camel_case_types)]
 #![allow(clippy::must_use_candidate)]
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
@@ -34,18 +33,18 @@ use crate::foundation::{
     swar_q7_phase_step_filter_words_64, swar_q7_scale_le128_with_bias_x8,
     swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64, swar_words_nonzero_64,
     unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, AlignedSlice32, AlignedSliceMut32,
-    PhaseSteering, Pod, RawPhaseProjectable, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
+    Pod, RawPhaseProjectable, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
     ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
     ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_GRAVITY_EPS,
     MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257_REF, SWAR_SPLAT_BYTE_64,
 };
-pub use crate::foundation::{gcso_paged_bitmask_t, gcso_tagged_ptr_t};
+pub use crate::foundation::{PagedBitmask, TaggedPtr};
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_q7_t, BitCut32, BitCut8, GcsoResult, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT,
+    BitCut32, BitCut8, LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_STIGMERGY_WIDE,
 };
-pub use crate::stigmergy::ledger::gcso_ledger_slot_t;
+pub use crate::stigmergy::ledger::LedgerSlot;
 use crate::stigmergy::ledger::{
     eval_bitmask_dyadic_ultrametric, ContrastivePhaseBloomFilter, FastPathLedger,
 };
@@ -58,69 +57,76 @@ use crate::stigmergy::{
     TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED,
     TRAIL_FLAG_SYNERGY_RESONANCE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
 };
-/// Stigmergic pointer trail structure aligned to 128 bytes (2 cache lines, Section 5.4.C).
-#[repr(C, align(128))]
+/// Stigmergic pointer trail structure aligned to 64 bytes (2 cache lines, 128 bytes total).
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct gcso_pointer_trail_t {
-    /// Current 64-bit tagged memory pointer address.
+pub struct PointerTrail {
+    /// Current 64-bit tagged memory pointer address (`offset 0..8`).
     pub current_ptr: u64,
-    /// Previous 64-bit tagged memory pointer address.
+    /// Previous 64-bit tagged memory pointer address (`offset 8..16`).
     pub prev_ptr: u64,
-    /// Extensible caller payload data.
+    /// Extensible caller payload data (`offset 16..24`).
     pub user_data: u64,
-    /// Accumulated graph edge traversal cost.
+    /// Accumulated graph edge traversal cost (`offset 24..28`).
     pub transition_cost: i32,
-    /// Total path execution steps taken along this trail.
+    /// Total path execution steps taken along this trail (`offset 28..32`).
     pub step_count: u32,
-    /// Local stigmergic trail density ($\rho_{\mathrm{stigmergy}}$) for cellular swarm routing.
+    /// Local stigmergic trail density ($\rho_{\mathrm{stigmergy}}$) for cellular swarm routing (`offset 32..36`).
     pub stigmergic_density: f32,
-    /// Full 32-bit identifier of the dominant macro attractor anchor on the unified phase manifold.
+    /// Full 32-bit identifier of the dominant macro attractor anchor on the unified phase manifold (`offset 36..40`).
     pub target_anchor_id: u32,
-    /// Active topological cluster / macro centroid identifier (or 3-bit working lane ID `0..=7`).
+    /// Active topological cluster / macro centroid identifier (or 3-bit working lane ID `0..=7`, `offset 40..44`).
     pub cluster_id: u32,
-    /// Linked adjacent cellular trail identifier along the pointer chain.
+    /// Linked adjacent cellular trail identifier along the pointer chain (`offset 44..48`).
     pub linked_trail_id: u32,
-    /// Gravitational pull force ($F_{\mathrm{pull}}$) exerted by nearby attractor(s).
+    /// Gravitational pull force ($F_{\mathrm{pull}}$) exerted by nearby attractor(s) (`offset 48..52`).
     pub attractor_pull_force: f32,
-    /// Execution status, synergy resonance, Limina beat, and repulsion bitmask flags.
+    /// Execution status, synergy resonance, Limina beat, and repulsion bitmask flags (`offset 52..56`).
     pub flags: u32,
-    /// Accumulated Q7 phase rotation state across 64 attention heads.
-    pub accumulated_phase_delta: [gcso_q7_t; 64],
-    /// Alignment padding to guarantee exact 128-byte boundary.
-    pub reserved_padding: [u8; 8],
+    /// Explicit header padding aligning `accumulated_phase_delta` to CL1 (`offset 56..64`).
+    pub reserved_header: [u8; 8],
+    /// Accumulated Q7 phase rotation state across 64 attention heads (`offset 64..128`, 1 cache line).
+    pub accumulated_phase_delta: [PhaseQ7; 64],
 }
 
-impl Default for gcso_pointer_trail_t {
+impl Default for PointerTrail {
     #[inline(always)]
     fn default() -> Self {
-        // SAFETY: `gcso_pointer_trail_t` is a C-ABI `Pod` struct where all-zero bytes are valid.
+        // SAFETY: `PointerTrail` is a Canonical Little-Endian `Pod` struct where all-zero bytes are valid.
         unsafe { core::mem::zeroed() }
     }
 }
 
-// SAFETY: `gcso_pointer_trail_t` is `#[repr(C, align(128))]` with explicit alignment padding and zero traps.
-unsafe impl Pod for gcso_pointer_trail_t {}
+// SAFETY: `PointerTrail` is `#[repr(C, align(64))]` with explicit alignment padding and zero traps.
+unsafe impl Pod for PointerTrail {}
 
-/// Borrows `trail.accumulated_phase_delta` (`offset 56` of `#[repr(C, align(128))]` [`gcso_pointer_trail_t`],
-/// guaranteed 8-byte aligned) as a zero-copy `&[u64; 8]` SWAR reference on little-endian targets,
+const _: () = {
+    assert!(core::mem::size_of::<PointerTrail>() == 128);
+    assert!(core::mem::align_of::<PointerTrail>() == 64);
+    assert!(core::mem::offset_of!(PointerTrail, reserved_header) == 56);
+    assert!(core::mem::offset_of!(PointerTrail, accumulated_phase_delta) == 64);
+};
+
+/// Borrows `trail.accumulated_phase_delta` (`offset 64` of `#[repr(C, align(64))]` [`PointerTrail`],
+/// guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR reference on little-endian targets,
 /// eliminating 64-byte stack copies and 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls.
 #[inline(always)]
 #[must_use]
-pub const fn trail_phase_words_ref(trail: &gcso_pointer_trail_t) -> &[u64; 8] {
+pub const fn trail_phase_words_ref(trail: &PointerTrail) -> &[u64; 8] {
     const _: () = assert!(cfg!(target_endian = "little"));
-    // SAFETY: `gcso_pointer_trail_t` is `#[repr(C, align(128))]` and `accumulated_phase_delta` is at
-    // byte offset 56 (`56 % 8 == 0`, 8-byte aligned), with identical 64-byte layout to `[u64; 8]`.
+    // SAFETY: `PointerTrail` is `#[repr(C, align(64))]` and `accumulated_phase_delta` is at
+    // byte offset 64 (64-byte cache-line aligned), with identical 64-byte layout to `[u64; 8]`.
     unsafe { &*(trail.accumulated_phase_delta.as_ptr().cast::<[u64; 8]>()) }
 }
 
-/// Mutably borrows `trail.accumulated_phase_delta` (`offset 56` of `#[repr(C, align(128))]`
-/// [`gcso_pointer_trail_t`], guaranteed 8-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
+/// Mutably borrows `trail.accumulated_phase_delta` (`offset 64` of `#[repr(C, align(64))]`
+/// [`PointerTrail`], guaranteed 64-byte aligned) as a zero-copy `&mut [u64; 8]` SWAR array.
 #[inline(always)]
 #[must_use]
-pub const fn trail_phase_words_mut(trail: &mut gcso_pointer_trail_t) -> &mut [u64; 8] {
+pub const fn trail_phase_words_mut(trail: &mut PointerTrail) -> &mut [u64; 8] {
     const _: () = assert!(cfg!(target_endian = "little"));
-    // SAFETY: `gcso_pointer_trail_t` is `#[repr(C, align(128))]` and `accumulated_phase_delta` is at
-    // byte offset 56 (`56 % 8 == 0`, 8-byte aligned), with identical 64-byte layout to `[u64; 8]`.
+    // SAFETY: `PointerTrail` is `#[repr(C, align(64))]` and `accumulated_phase_delta` is at
+    // byte offset 64 (64-byte cache-line aligned), with identical 64-byte layout to `[u64; 8]`.
     unsafe {
         &mut *(trail
             .accumulated_phase_delta
@@ -129,9 +135,9 @@ pub const fn trail_phase_words_mut(trail: &mut gcso_pointer_trail_t) -> &mut [u6
     }
 }
 
-impl RawPhaseProjectable for gcso_pointer_trail_t {
+impl RawPhaseProjectable for PointerTrail {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.accumulated_phase_delta
     }
     #[inline(always)]
@@ -173,7 +179,7 @@ pub(super) fn eval_candidate_trail_words_with_macro_fast(
     self_b0: u8,
     cur_linked_id: u32,
     cand_id: u32,
-    cand: &gcso_pointer_trail_t,
+    cand: &PointerTrail,
     phase_scale: f32,
     clean_eta: f32,
     clean_link: f32,
@@ -286,7 +292,7 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
     self_v1: core::arch::x86_64::__m256i,
     cur_linked_id: u32,
     cand_id: u32,
-    cand: &gcso_pointer_trail_t,
+    cand: &PointerTrail,
     phase_scale: f32,
     clean_eta: f32,
     clean_link: f32,
@@ -308,7 +314,7 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
 ) {
     // SAFETY: Caller guarantees `target_feature = "avx2"`. Keeps `(self_v0, self_v1)` and
     // `(win_v0, win_v1)` hoisted in YMM registers across the candidate loop and loads each
-    // candidate's offset-56 phase profile via 8-byte aligned GPR loads (`trail_phase_words_ref`)
+    // candidate's offset-64 phase profile via 64-byte aligned GPR loads (`trail_phase_words_ref`)
     // to eliminate 64B cache-line splits and 4-to-1 GPR-store-to-YMM-load STLF stalls.
     unsafe {
         use core::arch::x86_64::_mm256_sub_epi8;
@@ -417,10 +423,10 @@ unsafe fn eval_candidate_trail_avx2_with_macro_fast(
 }
 
 // ===================================================================
-// 3. Pointer-Driven Action Mode Orchestration (`gcso_tagged_ptr_t`)
+// 3. Pointer-Driven Action Mode Orchestration (`TaggedPtr`)
 // ===================================================================
 
-impl gcso_tagged_ptr_t {
+impl TaggedPtr {
     /// Packs a 48-bit address, 3-bit target working lane (`0..=7`), 5-bit action mode mask, and Q7 phase.
     #[inline(always)]
     #[must_use]
@@ -428,7 +434,7 @@ impl gcso_tagged_ptr_t {
         raw_addr: u64,
         attractor_slot_id: u8,
         action_mode_flags: u8,
-        phase_q7: gcso_q7_t,
+        phase_q7: PhaseQ7,
     ) -> Self {
         Self::pack(
             raw_addr,
@@ -516,9 +522,9 @@ impl gcso_tagged_ptr_t {
 /// and returning the post-bridged 8 `u64` SWAR words (`0` redundant stack/memory reloads).
 #[inline]
 pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
-    trail: &mut gcso_pointer_trail_t,
+    trail: &mut PointerTrail,
     mut self_w: [u64; NUM_STIGMERGIC_GRANULES],
-    candidate_trails: &[gcso_pointer_trail_t],
+    candidate_trails: &[PointerTrail],
     mut attention_scores_opt: Option<&mut [f32]>,
     head_dim: u32,
     phase_interference_gain: f32,
@@ -753,10 +759,10 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     )
 }
 
-impl gcso_pointer_trail_t {
+impl PointerTrail {
     /// Copies `src` and pre-loaded `phase_words` into `self` using width-matched scalar writes and
-    /// 8-byte aligned 64-bit GPR stores (`*trail_phase_words_mut(self) = *phase_words`) at byte
-    /// offset `56..120`, avoiding unaligned 256-bit `vmovdqu` cache-line splits, 256-bit-to-64-bit
+    /// 64-byte aligned 64-bit GPR stores (`*trail_phase_words_mut(self) = *phase_words`) at byte
+    /// offset `64..128`, avoiding unaligned 256-bit `vmovdqu` cache-line splits, 256-bit-to-64-bit
     /// Store-to-Load Forwarding (STLF) pipeline stalls, and redundant 64-byte reloads from `src`.
     #[inline(always)]
     pub fn copy_from_with_words_fast(
@@ -775,8 +781,8 @@ impl gcso_pointer_trail_t {
         self.linked_trail_id = src.linked_trail_id;
         self.attractor_pull_force = src.attractor_pull_force;
         self.flags = src.flags;
+        self.reserved_header = src.reserved_header;
         *trail_phase_words_mut(self) = *phase_words;
-        self.reserved_padding = src.reserved_padding;
     }
 
     /// Restores `self` from `src` using width-matched scalar writes and 64-bit GPR stores
@@ -801,12 +807,12 @@ impl gcso_pointer_trail_t {
         self.linked_trail_id = 0;
         self.attractor_pull_force = 0.0;
         self.flags = 0;
+        self.reserved_header = [0; 8];
         *trail_phase_words_mut(self) = [0u64; NUM_STIGMERGIC_GRANULES];
-        self.reserved_padding = [0; 8];
     }
 }
 
-impl gcso_pointer_trail_t {
+impl PointerTrail {
     /// Records an $\mathcal{O}(1)$ tagged pointer transition and reinforces stigmergic trail density.
     #[inline(always)]
     pub fn record_pointer_transition(&mut self, next_ptr: u64, edge_cost: i32, density_boost: f32) {
@@ -821,7 +827,7 @@ impl gcso_pointer_trail_t {
 
     /// Accumulates a 64-head Q7 phase delta vector into the trail's phase state using branchless saturation.
     #[inline(always)]
-    pub fn accumulate_phase_vector(&mut self, delta_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) {
+    pub fn accumulate_phase_vector(&mut self, delta_phases: &[PhaseQ7; MAX_ATTENTION_HEADS]) {
         let d = load_q7_words_64(delta_phases);
         let w = trail_phase_words_mut(self);
         swar_or_avx2_q7_add_sat_words_64(w, &d);
@@ -829,7 +835,7 @@ impl gcso_pointer_trail_t {
 
     /// Accumulates a uniform Q7 phase delta across all 64 heads in-place using 8-lane SWAR saturation.
     #[inline(always)]
-    pub fn accumulate_uniform_phase(&mut self, delta_q7: gcso_q7_t) {
+    pub fn accumulate_uniform_phase(&mut self, delta_q7: PhaseQ7) {
         let splat_u64 = ((delta_q7 as u8) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let w = trail_phase_words_mut(self);
         w[0] = swar_q7_add_sat_x8(w[0], splat_u64);
@@ -846,7 +852,7 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn geodesic_blend_phase_with(
         &mut self,
-        target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         t_u7: u8,
     ) {
         if t_u7 == 0 {
@@ -875,7 +881,7 @@ impl gcso_pointer_trail_t {
         w[5] = swar_q7_neg_sat_x8(w[5]);
         w[6] = swar_q7_neg_sat_x8(w[6]);
         w[7] = swar_q7_neg_sat_x8(w[7]);
-        self.current_ptr = gcso_tagged_ptr_t(self.current_ptr).conjugate_phase().raw();
+        self.current_ptr = TaggedPtr(self.current_ptr).conjugate_phase().raw();
         self.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
     }
 
@@ -891,25 +897,25 @@ impl gcso_pointer_trail_t {
         (self.stigmergic_density >= crystal_threshold) & (crystal_threshold > 0.0)
     }
 
-    /// Returns `current_ptr` wrapped as a strongly-typed [`gcso_tagged_ptr_t`].
+    /// Returns `current_ptr` wrapped as a strongly-typed [`TaggedPtr`].
     #[inline(always)]
-    pub fn current_tagged_ptr(&self) -> gcso_tagged_ptr_t {
-        gcso_tagged_ptr_t(self.current_ptr)
+    pub fn current_tagged_ptr(&self) -> TaggedPtr {
+        TaggedPtr(self.current_ptr)
     }
-    /// Returns `prev_ptr` wrapped as a strongly-typed [`gcso_tagged_ptr_t`].
+    /// Returns `prev_ptr` wrapped as a strongly-typed [`TaggedPtr`].
     #[inline(always)]
-    pub fn prev_tagged_ptr(&self) -> gcso_tagged_ptr_t {
-        gcso_tagged_ptr_t(self.prev_ptr)
+    pub fn prev_tagged_ptr(&self) -> TaggedPtr {
+        TaggedPtr(self.prev_ptr)
     }
     /// Extracts the active 5-bit Action Mode bitmask (`ACTION_MODE_*`) embedded in `current_ptr`.
     #[inline(always)]
     pub fn active_action_mode(&self) -> u8 {
-        gcso_tagged_ptr_t(self.current_ptr).action_mode_flags()
+        TaggedPtr(self.current_ptr).action_mode_flags()
     }
     /// Extracts the 3-bit Target Attractor Working Lane ID (`0..=7`) embedded in `current_ptr`.
     #[inline(always)]
     pub fn target_attractor_slot(&self) -> u8 {
-        gcso_tagged_ptr_t(self.current_ptr).target_attractor_slot()
+        TaggedPtr(self.current_ptr).target_attractor_slot()
     }
     /// Extracts the 8-bit Micro-Swarm Quorum bitmask (`bits 8..=15`) embedded in `self.flags`.
     #[inline(always)]
@@ -937,16 +943,12 @@ impl gcso_pointer_trail_t {
         next_addr: u64,
         attractor_slot_id: u8,
         action_mode_flags: u8,
-        phase_q7: gcso_q7_t,
+        phase_q7: PhaseQ7,
         edge_cost: i32,
         density_boost: f32,
     ) {
-        let packed = gcso_tagged_ptr_t::pack_action(
-            next_addr,
-            attractor_slot_id,
-            action_mode_flags,
-            phase_q7,
-        );
+        let packed =
+            TaggedPtr::pack_action(next_addr, attractor_slot_id, action_mode_flags, phase_q7);
         self.record_pointer_transition(packed.raw(), edge_cost, density_boost);
         self.cluster_id = u32::from(attractor_slot_id & ATTRACTOR_SLOT_ID_MASK);
         let phase_steer_on = (action_mode_flags & ACTION_MODE_PHASE_STEER) != 0;
@@ -966,8 +968,8 @@ impl gcso_pointer_trail_t {
         dominant_attractor_slot: u8,
         low_entropy_skip_thresh: f32,
         high_density_rank1_thresh: f32,
-    ) -> gcso_tagged_ptr_t {
-        let evolved = gcso_tagged_ptr_t(self.current_ptr).evolve_mode_stigmergically(
+    ) -> TaggedPtr {
+        let evolved = TaggedPtr(self.current_ptr).evolve_mode_stigmergically(
             self.stigmergic_density,
             entropy_h_tilde,
             repulsion_triggered,
@@ -995,7 +997,7 @@ impl gcso_pointer_trail_t {
 
     /// Evaluates circular phase coherence $\mathcal{C}_{\mathrm{phase}} \in [-1.0, 1.0]$ with `slot_phases`.
     #[inline(always)]
-    pub fn phase_coherence_with(&self, slot_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> f32 {
+    pub fn phase_coherence_with(&self, slot_phases: &[PhaseQ7; MAX_ATTENTION_HEADS]) -> f32 {
         coherence_from_word_arrays_64(trail_phase_words_ref(self), &load_q7_words_64(slot_phases))
     }
 
@@ -1003,7 +1005,7 @@ impl gcso_pointer_trail_t {
     /// alongside its Phase-Proximity Gravity mass $M_{\mathrm{grav}} = \rho_{\mathrm{stigmergy}} / (1 - \bar{R}_c + \epsilon)$
     /// in $\mathcal{O}(1)$ division-free (`0 fdiv`) mode.
     #[inline(always)]
-    pub fn evaluate_trail_circular_stats_and_gravity(&self) -> (f32, gcso_q7_t, f32, f32) {
+    pub fn evaluate_trail_circular_stats_and_gravity(&self) -> (f32, PhaseQ7, f32, f32) {
         let (r_bar, mean_q7, kappa) = circular_resultant_from_words_64(trail_phase_words_ref(self));
         let gravity = branchless_phase_proximity_gravity_f32(
             self.stigmergic_density,
@@ -1018,7 +1020,7 @@ impl gcso_pointer_trail_t {
     #[inline]
     pub fn apply_unified_field_anchor_resonance(
         &mut self,
-        anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         anchor_base_energy: f32,
     ) -> (f32, f32) {
         let clean_energy = branchless_flush_subnormal_f32(branchless_relu_f32(anchor_base_energy));
@@ -1096,9 +1098,9 @@ impl gcso_pointer_trail_t {
     pub fn apply_unified_field_anchor_slice_resonance_from_words(
         &mut self,
         init_w: [u64; NUM_STIGMERGIC_GRANULES],
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+        anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
+        repulsion_phases_and_strength: Option<(&[PhaseQ7; MAX_ATTENTION_HEADS], f32)>,
     ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]) {
         let (
             mut run_w,
@@ -1123,7 +1125,7 @@ impl gcso_pointer_trail_t {
 
         self.target_anchor_id = dominant_anchor_id;
         let lane_tag = (dominant_anchor_id as u8) & ATTRACTOR_SLOT_ID_MASK;
-        let cur_ptr = gcso_tagged_ptr_t(self.current_ptr);
+        let cur_ptr = TaggedPtr(self.current_ptr);
         let updated_ptr = cur_ptr.with_action_and_slot(
             branchless_select_u8(has_active, lane_tag, cur_ptr.target_attractor_slot()),
             cur_ptr.action_mode_flags()
@@ -1155,9 +1157,9 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn apply_unified_field_anchor_slice_resonance_to_words(
         &mut self,
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+        anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
+        repulsion_phases_and_strength: Option<(&[PhaseQ7; MAX_ATTENTION_HEADS], f32)>,
     ) -> (f32, f32, u32, [u64; NUM_STIGMERGIC_GRANULES]) {
         let init_w = *trail_phase_words_ref(self);
         self.apply_unified_field_anchor_slice_resonance_from_words(
@@ -1174,9 +1176,9 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn apply_unified_field_anchor_slice_resonance(
         &mut self,
-        anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+        anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
         anchor_base_energies: &[f32],
-        repulsion_phases_and_strength: Option<(&[gcso_q7_t; MAX_ATTENTION_HEADS], f32)>,
+        repulsion_phases_and_strength: Option<(&[PhaseQ7; MAX_ATTENTION_HEADS], f32)>,
     ) -> (f32, f32, u32) {
         let (final_pull, mean_coh, active_anchors, _words) = self
             .apply_unified_field_anchor_slice_resonance_to_words(
@@ -1193,7 +1195,7 @@ impl gcso_pointer_trail_t {
     #[inline]
     pub fn bridge_liminal_hallucinated_trail(
         &mut self,
-        prev_memory_trail: &gcso_pointer_trail_t,
+        prev_memory_trail: &PointerTrail,
         interpolation_u7: u8,
         contradiction_threshold: f32,
     ) -> (f32, f32, bool) {
@@ -1374,7 +1376,7 @@ impl gcso_pointer_trail_t {
             self.cluster_id,
         );
 
-        let cur_ptr = gcso_tagged_ptr_t(self.current_ptr);
+        let cur_ptr = TaggedPtr(self.current_ptr);
         let rep_ptr = cur_ptr
             .with_action_and_slot(
                 ATTRACTOR_SLOT_REPULSION,
@@ -1422,7 +1424,7 @@ impl gcso_pointer_trail_t {
     pub fn link_with_next_hallucinated_trail(
         &mut self,
         next_trail_id: u32,
-        next_trail: &mut gcso_pointer_trail_t,
+        next_trail: &mut PointerTrail,
         interpolation_u7: u8,
         contradiction_threshold: f32,
     ) -> (f32, f32, bool) {
@@ -1441,7 +1443,7 @@ impl gcso_pointer_trail_t {
     pub fn evaluate_bayesian_transition_score_with(
         &self,
         candidate_trail_id: u32,
-        candidate_trail: &gcso_pointer_trail_t,
+        candidate_trail: &PointerTrail,
         head_dim: u32,
         phase_interference_gain: f32,
         stigmergic_prior_gain: f32,
@@ -1479,7 +1481,7 @@ impl gcso_pointer_trail_t {
     /// with the 5-bit `ACTION_MODE_*` flags embedded in `self.current_ptr` in branchless constant time.
     #[inline(always)]
     pub fn sync_flags_with_current_ptr(&mut self) {
-        let mode = unpack_action_mode_from_tag(gcso_tagged_ptr_t(self.current_ptr).unpack_tag());
+        let mode = unpack_action_mode_from_tag(TaggedPtr(self.current_ptr).unpack_tag());
         let phase_steer_on = (mode & ACTION_MODE_PHASE_STEER) != 0;
         let skip_on = (mode & ACTION_MODE_LAYER_SKIP) != 0;
         let cleared =
@@ -1494,10 +1496,10 @@ impl gcso_pointer_trail_t {
     pub fn apply_cross_slot_synergy(
         &mut self,
         slot_a: u32,
-        phases_a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phases_a: &[PhaseQ7; MAX_ATTENTION_HEADS],
         weight_a: f32,
         slot_b: u32,
-        phases_b: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phases_b: &[PhaseQ7; MAX_ATTENTION_HEADS],
         weight_b: f32,
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
@@ -1517,7 +1519,7 @@ impl gcso_pointer_trail_t {
         self.attractor_pull_force = branchless_min_f32(new_pull, MAX_ATTRACTOR_PULL_FORCE);
 
         let dom_slot = branchless_select_u32(weight_a >= weight_b, slot_a, slot_b) as u8;
-        let cur_ptr = gcso_tagged_ptr_t(self.current_ptr);
+        let cur_ptr = TaggedPtr(self.current_ptr);
         self.current_ptr = cur_ptr
             .with_action_and_slot(
                 dom_slot,
@@ -1538,7 +1540,7 @@ impl gcso_pointer_trail_t {
     #[inline]
     pub fn apply_mutual_slot_inhibition(
         &mut self,
-        inhibitor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        inhibitor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         inhibition_strength: f32,
     ) -> f32 {
         let cur_pull = self.attractor_pull_force;
@@ -1564,7 +1566,7 @@ impl gcso_pointer_trail_t {
     pub fn apply_neighborhood_synergy_from_bank_from_words(
         &mut self,
         mut acc_w: [u64; NUM_STIGMERGIC_GRANULES],
-        slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
+        slot_phase_bank: &[[PhaseQ7; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
@@ -1657,7 +1659,7 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn apply_neighborhood_synergy_from_bank_to_words(
         &mut self,
-        slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
+        slot_phase_bank: &[[PhaseQ7; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
@@ -1675,11 +1677,11 @@ impl gcso_pointer_trail_t {
     }
 
     /// Unified single-source-of-truth evaluator for **8-Lane Coupled Neighborhood Synergy & Mutual Inhibition**
-    /// across `slot_phase_bank` (`[[gcso_q7_t; 64]; 8]`) and `slot_weights` (`[f32; 8]`).
+    /// across `slot_phase_bank` (`[[PhaseQ7; 64]; 8]`) and `slot_weights` (`[f32; 8]`).
     #[inline(always)]
     pub fn apply_neighborhood_synergy_from_bank(
         &mut self,
-        slot_phase_bank: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
+        slot_phase_bank: &[[PhaseQ7; MAX_ATTENTION_HEADS]; MAX_ATTRACTOR_DOMAINS],
         slot_weights: &[f32; MAX_ATTRACTOR_DOMAINS],
         coupling_matrix_8x8: u64,
         synergy_gain: f32,
@@ -1703,8 +1705,8 @@ impl gcso_pointer_trail_t {
 #[inline]
 pub fn modulate_attention_scores_by_bayesian_trails_64(
     attention_scores: &mut [f32],
-    query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    key_anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+    query_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    key_anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     key_stigmergic_densities: &[f32],
     linked_trail_id: Option<u32>,
     head_dim: u32,
@@ -1852,15 +1854,15 @@ pub(crate) const BLOCK_NORM_CACHE_CAP: usize = 64;
 /// $\hat{\lambda}_{\max} = 2 \max_i D_{ii}$ directly from 256-bit PagedBlock bitmasks (Section 1.2 & Lemma 1.2).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `block_masks` is empty or `degrees_out.len() < block_masks.len()`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `block_masks` is empty or `degrees_out.len() < block_masks.len()`.
 #[inline]
 pub fn eval_stigmergic_block_degrees(
-    block_masks: &[gcso_paged_bitmask_t],
+    block_masks: &[PagedBitmask],
     degrees_out: &mut AlignedSliceMut32<'_, f32>,
-) -> GcsoResult<f32> {
+) -> LmnkResult<f32> {
     let n = block_masks.len();
     if n == 0 || degrees_out.len() < n {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let deg_slice = &mut degrees_out.as_mut_slice()[..n];
     deg_slice.fill(0.0);
@@ -1944,16 +1946,16 @@ pub fn eval_stigmergic_block_degrees(
 /// pattern into `bloom_filter` while returning the phase-conjugate anti-phase vector ($-\boldsymbol{\Delta\theta}$).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or are empty.
-/// Returns [`crate::liminal::GCSO_ERROR_EDBC_SINGULARITY`] if residual norms are non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slice lengths mismatch or are empty.
+/// Returns [`crate::liminal::LMNK_ERR_ENTROPY_SINGULARITY`] if residual norms are non-finite.
 #[inline]
 pub fn detect_and_record_obstruction_repulsion(
     cochain_residual_r: &AlignedSlice32<'_, f32>,
     exact_projection_delta0_phi: &AlignedSlice32<'_, f32>,
     obstruction_threshold: f32,
-    active_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    active_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     bloom_filter: &mut ContrastivePhaseBloomFilter,
-) -> GcsoResult<(f32, bool, [gcso_q7_t; MAX_ATTENTION_HEADS])> {
+) -> LmnkResult<(f32, bool, [PhaseQ7; MAX_ATTENTION_HEADS])> {
     let (mean_obs, is_obstructed) = evaluate_cohomological_obstruction(
         cochain_residual_r,
         exact_projection_delta0_phi,
@@ -1974,15 +1976,15 @@ pub fn detect_and_record_obstruction_repulsion(
 /// Returns `(joint_log_prob_sum, holonomy_obstruction_energy, is_obstructed)`.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_chain` is empty or `obstruction_threshold` is non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `trail_chain` is empty or `obstruction_threshold` is non-finite.
 #[inline]
 pub fn evaluate_trail_chain_cohomology_and_joint_log_prob(
-    trail_chain: &[gcso_pointer_trail_t],
+    trail_chain: &[PointerTrail],
     obstruction_threshold: f32,
-) -> GcsoResult<(f32, f32, bool)> {
+) -> LmnkResult<(f32, f32, bool)> {
     let len = trail_chain.len();
     if len == 0 || !branchless_is_finite_f32(obstruction_threshold) {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     if len == 1 {
         return Ok((0.0, 0.0, false));
@@ -2014,23 +2016,23 @@ pub fn evaluate_trail_chain_cohomology_and_joint_log_prob(
 }
 
 /// Bridges all consecutive inter-memory gaps (**Limina**) across `trail_chain` via
-/// [`gcso_pointer_trail_t::bridge_liminal_hallucinated_trail`], recording any self-contradictory
+/// [`PointerTrail::bridge_liminal_hallucinated_trail`], recording any self-contradictory
 /// transitions ($H^1(K; \mathcal{F}) \neq 0$) into `bloom_filter`.
 ///
 /// Returns `(total_joint_log_prob, repulsed_transition_count)`.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_chain` is empty or `contradiction_threshold` is non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `trail_chain` is empty or `contradiction_threshold` is non-finite.
 #[inline]
 pub fn bridge_and_filter_liminal_trail_chain(
-    trail_chain: &mut [gcso_pointer_trail_t],
+    trail_chain: &mut [PointerTrail],
     interpolation_u7: u8,
     contradiction_threshold: f32,
     bloom_filter: &mut ContrastivePhaseBloomFilter,
-) -> GcsoResult<(f32, u32)> {
+) -> LmnkResult<(f32, u32)> {
     let len = trail_chain.len();
     if len == 0 || !branchless_is_finite_f32(contradiction_threshold) {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let mut total_log_prob = 0.0_f32;
     let mut repulsed_count = 0u32;
@@ -2060,22 +2062,22 @@ pub fn bridge_and_filter_liminal_trail_chain(
 /// discrete QDPT level, and cascades `parent_ptr` in $\mathcal{O}(1)$.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdpt_addr_offsets` is empty or its length does
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `qdpt_addr_offsets` is empty or its length does
 /// not match `qdpt_phase_deltas.len()`.
 #[inline(always)]
 pub fn resolve_dyadic_qdpt_and_cascade_ptr(
-    parent_ptr: gcso_tagged_ptr_t,
-    current_mask: &gcso_paged_bitmask_t,
-    anchor_mask: &gcso_paged_bitmask_t,
+    parent_ptr: TaggedPtr,
+    current_mask: &PagedBitmask,
+    anchor_mask: &PagedBitmask,
     w_key: f32,
     current_level: u32,
     hysteresis_band: f32,
     qdpt_addr_offsets: &[u64],
-    qdpt_phase_deltas: &[gcso_q7_t],
-) -> GcsoResult<(u32, f32, gcso_tagged_ptr_t)> {
+    qdpt_phase_deltas: &[PhaseQ7],
+) -> LmnkResult<(u32, f32, TaggedPtr)> {
     let table_len = qdpt_addr_offsets.len();
     if table_len == 0 || table_len != qdpt_phase_deltas.len() {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let max_level = (table_len - 1) as u32;
     let d_v = eval_bitmask_dyadic_ultrametric(current_mask, anchor_mask, w_key);
@@ -2096,45 +2098,41 @@ pub trait PointerSubstrate: Send + Sync {
     /// Resets transient pointer trails and slot counters without freeing pre-allocated tables.
     ///
     /// # Errors
-    /// Returns [`crate::liminal::GCSO_ERROR_INVALID_STATE`] if the substrate is locked or uninitialized.
-    fn reset(&mut self) -> GcsoResult<()>;
+    /// Returns [`crate::liminal::LMNK_ERR_INVALID_STATE`] if the substrate is locked or uninitialized.
+    fn reset(&mut self) -> LmnkResult<()>;
 
     /// Advances a 64-bit tagged pointer transition in zero-allocation $\mathcal{O}(1)$ mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] or [`crate::liminal::GCSO_ERROR_ACTION_HUB_FULL`] on failure.
-    fn step_pointer(
-        &mut self,
-        current_ptr: u64,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<()>;
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] or [`crate::liminal::LMNK_ERR_SUBSTRATE_FULL`] on failure.
+    fn step_pointer(&mut self, current_ptr: u64, trail_out: &mut PointerTrail) -> LmnkResult<()>;
 
     /// Updates cellular state for a trail directly with a Q7 phase delta in fast-path express mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_id` exceeds substrate capacity.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `trail_id` exceeds substrate capacity.
     fn update_cellular_state_express(
         &mut self,
         trail_id: u32,
-        phase_delta: gcso_q7_t,
-    ) -> GcsoResult<()>;
+        phase_delta: PhaseQ7,
+    ) -> LmnkResult<()>;
 
     /// Pulls active pointer trails toward a macro target anchor via pull force $F_{\mathrm{pull}}$.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `trail_id` is out of bounds or `pull_force` is non-finite.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `trail_id` is out of bounds or `pull_force` is non-finite.
     fn pull_trail_to_attractor(
         &mut self,
         trail_id: u32,
         anchor_id: u32,
         pull_force: f32,
-    ) -> GcsoResult<()>;
+    ) -> LmnkResult<()>;
 
     /// Links adjacent cellular hallucinated trails into contiguous stigmergic trace graphs.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if either trail ID is out of bounds.
-    fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> GcsoResult<()>;
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if either trail ID is out of bounds.
+    fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> LmnkResult<()>;
 
     /// Returns the maximum slot capacity of the substrate table.
     fn capacity(&self) -> u32;
@@ -2174,29 +2172,29 @@ pub trait PointerSubstrate: Send + Sync {
     }
 }
 
-/// Validates optional Query/Key tensor slice lengths and `GCSO_RESTRICT` pairwise disjointness.
+/// Validates optional Query/Key tensor slice lengths and `LMNK_RESTRICT` pairwise disjointness.
 #[inline(always)]
 pub(crate) fn validate_optional_qk_tensors(
     query_tensor: Option<&AlignedSliceMut32<'_, f32>>,
     key_tensor: Option<&AlignedSliceMut32<'_, f32>>,
     expected_len: usize,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     match (query_tensor, key_tensor) {
         (Some(q), Some(k)) => {
             if q.len() < expected_len || k.len() < expected_len {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
             q.ensure_disjoint_mut(k)
         }
         (Some(q), None) => {
             if q.len() < expected_len {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
             Ok(())
         }
         (None, Some(k)) => {
             if k.len() < expected_len {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
             Ok(())
         }
@@ -2209,15 +2207,15 @@ pub(crate) fn validate_optional_qk_tensors(
 /// telemetry under static dispatch.
 ///
 /// Blanket extensions (`SubstrateGatewayExt`) observe this composite directly.
-pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLedger {
+pub trait StigmergicSubstrateOps: PointerSubstrate + FastPathLedger {
     /// Broadest cognitive aperture spanned across all gateway, steering, swarm, cohomology, and
     /// mapped-storage capabilities (`0x0000_FFFF`).
     const HUB_APERTURE_MASK: u32 = THRESHOLD_STIGMERGY_WIDE;
 
-    /// Type-level complement identifying signals outside `StigmergicSubstrateOps`'s horizon as unknowable (`!0xFFFF`).
-    const HUB_UNKNOWABLE_VOID_MASK: u32 = !Self::HUB_APERTURE_MASK;
+    /// Type-level complement identifying signals outside `StigmergicSubstrateOps`'s horizon as unobserved (`!0xFFFF`).
+    const HUB_UNOBSERVED_LACUNA_MASK: u32 = !Self::HUB_APERTURE_MASK;
 
-    /// Branchlessly partitions `signal_bits` into `(cognized_bits, unknowable_void_bits)` for
+    /// Branchlessly partitions `signal_bits` into `(settled_bits, unobserved_lacuna_bits)` for
     /// [`Self::HUB_APERTURE_MASK`].
     #[inline(always)]
     fn inspect_substrate_horizon_partition(&self, signal_bits: u32) -> (u32, u32) {
@@ -2225,33 +2223,41 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
         (cut.inside, cut.outside)
     }
 
-    /// Validates `head_dim`, `num_heads <= MAX_ATTENTION_HEADS`, `qdps_min_step_rad >= 0.0`,
-    /// `ripa_max_rad > 0.0`, and optional Query/Key tensor lengths and `GCSO_RESTRICT` disjointness.
+    /// Validates `head_dim`, `num_heads <= MAX_ATTENTION_HEADS`, `phase_step_min_rad >= 0.0`,
+    /// `max_rad > 0.0`, and optional Query/Key tensor lengths and `LMNK_RESTRICT` disjointness.
     ///
     /// Returns `(head_dim, num_heads, expected_tensor_len)` on success.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any dimension, radian threshold, or tensor slice
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any dimension, radian threshold, or tensor slice
     /// invariant is violated.
     #[inline(always)]
     fn validate_substrate_cascade_params(
         &self,
-        qdps_min_step_rad: f32,
-        ripa_max_rad: f32,
+        head_dim: u32,
+        num_heads: u32,
+        phase_step_min_rad: f32,
+        max_rad: f32,
         query_tensor: Option<&AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(usize, usize, usize)> {
-        let (head_dim, num_heads, expected_len) = self.validate_head_layout()?;
-        if num_heads > MAX_ATTENTION_HEADS
-            || qdps_min_step_rad < 0.0
-            || !branchless_is_finite_f32(qdps_min_step_rad)
-            || ripa_max_rad <= 0.0
-            || !branchless_is_finite_f32(ripa_max_rad)
+    ) -> LmnkResult<(usize, usize, usize)> {
+        let valid_dims = (head_dim != 0)
+            & ((head_dim & 1) == 0)
+            & (num_heads != 0)
+            & ((num_heads as usize) <= MAX_ATTENTION_HEADS);
+        if !valid_dims
+            || phase_step_min_rad < 0.0
+            || !branchless_is_finite_f32(phase_step_min_rad)
+            || max_rad <= 0.0
+            || !branchless_is_finite_f32(max_rad)
         {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
+        let hd = head_dim as usize;
+        let nh = num_heads as usize;
+        let expected_len = hd.checked_mul(nh).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         validate_optional_qk_tensors(query_tensor, key_tensor, expected_len)?;
-        Ok((head_dim, num_heads, expected_len))
+        Ok((hd, nh, expected_len))
     }
 
     /// Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, advances the
@@ -2264,19 +2270,13 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
     #[inline(always)]
     fn step_substrate_with_bloom_repulsion_to_words(
         &mut self,
-        input_ptr: gcso_tagged_ptr_t,
-        ledger_slot: &mut gcso_ledger_slot_t,
+        input_ptr: TaggedPtr,
+        ledger_slot: &mut LedgerSlot,
         bloom_filter: &ContrastivePhaseBloomFilter,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(
-        bool,
-        gcso_tagged_ptr_t,
-        u8,
-        bool,
-        [u64; NUM_STIGMERGIC_GRANULES],
-    )> {
+        trail_out: &mut PointerTrail,
+    ) -> LmnkResult<(bool, TaggedPtr, u8, bool, [u64; NUM_STIGMERGIC_GRANULES])> {
         let (bypass_hit, effective_ptr) = self.resolve_or_pass_tagged_ptr(ledger_slot, input_ptr);
         self.step_pointer(effective_ptr.raw(), trail_out)?;
 
@@ -2298,8 +2298,8 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
         raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
         head_dim: usize,
         num_heads: usize,
-        qdps_min_step_rad: f32,
-        ripa_max_rad: f32,
+        phase_step_min_rad: f32,
+        max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> bool {
@@ -2307,10 +2307,10 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
         if !steered {
             return false;
         }
-        let min_step_q7 = if qdps_min_step_rad.to_bits() == 0 {
+        let min_step_q7 = if phase_step_min_rad.to_bits() == 0 {
             0
         } else {
-            branchless_rad_to_phase_step_u8(qdps_min_step_rad)
+            branchless_rad_to_phase_step_u8(phase_step_min_rad)
         };
         let filtered_buf;
         let swar_words = if min_step_q7 <= 1 {
@@ -2326,28 +2326,12 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
         match (query_tensor, key_tensor) {
             (Some(q), k_opt) => {
                 steer_from_swar_words_core_safe(
-                    swar_words,
-                    0xFF,
-                    128,
-                    head_dim,
-                    num_heads,
-                    false,
-                    ripa_max_rad,
-                    q,
-                    k_opt,
+                    swar_words, 0xFF, 128, head_dim, num_heads, false, max_rad, q, k_opt,
                 );
             }
             (None, Some(k)) => {
                 steer_from_swar_words_core_safe(
-                    swar_words,
-                    0xFF,
-                    128,
-                    head_dim,
-                    num_heads,
-                    false,
-                    ripa_max_rad,
-                    k,
-                    None,
+                    swar_words, 0xFF, 128, head_dim, num_heads, false, max_rad, k, None,
                 );
             }
             (None, None) => {}
@@ -2356,11 +2340,11 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
     }
 
     /// Executes a constant-time per-token stigmergic cascade over [`StigmergicSubstrateOps`]:
-    /// 1. Validates tensor dimensions, `GCSO_RESTRICT` disjointness, and radian thresholds.
+    /// 1. Validates tensor dimensions, `LMNK_RESTRICT` disjointness, and radian thresholds.
     /// 2. Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
     ///    pointer transition in `trail_out`, and applies [`ContrastivePhaseBloomFilter`] repulsion.
     /// 3. Filters `trail_out.accumulated_phase_delta` via 8-lane SWAR `PhaseStepFilter` and steers
-    ///    `query_tensor` and/or `key_tensor` with `PhaseClamp` soft-clamping (`ripa_max_rad`).
+    ///    `query_tensor` and/or `key_tensor` with `PhaseClamp` soft-clamping (`max_rad`).
     /// 4. Pushes the combined telemetry metric code (`LEDGER_METRIC_*`) into `ledger_slot`.
     ///
     /// Returns the observed Bloom repulsion bucket density (`0..=255`).
@@ -2373,25 +2357,29 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
     fn execute_stigmergic_token_cascade(
         &mut self,
         input_ptr: u64,
-        ledger_slot: &mut gcso_ledger_slot_t,
+        ledger_slot: &mut LedgerSlot,
         bloom_filter: &ContrastivePhaseBloomFilter,
+        head_dim: u32,
+        num_heads: u32,
         repulsion_threshold: u8,
         repulsion_scale_u7: u8,
-        qdps_min_step_rad: f32,
-        ripa_max_rad: f32,
+        phase_step_min_rad: f32,
+        max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<u8> {
+        trail_out: &mut PointerTrail,
+    ) -> LmnkResult<u8> {
         let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
-            qdps_min_step_rad,
-            ripa_max_rad,
+            head_dim,
+            num_heads,
+            phase_step_min_rad,
+            max_rad,
             query_tensor.as_deref(),
             key_tensor.as_deref(),
         )?;
         let (bypass_hit, _eff_ptr, density, repulsion_active, post_rep_words) = self
             .step_substrate_with_bloom_repulsion_to_words(
-                gcso_tagged_ptr_t(input_ptr),
+                TaggedPtr(input_ptr),
                 ledger_slot,
                 bloom_filter,
                 repulsion_threshold,
@@ -2402,8 +2390,8 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
             &post_rep_words,
             head_dim,
             num_heads,
-            qdps_min_step_rad,
-            ripa_max_rad,
+            phase_step_min_rad,
+            max_rad,
             query_tensor,
             key_tensor,
         );
@@ -2415,12 +2403,9 @@ pub trait StigmergicSubstrateOps: PhaseSteering + PointerSubstrate + FastPathLed
     }
 }
 
-impl<T> StigmergicSubstrateOps for T where
-    T: PhaseSteering + PointerSubstrate + FastPathLedger + ?Sized
-{
-}
+impl<T> StigmergicSubstrateOps for T where T: PointerSubstrate + FastPathLedger + ?Sized {}
 
-impl gcso_pointer_trail_t {
+impl PointerTrail {
     /// Branchlessly evaluates whether a pointer trail qualifies for bottom-up macro
     /// crystallization (`stigmergic_density >= density_thresh && r_bar_t >= coherence_thresh && !repulsion_active`)
     /// and stamps or clears [`TRAIL_FLAG_CRYSTALLIZED_CANDIDATE`] on `self.flags` in $\mathcal{O}(1)$.

@@ -11,7 +11,7 @@ use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder
 use liminika_adapter::{
     CorpusRecallEscalationProvider, ModelSteeringAdapter, RopeGeometry, RopeLayout,
 };
-use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
 use liminika_core::runtime::{
     GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
 };
@@ -54,22 +54,22 @@ impl<'a> ResonantAnchors<'a> {
 pub(crate) struct LayerSteer<'a, 'c, 'e> {
     pub(crate) adapter: &'a mut ModelSteeringAdapter,
     pub(crate) layer_idx: usize,
-    pub(crate) q7_deltas: &'a [gcso_q7_t],
-    pub(crate) persona_opt: Option<&'a [gcso_q7_t]>,
+    pub(crate) q7_deltas: &'a [lmnk_q7_t],
+    pub(crate) persona_opt: Option<&'a [lmnk_q7_t]>,
     pub(crate) resonant_opt: Option<LayerResonantSlices<'a>>,
     pub(crate) max_rad: f32,
-    pub(crate) trail: &'a mut gcso_pointer_trail_t,
+    pub(crate) trail: &'a mut lmnk_pointer_trail_t,
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
 }
 
 pub(crate) struct ForwardSteer<'a, 'c, 'e> {
     pub(crate) adapter: &'a mut ModelSteeringAdapter,
-    pub(crate) q7s: Option<&'a [Vec<gcso_q7_t>]>,
-    pub(crate) persona_q7s: Option<&'a [Vec<gcso_q7_t>]>,
+    pub(crate) q7s: Option<&'a [Vec<lmnk_q7_t>]>,
+    pub(crate) persona_q7s: Option<&'a [Vec<lmnk_q7_t>]>,
     pub(crate) resonant_ctx: Option<ResonantAnchors<'a>>,
     pub(crate) rope_rad: f32,
-    pub(crate) trail: &'a mut gcso_pointer_trail_t,
+    pub(crate) trail: &'a mut lmnk_pointer_trail_t,
     pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
@@ -84,7 +84,7 @@ fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
     escalation_provider: Option<&mut CorpusRecallEscalationProvider<'_>>,
     layer_idx: usize,
     signal: &S,
-    trail: &mut liminika_core::abi::gcso_pointer_trail_t,
+    trail: &mut liminika_core::abi::lmnk_pointer_trail_t,
     slice: &mut [f32],
 ) -> Result<(), String> {
     if matches!(

@@ -78,7 +78,7 @@ fn adapter_steers_via_gateway_trait_composition() {
     let orig: Vec<f32> = (0..len).map(|i| ((i % 11) as f32) * 0.1 - 0.4).collect();
     let mut q_rot = orig.clone();
     let mut logits = vec![2.0, 1.0, 0.5, -0.5];
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
 
     let fact = ObjectiveFact::new([20i8; 64], 2.5, 0, 42);
     let persona = SubjectivePersona::new([-12i8; 64], 1.8, 0, 7);
@@ -96,9 +96,9 @@ fn adapter_steers_via_gateway_trait_composition() {
         .expect("gateway steering should succeed")
         .expect("layer 0 is active");
 
-    assert!(frame.ripa_clamp_rad > 0.0);
-    assert_ne!(report.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
-    assert_ne!(report.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+    assert!(frame.phase_clamp_rad > 0.0);
+    assert_ne!(report.lineage_flags & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
+    assert_ne!(report.lineage_flags & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
     assert_ne!(q_rot, orig);
     assert_eq!(trail.step_count, 1);
 
@@ -119,7 +119,7 @@ fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let mut q_rot: Vec<f32> = (0..len).map(|i| ((i % 9) as f32) * 0.1 - 0.3).collect();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
 
     // Arbitrary number of candidates (e.g. 3, not tied to 8) matching 24 active Q heads.
     let mut a1 = [0i8; 64];
@@ -151,7 +151,7 @@ fn adapter_steers_via_substrate_and_builds_stigmergic_density() {
     let len = adapter.geometry().q_rot_len();
     let mut q_rot: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
     let orig = q_rot.clone();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
 
     let mut a1 = [0i8; 64];
     a1[..24].fill(55);
@@ -176,7 +176,7 @@ fn substrate_orchestrator_gates_rope_and_srl_by_stigmergic_density() {
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
 
     let mut a1 = [0i8; 64];
     a1[..24].fill(55);
@@ -1915,18 +1915,18 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert!(adapter.threshold_state().threshold_floor_q7[2] > initial_persona_floor);
     assert_eq!(adapter.threshold_state().adaptation_epochs, 1);
 
-    let venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
-        venn_penumbra_mask: 0x10,
-        void_exterior_mask: 0xE0,
-        serendipity_excursion_mask: 0x40,
-        serendipity_triggered: 1,
+    let venn = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
+        overlap_fringe_mask: 0x10,
+        lacuna_exterior_mask: 0xE0,
+        discovery_excursion_mask: 0x40,
+        discovery_triggered: 1,
         ..Default::default()
     };
     adapter.adapt_core_layers(&conflict_horizon, &venn, None);
     assert_eq!(adapter.threshold_state().adaptation_epochs, 2);
     assert_eq!(adapter.stigmergic_granule_state().adaptation_epochs, 2);
-    assert_eq!(adapter.stigmergic_granule_state().venn_overlap_mask, 0x0F);
+    assert_eq!(adapter.stigmergic_granule_state().overlap_mask, 0x0F);
 
     adapter.configure_ego_from_preset(LiminalEgoPreset::High);
     assert!(adapter.ego_state().is_active());
@@ -1949,10 +1949,10 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let quiescent_venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
-        venn_penumbra_mask: 0x10,
-        void_exterior_mask: 0xE0,
+    let quiescent_venn = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
+        overlap_fringe_mask: 0x10,
+        lacuna_exterior_mask: 0xE0,
         ..Default::default()
     };
     adapter.adapt_core_layers(&quiescent_horizon, &quiescent_venn, None);
@@ -1962,11 +1962,11 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     let mermaid = adapter.render_liminal_topology_mermaid(5, 2);
     assert!(mermaid.starts_with("flowchart TD\n"));
     assert!(mermaid.contains("Liminal"));
-    assert!(mermaid.contains("Core Layer 1: StigmergicGranuleState"));
-    assert!(mermaid.contains("Core Layer 2: LiminalEgoState"));
+    assert!(mermaid.contains("StigmergicGranuleState"));
+    assert!(mermaid.contains("LiminalEgoState"));
     assert!(mermaid.contains("ManifoldGatewaySignal"));
     assert!(mermaid.contains("L2_Substrate"));
-    assert!(mermaid.contains("Crystals:5"));
+    assert!(mermaid.contains("Anchors:5"));
     assert!(mermaid.contains("Daughters:2"));
 }
 
@@ -1975,7 +1975,7 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
     use liminika_core::drivers::EgoIntentAxes;
     use liminika_core::liminal::EpistemicRegime;
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
-    use liminika_core::stigmergy::StigmergicOverlapSerendipityReport;
+    use liminika_core::stigmergy::OverlapDiscoveryReport;
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let base_axes = EgoIntentAxes::new().with_autonomy_q7(32).with_logic_q7(80);
@@ -2001,9 +2001,9 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let active_venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
-        void_exterior_mask: 0xF0,
+    let active_venn = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
+        lacuna_exterior_mask: 0xF0,
         ..Default::default()
     };
     adapter.adapt_core_layers(&active_horizon, &active_venn, None);
@@ -2045,8 +2045,8 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_srl() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
+    let venn = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
         ..Default::default()
     };
     adapter.adapt_core_layers(&horizon, &venn, None);
@@ -2066,7 +2066,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
     use liminika_core::drivers::EgoIntentAxes;
     use liminika_core::liminal::EpistemicRegime;
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
-    use liminika_core::stigmergy::StigmergicOverlapSerendipityReport;
+    use liminika_core::stigmergy::OverlapDiscoveryReport;
 
     let geom = RopeGeometry::phi4_mini();
     let mut base_adapter = ModelSteeringAdapter::new(geom.clone()).expect("base init");
@@ -2085,9 +2085,9 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
-        void_exterior_mask: 0xF0,
+    let venn = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
+        lacuna_exterior_mask: 0xF0,
         ..Default::default()
     };
     ego_adapter.adapt_core_layers(&horizon, &venn, None);
@@ -2095,8 +2095,8 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
     let len = ego_adapter.geometry().q_rot_len();
     let mut q_base: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
     let mut q_ego = q_base.clone();
-    let mut trail_base = gcso_pointer_trail_t::default();
-    let mut trail_ego = gcso_pointer_trail_t::default();
+    let mut trail_base = lmnk_pointer_trail_t::default();
+    let mut trail_ego = lmnk_pointer_trail_t::default();
     let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 6.5, 0, 1);
 
     // 1. RoPE gateway steering diverges when Core Layers + Ego are active without mutating per-layer epochs.
@@ -2170,7 +2170,7 @@ fn adapter_rope_and_srl_paths_actively_wire_core_layers_and_ego() {
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&e1, 0.85), (&e2, 0.72)],
         recalled_personas: Vec::new(),
-        venn_partition: EpistemicPartition::default(),
+        venn_partition: LacunaPartition8::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
     };
@@ -2210,7 +2210,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
 
     let mut escalation = CorpusRecallEscalationProvider::new(&corpus);
     let mut custom_slot = CoherenceHorizonGuardSlot::default();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
     let signal = ObjectiveFact::new([18i8; 64], 1.5, 0, 99);
     let mut q_rot = vec![0.5_f32; q_len];
 
@@ -2223,7 +2223,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
             regime_code: EpistemicRegime::KnownCoherent as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicOverlapSerendipityReport::default(),
+        &OverlapDiscoveryReport::default(),
         None,
     );
     let (_, _, _) = adapter
@@ -2252,7 +2252,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
             regime_code: EpistemicRegime::InternalConflict as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicOverlapSerendipityReport::default(),
+        &OverlapDiscoveryReport::default(),
         None,
     );
     let (frame_conflict, _, _) = adapter
@@ -2291,7 +2291,7 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
             regime_code: EpistemicRegime::KnownCoherent as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicOverlapSerendipityReport::default(),
+        &OverlapDiscoveryReport::default(),
         None,
     );
     let _ = adapter
@@ -2329,11 +2329,11 @@ fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
     assert_eq!(adapter.substrate().slot_enabled_mask & (1 << esc_lane), 0);
 
     let snap = adapter.telemetry_snapshot();
-    assert_eq!(snap.system.total_steps, 4);
-    assert_eq!(snap.system.continuous_standard_steps, 4);
-    assert_eq!(snap.layer0.slide_in_count, 1);
-    assert_eq!(snap.layer0.slide_out_count, 1);
-    assert_eq!(snap.layer2.escalation_swaps, 1);
+    assert_eq!(snap.spine.total_steps, 4);
+    assert_eq!(snap.spine.continuous_standard_steps, 4);
+    assert_eq!(snap.liminal.slide_in_count, 1);
+    assert_eq!(snap.liminal.slide_out_count, 1);
+    assert_eq!(snap.ego.escalation_swaps, 1);
     assert_eq!(snap.mode, TelemetryVerbosityMode::Standard);
     assert!(snap.detailed.is_some());
 
@@ -2348,7 +2348,7 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
     let mut q_rot = vec![0.4_f32; q_len];
     let mut no_esc = ();
     let signal = ObjectiveFact::new([22i8; 64], 1.6, 0, 121);
@@ -2360,7 +2360,7 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
             regime_code: EpistemicRegime::InternalConflict as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicOverlapSerendipityReport::default(),
+        &OverlapDiscoveryReport::default(),
         None,
     );
     adapter.stage_overflow_residual(&DissipativeOverflowReport {
@@ -2407,7 +2407,7 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
     assert!(stored);
     assert_eq!(evicted, 0);
     assert_eq!(
-        adapter.telemetry_snapshot().system.experience_cache_stores,
+        adapter.telemetry_snapshot().spine.experience_cache_stores,
         1
     );
 
@@ -2425,7 +2425,7 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
         )
         .expect("step 3");
     assert_eq!(adapter.residual_spillover().cache_hits, 1);
-    assert_eq!(adapter.telemetry_snapshot().system.experience_cache_hits, 1);
+    assert_eq!(adapter.telemetry_snapshot().spine.experience_cache_hits, 1);
 }
 
 #[test]
@@ -2490,9 +2490,9 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).unwrap();
     let default_rank1 = StigmergicThresholds::default().rank1_inject_density_thresh;
-    let mut trail = gcso_pointer_trail_t {
+    let mut trail = lmnk_pointer_trail_t {
         stigmergic_density: 1.80,
-        ..gcso_pointer_trail_t::default()
+        ..lmnk_pointer_trail_t::default()
     };
     let sig = ObjectiveFact::new([12_i8; 64], 1.5, 0, 1);
     let mut q = vec![0.25_f32; 24 * 96];
@@ -2524,7 +2524,7 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
     let expected_resolved = policy_copy.resolve_thresholds(
         adapter.system_constraint(),
         adapter.probe_baseline(),
-        &gcso_pointer_trail_t::default(),
+        &lmnk_pointer_trail_t::default(),
         adapter.probe_baseline().baseline_entropy,
     );
     assert!(
@@ -2631,11 +2631,11 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
             regime_code: liminika_core::liminal::EpistemicRegime::InternalConflict as u8,
             ..liminika_core::runtime::EpistemicHorizonReading::default()
         },
-        &liminika_core::stigmergy::StigmergicOverlapSerendipityReport::default(),
+        &liminika_core::stigmergy::OverlapDiscoveryReport::default(),
         None,
     );
     let mut esc = CorpusRecallEscalationProvider::new(&corpus);
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
     let sig = ObjectiveFact::new([12_i8; 64], 1.5, 0, 1);
     let mut q = vec![0.25_f32; q_len];
     for layer_idx in 0..num_layers {
@@ -2646,11 +2646,11 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
             .expect("layer step");
     }
     assert_eq!(esc.escalation_calls, 1);
-    assert_eq!(adapter.telemetry_snapshot().layer2.escalation_swaps, 1);
+    assert_eq!(adapter.telemetry_snapshot().ego.escalation_swaps, 1);
     assert!(adapter.escalated_workbench_lane().is_some());
 
-    // 3. Standard workbench lanes contribute inside `venn_core_mask | venn_penumbra_mask`, while
-    //    sandbox lanes act only inside `void_exterior_mask | serendipity_excursion_mask`.
+    // 3. Standard workbench lanes contribute inside `overlap_core_mask | overlap_fringe_mask`, while
+    //    sandbox lanes act only inside `lacuna_exterior_mask | discovery_excursion_mask`.
     adapter.reset_horizon_and_core_state();
     adapter
         .switch_workbench_preset(
@@ -2670,26 +2670,26 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
     assert_eq!(adapter.substrate().sandbox_lane_mask(), 1 << 6);
     adapter.adapt_core_layers(
         &liminika_core::runtime::EpistemicHorizonReading::default(),
-        &liminika_core::stigmergy::StigmergicOverlapSerendipityReport {
-            venn_core_mask: 0x0F,
-            void_exterior_mask: 0xF0,
-            ..liminika_core::stigmergy::StigmergicOverlapSerendipityReport::default()
+        &liminika_core::stigmergy::OverlapDiscoveryReport {
+            overlap_core_mask: 0x0F,
+            lacuna_exterior_mask: 0xF0,
+            ..liminika_core::stigmergy::OverlapDiscoveryReport::default()
         },
         None,
     );
-    let mut trail_venn = gcso_pointer_trail_t::default();
+    let mut trail_venn = lmnk_pointer_trail_t::default();
     let _ = adapter
         .orchestrate_layer_rope_with_substrate(16, &sig, &mut trail_venn, None, 128, &mut q, None)
         .expect("venn layer step");
     assert!(trail_venn.accumulated_phase_delta[0] > 0);
     assert!(trail_venn.accumulated_phase_delta[40] > 0);
-    // Verify sandbox lane 6 does not inflate venn_core_mask head 0 compared to standard-only pass.
+    // Verify sandbox lane 6 does not inflate overlap_core_mask head 0 compared to standard-only pass.
     let core_head_with_sandbox = trail_venn.accumulated_phase_delta[0];
     let _ = adapter
         .substrate_mut()
         .release_lane(6)
         .expect("release sandbox");
-    let mut trail_no_sb = gcso_pointer_trail_t::default();
+    let mut trail_no_sb = lmnk_pointer_trail_t::default();
     let _ = adapter
         .orchestrate_layer_rope_with_substrate(16, &sig, &mut trail_no_sb, None, 128, &mut q, None)
         .expect("no-sandbox layer step");
@@ -2734,7 +2734,7 @@ fn gcso_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
 fn hot_path_sandbox_settlement_increments_sandbox_settlements() {
     use liminika_core::liminal::EpistemicRegime;
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
-    use liminika_core::stigmergy::StigmergicOverlapSerendipityReport;
+    use liminika_core::stigmergy::OverlapDiscoveryReport;
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     adapter.configure_ego_from_preset(LiminalEgoPreset::Low);
@@ -2747,10 +2747,10 @@ fn hot_path_sandbox_settlement_increments_sandbox_settlements() {
             regime_code: EpistemicRegime::KnownCoherent as u8,
             ..EpistemicHorizonReading::default()
         },
-        &StigmergicOverlapSerendipityReport {
-            venn_core_mask: 0x0F,
-            void_exterior_mask: 0xF0,
-            ..StigmergicOverlapSerendipityReport::default()
+        &OverlapDiscoveryReport {
+            overlap_core_mask: 0x0F,
+            lacuna_exterior_mask: 0xF0,
+            ..OverlapDiscoveryReport::default()
         },
         None,
     );
@@ -2758,9 +2758,9 @@ fn hot_path_sandbox_settlement_increments_sandbox_settlements() {
 
     let q_len = adapter.geometry().q_rot_len();
     let mut q = vec![0.25_f32; q_len];
-    let mut trail = gcso_pointer_trail_t {
+    let mut trail = lmnk_pointer_trail_t {
         accumulated_phase_delta: [24_i8; MAX_ATTENTION_HEADS],
-        ..gcso_pointer_trail_t::default()
+        ..lmnk_pointer_trail_t::default()
     };
     let sig = ObjectiveFact::new([24_i8; MAX_ATTENTION_HEADS], 2.0, 0, 7);
 
@@ -2875,7 +2875,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&fact, 0.85)],
         recalled_personas: Vec::new(),
-        venn_partition: EpistemicPartition::default(),
+        venn_partition: LacunaPartition8::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
     };

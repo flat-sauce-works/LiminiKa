@@ -18,7 +18,9 @@
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
-use liminika_core::abi::{gcso_edbc_state_t, gcso_paged_bitmask_t, gcso_q7_t, gcso_tagged_ptr_t};
+use liminika_core::abi::{
+    lmnk_entropy_state_t, lmnk_paged_bitmask_t, lmnk_q7_t, lmnk_tagged_ptr_t,
+};
 use liminika_core::drivers::spine::entropy::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_barrier_pitchfork,
     EntropyController,
@@ -76,7 +78,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     group.bench_function("eval_stateful_normal_mode", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut engine = EntropyController::default();
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..8 {
             engine.eval_stateful(0.42f32, &mut state_out).unwrap();
         }
@@ -93,7 +95,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
         let _ftz = ScopedFtzdazGuard::new();
         let mut base_engine = EntropyController::default();
         base_engine.set_bifurcation_threshold(1.0);
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..8 {
             base_engine.eval_stateful(0.95f32, &mut state_out).unwrap();
         }
@@ -114,7 +116,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
         let mut base_engine = EntropyController::default();
         base_engine.set_bifurcation_threshold(1.0);
         base_engine.set_tau_flux(0.2);
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..8 {
             base_engine.eval_stateful(1.30f32, &mut state_out).unwrap();
         }
@@ -206,7 +208,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     group.bench_function("eval_surrogate_and_step_fused", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut engine = EntropyController::default();
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..8 {
             engine
                 .eval_surrogate_and_step(0.68, 0.24, 0.35, 0.15, 0.09, 1.0, 0.5, &mut state_out)
@@ -235,7 +237,7 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
     // 4. O(1) Branchless 2nd-Order Entropy Flux Acceleration & Adaptive KV-keyframe GOP Budget
     group.bench_function("evaluate_adaptive_compute_and_pprc_gop_budget", |b| {
         let mut engine = EntropyController::default();
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for z in [0.4f32, 0.7, 1.1, 1.8] {
             engine.eval_stateful(z, &mut state_out).unwrap();
         }
@@ -272,7 +274,7 @@ fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(total_bytes as u64));
 
         group.bench_with_input(
-            BenchmarkId::new("eval_liminal_void_dyadic128", format!("dim_{dim}")),
+            BenchmarkId::new("eval_lacuna_energy_dyadic128", format!("dim_{dim}")),
             &dim,
             |b, &d| {
                 let _ftz = ScopedFtzdazGuard::new();
@@ -281,13 +283,13 @@ fn bench_entropy_control_liminal_void_dyadic(c: &mut Criterion) {
                 let mut void_score = 0.0f32;
                 for _ in 0..8 {
                     engine
-                        .eval_liminal_void_dyadic128(&slice_32, &mut void_score)
+                        .eval_lacuna_energy_dyadic128(&slice_32, &mut void_score)
                         .unwrap();
                 }
 
                 b.iter(|| {
                     engine
-                        .eval_liminal_void_dyadic128(
+                        .eval_lacuna_energy_dyadic128(
                             black_box(&slice_32),
                             black_box(&mut void_score),
                         )
@@ -341,7 +343,7 @@ fn bench_entropy_control_stream_simulation(c: &mut Criterion) {
                 let z_scores = z_buf.as_prefix(len);
 
                 let mut engine = EntropyController::default();
-                let mut state_out = gcso_edbc_state_t::default();
+                let mut state_out = lmnk_entropy_state_t::default();
                 for &z in z_scores {
                     engine.eval_stateful(z, &mut state_out).unwrap();
                 }
@@ -382,7 +384,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
         let z_scores = shared_500k_buf.as_slice();
 
         let mut engine = EntropyController::default();
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..2 {
             engine.reset();
             for &z in z_scores {
@@ -424,7 +426,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
         let mut engine = EntropyController::default();
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..2 {
             engine.reset();
             for &z in oscillating_z {
@@ -450,7 +452,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
         let mut engine = EntropyController::default().with_min_mode_dwell_steps(4);
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..2 {
             engine.reset();
             for &z in oscillating_z {
@@ -476,7 +478,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
     let bloom_ops_len = 100000usize;
     group.throughput(Throughput::Elements(bloom_ops_len as u64));
     group.bench_function("long_horizon_bloom_self_normalization_100k", |b| {
-        let patterns: [[gcso_q7_t; MAX_ATTENTION_HEADS]; 8] = core::array::from_fn(|k| {
+        let patterns: [[lmnk_q7_t; MAX_ATTENTION_HEADS]; 8] = core::array::from_fn(|k| {
             let mut arr = [0i8; MAX_ATTENTION_HEADS];
             let mut h = 0usize;
             while h < MAX_ATTENTION_HEADS {
@@ -514,50 +516,47 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
 
     // 1. Pointer-Coupled EntropyControl Step + Eyring-Kramers Temperature + Stigmergic Mode Evolution
     group.throughput(Throughput::Elements(1));
-    group.bench_function(
-        "eval_stateful_with_liminal_void_and_pointer_evolution",
-        |b| {
-            let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
-            let mut st_warm = gcso_edbc_state_t::default();
-            for _ in 0..8 {
-                base_engine.eval_stateful(1.1f32, &mut st_warm).unwrap();
-            }
-            let ptr = gcso_tagged_ptr_t::pack_action(
-                0x4000,
-                ATTRACTOR_SLOT_PERSONA,
-                ACTION_PRESET_EXPRESS_PHASE,
-                16,
-            );
+    group.bench_function("eval_stateful_with_lacuna_and_pointer_evolution", |b| {
+        let mut base_engine = EntropyController::default().with_min_mode_dwell_steps(3);
+        let mut st_warm = lmnk_entropy_state_t::default();
+        for _ in 0..8 {
+            base_engine.eval_stateful(1.1f32, &mut st_warm).unwrap();
+        }
+        let ptr = lmnk_tagged_ptr_t::pack_action(
+            0x4000,
+            ATTRACTOR_SLOT_PERSONA,
+            ACTION_PRESET_EXPRESS_PHASE,
+            16,
+        );
 
-            let mut engine = base_engine;
+        let mut engine = base_engine;
 
-            b.iter(|| {
-                reset_engine_fast(&mut engine, &base_engine);
-                let res = engine
-                    .eval_stateful_with_liminal_void_and_pointer(
-                        black_box(2.2f32),
-                        black_box(0.35f32),
-                        black_box(1.2f32),
-                        black_box(0.8f32),
-                        black_box(0.5f32),
-                        black_box(ptr),
-                        black_box(1.1f32),
-                        black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                        black_box(1.5f32),
-                    )
-                    .unwrap();
-                black_box(res);
-            });
-        },
-    );
+        b.iter(|| {
+            reset_engine_fast(&mut engine, &base_engine);
+            let res = engine
+                .eval_stateful_with_lacuna_and_pointer(
+                    black_box(2.2f32),
+                    black_box(0.35f32),
+                    black_box(1.2f32),
+                    black_box(0.8f32),
+                    black_box(0.5f32),
+                    black_box(ptr),
+                    black_box(1.1f32),
+                    black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                    black_box(1.5f32),
+                )
+                .unwrap();
+            black_box(res);
+        });
+    });
 
     // 2. Matrix-Free Stigmergic Block Degrees & 3rd-Order Chebyshev Filter
     group.throughput(Throughput::Elements(16));
     group.bench_function(
         "matrix_free_stigmergic_block_degrees_and_chebyshev_deg3",
         |b| {
-            let masks: [gcso_paged_bitmask_t; 16] =
-                core::array::from_fn(|i| gcso_paged_bitmask_t {
+            let masks: [lmnk_paged_bitmask_t; 16] =
+                core::array::from_fn(|i| lmnk_paged_bitmask_t {
                     bits: [
                         0xFFFF_0000_FFFF_0000u64.rotate_left(i as u32),
                         0x00FF_00FF_00FF_00FFu64.rotate_right(i as u32),
@@ -620,16 +619,16 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
     // 4. 256-Bit Dyadic Pseudo-Ultrametric QDPT Resolution & Pointer Cascading
     group.throughput(Throughput::Elements(1));
     group.bench_function("resolve_dyadic_qdpt_and_cascade_tagged_ptr", |b| {
-        let parent_ptr = gcso_tagged_ptr_t::pack_action(
+        let parent_ptr = lmnk_tagged_ptr_t::pack_action(
             0x8000,
             ATTRACTOR_SLOT_PERSONA,
             ACTION_PRESET_EXPRESS_PHASE,
             10,
         );
-        let curr_mask = gcso_paged_bitmask_t {
+        let curr_mask = lmnk_paged_bitmask_t {
             bits: [0xFFFF_FFFF_0000_0000, 0x1234_5678_9ABC_DEF0, 0, 0],
         };
-        let anchor_mask = gcso_paged_bitmask_t {
+        let anchor_mask = lmnk_paged_bitmask_t {
             bits: [0xFFFF_FFFF_0000_0000, 0x1234_5600_0000_0000, 0, 0],
         };
         let offsets = [0x100u64, 0x200, 0x300, 0x400, 0x500, 0x600, 0x700, 0x800];
@@ -680,7 +679,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
         let z_scores = shared_1m_buf.as_slice();
 
         let mut engine = EntropyController::default();
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..2 {
             engine.reset();
             for &z in z_scores {
@@ -722,7 +721,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
         let mut engine = EntropyController::default();
         engine.set_bifurcation_threshold(tau);
         engine.set_hysteresis_band(delta);
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for &z in oscillating_z {
             engine.eval_stateful(z, &mut state_out).unwrap();
         }
@@ -753,7 +752,7 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
         let z_scores = spike_buf.as_slice();
 
         let mut engine = EntropyController::default();
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = lmnk_entropy_state_t::default();
         for &z in z_scores {
             let _ = engine.eval_stateful(z, &mut state_out);
         }
@@ -780,12 +779,12 @@ fn bench_entropy_control_extreme_and_edge_cases(c: &mut Criterion) {
                 let engine = EntropyController::default();
                 let mut void_score = 0.0f32;
                 engine
-                    .eval_liminal_void_dyadic128(&slice_32, &mut void_score)
+                    .eval_lacuna_energy_dyadic128(&slice_32, &mut void_score)
                     .unwrap();
 
                 b.iter(|| {
                     engine
-                        .eval_liminal_void_dyadic128(
+                        .eval_lacuna_energy_dyadic128(
                             black_box(&slice_32),
                             black_box(&mut void_score),
                         )

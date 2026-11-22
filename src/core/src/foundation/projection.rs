@@ -12,7 +12,7 @@ use crate::foundation::simd_stats::{
 };
 use crate::foundation::swar_simd::{branchless_splitmix64, load_q7_words_64, words_to_q7_array_64};
 use crate::liminal::{
-    branchless_select_usize, gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_usize, PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 
 #[inline(always)]
@@ -25,7 +25,7 @@ pub(crate) const fn swar_clamp_q7_min_to_neg127_x8(w: u64) -> u64 {
 }
 
 /// Projects an arbitrary byte slice (`bytes`) directly into 8 register-resident `u64` SWAR words
-/// (`[u64; 8]` representing 64 `gcso_q7_t` heads) using 8-byte SplitMix64 mixing and `-128 -> -127` clamping.
+/// (`[u64; 8]` representing 64 `PhaseQ7` heads) using 8-byte SplitMix64 mixing and `-128 -> -127` clamping.
 #[inline]
 #[must_use]
 pub const fn project_bytes_swar_to_words_64(bytes: &[u8]) -> [u64; NUM_STIGMERGIC_GRANULES] {
@@ -71,10 +71,10 @@ pub const fn project_bytes_swar_to_words_64(bytes: &[u8]) -> [u64; NUM_STIGMERGI
     words
 }
 
-/// Projects an arbitrary byte slice (`bytes`) into a 64-head Q7 phase profile (`[gcso_q7_t; 64]`).
+/// Projects an arbitrary byte slice (`bytes`) into a 64-head Q7 phase profile (`[PhaseQ7; 64]`).
 #[inline]
 #[must_use]
-pub const fn project_bytes_swar_to_q7_64(bytes: &[u8]) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+pub const fn project_bytes_swar_to_q7_64(bytes: &[u8]) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     let words = project_bytes_swar_to_words_64(bytes);
     words_to_q7_array_64(&words)
 }
@@ -168,19 +168,19 @@ pub fn project_f32_slice_to_words_64(values: &[f32]) -> [u64; NUM_STIGMERGIC_GRA
     words
 }
 
-/// Projects an `f32` embedding slice into a 64-head Q7 phase profile (`[gcso_q7_t; 64]`) via
+/// Projects an `f32` embedding slice into a 64-head Q7 phase profile (`[PhaseQ7; 64]`) via
 /// pairwise $SO(2)$ angles evaluated with 8-lane SIMD (`atan2_to_q7_word_x8_simd`).
 #[inline]
 #[must_use]
-pub fn project_f32_slice_to_q7_64(values: &[f32]) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+pub fn project_f32_slice_to_q7_64(values: &[f32]) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     let words = project_f32_slice_to_words_64(values);
     words_to_q7_array_64(&words)
 }
 
 /// Trait for raw payloads that can be projected onto the 64-head $SO(2)^{64}$ Q7 phase manifold.
 pub trait RawPhaseProjectable {
-    /// Projects `self` onto a 64-head Q7 phase array (`[gcso_q7_t; 64]`).
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS];
+    /// Projects `self` onto a 64-head Q7 phase array (`[PhaseQ7; 64]`).
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS];
 
     /// Projects `self` directly into 8 register-resident `u64` SWAR words (`[u64; 8]`).
     #[inline(always)]
@@ -191,7 +191,7 @@ pub trait RawPhaseProjectable {
 
 impl RawPhaseProjectable for () {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         [0i8; MAX_ATTENTION_HEADS]
     }
     #[inline(always)]
@@ -200,9 +200,9 @@ impl RawPhaseProjectable for () {
     }
 }
 
-impl RawPhaseProjectable for [gcso_q7_t; MAX_ATTENTION_HEADS] {
+impl RawPhaseProjectable for [PhaseQ7; MAX_ATTENTION_HEADS] {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         *self
     }
     #[inline(always)]
@@ -213,7 +213,7 @@ impl RawPhaseProjectable for [gcso_q7_t; MAX_ATTENTION_HEADS] {
 
 impl RawPhaseProjectable for [u8] {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_bytes_swar_to_q7_64(self)
     }
     #[inline(always)]
@@ -224,7 +224,7 @@ impl RawPhaseProjectable for [u8] {
 
 impl<const N: usize> RawPhaseProjectable for [u8; N] {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_bytes_swar_to_q7_64(self.as_slice())
     }
     #[inline(always)]
@@ -235,7 +235,7 @@ impl<const N: usize> RawPhaseProjectable for [u8; N] {
 
 impl RawPhaseProjectable for str {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_bytes_swar_to_q7_64(self.as_bytes())
     }
     #[inline(always)]
@@ -246,7 +246,7 @@ impl RawPhaseProjectable for str {
 
 impl RawPhaseProjectable for &str {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_bytes_swar_to_q7_64(self.as_bytes())
     }
     #[inline(always)]
@@ -257,7 +257,7 @@ impl RawPhaseProjectable for &str {
 
 impl RawPhaseProjectable for &[u8] {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_bytes_swar_to_q7_64(self)
     }
     #[inline(always)]
@@ -268,7 +268,7 @@ impl RawPhaseProjectable for &[u8] {
 
 impl RawPhaseProjectable for [f32] {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_f32_slice_to_q7_64(self)
     }
     #[inline(always)]
@@ -279,7 +279,7 @@ impl RawPhaseProjectable for [f32] {
 
 impl RawPhaseProjectable for &[f32] {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_f32_slice_to_q7_64(self)
     }
     #[inline(always)]
@@ -290,7 +290,7 @@ impl RawPhaseProjectable for &[f32] {
 
 impl<const N: usize> RawPhaseProjectable for [f32; N] {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_f32_slice_to_q7_64(self.as_slice())
     }
     #[inline(always)]
@@ -301,7 +301,7 @@ impl<const N: usize> RawPhaseProjectable for [f32; N] {
 
 impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, f32, ALIGN> {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_f32_slice_to_q7_64(self.as_slice())
     }
     #[inline(always)]
@@ -312,7 +312,7 @@ impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, f32, ALIGN
 
 impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, u8, ALIGN> {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         project_bytes_swar_to_q7_64(self.as_slice())
     }
     #[inline(always)]
@@ -321,27 +321,27 @@ impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, u8, ALIGN>
     }
 }
 
-impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, gcso_q7_t, ALIGN> {
+impl<'a, const ALIGN: usize> RawPhaseProjectable for AlignedSlice<'a, PhaseQ7, ALIGN> {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         let s = self.as_slice();
         if s.len() >= MAX_ATTENTION_HEADS {
             let mut out = [0i8; MAX_ATTENTION_HEADS];
             out.copy_from_slice(&s[..MAX_ATTENTION_HEADS]);
             out
         } else {
-            project_bytes_swar_to_q7_64(gcso_q7_t::slice_as_bytes(s))
+            project_bytes_swar_to_q7_64(PhaseQ7::slice_as_bytes(s))
         }
     }
     #[inline(always)]
     fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         let s = self.as_slice();
         if s.len() >= MAX_ATTENTION_HEADS {
-            // SAFETY: `s.len() >= 64` and `gcso_q7_t` has alignment 1.
-            let arr_ref = unsafe { &*(s.as_ptr().cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()) };
+            // SAFETY: `s.len() >= 64` and `PhaseQ7` has alignment 1.
+            let arr_ref = unsafe { &*(s.as_ptr().cast::<[PhaseQ7; MAX_ATTENTION_HEADS]>()) };
             load_q7_words_64(arr_ref)
         } else {
-            project_bytes_swar_to_words_64(gcso_q7_t::slice_as_bytes(s))
+            project_bytes_swar_to_words_64(PhaseQ7::slice_as_bytes(s))
         }
     }
 }

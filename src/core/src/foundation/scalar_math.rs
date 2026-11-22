@@ -16,7 +16,7 @@ use crate::foundation::lut_crc32::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_u8, branchless_select_usize,
-    gcso_q7_t, DEFAULT_ENTROPY_EPS, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD,
+    PhaseQ7, DEFAULT_ENTROPY_EPS, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD,
 };
 
 /// Default soft-bounded phase clamp limit in radians ($5^\circ \approx 0.08726646\text{ rad}$).
@@ -528,7 +528,7 @@ pub const fn branchless_sincos_half_pi_f32(theta_rad: f32) -> (f32, f32) {
 /// Direct $\mathcal{O}(1)$ 64B-aligned 256-entry LUT lookup for `PhaseClamp` $(\sin\theta_{\mathrm{safe}}, \cos\theta_{\mathrm{safe}})$
 /// under [`DEFAULT_PHASE_CLAMP_MAX_RAD`].
 #[inline(always)]
-pub const fn branchless_sincos_q7_phase_clamp_default_lut(phase_q7: gcso_q7_t) -> (f32, f32) {
+pub const fn branchless_sincos_q7_phase_clamp_default_lut(phase_q7: PhaseQ7) -> (f32, f32) {
     let lut = Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF;
     lut[(phase_q7 as u8) as usize]
 }
@@ -537,7 +537,7 @@ pub const fn branchless_sincos_q7_phase_clamp_default_lut(phase_q7: gcso_q7_t) -
 /// with `PhaseClamp` soft-clamping under [`DEFAULT_PHASE_CLAMP_MAX_RAD`].
 #[inline(always)]
 pub const fn branchless_sincos_q7_geodesic_phase_clamp_default_lut(
-    phase_q7: gcso_q7_t,
+    phase_q7: PhaseQ7,
 ) -> (f32, f32) {
     let lut = Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF;
     lut[(phase_q7 as u8) as usize]
@@ -547,7 +547,7 @@ pub const fn branchless_sincos_q7_geodesic_phase_clamp_default_lut(
 /// using the 257-entry `TANH_LUT_257` table.
 #[inline(always)]
 pub(crate) const fn eval_phase_clamp_theta_rad_preinv(
-    phase_q7: gcso_q7_t,
+    phase_q7: PhaseQ7,
     max_rad: f32,
     q7_to_norm_scale: f32,
 ) -> f32 {
@@ -562,7 +562,7 @@ pub(crate) const fn eval_phase_clamp_theta_rad_preinv(
 /// using precomputed `q7_to_norm_scale = Q7_PHASE_SCALE_RAD / max_rad`.
 #[inline(always)]
 pub const fn branchless_sincos_q7_phase_clamp_preinv(
-    phase_q7: gcso_q7_t,
+    phase_q7: PhaseQ7,
     max_rad: f32,
     q7_to_norm_scale: f32,
 ) -> (f32, f32) {
@@ -584,7 +584,7 @@ pub const fn branchless_sincos_q7_phase_clamp_preinv(
 
 /// Standalone division-free branchless `PhaseClamp` soft-clamped $(\sin\theta_{\mathrm{safe}}, \cos\theta_{\mathrm{safe}})$ from Q7.
 #[inline(always)]
-pub const fn branchless_sincos_q7_phase_clamp(phase_q7: gcso_q7_t, max_rad: f32) -> (f32, f32) {
+pub const fn branchless_sincos_q7_phase_clamp(phase_q7: PhaseQ7, max_rad: f32) -> (f32, f32) {
     if max_rad == DEFAULT_PHASE_CLAMP_MAX_RAD {
         return branchless_sincos_q7_phase_clamp_default_lut(phase_q7);
     }
@@ -604,21 +604,21 @@ pub const fn branchless_sincos_q7_phase_clamp(phase_q7: gcso_q7_t, max_rad: f32)
 
 /// Direct 64B-aligned 256-entry interleaved LUT $(\sin\theta, \cos\theta)$ from Q7.
 #[inline(always)]
-pub const fn branchless_sincos_q7(phase_q7: gcso_q7_t) -> (f32, f32) {
+pub const fn branchless_sincos_q7(phase_q7: PhaseQ7) -> (f32, f32) {
     let lut = Q7_SINCOS_LUT_256_REF;
     lut[(phase_q7 as u8) as usize]
 }
 
 /// Direct 256-entry LUT $\sin\theta$ from a Q7 phase angle (`q7 * pi / 128`).
 #[inline(always)]
-pub const fn branchless_sin_q7(phase_q7: gcso_q7_t) -> f32 {
+pub const fn branchless_sin_q7(phase_q7: PhaseQ7) -> f32 {
     let lut = Q7_FULL_SIN_REF;
     lut[(phase_q7 as u8) as usize]
 }
 
 /// Direct 256-entry LUT $\cos\theta$ from a Q7 phase angle (`q7 * pi / 128`).
 #[inline(always)]
-pub const fn branchless_cos_q7(phase_q7: gcso_q7_t) -> f32 {
+pub const fn branchless_cos_q7(phase_q7: PhaseQ7) -> f32 {
     let lut = Q7_FULL_COS_REF;
     lut[(phase_q7 as u8) as usize]
 }
@@ -654,11 +654,11 @@ pub const fn branchless_atan2_f32(y: f32, x: f32) -> f32 {
     branchless_select_f32(valid & !both_zero, angle, 0.0)
 }
 
-/// Fused `#![no_std]` four-quadrant $\mathrm{atan2}(y, x)$ directly quantized into `gcso_q7_t`
+/// Fused `#![no_std]` four-quadrant $\mathrm{atan2}(y, x)$ directly quantized into `PhaseQ7`
 /// ($[-128, 127]$), folding the $\frac{128}{\pi}$ scale factor directly into the minimax polynomial
 /// coefficients (`0` Q7 error across $[-180^\circ, 180^\circ]$).
 #[inline(always)]
-pub const fn branchless_atan2_to_q7_fast(y: f32, x: f32) -> gcso_q7_t {
+pub const fn branchless_atan2_to_q7_fast(y: f32, x: f32) -> PhaseQ7 {
     let valid = branchless_is_finite_f32(x) & branchless_is_finite_f32(y);
     let safe_x = branchless_select_f32(valid, x, 1.0);
     let safe_y = branchless_select_f32(valid, y, 0.0);
@@ -690,7 +690,7 @@ pub const fn branchless_atan2_to_q7_fast(y: f32, x: f32) -> gcso_q7_t {
         rounded < -128,
         -128,
         branchless_select_i32(rounded > 127, 127, rounded),
-    ) as gcso_q7_t
+    ) as PhaseQ7
 }
 
 #[inline(always)]
@@ -800,13 +800,13 @@ pub const fn branchless_phase_proximity_gravity_f32(
 /// Branchless scale-invariant Eyring-Kramers Langevin pitchfork tunneling escape probability (Lemma 3.1).
 #[inline(always)]
 pub const fn branchless_eyring_kramers_escape(
-    liminal_void: f32,
+    liminal_lacuna: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
     d0: f32,
 ) -> f32 {
-    let valid = branchless_is_finite_f32(liminal_void)
+    let valid = branchless_is_finite_f32(liminal_lacuna)
         & branchless_is_finite_f32(tau_eff)
         & branchless_is_finite_f32(alpha)
         & branchless_is_finite_f32(beta)
@@ -814,7 +814,7 @@ pub const fn branchless_eyring_kramers_escape(
         & (beta > DEFAULT_ENTROPY_EPS)
         & (d0 > DEFAULT_ENTROPY_EPS);
     let safe_denom = branchless_select_f32(valid, 4.0 * beta * d0, 1.0);
-    let excess = branchless_relu_f32(liminal_void - tau_eff);
+    let excess = branchless_relu_f32(liminal_lacuna - tau_eff);
     let safe_alpha = branchless_select_f32(valid, alpha, 0.0);
     let ratio = (safe_alpha * safe_alpha * excess * excess) * fast_inv_pos_normal_f32(safe_denom);
     branchless_select_f32(valid, branchless_exp_f32(-ratio), 0.0)
@@ -822,13 +822,13 @@ pub const fn branchless_eyring_kramers_escape(
 
 /// Converts a Q7 fixed-point phase value to radians ($\theta = \mathrm{q7} \cdot \pi / 128$).
 #[inline(always)]
-pub const fn branchless_q7_to_rad(phase_q7: gcso_q7_t) -> f32 {
+pub const fn branchless_q7_to_rad(phase_q7: PhaseQ7) -> f32 {
     (phase_q7 as f32) * Q7_PHASE_SCALE_RAD
 }
 
 /// Branchlessly quantizes a radian angle into Q7 fixed-point format ($[-128, 127]$).
 #[inline(always)]
-pub const fn branchless_rad_to_q7(rad: f32) -> gcso_q7_t {
+pub const fn branchless_rad_to_q7(rad: f32) -> PhaseQ7 {
     let valid = branchless_is_finite_f32(rad);
     let scaled = branchless_select_f32(valid, rad, 0.0) * Q7_PHASE_INV_SCALE_RAD;
     let rounded = (scaled + branchless_select_f32(scaled >= 0.0, 0.5, -0.5)) as i32;
@@ -837,7 +837,7 @@ pub const fn branchless_rad_to_q7(rad: f32) -> gcso_q7_t {
         -128,
         branchless_select_i32(rounded > 127, 127, rounded),
     );
-    branchless_select_i32(valid, clamped, 0) as gcso_q7_t
+    branchless_select_i32(valid, clamped, 0) as PhaseQ7
 }
 
 /// Converts a non-negative radian step threshold into a ceiling-rounded Q7 integer cutoff (`0..=128`).
@@ -858,38 +858,38 @@ pub const fn branchless_rad_to_phase_step_u8(min_step_rad: f32) -> u8 {
 
 /// Branchless Q7 fixed-point saturating addition ($[-128, 127]$).
 #[inline(always)]
-pub const fn branchless_q7_add_sat(a: gcso_q7_t, b: gcso_q7_t) -> gcso_q7_t {
+pub const fn branchless_q7_add_sat(a: PhaseQ7, b: PhaseQ7) -> PhaseQ7 {
     let sum = (a as i32) + (b as i32);
     let clamped_hi = branchless_select_i32(sum > (Q7_MAX as i32), Q7_MAX as i32, sum);
-    branchless_select_i32(clamped_hi < (Q7_MIN as i32), Q7_MIN as i32, clamped_hi) as gcso_q7_t
+    branchless_select_i32(clamped_hi < (Q7_MIN as i32), Q7_MIN as i32, clamped_hi) as PhaseQ7
 }
 
 /// Branchless Q7 fixed-point saturating subtraction ($[-128, 127]$).
 #[inline(always)]
-pub const fn branchless_q7_sub_sat(a: gcso_q7_t, b: gcso_q7_t) -> gcso_q7_t {
+pub const fn branchless_q7_sub_sat(a: PhaseQ7, b: PhaseQ7) -> PhaseQ7 {
     let diff = (a as i32) - (b as i32);
     let clamped_hi = branchless_select_i32(diff > (Q7_MAX as i32), Q7_MAX as i32, diff);
-    branchless_select_i32(clamped_hi < (Q7_MIN as i32), Q7_MIN as i32, clamped_hi) as gcso_q7_t
+    branchless_select_i32(clamped_hi < (Q7_MIN as i32), Q7_MIN as i32, clamped_hi) as PhaseQ7
 }
 
 /// Branchless Q7 circular phase difference $(a - b) \pmod{256}$ on $S^1 \cong SO(2)$.
 #[inline(always)]
-pub const fn branchless_q7_circular_diff(a: gcso_q7_t, b: gcso_q7_t) -> gcso_q7_t {
+pub const fn branchless_q7_circular_diff(a: PhaseQ7, b: PhaseQ7) -> PhaseQ7 {
     a.wrapping_sub(b)
 }
 
 /// Branchlessly folds a circular Q7 phase angle on $S^1$ onto the principal geodesic wave `[-64, +64]`.
 #[inline(always)]
-pub const fn branchless_q7_fold_s1_geodesic(phase_q7: gcso_q7_t) -> gcso_q7_t {
+pub const fn branchless_q7_fold_s1_geodesic(phase_q7: PhaseQ7) -> PhaseQ7 {
     let b = phase_q7 as u8;
     let fold_mask = ((b ^ (b << 1)) >> 7).wrapping_neg();
     let mirrored = 0x80u8.wrapping_sub(b);
-    ((b & !fold_mask) | (mirrored & fold_mask)) as gcso_q7_t
+    ((b & !fold_mask) | (mirrored & fold_mask)) as PhaseQ7
 }
 
 /// Branchless Q7 shortest-arc geodesic interpolation on $S^1 \cong SO(2)$ (`t_u7 in 0..=128`).
 #[inline(always)]
-pub const fn branchless_q7_circular_lerp(a: gcso_q7_t, b: gcso_q7_t, t_u7: u8) -> gcso_q7_t {
+pub const fn branchless_q7_circular_lerp(a: PhaseQ7, b: PhaseQ7, t_u7: u8) -> PhaseQ7 {
     let clamped_t = branchless_select_u8(t_u7 > 128, 128, t_u7);
     a.wrapping_add(branchless_q7_scale_u7(
         branchless_q7_circular_diff(b, a),
@@ -899,14 +899,14 @@ pub const fn branchless_q7_circular_lerp(a: gcso_q7_t, b: gcso_q7_t, t_u7: u8) -
 
 /// Branchless Q7 phase-conjugate negation ($-\Delta\theta$) saturating $-128 \to +127$.
 #[inline(always)]
-pub const fn branchless_q7_neg_sat(x: gcso_q7_t) -> gcso_q7_t {
+pub const fn branchless_q7_neg_sat(x: PhaseQ7) -> PhaseQ7 {
     let neg = -(x as i32);
-    branchless_select_i32(neg > 127, 127, neg) as gcso_q7_t
+    branchless_select_i32(neg > 127, 127, neg) as PhaseQ7
 }
 
 /// Branchless Q7 absolute value returning `[0, 128]` as `u8`.
 #[inline(always)]
-pub const fn branchless_q7_abs_u8(x: gcso_q7_t) -> u8 {
+pub const fn branchless_q7_abs_u8(x: PhaseQ7) -> u8 {
     let val = x as i32;
     let mask = val >> 31;
     ((val ^ mask) - mask) as u8
@@ -914,8 +914,8 @@ pub const fn branchless_q7_abs_u8(x: gcso_q7_t) -> u8 {
 
 /// Branchless Q7 fixed-point integer scaling: $\lfloor (\mathrm{val} \cdot \mathrm{scale\_u7}) / 128 \rfloor$.
 #[inline(always)]
-pub const fn branchless_q7_scale_u7(val: gcso_q7_t, scale_u7: u8) -> gcso_q7_t {
+pub const fn branchless_q7_scale_u7(val: PhaseQ7, scale_u7: u8) -> PhaseQ7 {
     let scaled = ((val as i32) * (scale_u7 as i32)) >> 7;
     let clamped_hi = branchless_select_i32(scaled > 127, 127, scaled);
-    branchless_select_i32(clamped_hi < -128, -128, clamped_hi) as gcso_q7_t
+    branchless_select_i32(clamped_hi < -128, -128, clamped_hi) as PhaseQ7
 }

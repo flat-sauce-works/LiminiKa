@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.3"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.80"
 license = "MIT OR Apache-2.0"
@@ -19,7 +19,7 @@ license = "MIT OR Apache-2.0"
 authors = ["flat-sauce-works"]
 repository = "https://github.com/flat-sauce-works/LiminiKa"
 readme = "README.md"
-keywords = ["llm", "gcso", "sheaf-theory", "zero-alloc", "c-abi"]
+keywords = ["llm", "liminika", "sheaf-theory", "zero-alloc", "c-abi"]
 categories = ["science", "embedded", "no-std", "hardware-support"]
 
 [workspace.dependencies]

@@ -1,7 +1,7 @@
-// name: src/core/src/stigmergy/crystal/kmeans.rs
+// name: src/core/src/stigmergy/anchor/kmeans.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Toroidal centroid merging and evaporative pruning for [`CrystallizedAttractorRecord`].
+//! Toroidal centroid merging and evaporative pruning for [`PhaseAnchorRecord`].
 
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_maturity_scale_u32,
@@ -15,11 +15,11 @@ use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
 
 use super::crc32_delta::crc32_update_crystal_energy_and_mass_delta;
 use super::{
-    CrystallizedAttractorRecord, CRYSTAL_PROVENANCE_MATURE_BIT, GCSO_CRYSTAL_RECORD_MAGIC,
-    GCSO_CRYSTAL_RECORD_VERSION,
+    PhaseAnchorRecord, ANCHOR_LINEAGE_MATURE_BIT, LMNK_PHASE_ANCHOR_MAGIC,
+    LMNK_PHASE_ANCHOR_VERSION,
 };
 
-impl CrystallizedAttractorRecord {
+impl PhaseAnchorRecord {
     fn merge_other_centroid_words_in_place(
         &mut self,
         w_a: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -34,13 +34,13 @@ impl CrystallizedAttractorRecord {
         b_resultant_r_bar: f32,
         b_von_mises_kappa: f32,
         b_gravity_mass: f32,
-        b_ripa_clamp_rad: f32,
+        b_phase_clamp_rad: f32,
         b_effective_inv_temp: f32,
-        b_provenance_bits: u32,
+        b_lineage_flags: u32,
         b_dominant_slot: u8,
         b_action_mode_flags: u8,
         b_active_swarm_mask: u8,
-        b_dominant_cause_code: u8,
+        b_attribution_tag: u8,
     ) -> [u64; NUM_STIGMERGIC_GRANULES] {
         let b_dom = b_gravity_mass > self.phase_gravity_mass;
         let (
@@ -59,9 +59,9 @@ impl CrystallizedAttractorRecord {
         ) = if b_dom {
             self.anchor_id = b_anchor_id;
             self.dominant_slot = b_dominant_slot;
-            self.ripa_clamp_rad = b_ripa_clamp_rad;
+            self.phase_clamp_rad = b_phase_clamp_rad;
             self.effective_inv_temp = b_effective_inv_temp;
-            self.dominant_cause_code = b_dominant_cause_code;
+            self.attribution_tag = b_attribution_tag;
             if b_mapped_offset48 != 0 {
                 self.mapped_section_offset48 = b_mapped_offset48;
             }
@@ -123,7 +123,7 @@ impl CrystallizedAttractorRecord {
         self.phase_gravity_mass = branchless_flush_subnormal_f32(
             next_e * branchless_clamp_f32(r_bar, 0.10, 1.0) * maturity_scale,
         );
-        self.provenance_bits |= b_provenance_bits | CRYSTAL_PROVENANCE_MATURE_BIT;
+        self.lineage_flags |= b_lineage_flags | ANCHOR_LINEAGE_MATURE_BIT;
         self.action_mode_flags |= b_action_mode_flags;
         if self.action_mode_flags == ACTION_PRESET_PASSIVE_SIDECAR {
             self.action_mode_flags = ACTION_PRESET_EXPRESS_PHASE;
@@ -168,8 +168,8 @@ impl CrystallizedAttractorRecord {
                     );
                     centroids[i].base_energy = next_be;
                     centroids[i].phase_gravity_mass = next_gm;
-                    if (centroids[i].magic == GCSO_CRYSTAL_RECORD_MAGIC)
-                        & (centroids[i].version == GCSO_CRYSTAL_RECORD_VERSION)
+                    if (centroids[i].magic == LMNK_PHASE_ANCHOR_MAGIC)
+                        & (centroids[i].version == LMNK_PHASE_ANCHOR_VERSION)
                         & (centroids[i].checksum_crc32 != 0)
                     {
                         centroids[i].checksum_crc32 = crc32_update_crystal_energy_and_mass_delta(
@@ -242,13 +242,13 @@ impl CrystallizedAttractorRecord {
                                 centroids[b].resultant_r_bar,
                                 centroids[b].von_mises_kappa,
                                 centroids[b].phase_gravity_mass,
-                                centroids[b].ripa_clamp_rad,
+                                centroids[b].phase_clamp_rad,
                                 centroids[b].effective_inv_temp,
-                                centroids[b].provenance_bits,
+                                centroids[b].lineage_flags,
                                 centroids[b].dominant_slot,
                                 centroids[b].action_mode_flags,
                                 centroids[b].active_swarm_mask,
-                                centroids[b].dominant_cause_code,
+                                centroids[b].attribution_tag,
                             );
                             w_a = centroids[a].merge_other_centroid_words_in_place(
                                 &w_a, a_uni, &w_b, b_uni, coh, b_aid, b_sc, b_zoff, b_be, b_rbar,

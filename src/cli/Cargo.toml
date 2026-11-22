@@ -14,9 +14,6 @@ path = "src/main.rs"
 
 [features]
 default = []
-cuda = ["liminika-core/cuda"]
-metal = ["liminika-core/metal"]
-vulkan = ["liminika-core/vulkan"]
 
 [dependencies]
 liminika-adapter = { path = "../adapter" }

@@ -1,28 +1,27 @@
 // name: src/core/src/stigmergy/ledger.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Canonical Layer 2 [`gcso_ledger_slot_t`] POD descriptor, 256-bit `gcso_paged_bitmask_t`
+//! Canonical Layer 2 [`LedgerSlot`] POD descriptor, 256-bit `PagedBitmask`
 //! algebra, 64-byte [`ContrastivePhaseBloomFilter`], and [`FastPathLedger`] capability trait.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(non_camel_case_types)]
 #![allow(clippy::must_use_candidate)]
 
 use crate::foundation::{
     branchless_clamp_f32, branchless_popcount_rsqrt_u32, branchless_relu_f32,
-    branchless_splitmix64, branchless_tanh_f32, gcso_paged_bitmask_t, gcso_tagged_ptr_t,
-    is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
-    swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8,
-    swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask,
-    swar_u8_sub_sat_x8, swar_words_nonzero_64, Pod, ACTION_PRESET_REPULSION_ESCAPE,
-    PAGED_BITMASK_BITS, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
+    branchless_splitmix64, branchless_tanh_f32, is_word_array_uniform_64, load_q7_words_64,
+    store_q7_words_64, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8,
+    swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8,
+    swar_u8_nonzero_msb_mask, swar_u8_sub_sat_x8, swar_words_nonzero_64, PagedBitmask, Pod,
+    TaggedPtr, ACTION_PRESET_REPULSION_ESCAPE, PAGED_BITMASK_BITS, SWAR_EVEN_BYTES_64,
+    SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u64, branchless_select_u8, gcso_config_t, gcso_q7_t,
-    GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, MAX_ATTENTION_HEADS,
+    branchless_select_u32, branchless_select_u64, branchless_select_u8, LmnkResult, PhaseQ7,
+    RuntimeConfig, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::{
@@ -33,7 +32,7 @@ use crate::stigmergy::{
 /// Dynamic Adaptive Extension Scratchpad (FastPathLedger) slot layout (64 bytes, 1 cache line, Section 5.4.F).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct gcso_ledger_slot_t {
+pub struct LedgerSlot {
     /// Active extension execution mode (`0` = Scratchpad, `1` = DNP Plugin, `2` = Shared IPC Buffer).
     pub mode: u32,
     /// Ring buffer head write index.
@@ -52,12 +51,12 @@ pub struct gcso_ledger_slot_t {
     pub telemetry_mini_ledger: [u8; 8],
 }
 
-// SAFETY: `gcso_ledger_slot_t` is `#[repr(C, align(64))]` with primitive fields only and zero padding.
-unsafe impl Pod for gcso_ledger_slot_t {}
+// SAFETY: `LedgerSlot` is `#[repr(C, align(64))]` with primitive fields only and zero padding.
+unsafe impl Pod for LedgerSlot {}
 
-impl gcso_ledger_slot_t {
+impl LedgerSlot {
     /// Executes strictly branchless $\mathcal{O}(1)$ fast-path shortcut lookup directly in-place
-    /// on `self` without copying the 64-byte `gcso_ledger_slot_t` onto the stack.
+    /// on `self` without copying the 64-byte `LedgerSlot` onto the stack.
     #[inline(always)]
     #[must_use]
     pub(crate) const fn lookup_fast_path_branchless(&self, input_key: u64) -> (bool, u64) {
@@ -73,14 +72,11 @@ impl gcso_ledger_slot_t {
     /// Branchlessly resolves `input_ptr` against `self.fast_path_shortcuts` in-place (`0` stack
     /// copy, `0` 256-bit-to-64-bit Store-to-Load Forwarding pipeline stall).
     #[inline(always)]
-    pub(crate) fn resolve_or_pass_in_place(
-        &mut self,
-        input_ptr: gcso_tagged_ptr_t,
-    ) -> (bool, gcso_tagged_ptr_t) {
+    pub(crate) fn resolve_or_pass_in_place(&mut self, input_ptr: TaggedPtr) -> (bool, TaggedPtr) {
         let (hit, shortcut_raw) = self.lookup_fast_path_branchless(input_ptr.raw());
         self.cache_hit_count = self.cache_hit_count.wrapping_add(u32::from(hit));
         let eff_raw = branchless_select_u64(hit, shortcut_raw, input_ptr.raw());
-        (hit, gcso_tagged_ptr_t(eff_raw))
+        (hit, TaggedPtr(eff_raw))
     }
 
     /// Pushes a profiling metric byte code (`LEDGER_METRIC_*`) into `self.telemetry_mini_ledger` in-place.
@@ -93,10 +89,10 @@ impl gcso_ledger_slot_t {
 }
 
 // ===================================================================
-// 2. 256-Bit PagedBlock Bitmask Algebra (`gcso_paged_bitmask_t`)
+// 2. 256-Bit PagedBlock Bitmask Algebra (`PagedBitmask`)
 // ===================================================================
 
-impl gcso_paged_bitmask_t {
+impl PagedBitmask {
     /// Returns `true` if all 256 bits across the four 64-bit words are zero.
     #[inline(always)]
     pub fn is_all_zero(&self) -> bool {
@@ -345,7 +341,7 @@ impl gcso_paged_bitmask_t {
 }
 
 #[inline(always)]
-const fn dyadic_lca_depth_raw(mask_x: &gcso_paged_bitmask_t, mask_y: &gcso_paged_bitmask_t) -> u32 {
+const fn dyadic_lca_depth_raw(mask_x: &PagedBitmask, mask_y: &PagedBitmask) -> u32 {
     let d0 = mask_x.bits[0] ^ mask_y.bits[0];
     let d1 = mask_x.bits[1] ^ mask_y.bits[1];
     let d2 = mask_x.bits[2] ^ mask_y.bits[2];
@@ -372,8 +368,8 @@ const fn dyadic_lca_depth_raw(mask_x: &gcso_paged_bitmask_t, mask_y: &gcso_paged
 #[inline(always)]
 #[must_use]
 pub const fn eval_bitmask_dyadic_ultrametric(
-    mask_x: &gcso_paged_bitmask_t,
-    mask_y: &gcso_paged_bitmask_t,
+    mask_x: &PagedBitmask,
+    mask_y: &PagedBitmask,
     w_key: f32,
 ) -> f32 {
     let l_lca = dyadic_lca_depth_raw(mask_x, mask_y);
@@ -544,9 +540,7 @@ impl ContrastivePhaseBloomFilter {
     /// across 4 parallel superscalar multiply lanes in $\mathcal{O}(1)$.
     #[inline(always)]
     #[must_use]
-    pub const fn compute_hash_slots(
-        phase_pattern: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> [usize; 4] {
+    pub const fn compute_hash_slots(phase_pattern: &[PhaseQ7; MAX_ATTENTION_HEADS]) -> [usize; 4] {
         Self::compute_hash_slots_from_words(&load_q7_words_64(phase_pattern))
     }
 
@@ -634,7 +628,7 @@ impl ContrastivePhaseBloomFilter {
     #[inline(always)]
     pub const fn insert_repulsive_pattern(
         &mut self,
-        phase_pattern: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phase_pattern: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) {
         self.insert_repulsive_pattern_weighted(phase_pattern, 1);
     }
@@ -644,7 +638,7 @@ impl ContrastivePhaseBloomFilter {
     #[inline(always)]
     pub const fn insert_repulsive_pattern_weighted(
         &mut self,
-        phase_pattern: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phase_pattern: &[PhaseQ7; MAX_ATTENTION_HEADS],
         weight: u8,
     ) {
         self.insert_repulsive_pattern_words_weighted(&load_q7_words_64(phase_pattern), weight);
@@ -655,7 +649,7 @@ impl ContrastivePhaseBloomFilter {
     #[must_use]
     pub const fn query_repulsive_density(
         &self,
-        phase_pattern: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phase_pattern: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> u8 {
         self.query_repulsive_density_from_words(&load_q7_words_64(phase_pattern))
     }
@@ -665,7 +659,7 @@ impl ContrastivePhaseBloomFilter {
     #[must_use]
     pub const fn query_repulsion_potential(
         &self,
-        phase_pattern: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phase_pattern: &[PhaseQ7; MAX_ATTENTION_HEADS],
         gain: f32,
     ) -> f32 {
         let density = self.query_repulsive_density(phase_pattern) as f32;
@@ -678,7 +672,7 @@ impl ContrastivePhaseBloomFilter {
     #[inline(always)]
     pub const fn apply_phase_conjugate_repulsion_to_words(
         &self,
-        candidate_phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
         density_threshold: u8,
         repulsion_scale_u7: u8,
     ) -> (u8, bool, [u64; 8]) {
@@ -700,7 +694,7 @@ impl ContrastivePhaseBloomFilter {
     #[inline(always)]
     pub const fn apply_phase_conjugate_repulsion(
         &self,
-        candidate_phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
         density_threshold: u8,
         repulsion_scale_u7: u8,
     ) -> u8 {
@@ -717,11 +711,11 @@ impl ContrastivePhaseBloomFilter {
     #[inline(always)]
     pub fn apply_repulsion_and_evolve_ptr(
         &self,
-        tagged_ptr: gcso_tagged_ptr_t,
-        candidate_phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+        tagged_ptr: TaggedPtr,
+        candidate_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
         density_threshold: u8,
         repulsion_scale_u7: u8,
-    ) -> (gcso_tagged_ptr_t, u8, bool) {
+    ) -> (TaggedPtr, u8, bool) {
         let density = self.apply_phase_conjugate_repulsion(
             candidate_phases,
             density_threshold,
@@ -732,7 +726,7 @@ impl ContrastivePhaseBloomFilter {
         let rep_ptr = tagged_ptr
             .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
             .conjugate_phase();
-        let out_ptr = gcso_tagged_ptr_t(branchless_select_u64(
+        let out_ptr = TaggedPtr(branchless_select_u64(
             triggered,
             rep_ptr.raw(),
             tagged_ptr.raw(),
@@ -824,7 +818,7 @@ pub trait FastPathLedger {
     /// # Errors
     /// Returns an error status only if a custom implementor rejects resetting a locked slot.
     #[inline(always)]
-    fn reset_telemetry(&mut self, slot: &mut gcso_ledger_slot_t) -> GcsoResult<()> {
+    fn reset_telemetry(&mut self, slot: &mut LedgerSlot) -> LmnkResult<()> {
         slot.telemetry_ring_head = 0;
         slot.telemetry_ring_tail = 0;
         slot.cache_hit_count = 0;
@@ -835,25 +829,21 @@ pub trait FastPathLedger {
     /// Executes fast-path shortcut lookup in zero-allocation mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `slot.mode != 0` or no matching non-zero shortcut is registered.
+    /// Returns [`LMNK_ERR_INVALID_STATE`] if `slot.mode != 0` or no matching non-zero shortcut is registered.
     #[inline(always)]
-    fn fast_path_lookup(&self, slot: &gcso_ledger_slot_t, input_key: u64) -> GcsoResult<u64> {
+    fn fast_path_lookup(&self, slot: &LedgerSlot, input_key: u64) -> LmnkResult<u64> {
         let (hit, val) = self.fast_path_lookup_branchless(slot, input_key);
         if hit {
             Ok(val)
         } else {
-            Err(GCSO_ERROR_INVALID_STATE)
+            Err(LMNK_ERR_INVALID_STATE)
         }
     }
 
     /// Executes strictly branchless $\mathcal{O}(1)$ fast-path lookup across all 4 shortcut registers.
     #[inline(always)]
     #[must_use]
-    fn fast_path_lookup_branchless(
-        &self,
-        slot: &gcso_ledger_slot_t,
-        input_key: u64,
-    ) -> (bool, u64) {
+    fn fast_path_lookup_branchless(&self, slot: &LedgerSlot, input_key: u64) -> (bool, u64) {
         let mask_hit = ((slot.fast_path_bypass_mask & input_key) != 0) & (slot.mode == 0);
         let idx = ((input_key.wrapping_mul(0x9E37_79B9_7F4A_7C15)) >> 62) as usize;
         let candidate = slot.fast_path_shortcuts[idx & (FAST_PATH_SHORTCUT_SLOTS - 1)];
@@ -867,20 +857,20 @@ pub trait FastPathLedger {
     #[inline(always)]
     fn resolve_or_pass_tagged_ptr(
         &self,
-        slot: &mut gcso_ledger_slot_t,
-        input_ptr: gcso_tagged_ptr_t,
-    ) -> (bool, gcso_tagged_ptr_t) {
+        slot: &mut LedgerSlot,
+        input_ptr: TaggedPtr,
+    ) -> (bool, TaggedPtr) {
         let (hit, shortcut_raw) = self.fast_path_lookup_branchless(slot, input_ptr.raw());
         slot.cache_hit_count = slot.cache_hit_count.wrapping_add(u32::from(hit));
         let eff_raw = branchless_select_u64(hit, shortcut_raw, input_ptr.raw());
-        (hit, gcso_tagged_ptr_t(eff_raw))
+        (hit, TaggedPtr(eff_raw))
     }
 
     /// Registers a 64-bit tagged pointer shortcut into the FastPathLedger fast-path table in $\mathcal{O}(1)$.
     #[inline(always)]
     fn register_fast_path_shortcut(
         &mut self,
-        slot: &mut gcso_ledger_slot_t,
+        slot: &mut LedgerSlot,
         input_key: u64,
         target_shortcut: u64,
     ) {
@@ -892,9 +882,9 @@ pub trait FastPathLedger {
     /// Pushes a profiling metric byte code (`LEDGER_METRIC_*`) into the FastPathLedger telemetry ring ledger in-place.
     ///
     /// # Errors
-    /// Returns [`crate::liminal::GCSO_ERROR_LEDGER_FULL`] only if non-overwriting ring semantics are enforced.
+    /// Returns [`crate::liminal::LMNK_ERR_LEDGER_FULL`] only if non-overwriting ring semantics are enforced.
     #[inline(always)]
-    fn telemetry_push(&mut self, slot: &mut gcso_ledger_slot_t, metric_code: u8) -> GcsoResult<()> {
+    fn telemetry_push(&mut self, slot: &mut LedgerSlot, metric_code: u8) -> LmnkResult<()> {
         let head = (slot.telemetry_ring_head as usize) & (LEDGER_HISTORY_LEN - 1);
         slot.telemetry_mini_ledger[head] = metric_code;
         slot.telemetry_ring_head = slot.telemetry_ring_head.wrapping_add(1);
@@ -905,7 +895,7 @@ pub trait FastPathLedger {
     /// returning `(combined_metric_or_mask, active_entry_count)`.
     #[inline(always)]
     #[must_use]
-    fn telemetry_snapshot_metrics(&self, slot: &gcso_ledger_slot_t) -> (u8, u32) {
+    fn telemetry_snapshot_metrics(&self, slot: &LedgerSlot) -> (u8, u32) {
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
         let fold32 = (word as u32) | ((word >> 32) as u32);
         let fold16 = (fold32 & 0xFFFF) | (fold32 >> 16);
@@ -916,11 +906,11 @@ pub trait FastPathLedger {
     /// Sets the operating mode of the ledger slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `mode > 2`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `mode > 2`.
     #[inline(always)]
-    fn set_mode(&mut self, slot: &mut gcso_ledger_slot_t, mode: u32) -> GcsoResult<()> {
+    fn set_mode(&mut self, slot: &mut LedgerSlot, mode: u32) -> LmnkResult<()> {
         if mode > 2 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         slot.mode = mode;
         Ok(())
@@ -929,16 +919,16 @@ pub trait FastPathLedger {
     /// Evaluates telemetry ledger to auto-tune sub-head router ratios, `PhaseClamp` limits, and `EntropyController` thresholds.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_STATE`] if `slot` is in an incompatible mode.
+    /// Returns [`LMNK_ERR_INVALID_STATE`] if `slot` is in an incompatible mode.
     fn evaluate_auto_tune(
         &self,
-        slot: &gcso_ledger_slot_t,
-        config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()>;
+        slot: &LedgerSlot,
+        config_out: &mut RuntimeConfig,
+    ) -> LmnkResult<()>;
 
     /// Returns the cumulative cache hit count recorded in the slot.
     #[inline(always)]
-    fn cache_hit_count(&self, slot: &gcso_ledger_slot_t) -> u32 {
+    fn cache_hit_count(&self, slot: &LedgerSlot) -> u32 {
         slot.cache_hit_count
     }
 }

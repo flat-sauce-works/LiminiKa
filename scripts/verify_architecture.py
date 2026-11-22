@@ -86,11 +86,17 @@ RETIRED_LEGACY_PATHS: tuple[str, ...] = (
     "stigmergy/attractor/field_engine.rs",
     "stigmergy/attractor/multi_space.rs",
     "stigmergy/attractor/snapshot.rs",
+    "stigmergy/crystal",
+    "stigmergy/attractor",
+    "runtime/abi/action_hub.rs",
+    "runtime/abi/entropy_attractor.rs",
+    "runtime/abi/storage.rs",
 )
 
 REQUIRED_CANONICAL_PATHS: tuple[str, ...] = (
     "foundation/phase_ops/mod.rs",
     "stigmergy/substrate.rs",
+    "stigmergy/anchor/mod.rs",
 )
 
 PUB_TYPE_OR_TRAIT_RE = re.compile(
@@ -104,6 +110,10 @@ ALLOWED_SUBSTRATE_DECLS: dict[str, tuple[str, ...]] = {
     "PointerSubstrate": ("stigmergy/trail.rs",),
     "StigmergicSubstrateOps": ("stigmergy/trail.rs",),
     "SubstrateGatewayExt": ("runtime/gateway/orchestrator.rs",),
+    "LmnkSubstrateOpaque": ("runtime/abi/handles.rs",),
+    "LmnkSubstrateHandle": ("runtime/abi/handles.rs",),
+    "lmnk_substrate_handle_t": ("runtime/abi/handles.rs",),
+    "lmnk_substrate_step_report_t": ("runtime/abi/types.rs",),
 }
 
 SCOPED_BOUNDARY_TYPE_RE = re.compile(
@@ -404,8 +414,7 @@ def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]
     if norm_rel.startswith("src/core/src/"):
         norm_rel = norm_rel[len("src/core/src/"):]
     if (
-        norm_rel.startswith("runtime/abi/")
-        or norm_rel.endswith("tests.rs")
+        norm_rel.endswith("tests.rs")
         or "/tests/" in f"/{norm_rel}"
     ):
         return []
@@ -441,8 +450,6 @@ def check_vocabulary_ownership(core_src: pathlib.Path) -> list[str]:
         if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
             continue
         rel_path = rs_file.relative_to(core_src).as_posix()
-        if rel_path.startswith("runtime/abi/"):
-            continue
         source = rs_file.read_text(encoding="utf-8")
         violations.extend(scan_vocabulary_ownership_in_source(source, rel_path))
     return violations
@@ -566,7 +573,7 @@ def render_mermaid(core_src: pathlib.Path) -> str:
         "flowchart TD",
         f'    L0_liminal["{node_label("liminal", "Lv.0 liminal (Boundary Axioms & AbstractDomain)")}"]',
         f'    L1_foundation["{node_label("foundation", "Lv.1 foundation (Pure SWAR, RoPE & Cohomology)")}"]',
-        f'    L2_stigmergy["{node_label("stigmergy", "Lv.2 stigmergy (Substrate, Attractors & Crystal)")}"]',
+        f'    L2_stigmergy["{node_label("stigmergy", "Lv.2 stigmergy (Substrate & PhaseAnchors)")}"]',
         '    subgraph L3_drivers["Lv.3 drivers (Orthogonal Axes & Tension)"]',
         f'        L3_spine["{node_label("drivers::spine", "drivers/spine (Reflex & EntropyController)")}"]',
         f'        L3_ego["{node_label("drivers::ego", "drivers/ego (Intent & EgoDifferentialNet)")}"]',

@@ -125,7 +125,7 @@ pub struct SourceTextRecord {
 pub enum GopFrameKind {
     /// Full I-Frame snapshot containing a validated 4-section mapped-storage `.gcso` container and active policy.
     KeyframeI {
-        /// Serialized 4-section mapped-storage container bytes (`GcsoFourSectionView`).
+        /// Serialized 4-section mapped-storage container bytes (`LmnkFourSectionView`).
         zimms_4section: Vec<u8>,
         /// Calibrated recall policy at this keyframe.
         recall_policy: RecallPolicy,
@@ -133,7 +133,7 @@ pub enum GopFrameKind {
     /// Incremental P-Frame storing Q7 phase motion delta and energy delta relative to the prior frame.
     DeltaP {
         /// Per-head Q7 phase motion delta (`64` heads).
-        delta_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        delta_q7: [lmnk_q7_t; MAX_ATTENTION_HEADS],
         /// Incremental energy change.
         energy_delta: f32,
         /// Target anchor ID updated by this step.
@@ -164,7 +164,7 @@ pub struct SeekedContainerState {
     /// Active [`RecallPolicy`] restored from the keyframe.
     pub recall_policy: RecallPolicy,
     /// Reconstructed 64-head Q7 phase state after applying P-Frame deltas.
-    pub active_phase_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub active_phase_q7: [lmnk_q7_t; MAX_ATTENTION_HEADS],
     /// Reconstructed total gravitational energy.
     pub total_energy: f32,
     /// Anchor IDs present in the keyframe's mapped-storage crystal section.
@@ -386,14 +386,14 @@ impl GcsoDualTrackTimeline {
             return None;
         }
         if (snapshot.as_ptr() as usize).is_multiple_of(128) {
-            return GcsoFourSectionView::from_container_bytes_zero_copy(snapshot)
+            return LmnkFourSectionView::from_container_bytes_zero_copy(snapshot)
                 .ok()
                 .and_then(|v| v.cognitive_trajectory_ledger());
         }
         let mut aligned = vec![0_u8; snapshot.len() + 128];
         let off = aligned.as_ptr().align_offset(128);
         aligned[off..off + snapshot.len()].copy_from_slice(snapshot);
-        GcsoFourSectionView::from_container_bytes_zero_copy(&aligned[off..off + snapshot.len()])
+        LmnkFourSectionView::from_container_bytes_zero_copy(&aligned[off..off + snapshot.len()])
             .ok()
             .and_then(|v| v.cognitive_trajectory_ledger())
     }
@@ -442,11 +442,8 @@ impl GcsoDualTrackTimeline {
     ) -> Result<Vec<u8>, String> {
         let mut crystals = Vec::with_capacity(corpus.entries().len().max(1));
         for entry in corpus.entries() {
-            let mut rec = CrystallizedAttractorRecord::new_empty(
-                entry.anchor_id,
-                Self::slot_for_role(entry.role),
-                0,
-            );
+            let mut rec =
+                PhaseAnchorRecord::new_empty(entry.anchor_id, Self::slot_for_role(entry.role), 0);
             rec.base_energy = entry.energy;
             rec.phase_gravity_mass = entry.energy;
             rec.sample_count = 1;
@@ -457,13 +454,13 @@ impl GcsoDualTrackTimeline {
             crystals.push(rec);
         }
         if crystals.is_empty() {
-            let empty_rec = CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0);
+            let empty_rec = PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0);
             crystals.push(empty_rec);
         }
-        let trail = gcso_pointer_trail_t::default();
+        let trail = lmnk_pointer_trail_t::default();
         let trails = [trail];
         let ledger_slot = persona_circuit.map(CognitiveTrajectoryLedger::to_persona_ledger_slot);
-        let req_len = GcsoFourSectionView::required_byte_len_with_reports(
+        let req_len = LmnkFourSectionView::required_byte_len_with_reports(
             crystals.len(),
             trails.len(),
             false,
@@ -473,7 +470,7 @@ impl GcsoDualTrackTimeline {
         .map_err(|e| format!("required_byte_len error: {e}"))?;
         let mut aligned = vec![0_u8; req_len + 128];
         let off = aligned.as_ptr().align_offset(128);
-        let written = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
+        let written = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
             &crystals,
             &trails,
             None,
@@ -486,7 +483,7 @@ impl GcsoDualTrackTimeline {
         Ok(aligned[off..off + written].to_vec())
     }
 
-    fn latest_phase_q7(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn latest_phase_q7(&self) -> [lmnk_q7_t; MAX_ATTENTION_HEADS] {
         if let Some(last) = self.frames.last() {
             if let Ok(state) = self.seek_zero_forward(last.frame_index) {
                 return state.active_phase_q7;
@@ -937,7 +934,7 @@ impl AttractorContainerCodec for GcsoDualTrackTimeline {
         let mut aligned = vec![0_u8; container_bytes.len() + 128];
         let off = aligned.as_ptr().align_offset(128);
         aligned[off..off + container_bytes.len()].copy_from_slice(container_bytes);
-        let view = GcsoFourSectionView::from_container_bytes_zero_copy(
+        let view = LmnkFourSectionView::from_container_bytes_zero_copy(
             &aligned[off..off + container_bytes.len()],
         )
         .map_err(|e| format!("mapped-storage zero-copy view validation failed: {e}"))?;

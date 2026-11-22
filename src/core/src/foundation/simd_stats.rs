@@ -25,7 +25,7 @@ use crate::foundation::swar_simd::{
 };
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::liminal::branchless_select_f32;
-use crate::liminal::{branchless_select_u32, gcso_q7_t, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
+use crate::liminal::{branchless_select_u32, PhaseQ7, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
@@ -1508,16 +1508,16 @@ pub(crate) fn procrustes_q7_slice_simd(
     tgt_slice: &[f32],
     head_dim: usize,
     num_heads: usize,
-    phases_out: &mut [gcso_q7_t],
+    phases_out: &mut [PhaseQ7],
 ) {
     let limit_heads = num_heads.min(MAX_ATTENTION_HEADS).min(phases_out.len());
     let words = procrustes_q7_words_64_simd(src_slice, tgt_slice, head_dim, limit_heads);
     if limit_heads == MAX_ATTENTION_HEADS {
-        // SAFETY: `phases_out.len() >= MAX_ATTENTION_HEADS` and `align_of::<gcso_q7_t>() == 1`.
+        // SAFETY: `phases_out.len() >= MAX_ATTENTION_HEADS` and `align_of::<PhaseQ7>() == 1`.
         let out_arr = unsafe {
             &mut *phases_out
                 .as_mut_ptr()
-                .cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
+                .cast::<[PhaseQ7; MAX_ATTENTION_HEADS]>()
         };
         store_q7_words_64(out_arr, &words);
         return;
@@ -1533,7 +1533,7 @@ pub(crate) fn procrustes_q7_slice_simd(
         let mut w = words[full_cells];
         let mut h = rem_start;
         while h < limit_heads {
-            phases_out[h] = (w & 0xFF) as gcso_q7_t;
+            phases_out[h] = (w & 0xFF) as PhaseQ7;
             w >>= 8;
             h += 1;
         }

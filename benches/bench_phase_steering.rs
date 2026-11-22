@@ -3,15 +3,15 @@
 
 //! Benchmarks for `PhaseSteeringEngine`, sub-head routing, visual co-watching,
 //! and toroidal centroid consolidation kernels, engineered for **zero input overfitting**
-//! and **clean separation of Provisional `.gcso` Storage Container workloads**:
-//! - Evaluates aligned (`32B`/`128B`/`256B`/`512B`) query steering, RIPA soft-bounded phase
+//! and **clean separation of Provisional `.lmnk` Storage Container workloads**:
+//! - Evaluates aligned (`32B`/`128B`/`256B`/`512B`) query steering, soft-bounded phase
 //!   clamping, soft phase damping, cumulative phase unwrapping, Procrustes alignment,
-//!   logit phase shifting, and QDPS step filtering across realistic heterogeneous 64-head profiles.
+//!   logit phase shifting, and step filtering across realistic heterogeneous 64-head profiles.
 //! - Evaluates 8-slot sub-head pseudo-MoE / geodesic ensembles, online toroidal centroid
 //!   merge-and-prune consolidation, 2D/3D bitmask-gated visual patch steering, and edge cases
 //!   (head-dim aspect ratios, Q7 boundary saturation/zero, subnormals, and extreme spikes).
-//! - Isolates provisional pre-v1.0 `.gcso` zero-copy container steering into the dedicated
-//!   `PhaseSteering_Provisional_GCSO_Container` Criterion group.
+//! - Isolates provisional pre-v1.0 `.lmnk` zero-copy container steering into the dedicated
+//!   `PhaseSteering_Provisional_LMNK_Container` Criterion group.
 
 #![allow(missing_docs)]
 #![allow(clippy::too_many_arguments)]
@@ -24,7 +24,7 @@ use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
 use liminika_core::abi::{
-    gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t, gcso_subhead_config_t,
+    lmnk_paged_bitmask_t, lmnk_pointer_trail_t, lmnk_q7_t, lmnk_subhead_config_t,
 };
 use liminika_core::foundation::{
     detect_frame_delta_bitmask, dispatch_subhead_slot_ensemble,
@@ -34,7 +34,7 @@ use liminika_core::foundation::{
 };
 use liminika_core::runtime::GatewayPhaseSteeringExt;
 use liminika_core::stigmergy::{
-    CrystallizedAttractorRecord, PhaseProfileRef64, PhaseSteeringEngine, ATTRACTOR_SLOT_KNOWLEDGE,
+    PhaseAnchorRecord, PhaseProfileRef64, PhaseSteeringEngine, ATTRACTOR_SLOT_KNOWLEDGE,
     ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
 };
 use std::hint::black_box;
@@ -42,31 +42,31 @@ use std::time::Duration;
 
 mod common;
 use common::{
-    configured_noise_threshold, should_run_provisional_gcso, AlignedHeapBuffer, ScopedFtzdazGuard,
+    configured_noise_threshold, should_run_provisional_lmnk, AlignedHeapBuffer, ScopedFtzdazGuard,
 };
 
 #[repr(align(64))]
-struct AlignedQ7Buffer<const N: usize>([gcso_q7_t; N]);
+struct AlignedQ7Buffer<const N: usize>([lmnk_q7_t; N]);
 
-/// Restores `dst` from `src` using [`gcso_pointer_trail_t::copy_from_fast`] (64-bit GPR stores at
+/// Restores `dst` from `src` using [`lmnk_pointer_trail_t::copy_from_fast`] (64-bit GPR stores at
 /// offset `56..120`), preventing 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) pipeline stalls.
 #[inline(always)]
-fn reset_trail_fast(dst: &mut gcso_pointer_trail_t, src: &gcso_pointer_trail_t) {
+fn reset_trail_fast(dst: &mut lmnk_pointer_trail_t, src: &lmnk_pointer_trail_t) {
     dst.copy_from_fast(src);
 }
 
-/// Restores `dst` from `src` using [`CrystallizedAttractorRecord::copy_from_fast`] (64-bit GPR stores
+/// Restores `dst` from `src` using [`PhaseAnchorRecord::copy_from_fast`] (64-bit GPR stores
 /// for `phase_profile`), avoiding 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls.
 #[inline(always)]
-fn reset_crystal_fast(dst: &mut CrystallizedAttractorRecord, src: &CrystallizedAttractorRecord) {
+fn reset_crystal_fast(dst: &mut PhaseAnchorRecord, src: &PhaseAnchorRecord) {
     dst.copy_from_fast(src);
 }
 
 /// Populates an 8-slot (`512`-element) attractor phase bank where each 64-head slot carries a
 /// distinct heterogeneous phase profile on $SO(2)^{64}$, avoiding uniform-slot synthetic shortcuts.
 #[inline(always)]
-const fn make_heterogeneous_slot_bank_512(base_shift: gcso_q7_t) -> [gcso_q7_t; 512] {
-    let slot_shifts: [gcso_q7_t; 8] = [0, 12, -18, 24, -10, 16, -22, 8];
+const fn make_heterogeneous_slot_bank_512(base_shift: lmnk_q7_t) -> [lmnk_q7_t; 512] {
+    let slot_shifts: [lmnk_q7_t; 8] = [0, 12, -18, 24, -10, 16, -22, 8];
     let mut out = [0i8; 512];
     let mut s = 0usize;
     while s < 8 {
@@ -112,10 +112,10 @@ fn init_non_collinear_procrustes_tensors(
 /// where every head $h \in [0, 64)$ and every 8-head SWAR cell carries a distinct Q7 phase offset,
 /// preventing synthetic uniform-array shortcuts while preserving directional coherence around `base_shift`.
 #[inline(always)]
-const fn make_heterogeneous_q7_phases_with_offset(base_shift: gcso_q7_t) -> [gcso_q7_t; 64] {
+const fn make_heterogeneous_q7_phases_with_offset(base_shift: lmnk_q7_t) -> [lmnk_q7_t; 64] {
     let mut arr = [0i8; 64];
-    let cell_offsets: [gcso_q7_t; 8] = [-6, 4, -3, 7, -5, 3, -2, 5];
-    let head_offsets: [gcso_q7_t; 8] = [-4, -2, -1, 1, 2, 4, -3, 3];
+    let cell_offsets: [lmnk_q7_t; 8] = [-6, 4, -3, 7, -5, 3, -2, 5];
+    let head_offsets: [lmnk_q7_t; 8] = [-4, -2, -1, 1, 2, 4, -3, 3];
     let mut i = 0usize;
     while i < 64 {
         arr[i] = base_shift
@@ -239,7 +239,7 @@ fn bench_phase_steering_operations(c: &mut Criterion) {
         group.throughput(Throughput::Bytes(single_tensor_bytes as u64));
         group.bench_with_input(
             BenchmarkId::new(
-                "apply_phase_steering_safe_ripa",
+                "apply_phase_steering_safe_clamped",
                 format!("{head_dim}x{num_heads}"),
             ),
             &(head_dim, num_heads),
@@ -476,12 +476,12 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
         }
         let mut slot_bank =
-            AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(12));
+            AlignedBuffer64::<lmnk_q7_t, 512>::new(make_heterogeneous_slot_bank_512(12));
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
         let _ftz = ScopedFtzdazGuard::new();
-        let subhead_cfg = gcso_subhead_config_t {
+        let subhead_cfg = lmnk_subhead_config_t {
             num_fact_heads: 32,
             num_logic_heads: 24,
             num_explore_heads: 8,
@@ -531,12 +531,12 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
             *val = 0.75f32 + ((idx & 7) as f32) * 0.09f32;
         }
         let mut slot_bank =
-            AlignedBuffer64::<gcso_q7_t, 512>::new(make_heterogeneous_slot_bank_512(116));
+            AlignedBuffer64::<lmnk_q7_t, 512>::new(make_heterogeneous_slot_bank_512(116));
         slot_bank.data[64..128].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(24));
         slot_bank.data[128..192].copy_from_slice(&make_heterogeneous_q7_phases_with_offset(-18));
         let bank_slice = slot_bank.relax_slice::<16>();
         let _ftz = ScopedFtzdazGuard::new();
-        let subhead_cfg = gcso_subhead_config_t {
+        let subhead_cfg = lmnk_subhead_config_t {
             num_fact_heads: 32,
             num_logic_heads: 24,
             num_explore_heads: 8,
@@ -582,8 +582,8 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     group.bench_function(
         "online_toroidal_centroid_merge_and_prune_8centroids_64h",
         |b| {
-            let base_centroids: [CrystallizedAttractorRecord; 8] = core::array::from_fn(|i| {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
+            let base_centroids: [PhaseAnchorRecord; 8] = core::array::from_fn(|i| {
+                let mut rec = PhaseAnchorRecord::new_empty(
                     (i as u32) + 1,
                     ATTRACTOR_SLOT_KNOWLEDGE,
                     0x0020_0000 + ((i as u64) << 12),
@@ -627,7 +627,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
                 centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
                 reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
-                let _ = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
+                let _ = PhaseAnchorRecord::merge_and_prune_centroids_64(
                     &mut centroids,
                     0.85f32,
                     0.05f32,
@@ -650,7 +650,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 centroids[6].phase_gravity_mass = base_centroids[6].phase_gravity_mass;
                 centroids[6].checksum_crc32 = base_centroids[6].checksum_crc32;
                 reset_crystal_fast(&mut centroids[7], &base_centroids[7]);
-                let res = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
+                let res = PhaseAnchorRecord::merge_and_prune_centroids_64(
                     black_box(&mut centroids),
                     black_box(0.85f32),
                     black_box(0.05f32),
@@ -671,7 +671,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     group.bench_function("visual_grid_2d_bitmask_gated_256patches", |b| {
         let mut grid_data = AlignedHeapBuffer::<f32, 32>::new(grid_elems, 1.0f32);
         let mut grid_slice = grid_data.as_aligned_slice_mut();
-        let prev_mask = gcso_paged_bitmask_t {
+        let prev_mask = lmnk_paged_bitmask_t {
             bits: [
                 0x0F0F_0F0F_0F0F_0F0Fu64,
                 0x3333_3333_3333_3333u64,
@@ -679,7 +679,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 0x00FF_00FF_00FF_00FFu64,
             ],
         };
-        let curr_mask = gcso_paged_bitmask_t {
+        let curr_mask = lmnk_paged_bitmask_t {
             bits: [
                 0x0FFF_03CF_0FFF_3C0Fu64,
                 0x33F3_3C33_3F33_33C3u64,
@@ -727,7 +727,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     group.bench_function("visual_grid_3d_txy_bitmask_gated_256patches", |b| {
         let mut grid_data = AlignedHeapBuffer::<f32, 32>::new(grid_elems_3d, 1.0f32);
         let mut grid_slice = grid_data.as_aligned_slice_mut();
-        let prev_mask = gcso_paged_bitmask_t {
+        let prev_mask = lmnk_paged_bitmask_t {
             bits: [
                 0x0F0F_0F0F_0F0F_0F0Fu64,
                 0x3333_3333_3333_3333u64,
@@ -735,7 +735,7 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 0x00FF_00FF_00FF_00FFu64,
             ],
         };
-        let curr_mask = gcso_paged_bitmask_t {
+        let curr_mask = lmnk_paged_bitmask_t {
             bits: [
                 0x0FFF_03CF_0FFF_3C0Fu64,
                 0x33F3_3C33_3F33_33C3u64,
@@ -779,17 +779,17 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
     group.finish();
 }
 
-/// Provisional `.gcso` / MappedStorage 4-Section Container Benchmarks (Isolated from Core PhaseSteering Suite).
+/// Provisional `.lmnk` / MappedStorage 4-Section Container Benchmarks (Isolated from Core PhaseSteering Suite).
 ///
-/// Evaluates pre-v1.0 `.gcso` record crystallization and 4-section zero-copy byte container mapping.
+/// Evaluates pre-v1.0 `.lmnk` record crystallization and 4-section zero-copy byte container mapping.
 /// Skipped by default under `run_benchmarks.py --profile standard` so Core `PhaseSteering`/`EntropyControl` evaluations
 /// remain decoupled from the provisional container layout prior to v1.0 KV-keyframe video-stream memory integration.
-fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
-    if !should_run_provisional_gcso() {
+fn bench_phase_steering_provisional_lmnk_container(c: &mut Criterion) {
+    if !should_run_provisional_lmnk() {
         return;
     }
     let _ftz = ScopedFtzdazGuard::new();
-    let mut group = c.benchmark_group("PhaseSteering_Provisional_GCSO_Container");
+    let mut group = c.benchmark_group("PhaseSteering_Provisional_LMNK_Container");
     group.noise_threshold(configured_noise_threshold());
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(100);
@@ -805,7 +805,7 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
 
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
 
-    // 1. Provisional `.gcso` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
+    // 1. Provisional `.lmnk` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
     let engine = PhaseSteeringEngine::new(head_dim, num_heads)
         .expect("Failed 64-head PhaseSteeringEngine init");
     group.bench_function(
@@ -817,8 +817,8 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
             q_slice.as_mut_slice().fill(1.0f32);
             let mut gw_logits =
                 AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-            let records: [CrystallizedAttractorRecord; 4] = core::array::from_fn(|i| {
-                let mut rec = CrystallizedAttractorRecord::new_empty(
+            let records: [PhaseAnchorRecord; 4] = core::array::from_fn(|i| {
+                let mut rec = PhaseAnchorRecord::new_empty(
                     (i as u32) + 40,
                     ATTRACTOR_SLOT_KNOWLEDGE,
                     0x0018_0000 + ((i as u64) << 12),
@@ -831,12 +831,9 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 rec
             });
             let mut storage_buf = AlignedBuffer64::<u8, 512>::new([0u8; 512]);
-            CrystallizedAttractorRecord::write_records_to_container_bytes(
-                &records,
-                &mut storage_buf.data,
-            )
-            .unwrap();
-            let base_trail = gcso_pointer_trail_t {
+            PhaseAnchorRecord::write_records_to_container_bytes(&records, &mut storage_buf.data)
+                .unwrap();
+            let base_trail = lmnk_pointer_trail_t {
                 stigmergic_density: 1.2,
                 attractor_pull_force: 1.5,
                 accumulated_phase_delta: make_heterogeneous_q7_phases_with_offset(26),
@@ -848,12 +845,11 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 reset_trail_fast(&mut trail, &base_trail);
                 gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
                 let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let zero_copy_recs =
-                    CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
-                        &storage_buf.data,
-                        4usize,
-                    )
-                    .unwrap();
+                let zero_copy_recs = PhaseAnchorRecord::slice_from_container_bytes_zero_copy(
+                    &storage_buf.data,
+                    4usize,
+                )
+                .unwrap();
                 let _ = engine
                     .steer_gateway_signal_safe(
                         zero_copy_recs,
@@ -870,12 +866,11 @@ fn bench_phase_steering_provisional_gcso_container(c: &mut Criterion) {
                 reset_trail_fast(&mut trail, &base_trail);
                 gw_logits.data = [1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25];
                 let mut logits_mut = gw_logits.as_aligned_slice_mut();
-                let zero_copy_recs =
-                    CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
-                        black_box(&storage_buf.data),
-                        black_box(4usize),
-                    )
-                    .unwrap();
+                let zero_copy_recs = PhaseAnchorRecord::slice_from_container_bytes_zero_copy(
+                    black_box(&storage_buf.data),
+                    black_box(4usize),
+                )
+                .unwrap();
                 let res = engine
                     .steer_gateway_signal_safe(
                         black_box(zero_copy_recs),
@@ -999,7 +994,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
     });
 
     // 3. Extreme Phase Spike Noise & Geodesic RIPA Branchless Clamp (Heterogeneous Extreme Spikes)
-    group.bench_function("ripa_extreme_phase_spike_clamp_branchless", |b| {
+    group.bench_function("extreme_phase_spike_clamp_branchless", |b| {
         let _ftz = ScopedFtzdazGuard::new();
         let mut q_slice = shared_extreme_arena
             .as_aligned_prefix_mut(stride)
@@ -1101,6 +1096,6 @@ criterion_group!(
     bench_phase_steering_long_context_and_procrustes,
     bench_phase_steering_swarm_subhead_and_visual_cowatching,
     bench_phase_steering_extreme_and_edge_cases,
-    bench_phase_steering_provisional_gcso_container
+    bench_phase_steering_provisional_lmnk_container
 );
 criterion_main!(benches);

@@ -17,7 +17,7 @@ use liminika_adapter::{
     SequenceActivationPooler, SourceTextRecord, SubtitleActivationEncoder, TimelineResumeOutcome,
     TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot, VoidBoundaryState,
 };
-use liminika_core::abi::gcso_pointer_trail_t;
+use liminika_core::abi::lmnk_pointer_trail_t;
 use liminika_core::drivers::LiminalEgoPreset;
 use liminika_core::runtime::{
     AdaptiveThresholdPolicy, CognitiveCircuitThresholdPolicy, GuardPhaseAnchor, HybridScaleCircuit,
@@ -405,7 +405,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map_err(|e| format!("encode error: {e}"))?
                         .get_ids()
                         .to_vec();
-                    let mut trail = gcso_pointer_trail_t::default();
+                    let mut trail = lmnk_pointer_trail_t::default();
                     let q7_primary = if use_two_origin {
                         baked.fact_q7.as_slice()
                     } else {
@@ -537,7 +537,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let snap = adapter.telemetry_snapshot();
                     println!(
                     "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
-                    snap.system.continuous_standard_steps,
+                    snap.spine.continuous_standard_steps,
                     snap.decision_ratios_pct[0],
                     snap.decision_ratios_pct[1],
                     snap.decision_ratios_pct[2],
@@ -551,8 +551,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!(
                     "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% guard_act={} guard_ret={} dwell=({},{})",
                     snap.mode,
-                    snap.system.total_steps,
-                    snap.system.continuous_standard_steps,
+                    snap.spine.total_steps,
+                    snap.spine.continuous_standard_steps,
                     snap.liminal_excursion_ratio * 100.0,
                     snap.ego_intervention_ratio * 100.0,
                     guard_slot.activations,
@@ -629,7 +629,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 adapter.set_layer_rope_mask(layer_mask);
                 adapter.reset_substrate_stats();
                 model.clear_cache();
-                let mut trail = gcso_pointer_trail_t::default();
+                let mut trail = lmnk_pointer_trail_t::default();
                 let mut offset = 0_usize;
                 println!("-- {mode_label} --");
                 for (turn_name, prompt) in turns {
@@ -1370,7 +1370,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 adapter.stigmergic_granule_state().adaptation_epochs,
                 adapter.ego_state().intervention_epochs,
                 adapter.last_boundary_delta().stationary_shortcut_ready,
-                core_venn.venn_core_mask,
+                core_venn.overlap_core_mask,
                 ens_opt.map_or(0, |r| r.active_fragment_count),
             );
             let top_fact_preview = if recall.recalled_facts.is_empty() {

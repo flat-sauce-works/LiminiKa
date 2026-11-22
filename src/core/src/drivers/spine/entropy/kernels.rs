@@ -13,7 +13,7 @@ use crate::foundation::{
     fast_inv_pos_normal_f32, tanh_lut_eval_nonneg, F32_MIN_POSITIVE_NORMAL,
 };
 use crate::liminal::{
-    branchless_select_f32, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY, MAX_SURROGATE_ENTROPY_LN2,
+    branchless_select_f32, LmnkResult, LMNK_ERR_ENTROPY_SINGULARITY, MAX_SURROGATE_ENTROPY_LN2,
 };
 
 // ===================================================================
@@ -134,21 +134,21 @@ pub const fn compute_moving_z_score_entropy(
 }
 
 /// Evaluates scale-invariant Pitchfork Bifurcation potential barrier height
-/// $\Delta V = \frac{\alpha^2 (\max(0, \mathcal{C}_{\mathrm{void}} - \tau_{\mathrm{eff}}))^2}{4 \beta d_{\mathrm{head}}}$
+/// $\Delta V = \frac{\alpha^2 (\max(0, \mathcal{E}_{\mathrm{lat}} - \tau_{\mathrm{eff}}))^2}{4 \beta d_{\mathrm{head}}}$
 /// in division-free (`0 fdiv`) mode (Lemma 3.1).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if any parameter is `NaN`/`Inf`, `beta <= 0.0`,
+/// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if any parameter is `NaN`/`Inf`, `beta <= 0.0`,
 /// or `head_dim` is zero or odd.
 #[inline(always)]
 pub const fn eval_barrier_pitchfork(
-    liminal_void: f32,
+    liminal_lacuna: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
     head_dim: u32,
-) -> GcsoResult<f32> {
-    let valid_params = branchless_is_finite_f32(liminal_void)
+) -> LmnkResult<f32> {
+    let valid_params = branchless_is_finite_f32(liminal_lacuna)
         & branchless_is_finite_f32(tau_eff)
         & branchless_is_finite_f32(alpha)
         & branchless_is_finite_f32(beta)
@@ -156,10 +156,10 @@ pub const fn eval_barrier_pitchfork(
         & (head_dim != 0)
         & ((head_dim & 1) == 0);
     if !valid_params {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
     }
 
-    let diff = branchless_relu_f32(liminal_void - tau_eff);
+    let diff = branchless_relu_f32(liminal_lacuna - tau_eff);
     let prod = alpha * diff;
     let num = prod * prod;
     let den = 4.0 * beta * (head_dim as f32);
@@ -167,7 +167,7 @@ pub const fn eval_barrier_pitchfork(
     let inv_den = fast_inv_pos_normal_f32(safe_den);
     let barrier = branchless_flush_subnormal_f32(num * inv_den);
     if !branchless_is_finite_f32(barrier) {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
     }
     Ok(barrier)
 }
@@ -181,7 +181,7 @@ pub(super) const fn eval_temperature_for_mode(
     mode: u32,
     base_temperature: f32,
     moving_z_entropy: f32,
-    void_score: f32,
+    lacuna_score: f32,
     tau_eff: f32,
     alpha: f32,
     beta: f32,
@@ -201,7 +201,7 @@ pub(super) const fn eval_temperature_for_mode(
     }
     let norm_h = branchless_clamp_f32(branchless_relu_f32(moving_z_entropy) * INV_LN_2, 0.0, 1.0);
     let candidate = if mode == ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION {
-        let escape_p = branchless_eyring_kramers_escape(void_score, tau_eff, alpha, beta, d0);
+        let escape_p = branchless_eyring_kramers_escape(lacuna_score, tau_eff, alpha, beta, d0);
         safe_base * (1.0 + 0.35 * escape_p * norm_h)
     } else {
         safe_base * (1.0 + 0.25 * norm_h)

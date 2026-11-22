@@ -1,65 +1,93 @@
-// name: src/core/src/runtime/abi/action_hub.rs
+// name: src/core/src/runtime/abi/substrate.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Action Hub orchestration, Limina bridging, Bayesian trail rewiring, and FastPathLedger acceleration FFI.
+//! Stigmergic Substrate orchestration, Liminal bridging, Bayesian trail rewiring, and FastPathLedger acceleration FFI.
 
 use super::*;
+use crate::stigmergy::PointerSubstrate;
 
 // ===================================================================
-// 3. Action Hub, Limina Bridging, Bayesian Trail Rewiring & FastPathLedger Interface
+// 3. Stigmergic Substrate, Limina Bridging, Bayesian Trail Rewiring & FastPathLedger Interface
 // ===================================================================
 
-/// Allocates an Action Hub (Sidecar Pointer Table) instance with the specified slot capacity.
+/// Allocates an Stigmergic Substrate instance with the specified slot capacity.
 ///
 /// # Safety
 /// `hub_out` must be a non-null, naturally aligned writable handle pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_create(
+pub unsafe extern "C" fn lmnk_substrate_create(
     capacity: u32,
-    hub_out: *mut GcsoActionHubHandle,
-) -> GcsoStatus {
+    hub_out: *mut LmnkSubstrateHandle,
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(hub_out)? };
         let hub = StigmergicSubstrate::with_capacity(capacity)?;
-        *out_handle = Box::into_raw(Box::new(hub)).cast::<GcsoActionHubOpaque>();
-        Ok(GCSO_SUCCESS)
+        *out_handle = Box::into_raw(Box::new(hub)).cast::<LmnkSubstrateOpaque>();
+        Ok(LMNK_OK)
     })
 }
 
-/// Initializes a 32-byte [`gcso_stigmergic_thresholds_t`] structure with canonical defaults.
+/// Destroys a stigmergic substrate instance and releases its heap allocation if created via
+/// [`lmnk_substrate_create`].
 ///
 /// # Safety
-/// `thresholds_out` must be a non-null, 32-byte aligned writable [`gcso_stigmergic_thresholds_t`] pointer.
+/// `handle` must be `NULL` or a valid substrate handle returned by [`lmnk_substrate_create`].
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_init_default_thresholds(
-    thresholds_out: *mut gcso_stigmergic_thresholds_t,
-) -> GcsoStatus {
+pub unsafe extern "C" fn lmnk_substrate_destroy(handle: LmnkSubstrateHandle) -> LmnkStatus {
+    if handle.is_null() {
+        return LMNK_OK;
+    }
+    if !is_aligned(handle) {
+        return LMNK_ERR_ALIGNMENT;
+    }
+    ffi_boundary!({
+        if (handle as usize) >= 4096
+            && ((handle as usize) & (align_of::<StigmergicSubstrate>() - 1)) == 0
+        {
+            // SAFETY: `handle` was allocated via `Box::into_raw(Box::new(StigmergicSubstrate))`
+            // in `lmnk_substrate_create`.
+            unsafe {
+                let _ = Box::from_raw(handle.cast::<StigmergicSubstrate>());
+            }
+        }
+        Ok(LMNK_OK)
+    })
+}
+
+/// Initializes a 32-byte [`lmnk_stigmergic_thresholds_t`] structure with canonical defaults.
+///
+/// # Safety
+/// `thresholds_out` must be a non-null, 32-byte aligned writable [`lmnk_stigmergic_thresholds_t`] pointer.
+#[no_mangle]
+pub unsafe extern "C" fn lmnk_substrate_init_default_thresholds(
+    thresholds_out: *mut lmnk_stigmergic_thresholds_t,
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 32B alignment.
         let mut out_th = unsafe { FfiHandleMut::from_raw(thresholds_out)? };
         *out_th = StigmergicThresholds::new();
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
 /// Evaluates the 7-regime stigmergic threshold ladder on `trail` in strictly branchless constant
-/// time (`0` branches) and writes the 32-byte [`gcso_action_orchestration_report_t`] to `report_out`.
+/// time (`0` branches) and writes the 32-byte [`lmnk_substrate_step_report_t`] to `report_out`.
 ///
 /// # Safety
 /// `trail` (128B aligned) and `report_out` (32B aligned) must be non-null; `thresholds_opt` may be `NULL` or 32B aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_evaluate_stigmergic_thresholds(
-    thresholds_opt: *const gcso_stigmergic_thresholds_t,
-    trail: *const gcso_pointer_trail_t,
+pub unsafe extern "C" fn lmnk_substrate_evaluate_thresholds(
+    thresholds_opt: *const lmnk_stigmergic_thresholds_t,
+    trail: *const lmnk_pointer_trail_t,
     entropy_h_tilde: f32,
     phase_coherence: f32,
     transition_log_prob: f32,
     selected_trail_id: u32,
     bloom_repulsion_density: u8,
     dominant_slot: u8,
-    report_out: *mut gcso_action_orchestration_report_t,
-) -> GcsoStatus {
+    report_out: *mut lmnk_substrate_step_report_t,
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let ((th_opt, trail_ref), mut rep_out) = unsafe {
@@ -88,7 +116,7 @@ pub unsafe extern "C" fn gcso_action_hub_evaluate_stigmergic_thresholds(
             bloom_repulsion_density,
             dominant_slot,
         );
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -96,15 +124,15 @@ pub unsafe extern "C" fn gcso_action_hub_evaluate_stigmergic_thresholds(
 /// boundary via [`StigmergicSubstrate::orchestrate_next_action_step`] ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
-    hub_opt: GcsoActionHubHandle,
-    thresholds_opt: *const gcso_stigmergic_thresholds_t,
+pub unsafe extern "C" fn lmnk_substrate_step_safe(
+    hub_opt: LmnkSubstrateHandle,
+    thresholds_opt: *const lmnk_stigmergic_thresholds_t,
     input_ptr: u64,
     entropy_h_tilde: f32,
     dominant_slot: u8,
-    trail_inout: *mut gcso_pointer_trail_t,
+    trail_inout: *mut lmnk_pointer_trail_t,
     attention_scores_inout: *mut f32,
     num_scores: usize,
     query_tensor: *mut f32,
@@ -113,8 +141,8 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-    report_out: *mut gcso_action_orchestration_report_t,
-) -> GcsoStatus {
+    report_out: *mut lmnk_substrate_step_report_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(trail_inout)?;
         let (phase_engine, total_len) = init_phase_engine(head_dim, num_heads)?;
@@ -171,13 +199,14 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
         {
             // SAFETY: `hub_opt` is non-null and 128-byte aligned.
             let hub_ref = unsafe { &mut *hub_opt.cast::<StigmergicSubstrate>() };
-            hub_ref.phase_steering = phase_engine;
+            hub_ref.head_dim = head_dim as u16;
+            hub_ref.num_heads = num_heads as u16;
             if let Some(ref th) = th_ref_opt {
                 th.validate()?;
                 hub_ref.thresholds = **th;
             }
-            hub_ref.orchestrate_next_action_step(
-                gcso_tagged_ptr_t(input_ptr),
+            hub_ref.orchestrate_next_action_step_core(
+                TaggedPtr(input_ptr),
                 entropy_h_tilde,
                 dominant_slot,
                 &mut trail,
@@ -185,6 +214,10 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
                 q_opt.as_mut(),
                 k_opt.as_mut(),
                 logits_opt.as_mut(),
+                true,
+                None,
+                phase_engine.phase_step_min_rad(),
+                phase_engine.phase_clamp_max_rad(),
             )?
         } else {
             let th = match th_ref_opt {
@@ -196,7 +229,7 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
             };
             th.orchestrate_stateless_action_step(
                 &phase_engine,
-                gcso_tagged_ptr_t(input_ptr),
+                TaggedPtr(input_ptr),
                 entropy_h_tilde,
                 dominant_slot,
                 &mut trail,
@@ -206,7 +239,7 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
             )?
         };
         *rep_out = report;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -216,16 +249,16 @@ pub unsafe extern "C" fn gcso_action_hub_orchestrate_stigmergic_step_safe(
 /// # Safety
 /// `context` and `trail_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_step_pointer(
-    context: GcsoContextHandle,
+pub unsafe extern "C" fn lmnk_substrate_step_pointer(
+    context: LmnkContextHandle,
     current_ptr: u64,
-    trail_out: *mut gcso_pointer_trail_t,
-) -> GcsoStatus {
+    trail_out: *mut lmnk_pointer_trail_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(context)?;
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 128B alignment.
         let mut trail = unsafe { FfiHandleMut::from_raw(trail_out)? };
-        let tp = gcso_tagged_ptr_t(current_ptr);
+        let tp = TaggedPtr(current_ptr);
 
         trail.record_pointer_transition(current_ptr, 1, 1.0);
         let embedded_phase = tp.unpack_phase();
@@ -238,39 +271,39 @@ pub unsafe extern "C" fn gcso_action_hub_step_pointer(
             u32::from(tp.target_attractor_slot() & ATTRACTOR_SLOT_ID_MASK),
         );
         trail.sync_flags_with_current_ptr();
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Resolves an Action Hub phase command across the 8 parallel 8-head SWAR Micro-Swarm cells on
+/// Resolves an Stigmergic Substrate phase command across the 8 parallel 8-head SWAR Micro-Swarm cells on
 /// `trail_inout` in strictly constant time (`0` branches) and writes the [`StigmergicReconstitutionReport`] to `report_out`.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_resolve_trail_in_swarm(
-    trail_inout: *mut gcso_pointer_trail_t,
+pub unsafe extern "C" fn lmnk_substrate_resolve_trail_in_swarm(
+    trail_inout: *mut lmnk_pointer_trail_t,
     action_ptr: u64,
-    target_phases: *const gcso_q7_t,
+    target_phases: *const lmnk_q7_t,
     active_cell_mask: u8,
     step_gain_u7: u8,
-    qdps_min_step_q7: u8,
+    min_step_q7: u8,
     tolerance_q7: u8,
     quorum_threshold: u8,
     entropy_h_tilde: f32,
     low_entropy_skip_thresh: f32,
     report_out: *mut StigmergicReconstitutionReport,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(trail_inout)?;
         validate_ptr(target_phases)?;
         if raw_byte_ranges_overlap(
             trail_inout as usize,
-            size_of::<gcso_pointer_trail_t>(),
+            size_of::<lmnk_pointer_trail_t>(),
             target_phases as usize,
             MAX_ATTENTION_HEADS,
         ) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Validated non-null, aligned, and disjoint above.
         let ((mut trail, tgt_ref), mut out_rep) = unsafe {
@@ -284,11 +317,11 @@ pub unsafe extern "C" fn gcso_action_hub_resolve_trail_in_swarm(
         };
 
         let report = trail.try_resolve_action_in_swarm_masked(
-            gcso_tagged_ptr_t(action_ptr),
+            TaggedPtr(action_ptr),
             tgt_ref,
             active_cell_mask,
             step_gain_u7,
-            qdps_min_step_q7,
+            min_step_q7,
             tolerance_q7,
             quorum_threshold,
             entropy_h_tilde,
@@ -298,7 +331,7 @@ pub unsafe extern "C" fn gcso_action_hub_resolve_trail_in_swarm(
             0,
         );
         *out_rep = report;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -308,30 +341,8 @@ pub unsafe extern "C" fn gcso_action_hub_resolve_trail_in_swarm(
 /// # Safety
 /// Pure arithmetic function safe for any `u64` value.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_hash_slot256_index(ptr: u64) -> u32 {
+pub unsafe extern "C" fn lmnk_substrate_hash_slot256_index(ptr: u64) -> u32 {
     (branchless_splitmix64(ptr) & 0xFF) as u32
-}
-
-/// Updates cellular swarm cell state across PagedBlock token chunk boundaries.
-///
-/// # Safety
-/// `context` and `mask` must be non-null and naturally aligned.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_swarm_cell_chunk_step(
-    context: GcsoContextHandle,
-    mask: *const gcso_paged_bitmask_t,
-    chunk_len: u32,
-) -> GcsoStatus {
-    ffi_boundary!({
-        validate_ptr(context)?;
-        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 32B alignment.
-        let mask_ref = unsafe { FfiHandleRef::from_raw(mask)? };
-        if chunk_len == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        let _active_bits = mask_ref.popcount();
-        Ok(GCSO_SUCCESS)
-    })
 }
 
 /// Applies macro attractor pull force ($F_{\mathrm{pull}}$) to steer active pointer chains bottom-up.
@@ -339,18 +350,21 @@ pub unsafe extern "C" fn gcso_swarm_cell_chunk_step(
 /// # Safety
 /// `context` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_pull_trail_to_attractor(
-    context: GcsoContextHandle,
-    _trail_id: u32,
-    _anchor_id: u32,
+pub unsafe extern "C" fn lmnk_substrate_pull_trail_to_anchor(
+    context: LmnkContextHandle,
+    trail_id: u32,
+    anchor_id: u32,
     pull_force: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
-        validate_ptr(context)?;
         if !branchless_is_finite_f32(pull_force) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        Ok(GCSO_SUCCESS)
+        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(context.cast::<RuntimeContext>())? };
+        ctx.as_mut()
+            .pull_trail_to_attractor(trail_id, anchor_id, pull_force)?;
+        Ok(LMNK_OK)
     })
 }
 
@@ -359,14 +373,17 @@ pub unsafe extern "C" fn gcso_action_hub_pull_trail_to_attractor(
 /// # Safety
 /// `context` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_link_hallucinated_trails(
-    context: GcsoContextHandle,
-    _src_trail_id: u32,
-    _dst_trail_id: u32,
-) -> GcsoStatus {
+pub unsafe extern "C" fn lmnk_substrate_link_hallucinated_trails(
+    context: LmnkContextHandle,
+    src_trail_id: u32,
+    dst_trail_id: u32,
+) -> LmnkStatus {
     ffi_boundary!({
-        validate_ptr(context)?;
-        Ok(GCSO_SUCCESS)
+        // SAFETY: Validated for non-nullness and concrete `RuntimeContext` alignment.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(context.cast::<RuntimeContext>())? };
+        ctx.as_mut()
+            .link_hallucinated_trails(src_trail_id, dst_trail_id)?;
+        Ok(LMNK_OK)
     })
 }
 
@@ -376,21 +393,21 @@ pub unsafe extern "C" fn gcso_action_hub_link_hallucinated_trails(
 /// # Safety
 /// `bitmasks` and `reduced_out` must be non-null, 32-byte aligned, and disjoint.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
-    bitmasks: *const gcso_paged_bitmask_t,
+pub unsafe extern "C" fn lmnk_substrate_reduce_bit_tree(
+    bitmasks: *const lmnk_paged_bitmask_t,
     num_masks: usize,
-    reduced_out: *mut gcso_paged_bitmask_t,
-) -> GcsoStatus {
+    reduced_out: *mut lmnk_paged_bitmask_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(bitmasks)?;
         validate_ptr(reduced_out)?;
         if num_masks == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Validated for non-nullness and 32B alignment.
         let masks_slice = unsafe { AlignedSlice32::from_raw_parts(bitmasks, num_masks)? };
         if masks_slice.contains_ptr(reduced_out.cast_const()) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Validated for non-nullness and 32B alignment.
         let mut out_ref = unsafe { FfiHandleMut::from_raw(reduced_out)? };
@@ -423,7 +440,7 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
                     i += 1;
                 }
                 _mm256_store_si256(
-                    (&mut *out_ref as *mut gcso_paged_bitmask_t).cast::<__m256i>(),
+                    (&mut *out_ref as *mut lmnk_paged_bitmask_t).cast::<__m256i>(),
                     acc,
                 );
             }
@@ -451,7 +468,7 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
             }
             out_ref.bits = [b0, b1, b2, b3];
         }
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -462,23 +479,23 @@ pub unsafe extern "C" fn gcso_action_hub_reduce_bit_tree(
 /// # Safety
 /// `kv_bits` and `mask_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_action_hub_paged_block_warp_bitmask(
+pub unsafe extern "C" fn lmnk_substrate_paged_block_warp_bitmask(
     kv_bits: *const u64,
     num_blocks: usize,
-    mask_out: *mut gcso_paged_bitmask_t,
-) -> GcsoStatus {
+    mask_out: *mut lmnk_paged_bitmask_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(kv_bits)?;
         // SAFETY: Validated for non-nullness and 32B alignment.
         let mut out_mask = unsafe { FfiHandleMut::from_raw(mask_out)? };
         if num_blocks == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let limit = num_blocks.min(PAGED_BITMASK_BITS as usize);
         // SAFETY: `kv_bits` is non-null, 8B aligned, and valid for `limit <= num_blocks` elements.
         let active_slice = unsafe { slice::from_raw_parts(kv_bits, limit) };
 
-        let mut acc = gcso_paged_bitmask_t::default();
+        let mut acc = lmnk_paged_bitmask_t::default();
         for (word_slot, word_chunk) in active_slice.chunks(64).enumerate() {
             let mut acc_word = 0u64;
             let chunk_len = word_chunk.len();
@@ -555,37 +572,21 @@ pub unsafe extern "C" fn gcso_action_hub_paged_block_warp_bitmask(
             acc.bits[word_slot] = acc_word;
         }
         *out_mask = acc;
-        Ok(GCSO_SUCCESS)
-    })
-}
-
-/// Allocates a ledger slot handle.
-///
-/// # Safety
-/// `slot_out` must be a non-null, naturally aligned writable handle pointer.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_ledger_slot_create(
-    slot_out: *mut GcsoLedgerSlotHandle,
-) -> GcsoStatus {
-    ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
-        let mut out_handle = unsafe { FfiHandleMut::from_raw(slot_out)? };
-        *out_handle = core::ptr::NonNull::dangling().as_ptr();
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
 /// Resets the active telemetry mini ledger and cache hit counters in-place.
 ///
 /// # Safety
-/// `slot` must be a non-null, 64-byte aligned writable [`gcso_ledger_slot_t`] pointer.
+/// `slot` must be a non-null, 64-byte aligned writable [`lmnk_ledger_slot_t`] pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_ledger_reset_telemetry(slot: *mut gcso_ledger_slot_t) -> GcsoStatus {
+pub unsafe extern "C" fn lmnk_ledger_reset_telemetry(slot: *mut lmnk_ledger_slot_t) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and 64B alignment.
         let mut slot_mut = unsafe { FfiHandleMut::from_raw(slot)? };
         AbiLedgerDispatcher.reset_telemetry(&mut slot_mut)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -594,11 +595,11 @@ pub unsafe extern "C" fn gcso_ledger_reset_telemetry(slot: *mut gcso_ledger_slot
 /// # Safety
 /// `slot` and `shortcut_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_ledger_fast_path_lookup(
-    slot: *const gcso_ledger_slot_t,
+pub unsafe extern "C" fn lmnk_ledger_fast_path_lookup(
+    slot: *const lmnk_ledger_slot_t,
     input_key: u64,
     shortcut_out: *mut u64,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let (slot_ref, mut out_val) = unsafe {
@@ -609,41 +610,41 @@ pub unsafe extern "C" fn gcso_ledger_fast_path_lookup(
         };
 
         *out_val = AbiLedgerDispatcher.fast_path_lookup(&slot_ref, input_key)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
 /// Pushes a profiling metric byte to the FastPathLedger telemetry ring ledger in zero-allocation mode.
 ///
 /// # Safety
-/// `slot` must be a non-null, 64-byte aligned writable [`gcso_ledger_slot_t`] pointer.
+/// `slot` must be a non-null, 64-byte aligned writable [`lmnk_ledger_slot_t`] pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_ledger_telemetry_push(
-    slot: *mut gcso_ledger_slot_t,
+pub unsafe extern "C" fn lmnk_ledger_telemetry_push(
+    slot: *mut lmnk_ledger_slot_t,
     metric_code: u8,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and 64B alignment.
         let mut slot_mut = unsafe { FfiHandleMut::from_raw(slot)? };
         AbiLedgerDispatcher.telemetry_push(&mut slot_mut, metric_code)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
 /// Sets the operating mode of a ledger slot (`0` = Scratchpad, `1` = Plugin, `2` = Shared IPC Buffer).
 ///
 /// # Safety
-/// `slot` must be a non-null, 64-byte aligned writable [`gcso_ledger_slot_t`] pointer.
+/// `slot` must be a non-null, 64-byte aligned writable [`lmnk_ledger_slot_t`] pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_ledger_set_mode(
-    slot: *mut gcso_ledger_slot_t,
+pub unsafe extern "C" fn lmnk_ledger_set_mode(
+    slot: *mut lmnk_ledger_slot_t,
     mode: u32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and 64B alignment.
         let mut slot_mut = unsafe { FfiHandleMut::from_raw(slot)? };
         AbiLedgerDispatcher.set_mode(&mut slot_mut, mode)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -652,10 +653,10 @@ pub unsafe extern "C" fn gcso_ledger_set_mode(
 /// # Safety
 /// `slot` and `config_out` must be non-null and naturally aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_ledger_evaluate_auto_tune(
-    slot: *const gcso_ledger_slot_t,
-    config_out: *mut gcso_config_t,
-) -> GcsoStatus {
+pub unsafe extern "C" fn lmnk_ledger_evaluate_auto_tune(
+    slot: *const lmnk_ledger_slot_t,
+    config_out: *mut lmnk_config_t,
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let (slot_ref, mut cfg_mut) = unsafe {
@@ -666,6 +667,6 @@ pub unsafe extern "C" fn gcso_ledger_evaluate_auto_tune(
         };
 
         AbiLedgerDispatcher.evaluate_auto_tune(&slot_ref, &mut cfg_mut)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }

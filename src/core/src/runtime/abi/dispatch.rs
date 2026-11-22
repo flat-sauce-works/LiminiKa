@@ -14,22 +14,22 @@ impl FastPathLedger for AbiLedgerDispatcher {
     #[inline]
     fn evaluate_auto_tune(
         &self,
-        slot: &gcso_ledger_slot_t,
-        config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()> {
+        slot: &lmnk_ledger_slot_t,
+        config_out: &mut lmnk_config_t,
+    ) -> LmnkResult<()> {
         if config_out.head_dim == 0 {
             init_default_config(config_out)?;
         }
         // Single 64-bit SWAR instruction counting all 8 bytes >= 0x80 (`0` loops, `0` branches).
         let spike_count =
             (u64::from_le_bytes(slot.telemetry_mini_ledger) & 0x8080_8080_8080_8080).count_ones();
-        let base_ripa = branchless_select_f32(
-            config_out.ripa_clamp_max_rad > 0.0,
-            config_out.ripa_clamp_max_rad,
+        let base_clamp = branchless_select_f32(
+            config_out.phase_clamp_max_rad > 0.0,
+            config_out.phase_clamp_max_rad,
             DEFAULT_PHASE_CLAMP_MAX_RAD,
         );
         let damping = 1.0 - 0.025 * (spike_count as f32);
-        config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
+        config_out.phase_clamp_max_rad = branchless_clamp_f32(base_clamp * damping, 0.01, 0.25);
         config_out.ledger_mode = (slot.mode & 0xFF) as u8;
         Ok(())
     }
@@ -45,11 +45,11 @@ pub fn is_aligned<T>(ptr: *const T) -> bool {
 
 /// Validates a non-null, naturally aligned pointer or opaque handle.
 #[inline(always)]
-pub(super) fn validate_ptr<T>(ptr: *const T) -> GcsoResult<()> {
+pub(super) fn validate_ptr<T>(ptr: *const T) -> LmnkResult<()> {
     if ptr.is_null() {
-        Err(GCSO_ERROR_NULL_POINTER)
+        Err(LMNK_ERR_NULL_POINTER)
     } else if !is_aligned(ptr) {
-        Err(GCSO_ERROR_MISALIGNED_POINTER)
+        Err(LMNK_ERR_ALIGNMENT)
     } else {
         Ok(())
     }
@@ -57,26 +57,26 @@ pub(super) fn validate_ptr<T>(ptr: *const T) -> GcsoResult<()> {
 
 /// Validates a non-null pointer against an explicit power-of-two alignment boundary `align`.
 #[inline(always)]
-pub(super) fn validate_ptr_aligned<T>(ptr: *const T, align: usize) -> GcsoResult<()> {
+pub(super) fn validate_ptr_aligned<T>(ptr: *const T, align: usize) -> LmnkResult<()> {
     if ptr.is_null() {
-        Err(GCSO_ERROR_NULL_POINTER)
+        Err(LMNK_ERR_NULL_POINTER)
     } else if !is_ptr_aligned_to(ptr, align) {
-        Err(GCSO_ERROR_MISALIGNED_POINTER)
+        Err(LMNK_ERR_ALIGNMENT)
     } else {
         Ok(())
     }
 }
 
 /// Zero-copy borrowed 64-head Q7 phase wrapper implementing [`RawPhaseProjectable`] so FFI callers
-/// passing `*const gcso_q7_t` into 2-Origin Gateway synthesis load directly into 8 `u64` SWAR
+/// passing `*const lmnk_q7_t` into 2-Origin Gateway synthesis load directly into 8 `u64` SWAR
 /// registers without intermediate 64-byte stack array copies.
 #[repr(transparent)]
 #[derive(Clone, Copy)]
-pub(super) struct AbiPhaseRef64<'a>(&'a [gcso_q7_t; MAX_ATTENTION_HEADS]);
+pub(super) struct AbiPhaseRef64<'a>(&'a [lmnk_q7_t; MAX_ATTENTION_HEADS]);
 
 impl RawPhaseProjectable for AbiPhaseRef64<'_> {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [lmnk_q7_t; MAX_ATTENTION_HEADS] {
         *self.0
     }
 
@@ -98,7 +98,7 @@ pub(super) struct AbiF32EmbeddingRef<'a> {
 
 impl RawPhaseProjectable for AbiF32EmbeddingRef<'_> {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [lmnk_q7_t; MAX_ATTENTION_HEADS] {
         if self.gain > 0.0 {
             branchless_project_f32_slice_to_q7_64(self.slice, self.gain)
         } else {
@@ -157,7 +157,7 @@ impl CausalProvenanceSignal for AbiBorrowedBloomGuard<'_> {
 
 impl CognitiveGroundingSignal for AbiBorrowedBloomGuard<'_> {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [lmnk_q7_t; MAX_ATTENTION_HEADS] {
         [0i8; MAX_ATTENTION_HEADS]
     }
 
@@ -181,7 +181,7 @@ impl ContradictionGuardSignal for AbiBorrowedBloomGuard<'_> {
     #[inline(always)]
     fn evaluate_repulsion_severity(
         &self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[lmnk_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let words = load_q7_words_64(candidate_phases);
         self.evaluate_repulsion_severity_from_words(&words, candidate_phases)
@@ -191,7 +191,7 @@ impl ContradictionGuardSignal for AbiBorrowedBloomGuard<'_> {
     fn evaluate_repulsion_severity_from_words(
         &self,
         candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        _candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        _candidate_phases: &[lmnk_q7_t; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let density = if self.bloom.is_empty() {
             0
@@ -212,7 +212,7 @@ impl ContradictionGuardSignal for AbiBorrowedBloomGuard<'_> {
 /// and Origin 2 (`ObjectiveFact<F>`, `SubjectivePersona<P>`, optional `AbiBorrowedBloomGuard`).
 ///
 /// # Safety
-/// `bloom_filter_opt` must be `NULL` or a valid aligned pointer to [`gcso_contrastive_bloom_filter_t`].
+/// `bloom_filter_opt` must be `NULL` or a valid aligned pointer to [`lmnk_bloom_filter_t`].
 #[inline]
 pub(super) unsafe fn synthesize_multi_origin_generic_with_words<
     F: RawPhaseProjectable,
@@ -224,10 +224,10 @@ pub(super) unsafe fn synthesize_multi_origin_generic_with_words<
     recommend_layer_skip: u8,
     fact_sig_opt: Option<ObjectiveFact<F>>,
     pers_sig_opt: Option<SubjectivePersona<P>>,
-    bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
+    bloom_filter_opt: *const lmnk_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
+) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     // SAFETY: `FfiHandleRef::from_raw_opt` validates non-nullness and alignment of `bloom_filter_opt`.
     let bloom_ref_opt = unsafe { FfiHandleRef::from_raw_opt(bloom_filter_opt)? };
     let sys_sig =
@@ -262,30 +262,30 @@ pub(super) unsafe fn synthesize_multi_origin_generic_with_words<
 /// Zero-copy internal helper synthesizing a [`GatewayFrame`] directly from raw Q7 phase pointers.
 ///
 /// # Safety
-/// Non-null phase pointers must point to at least 64 valid `gcso_q7_t` elements.
+/// Non-null phase pointers must point to at least 64 valid `lmnk_q7_t` elements.
 #[inline]
 pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
     vram_pressure: f32,
     gpu_frame_overrun: f32,
     active_swarm_cell_mask: u8,
     recommend_layer_skip: u8,
-    fact_phases: *const gcso_q7_t,
+    fact_phases: *const lmnk_q7_t,
     fact_confidence: f32,
     fact_mapped_offset48: u64,
     fact_anchor_id: u32,
-    persona_phases: *const gcso_q7_t,
+    persona_phases: *const lmnk_q7_t,
     persona_strength: f32,
     persona_mapped_offset48: u64,
     persona_anchor_id: u32,
-    bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
+    bloom_filter_opt: *const lmnk_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
+) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     let fact_sig_opt = if fact_phases.is_null() {
         None
     } else {
-        // SAFETY: `fact_phases` is non-null and `align_of::<[gcso_q7_t; 64]>() == 1`.
-        let f_ref = unsafe { &*fact_phases.cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() };
+        // SAFETY: `fact_phases` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
+        let f_ref = unsafe { &*fact_phases.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() };
         Some(ObjectiveFact::new(
             AbiPhaseRef64(f_ref),
             fact_confidence,
@@ -296,8 +296,8 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
     let pers_sig_opt = if persona_phases.is_null() {
         None
     } else {
-        // SAFETY: `persona_phases` is non-null and `align_of::<[gcso_q7_t; 64]>() == 1`.
-        let p_ref = unsafe { &*persona_phases.cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() };
+        // SAFETY: `persona_phases` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
+        let p_ref = unsafe { &*persona_phases.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() };
         Some(SubjectivePersona::new(
             AbiPhaseRef64(p_ref),
             persona_strength,
@@ -343,14 +343,14 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
     persona_strength: f32,
     persona_mapped_offset48: u64,
     persona_anchor_id: u32,
-    bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
+    bloom_filter_opt: *const lmnk_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
+) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     if (fact_byte_len > 0 && fact_bytes.is_null())
         || (persona_byte_len > 0 && persona_bytes.is_null())
     {
-        return Err(GCSO_ERROR_NULL_POINTER);
+        return Err(LMNK_ERR_NULL_POINTER);
     }
     let fact_sig_opt = if fact_bytes.is_null() {
         None
@@ -424,16 +424,16 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
     persona_strength: f32,
     persona_mapped_offset48: u64,
     persona_anchor_id: u32,
-    bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
+    bloom_filter_opt: *const lmnk_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-) -> GcsoResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
+) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     if !branchless_is_finite_f32(fact_projection_gain)
         || fact_projection_gain < 0.0
         || !branchless_is_finite_f32(persona_projection_gain)
         || persona_projection_gain < 0.0
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     if fact_len > 0 {
         validate_ptr(fact_values)?;
@@ -499,26 +499,26 @@ pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
 
 /// Unified register-resident core helper for [`GatewayFrame`] steering across FFI entry points:
 /// loads `frame_ref.phase_deltas` once into 8 `u64` SWAR registers (`frm_w`), updates `trail`,
-/// steers `q_aligned` (and optional `k_opt`) with $SO(2)$-fused RIPA + sub-head router routing, optionally
+/// steers `q_aligned` (and optional `k_opt`) with $SO(2)$-fused PhaseClamp + sub-head router routing, optionally
 /// scales `logits_opt`, and returns `report` without copying `GatewayFrame`.
 #[inline]
 pub(super) fn steer_gateway_frame_with_words_core_safe(
     frame_ref: &GatewayFrame,
     frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
-    trail: &mut gcso_pointer_trail_t,
+    trail: &mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
     head_dim: usize,
     num_heads: usize,
     q_aligned: &mut AlignedSliceMut32<'_, f32>,
     k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-) -> GcsoResult<CausalProvenanceReport> {
-    if frame_ref.qdps_min_step_rad < 0.0
-        || !branchless_is_finite_f32(frame_ref.qdps_min_step_rad)
-        || frame_ref.ripa_clamp_rad <= 0.0
-        || !branchless_is_finite_f32(frame_ref.ripa_clamp_rad)
+) -> LmnkResult<CausalProvenanceReport> {
+    if frame_ref.phase_step_min_rad < 0.0
+        || !branchless_is_finite_f32(frame_ref.phase_step_min_rad)
+        || frame_ref.phase_clamp_rad <= 0.0
+        || !branchless_is_finite_f32(frame_ref.phase_clamp_rad)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     if let Some(ref k_ref) = k_opt {
         q_aligned.ensure_disjoint_mut(k_ref)?;
@@ -555,12 +555,12 @@ pub(super) fn steer_gateway_frame_with_words_core_safe(
 /// / DP-Means centroid update + optional output pointer writes.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[inline]
 pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_ffi(
     frame: &GatewayFrame,
     frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
-    trail_inout: *mut gcso_pointer_trail_t,
+    trail_inout: *mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
@@ -568,32 +568,32 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-    centroids_inout: *mut gcso_crystallized_attractor_record_t,
+    centroids_inout: *mut lmnk_phase_anchor_record_t,
     num_centroids: usize,
     split_coherence_threshold: f32,
-    frame_out: *mut gcso_gateway_frame_t,
-    report_out: *mut gcso_causal_provenance_report_t,
+    frame_out: *mut lmnk_gateway_frame_t,
+    report_out: *mut lmnk_causal_report_t,
     assigned_centroid_idx_out: *mut usize,
     assigned_coherence_out: *mut f32,
     updated_gravity_mass_out: *mut f32,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     validate_ptr(trail_inout)?;
     let has_centroids = !centroids_inout.is_null() && num_centroids > 0;
     if has_centroids {
         validate_ptr(centroids_inout)?;
         if !branchless_is_finite_f32(split_coherence_threshold) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let cent_bytes = num_centroids
-            .checked_mul(size_of::<CrystallizedAttractorRecord>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .checked_mul(size_of::<PhaseAnchorRecord>())
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         if raw_byte_ranges_overlap(
             centroids_inout as usize,
             cent_bytes,
             trail_inout as usize,
-            size_of::<gcso_pointer_trail_t>(),
+            size_of::<lmnk_pointer_trail_t>(),
         ) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
     }
 
@@ -627,7 +627,7 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
         // SAFETY: `centroids_inout` is validated non-null, aligned, and disjoint from `trail_inout`.
         let centroids_slice = unsafe { slice::from_raw_parts_mut(centroids_inout, num_centroids) };
         let (assigned_idx, _assigned_anchor_id, assigned_coh, updated_mass, _spawned_new) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_frame_with_words_64(
+            PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
                 centroids_slice,
                 frame,
                 frm_w,
@@ -653,11 +653,11 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
 /// Shared FFI execution tail when `frame` is passed by pointer across the C-ABI boundary.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[inline]
 pub(super) unsafe fn execute_gateway_frame_steer_and_optional_kmeans_ffi(
     frame: &GatewayFrame,
-    trail_inout: *mut gcso_pointer_trail_t,
+    trail_inout: *mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
@@ -665,15 +665,15 @@ pub(super) unsafe fn execute_gateway_frame_steer_and_optional_kmeans_ffi(
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-    centroids_inout: *mut gcso_crystallized_attractor_record_t,
+    centroids_inout: *mut lmnk_phase_anchor_record_t,
     num_centroids: usize,
     split_coherence_threshold: f32,
-    frame_out: *mut gcso_gateway_frame_t,
-    report_out: *mut gcso_causal_provenance_report_t,
+    frame_out: *mut lmnk_gateway_frame_t,
+    report_out: *mut lmnk_causal_report_t,
     assigned_centroid_idx_out: *mut usize,
     assigned_coherence_out: *mut f32,
     updated_gravity_mass_out: *mut f32,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let frm_w = frame.phase_words_ref();
     // SAFETY: Validated by `execute_gateway_frame_with_words_steer_and_optional_kmeans_ffi`.
     unsafe {
@@ -700,7 +700,7 @@ pub(super) unsafe fn execute_gateway_frame_steer_and_optional_kmeans_ffi(
     }
 }
 
-/// Shared register-resident post-routing QDPS + RIPA phase steering helper for Coarse-to-Fine
+/// Shared register-resident post-routing QDPS + PhaseClamp phase steering helper for Coarse-to-Fine
 /// pointer-trail routing entry points (fast-pathing uniform and all-zero filtered words).
 #[inline]
 pub(super) fn steer_routed_trail_words_qk_safe(
@@ -753,27 +753,27 @@ pub(super) fn steer_routed_trail_words_qk_safe(
     }
 }
 
-/// Shared register-resident crystallized ensemble folding + optional Bloom repulsion + QDPS/RIPA
-/// steering helper for [`gcso_container_map_and_steer_four_section_zero_copy_safe`].
+/// Shared register-resident crystallized ensemble folding + optional Bloom repulsion + PhaseStepFilter/PhaseClamp
+/// steering helper for [`lmnk_container_map_and_steer_four_section_zero_copy_safe`].
 #[inline]
 pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
-    records: &[CrystallizedAttractorRecord],
+    records: &[PhaseAnchorRecord],
     bloom_opt: Option<&ContrastivePhaseBloomFilter>,
-    trail_inout: &mut gcso_pointer_trail_t,
+    trail_inout: &mut lmnk_pointer_trail_t,
     min_step_rad: f32,
     head_dim: usize,
     num_heads: usize,
     q_aligned: &mut AlignedSliceMut32<'_, f32>,
     k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-) -> GcsoResult<(f32, u32, f32)> {
+) -> LmnkResult<(f32, u32, f32)> {
     if min_step_rad < 0.0 || !branchless_is_finite_f32(min_step_rad) {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let init_pull =
         branchless_flush_subnormal_f32(branchless_relu_f32(trail_inout.attractor_pull_force));
     let (mut folded_w, tot_pull, dom_id, dom_clamp) =
-        CrystallizedAttractorRecord::fold_crystallized_ensemble_words_with_init_pull_64(
+        PhaseAnchorRecord::fold_crystallized_ensemble_words_with_init_pull_64(
             records,
             &mut trail_inout.accumulated_phase_delta,
             init_pull,
@@ -792,7 +792,7 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
                 bloom_ref.apply_phase_conjugate_repulsion_words(&mut folded_w, 4, 128);
             if rep_active {
                 *trail_phase_words_mut(trail_inout) = folded_w;
-                let cur_ptr = gcso_tagged_ptr_t(trail_inout.current_ptr);
+                let cur_ptr = TaggedPtr(trail_inout.current_ptr);
                 let rep_mode = cur_ptr.action_mode_flags() | ACTION_PRESET_REPULSION_ESCAPE;
                 trail_inout.current_ptr = cur_ptr
                     .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
@@ -823,34 +823,34 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
     Ok((tot_pull, dom_id, eff_ripa))
 }
 
-/// Reinterprets a non-null raw `gcso_q7_t` pointer as a zero-copy reference to a 64-head phase array.
+/// Reinterprets a non-null raw `lmnk_q7_t` pointer as a zero-copy reference to a 64-head phase array.
 ///
 /// # Safety
-/// `ptr` must be non-null and point to at least 64 valid `gcso_q7_t` elements.
+/// `ptr` must be non-null and point to at least 64 valid `lmnk_q7_t` elements.
 #[inline(always)]
 pub(super) unsafe fn ref_phase64_from_raw<'a>(
-    ptr: *const gcso_q7_t,
-) -> GcsoResult<&'a [gcso_q7_t; MAX_ATTENTION_HEADS]> {
+    ptr: *const lmnk_q7_t,
+) -> LmnkResult<&'a [lmnk_q7_t; MAX_ATTENTION_HEADS]> {
     if ptr.is_null() {
-        return Err(GCSO_ERROR_NULL_POINTER);
+        return Err(LMNK_ERR_NULL_POINTER);
     }
-    // SAFETY: `ptr` is non-null and `align_of::<[gcso_q7_t; 64]>() == 1`.
-    Ok(unsafe { &*ptr.cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() })
+    // SAFETY: `ptr` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
+    Ok(unsafe { &*ptr.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() })
 }
 
-/// Reinterprets a non-null raw mutable `gcso_q7_t` pointer as a zero-copy mutable reference to a 64-head phase array.
+/// Reinterprets a non-null raw mutable `lmnk_q7_t` pointer as a zero-copy mutable reference to a 64-head phase array.
 ///
 /// # Safety
-/// `ptr` must be non-null, uniquely borrowed, and point to at least 64 valid `gcso_q7_t` elements.
+/// `ptr` must be non-null, uniquely borrowed, and point to at least 64 valid `lmnk_q7_t` elements.
 #[inline(always)]
 pub(super) unsafe fn mut_phase64_from_raw<'a>(
-    ptr: *mut gcso_q7_t,
-) -> GcsoResult<&'a mut [gcso_q7_t; MAX_ATTENTION_HEADS]> {
+    ptr: *mut lmnk_q7_t,
+) -> LmnkResult<&'a mut [lmnk_q7_t; MAX_ATTENTION_HEADS]> {
     if ptr.is_null() {
-        return Err(GCSO_ERROR_NULL_POINTER);
+        return Err(LMNK_ERR_NULL_POINTER);
     }
-    // SAFETY: `ptr` is non-null and `align_of::<[gcso_q7_t; 64]>() == 1`.
-    Ok(unsafe { &mut *ptr.cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>() })
+    // SAFETY: `ptr` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
+    Ok(unsafe { &mut *ptr.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() })
 }
 
 /// Validates a `PhaseSteeringEngine` configuration from `(head_dim, num_heads)` and returns `(engine, total_elements)`.
@@ -858,13 +858,13 @@ pub(super) unsafe fn mut_phase64_from_raw<'a>(
 pub(super) fn init_phase_engine(
     head_dim: usize,
     num_heads: usize,
-) -> GcsoResult<(PhaseSteeringEngine, usize)> {
-    let hd_u32 = u32::try_from(head_dim).map_err(|_| GCSO_ERROR_INVALID_ARGUMENT)?;
-    let nh_u32 = u32::try_from(num_heads).map_err(|_| GCSO_ERROR_INVALID_ARGUMENT)?;
+) -> LmnkResult<(PhaseSteeringEngine, usize)> {
+    let hd_u32 = u32::try_from(head_dim).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
+    let nh_u32 = u32::try_from(num_heads).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
     let engine = PhaseSteeringEngine::new(hd_u32, nh_u32)?;
     let total_len = head_dim
         .checked_mul(num_heads)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     Ok((engine, total_len))
 }
 
@@ -873,7 +873,7 @@ pub(super) fn init_phase_engine(
 /// # Safety
 /// If `out_ptr` is non-null, it must be naturally aligned and writable for `T`.
 #[inline(always)]
-pub(super) unsafe fn write_opt_out<T: Copy>(out_ptr: *mut T, val: T) -> GcsoResult<()> {
+pub(super) unsafe fn write_opt_out<T: Copy>(out_ptr: *mut T, val: T) -> LmnkResult<()> {
     // SAFETY: `FfiHandleMut::from_raw_opt` validates alignment when `out_ptr` is non-null.
     if let Some(mut out_ref) = unsafe { FfiHandleMut::from_raw_opt(out_ptr)? } {
         *out_ref = val;
@@ -892,7 +892,7 @@ pub(super) unsafe fn bind_qk_32<'a>(
     key_tensor: *mut f32,
     head_dim: usize,
     num_heads: usize,
-) -> GcsoResult<(
+) -> LmnkResult<(
     PhaseSteeringEngine,
     AlignedSliceMut32<'a, f32>,
     Option<AlignedSliceMut32<'a, f32>>,
@@ -925,7 +925,7 @@ pub(super) unsafe fn bind_qk_and_logits_32<'a>(
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-) -> GcsoResult<(
+) -> LmnkResult<(
     PhaseSteeringEngine,
     AlignedSliceMut32<'a, f32>,
     Option<AlignedSliceMut32<'a, f32>>,
@@ -951,25 +951,11 @@ pub(super) unsafe fn bind_qk_and_logits_32<'a>(
     Ok((engine, q_aligned, k_opt, logits_opt))
 }
 
-/// Validates a null-terminated C string pointer and ensures valid UTF-8 encoding in `#![no_std]` mode.
-///
-/// # Safety
-/// `c_str_ptr` must be non-null and point to a valid NUL-terminated C string.
-#[inline]
-pub(super) unsafe fn validate_c_utf8_str<'a>(c_str_ptr: *const c_char) -> GcsoResult<&'a str> {
-    if c_str_ptr.is_null() {
-        return Err(GCSO_ERROR_NULL_POINTER);
-    }
-    // SAFETY: `c_str_ptr` is non-null and caller guarantees NUL-termination.
-    let c_str = unsafe { CStr::from_ptr(c_str_ptr) };
-    c_str.to_str().map_err(|_| GCSO_ERROR_INVALID_ARGUMENT)
-}
-
 /// Resolves flexible `(head_dim, num_heads)` dimensions for flat tensor C-ABI entry points.
 #[inline(always)]
-pub(super) const fn resolve_flat_tensor_heads(dim: usize) -> GcsoResult<(u32, u32)> {
+pub(super) const fn resolve_flat_tensor_heads(dim: usize) -> LmnkResult<(u32, u32)> {
     if dim == 0 || (dim & 1) != 0 || dim > (u32::MAX as usize) {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     if dim >= 128 && (dim % 128 == 0) {
         let heads = dim / 128;

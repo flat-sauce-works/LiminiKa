@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 cmake_minimum_required(VERSION 3.18)
-project(LiminiKa VERSION 0.1.3 LANGUAGES C CXX)
+project(LiminiKa VERSION 0.2.0 LANGUAGES C CXX)
 
-# Enforce C11 and C++20 specifications for GCSO C-ABI compilation
+# Enforce C11 and C++20 specifications for LiminiKa C-ABI compilation
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
@@ -127,6 +127,7 @@ if(WIN32)
         ntdll
         advapi32
         synchronization
+        dbghelp
     )
 elseif(UNIX)
     target_link_libraries(liminika_core_ffi INTERFACE

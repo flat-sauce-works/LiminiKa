@@ -29,9 +29,9 @@ fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
     assert_eq!(frame.mapped_section_offset48, 0x0012_3400);
     assert_eq!(frame.target_anchor_id, 77);
     assert_eq!(frame.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
-    assert_eq!(report.dominant_cause_code, ROOT_CAUSE_NOMINAL);
+    assert_eq!(report.attribution_tag, ROOT_CAUSE_NOMINAL);
     assert!(report.fact_persona_coherence > 0.95);
-    assert!((frame.ripa_clamp_rad - DEFAULT_PHASE_CLAMP_MAX_RAD).abs() < 1e-6);
+    assert!((frame.phase_clamp_rad - DEFAULT_PHASE_CLAMP_MAX_RAD).abs() < 1e-6);
 
     let f32_emb = [0.5_f32, 0.866_025_4, -0.5, 0.866_025_4];
     let fact_f32 = ObjectiveFact::new(&f32_emb[..], 2.5, 0x0015_0000, 88);
@@ -44,7 +44,7 @@ fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
     let col_report = col_frame.to_causal_report();
     assert!(col_report.is_persona_fact_collision());
     assert_eq!(
-        col_report.dominant_cause_code,
+        col_report.attribution_tag,
         ROOT_CAUSE_PERSONA_FACT_COLLISION
     );
     assert_eq!(col_frame.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
@@ -54,19 +54,16 @@ fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
     let rep_frame = (&sys, &fact, &persona_aligned, &guard).synthesize_gateway_frame();
     let rep_report = rep_frame.to_causal_report();
     assert!(rep_report.is_cohomology_repulsion());
-    assert_eq!(
-        rep_report.dominant_cause_code,
-        ROOT_CAUSE_COHOMOLOGY_REPULSION
-    );
+    assert_eq!(rep_report.attribution_tag, ROOT_CAUSE_COHOMOLOGY_REPULSION);
     assert_eq!(rep_frame.dominant_slot, ATTRACTOR_SLOT_REPULSION);
 }
 
 #[test]
 fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     let mut centroids = [
-        CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0),
-        CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
-        CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
+        PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0),
+        PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
+        PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0),
     ];
     assert_eq!(centroids[0].causal_provenance_bits(), 0);
     assert_eq!(
@@ -74,11 +71,11 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
         ACTION_PRESET_PASSIVE_SIDECAR
     );
 
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = PointerTrail::default();
 
     let fact_a = ObjectiveFact::new([28i8; MAX_ATTENTION_HEADS], 2.5, 0x0010_0000, 101);
     let (f1, idx1, id1, _coh1, mass1, spawned1) =
-        CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(
+        PhaseAnchorRecord::step_online_toroidal_kmeans_signal_64(
             &mut centroids,
             &fact_a,
             DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
@@ -88,7 +85,7 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
 
     let fact_a2 = ObjectiveFact::new([30i8; MAX_ATTENTION_HEADS], 3.0, 0x0010_0000, 101);
     let (f2, idx2, id2, coh2, mass2, spawned2) =
-        CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(
+        PhaseAnchorRecord::step_online_toroidal_kmeans_signal_64(
             &mut centroids,
             &fact_a2,
             DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
@@ -99,7 +96,7 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
 
     let persona_b = SubjectivePersona::new([-80i8; MAX_ATTENTION_HEADS], 2.8, 0x0024_0000, 202);
     let (_f3, idx3, id3, _coh3, mass3, spawned3) =
-        CrystallizedAttractorRecord::step_online_toroidal_kmeans_signal_64(
+        PhaseAnchorRecord::step_online_toroidal_kmeans_signal_64(
             &mut centroids,
             &persona_b,
             DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
@@ -108,7 +105,7 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     assert!(spawned3 && idx3 == 1 && id3 == 202 && trail.cluster_id == 202 && mass3 > 0.0);
 
     let (act_cnt, tot_smp, mean_r, mean_k, _max_coh) =
-        CrystallizedAttractorRecord::diagnose_macro_distribution_64(&centroids);
+        PhaseAnchorRecord::diagnose_macro_distribution_64(&centroids);
     assert_eq!(act_cnt, 2);
     assert_eq!(tot_smp, 3);
     assert!(mean_r > 0.85 && mean_k > 2.0);
@@ -116,13 +113,13 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     let closed_loop_frame = centroids.synthesize_gateway_frame();
     assert!(closed_loop_frame.effective_energy > 2.0);
     assert_ne!(
-        closed_loop_frame.provenance_bits & CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
+        closed_loop_frame.lineage_flags & CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
         0
     );
 
     let batch_frames = [f1, f2];
     let (_b_idx, b_id, b_coh, b_spawned) =
-        CrystallizedAttractorRecord::step_online_toroidal_kmeans_batch_frames_64(
+        PhaseAnchorRecord::step_online_toroidal_kmeans_batch_frames_64(
             &mut centroids,
             &batch_frames,
             DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
@@ -133,13 +130,13 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     assert!(b_coh > 0.95 && centroids[0].verify_integrity());
 
     // Populate slot 2 with a near-duplicate of slot 0 and verify online consolidation
-    centroids[2] = CrystallizedAttractorRecord::new_empty(303, ATTRACTOR_SLOT_KNOWLEDGE, 0);
+    centroids[2] = PhaseAnchorRecord::new_empty(303, ATTRACTOR_SLOT_KNOWLEDGE, 0);
     let sample_c2 = [29i8; MAX_ATTENTION_HEADS];
     let _ = centroids[2].absorb_sample_point_64(
         crate::liminal::Scoped::interior(PhaseProfileRef64(&sample_c2)).into_grounded(),
         1.2,
     );
-    let (merged_cnt, pruned_cnt) = CrystallizedAttractorRecord::merge_and_prune_centroids_64(
+    let (merged_cnt, pruned_cnt) = PhaseAnchorRecord::merge_and_prune_centroids_64(
         &mut centroids,
         DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE,
         0.10,
@@ -150,46 +147,39 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     assert_eq!(centroids[2].sample_count, 0);
     assert!(centroids[0].verify_integrity() && centroids[2].verify_integrity());
 
-    let mut query_trail = gcso_pointer_trail_t {
+    let mut query_trail = PointerTrail {
         accumulated_phase_delta: [-76i8; MAX_ATTENTION_HEADS],
         stigmergic_density: 1.0,
         attractor_pull_force: 1.0,
         ..Default::default()
     };
     let (routed_idx, routed_id, routed_coh, routed_grav) =
-        CrystallizedAttractorRecord::route_coarse_to_fine_trail_64(
-            &centroids,
-            &mut query_trail,
-            64,
-        );
+        PhaseAnchorRecord::route_coarse_to_fine_trail_64(&centroids, &mut query_trail, 64);
     assert_eq!(routed_idx, 1);
     assert_eq!(routed_id, 202);
     assert_eq!(query_trail.cluster_id, 202);
     assert_eq!(
-        gcso_tagged_ptr_t(query_trail.current_ptr).unpack_addr(),
+        TaggedPtr(query_trail.current_ptr).unpack_addr(),
         0x0024_0000
     );
     assert!(routed_coh > 0.95 && routed_grav > 1.0);
 
     let mut storage_buf = AlignedBuffer64::<u8, 384>::new([0u8; 384]);
-    let written = CrystallizedAttractorRecord::write_records_to_container_bytes(
-        &centroids,
-        &mut storage_buf.data,
-    )
-    .unwrap();
+    let written =
+        PhaseAnchorRecord::write_records_to_container_bytes(&centroids, &mut storage_buf.data)
+            .unwrap();
     assert_eq!(written, 384);
     let restored =
-        CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(&storage_buf.data, 3)
-            .unwrap();
+        PhaseAnchorRecord::slice_from_container_bytes_zero_copy(&storage_buf.data, 3).unwrap();
     assert_eq!(restored[0].anchor_id, 101);
     assert_eq!(restored[1].anchor_id, 202);
 
     let bloom = ContrastivePhaseBloomFilter::new();
-    let ledger = gcso_ledger_slot_t::default();
+    let ledger = LedgerSlot::default();
     let reports_arr = [f1.to_causal_report(), f2.to_causal_report()];
     let trails_arr = [query_trail];
     let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
-    let no_rep_len = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
+    let no_rep_len = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
         &centroids[..2],
         &trails_arr,
         Some(&bloom),
@@ -200,11 +190,11 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     )
     .unwrap();
     let no_rep_view =
-        GcsoFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..no_rep_len])
+        LmnkFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..no_rep_len])
             .unwrap();
     assert_eq!(no_rep_view.crystals.len(), 2);
 
-    let total_len = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
+    let total_len = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
         &centroids,
         &trails_arr,
         Some(&bloom),
@@ -216,9 +206,9 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     .unwrap();
 
     let view =
-        GcsoFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..total_len])
+        LmnkFourSectionView::from_container_bytes_zero_copy(&container_buf.data[..total_len])
             .unwrap();
-    assert_eq!(view.header.attractor_field_offset, 192);
+    assert_eq!(view.header.anchor_offset, 192);
     assert_eq!(
         view.mapped_storage_descriptor.file_size_bytes,
         total_len as u64
@@ -231,8 +221,8 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
 
     // Verify Top-2 Liminal Bifurcation Routing between two balanced attractors
     let mut lim_centroids = [
-        CrystallizedAttractorRecord::new_empty(101, ATTRACTOR_SLOT_KNOWLEDGE, 0x0010_0000),
-        CrystallizedAttractorRecord::new_empty(202, ATTRACTOR_SLOT_PERSONA, 0x0024_0000),
+        PhaseAnchorRecord::new_empty(101, ATTRACTOR_SLOT_KNOWLEDGE, 0x0010_0000),
+        PhaseAnchorRecord::new_empty(202, ATTRACTOR_SLOT_PERSONA, 0x0024_0000),
     ];
     let lim_p0 = [16i8; MAX_ATTENTION_HEADS];
     let lim_p1 = [48i8; MAX_ATTENTION_HEADS];
@@ -244,14 +234,14 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
         crate::liminal::Scoped::interior(PhaseProfileRef64(&lim_p1)).into_grounded(),
         2.5,
     );
-    let mut lim_trail = gcso_pointer_trail_t {
+    let mut lim_trail = PointerTrail {
         accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
         stigmergic_density: 1.0,
         attractor_pull_force: 1.0,
         ..Default::default()
     };
     let (_k1, _k2, aid1, aid2, lim_coh, lim_grav, is_liminal) =
-        CrystallizedAttractorRecord::route_top2_liminal_centroids_64(
+        PhaseAnchorRecord::route_top2_liminal_centroids_64(
             &lim_centroids,
             &mut lim_trail,
             64,
@@ -262,24 +252,24 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_four_section_view() {
     assert_ne!(lim_trail.flags & TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, 0);
 
     // Verify Continuous Geodesic Affinity Prior on unstamped candidate trails (cluster_id == 0)
-    let cand_aligned = gcso_pointer_trail_t {
+    let cand_aligned = PointerTrail {
         accumulated_phase_delta: [18i8; MAX_ATTENTION_HEADS],
         stigmergic_density: 1.0,
         cluster_id: 0,
         ..Default::default()
     };
-    let cand_orthogonal = gcso_pointer_trail_t {
+    let cand_orthogonal = PointerTrail {
         accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
         stigmergic_density: 1.0,
         cluster_id: 0,
         ..Default::default()
     };
-    let mut src_trail = gcso_pointer_trail_t {
+    let mut src_trail = PointerTrail {
         accumulated_phase_delta: [16i8; MAX_ATTENTION_HEADS],
         ..Default::default()
     };
     let (win_c, sel_tid, best_sc, best_c, found_ok) =
-        CrystallizedAttractorRecord::route_coarse_to_fine_candidates_64(
+        PhaseAnchorRecord::route_coarse_to_fine_candidates_64(
             &lim_centroids,
             &mut src_trail,
             &[cand_orthogonal, cand_aligned],
@@ -307,7 +297,7 @@ fn test_adaptive_threshold_policy_probe_and_telemetry_scaling() {
         baseline_guard_noise_floor: 0.45,
         probe_epoch: 1,
     };
-    let trail = gcso_pointer_trail_t {
+    let trail = PointerTrail {
         step_count: 32,
         attractor_pull_force: 1.0,
         ..Default::default()
@@ -392,11 +382,11 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
     let fact = ObjectiveFact::new([28i8; MAX_ATTENTION_HEADS], 2.5, 0x0010_0000, 101);
     let composite_frame = (&fact, &peel_heavy).synthesize_gateway_frame();
     assert_ne!(
-        composite_frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT,
+        composite_frame.lineage_flags & CAUSAL_AXIS_OBJECTIVE_FACT,
         0
     );
     assert_ne!(
-        composite_frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+        composite_frame.lineage_flags & CAUSAL_AXIS_SUBJECTIVE_PERSONA,
         0
     );
 
@@ -436,8 +426,8 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
 
     // 3. Verify ScaleLayerOrchestrator executes zero-alloc elastic depth-N cascades and persists trajectory.
     let mut substrate = crate::stigmergy::substrate::StigmergicSubstrate::new();
-    let mut ledger = gcso_ledger_slot_t::default();
-    let mut trail = gcso_pointer_trail_t {
+    let mut ledger = LedgerSlot::default();
+    let mut trail = PointerTrail {
         accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
         stigmergic_density: 1.0,
         ..Default::default()
@@ -460,7 +450,7 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
         .orchestrate_adaptive_depth_n(
             &layer_array,
             3,
-            gcso_tagged_ptr_t::default(),
+            TaggedPtr::default(),
             &input_words,
             &mut ledger,
             &mut trail,
@@ -529,7 +519,7 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
     // 3. Adaptive early-exit skips redundant deeper layers when residual energy is low and
     //    fuse_gate_q7 is already saturated.
     let mut substrate = crate::stigmergy::substrate::StigmergicSubstrate::new();
-    let mut early_slot = gcso_ledger_slot_t::default();
+    let mut early_slot = LedgerSlot::default();
     let mut early_ledger = CognitiveTrajectoryLedger::new();
     early_ledger.push_step(CognitiveStepOp::pack(
         StigmergicScaleGranularity::PointerBit,
@@ -556,12 +546,12 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
         ScaleLayerNode::new(aligned_frame, StigmergicScaleGranularity::CellTrail),
         ScaleLayerNode::new(aligned_frame, StigmergicScaleGranularity::PointerBit),
     ];
-    let mut early_trail = gcso_pointer_trail_t::default();
+    let mut early_trail = PointerTrail::default();
     let (_, out_early, _) = substrate
         .orchestrate_adaptive_depth_n(
             &early_layers,
             3,
-            gcso_tagged_ptr_t::default(),
+            TaggedPtr::default(),
             &aligned_words,
             &mut early_slot,
             &mut early_trail,
@@ -622,15 +612,11 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
     assert_ne!(blended, circuit);
     assert!(blended.op_counts().1 >= 2);
 
-    // Zero-copy 4-section .gcso roundtrip via to_persona_ledger_slot & cognitive_trajectory_ledger.
+    // Zero-copy 4-section .lmnk roundtrip via to_persona_ledger_slot & cognitive_trajectory_ledger.
     let slot = blended.to_persona_ledger_slot();
-    let crystals = [CrystallizedAttractorRecord::new_empty(
-        1,
-        ATTRACTOR_SLOT_PERSONA,
-        0,
-    )];
-    let trails = [gcso_pointer_trail_t::default()];
-    let req_len = GcsoFourSectionView::required_byte_len_with_reports(
+    let crystals = [PhaseAnchorRecord::new_empty(1, ATTRACTOR_SLOT_PERSONA, 0)];
+    let trails = [PointerTrail::default()];
+    let req_len = LmnkFourSectionView::required_byte_len_with_reports(
         crystals.len(),
         trails.len(),
         false,
@@ -640,7 +626,7 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
     .unwrap();
     let mut buf = [0u8; 1024];
     let off = buf.as_ptr().align_offset(128);
-    let written = GcsoFourSectionView::write_four_section_with_reports_to_bytes(
+    let written = LmnkFourSectionView::write_four_section_with_reports_to_bytes(
         &crystals,
         &trails,
         None,
@@ -651,7 +637,7 @@ fn test_cognitive_circuit_plasticity_composition_and_four_section_roundtrip() {
     )
     .unwrap();
     let view =
-        GcsoFourSectionView::from_container_bytes_zero_copy(&buf[off..off + written]).unwrap();
+        LmnkFourSectionView::from_container_bytes_zero_copy(&buf[off..off + written]).unwrap();
     assert_eq!(view.cognitive_trajectory_ledger(), Some(blended));
 }
 
@@ -705,14 +691,14 @@ fn test_hybrid_scale_circuit_and_adaptive_threshold_policy() {
     assert!(strict_policy.peel_escalation_floor_q7() < relaxed_policy.peel_escalation_floor_q7());
 
     let mut substrate = crate::stigmergy::substrate::StigmergicSubstrate::new();
-    let mut slot = gcso_ledger_slot_t::default();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut slot = LedgerSlot::default();
+    let mut trail = PointerTrail::default();
     let layers = [hybrid];
     let (proj, out_ledger, _) = substrate
         .orchestrate_adaptive_depth_n_with_policy(
             &layers,
             1,
-            gcso_tagged_ptr_t::default(),
+            TaggedPtr::default(),
             &input_words,
             &mut slot,
             &mut trail,
@@ -762,7 +748,7 @@ fn test_scalable_ram_cognitive_circuit_bank_and_folding() {
 
     // Bank acts directly as a ManifoldGatewaySignal via consolidated 8-byte folding.
     let frame = high.synthesize_gateway_frame();
-    assert_ne!(frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+    assert_ne!(frame.lineage_flags & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
 
     // Slice implementation allows runtime-sized RAM banks without fixed const N.
     let mut dynamic_units = [CognitiveTrajectoryLedger::new(); 4];
@@ -812,8 +798,8 @@ fn test_ram_phase_kv_cache_exact_hit_resonance_lru_and_gateway_synthesis() {
 
     // 3. Cached entry directly synthesizes a composite GatewayFrame (Fact + Persona circuit).
     let frame = cache.slots[0].synthesize_gateway_frame();
-    assert_ne!(frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
-    assert_ne!(frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+    assert_ne!(frame.lineage_flags & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
+    assert_ne!(frame.lineage_flags & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
 
     // 4. LRU eviction replaces oldest epoch when capacity is full.
     let mut tiny = [RamPhaseKvEntry::default(); 2];
@@ -862,8 +848,8 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let frame = gop_cache
         .synthesize_slot_history_gateway_frame(slot, 1, 0.35, 6)
         .unwrap();
-    assert_ne!(frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
-    assert_ne!(frame.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
+    assert_ne!(frame.lineage_flags & CAUSAL_AXIS_OBJECTIVE_FACT, 0);
+    assert_ne!(frame.lineage_flags & CAUSAL_AXIS_SUBJECTIVE_PERSONA, 0);
     assert_eq!(gop_cache.entries()[slot].reuse_count, 2);
 
     // Small-amplitude orthogonal, opposite, and zero vectors must not falsely collide.
@@ -888,7 +874,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         .is_none());
 
     // Autonomous S^(H-1) concentration-of-measure resonance floor scales inversely with sqrt(H)
-    // and steps RamPhaseKvGopCache through SkippedVoid -> StoredKeyframe -> ResonatedSeeked.
+    // and steps RamPhaseKvGopCache through SkippedLiminal -> StoredKeyframe -> ResonatedSeeked.
     let policy = AdaptiveThresholdPolicy::default();
     let floor_h8 = policy.kv_resonance_floor_for_heads_q7(8, 0, 16);
     let floor_h24 = policy.kv_resonance_floor_for_heads_q7(24, 0, 16);
@@ -898,12 +884,12 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
 
     let mut auto_cache: LowSpecPhaseKvGopCache = RamPhaseKvGopCache::new();
     let mut auto_circuit = circuit;
-    let void_frame = GatewayFrame::default();
+    let empty_frame = GatewayFrame::default();
     assert_eq!(
         auto_cache
-            .step_with_gateway_autonomous(0, 1, &void_frame, &mut auto_circuit, act, &policy, 1)
+            .step_with_gateway_autonomous(0, 1, &empty_frame, &mut auto_circuit, act, &policy, 1)
             .unwrap(),
-        RamPhaseKvStepOutcome::SkippedVoid
+        RamPhaseKvStepOutcome::SkippedLiminal
     );
     let mut fact_arr = [0i8; MAX_ATTENTION_HEADS];
     fact_arr[0] = 24;
@@ -1042,7 +1028,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     );
     let mut g_frame = guard_composite.synthesize_gateway_frame();
     assert!(g_frame.repulsion_severity >= 0.55);
-    assert_ne!(g_frame.provenance_bits & CAUSAL_AXIS_CONTRADICTION_GUARD, 0);
+    assert_ne!(g_frame.lineage_flags & CAUSAL_AXIS_CONTRADICTION_GUARD, 0);
 
     let mut peel_ledger = CognitiveTrajectoryLedger::new();
     peel_ledger.push_step(CognitiveStepOp::pack(
@@ -1088,7 +1074,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         CognitiveOpKind::CrystallizeCommit,
         7,
     ));
-    let mut fuse_slot = gcso_ledger_slot_t::default();
+    let mut fuse_slot = LedgerSlot::default();
     fuse_ledger.write_to_ledger_slot(&mut fuse_slot);
     let mut substrate =
         crate::stigmergy::substrate::StigmergicSubstrate::with_dimensions_and_thresholds(
@@ -1098,7 +1084,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
             crate::stigmergy::substrate::StigmergicThresholds::default(),
         )
         .unwrap();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = PointerTrail::default();
     let policy = AdaptiveThresholdPolicy::default();
     let sys = SystemConstraint::new((), 0.0, 0.0, 0xFF);
     let probe = ManifoldProbeBaseline::new();
@@ -1146,12 +1132,12 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     assert!(peel_thresh.subhead_route_density_thresh < fuse_thresh.subhead_route_density_thresh);
     assert!(fuse_thresh.crystallize_density_thresh < peel_thresh.crystallize_density_thresh);
 
-    let fixed_trail = gcso_pointer_trail_t {
+    let fixed_trail = PointerTrail {
         stigmergic_density: 1.95,
         step_count: 8,
         ..Default::default()
     };
-    let mut peel_hub_slot = gcso_ledger_slot_t::default();
+    let mut peel_hub_slot = LedgerSlot::default();
     peel_ledger.write_to_ledger_slot(&mut peel_hub_slot);
     let mut peel_trail = fixed_trail;
     let (_, _, dec_peel) = substrate
@@ -1173,7 +1159,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         )
         .unwrap();
 
-    let mut fuse_hub_slot = gcso_ledger_slot_t::default();
+    let mut fuse_hub_slot = LedgerSlot::default();
     fuse_ledger.write_to_ledger_slot(&mut fuse_hub_slot);
     let mut fuse_trail = fixed_trail;
     let (_, _, dec_fuse) = substrate
@@ -1199,7 +1185,7 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
 }
 
 #[test]
-fn epistemic_horizon_separates_true_void_from_internal_conflict_branchlessly() {
+fn epistemic_horizon_separates_liminal_from_internal_conflict_branchlessly() {
     let f0 = ObjectiveFact::new([0i8; MAX_ATTENTION_HEADS], 1.5, 0x0001_0000, 101);
     let f1 = ObjectiveFact::new([20i8; MAX_ATTENTION_HEADS], 1.5, 0x0002_0000, 102);
     let nodes = [f0, f1];
@@ -1236,25 +1222,25 @@ fn epistemic_horizon_separates_true_void_from_internal_conflict_branchlessly() {
     assert!(frame_conf.effective_energy > 0.0);
 
     // 3. Outside carved memory cut (orthogonal to all memory nodes) -> Liminal zeroes output cleanly.
-    let q_void = load_q7_words_64(&[-64i8; MAX_ATTENTION_HEADS]);
-    let (frame_void, horizon_void) =
-        ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_void, 0.35);
-    assert_eq!(horizon_void.regime(), EpistemicRegime::Liminal);
-    assert_eq!(horizon_void.horizon_gate, 0.0);
-    assert_eq!(frame_void.effective_energy, 0.0);
+    let q_outside = load_q7_words_64(&[-64i8; MAX_ATTENTION_HEADS]);
+    let (frame_liminal, horizon_liminal) =
+        ObjectiveFact::synthesize_slice_relative_gateway(&nodes, coupling.row(0), &q_outside, 0.35);
+    assert_eq!(horizon_liminal.regime(), EpistemicRegime::Liminal);
+    assert_eq!(horizon_liminal.horizon_gate, 0.0);
+    assert_eq!(frame_liminal.effective_energy, 0.0);
     assert_eq!(
-        frame_void.phase_words_ref(),
+        frame_liminal.phase_words_ref(),
         &[0u64; NUM_STIGMERGIC_GRANULES]
     );
-    assert_eq!(frame_void.mean_phase_tag_q7, 0);
+    assert_eq!(frame_liminal.mean_phase_tag_q7, 0);
 }
 
 #[test]
 fn relative_coupling_flips_repulsion_by_active_perspective_across_ten_nodes() {
-    let mut nodes = [CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0); 10];
+    let mut nodes = [PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0); 10];
     let mut idx = 0usize;
     while idx < nodes.len() {
-        let mut rec = CrystallizedAttractorRecord::new_empty(
+        let mut rec = PhaseAnchorRecord::new_empty(
             (idx as u32) + 1,
             ATTRACTOR_SLOT_KNOWLEDGE,
             0x0010_0000 + ((idx as u64) << 12),
@@ -1280,12 +1266,7 @@ fn relative_coupling_flips_repulsion_by_active_perspective_across_ten_nodes() {
 
     // Perspective #2 treats node #1 as opposing (`ACTION_MODE_PHASE_REPULSE`), while #2 itself stays attractive.
     let (frame_from_2_on_1, hor_2_on_1) =
-        CrystallizedAttractorRecord::synthesize_slice_relative_gateway(
-            &nodes,
-            matrix.row(2),
-            &q_node1,
-            0.40,
-        );
+        PhaseAnchorRecord::synthesize_slice_relative_gateway(&nodes, matrix.row(2), &q_node1, 0.40);
     assert_eq!(hor_2_on_1.regime(), EpistemicRegime::InternalConflict);
     assert_eq!(hor_2_on_1.opposing_anchor_id, nodes[1].anchor_id);
     assert_ne!(
@@ -1295,12 +1276,7 @@ fn relative_coupling_flips_repulsion_by_active_perspective_across_ten_nodes() {
 
     // Switching active perspective to #1 flips roles with zero code change: #1 becomes coherent, #2 opposes.
     let (frame_from_1_on_1, hor_1_on_1) =
-        CrystallizedAttractorRecord::synthesize_slice_relative_gateway(
-            &nodes,
-            matrix.row(1),
-            &q_node1,
-            0.40,
-        );
+        PhaseAnchorRecord::synthesize_slice_relative_gateway(&nodes, matrix.row(1), &q_node1, 0.40);
     assert_eq!(hor_1_on_1.regime(), EpistemicRegime::KnownCoherent);
     assert_eq!(hor_1_on_1.dominant_anchor_id, nodes[1].anchor_id);
     assert_eq!(
@@ -1309,12 +1285,7 @@ fn relative_coupling_flips_repulsion_by_active_perspective_across_ten_nodes() {
     );
 
     let (frame_from_1_on_2, hor_1_on_2) =
-        CrystallizedAttractorRecord::synthesize_slice_relative_gateway(
-            &nodes,
-            matrix.row(1),
-            &q_node2,
-            0.40,
-        );
+        PhaseAnchorRecord::synthesize_slice_relative_gateway(&nodes, matrix.row(1), &q_node2, 0.40);
     assert_eq!(hor_1_on_2.regime(), EpistemicRegime::InternalConflict);
     assert_eq!(hor_1_on_2.opposing_anchor_id, nodes[2].anchor_id);
     assert_ne!(
@@ -1325,8 +1296,8 @@ fn relative_coupling_flips_repulsion_by_active_perspective_across_ten_nodes() {
 
 #[test]
 fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relative_coupling() {
-    let mut pool = [CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0); 4];
-    pool[0] = CrystallizedAttractorRecord::new_empty(11, ATTRACTOR_SLOT_KNOWLEDGE, 0x0010_0000);
+    let mut pool = [PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0); 4];
+    pool[0] = PhaseAnchorRecord::new_empty(11, ATTRACTOR_SLOT_KNOWLEDGE, 0x0010_0000);
     pool[0].phase_profile = [0i8; MAX_ATTENTION_HEADS];
     pool[0].sample_count = 32;
     pool[0].base_energy = 2.0;
@@ -1335,7 +1306,7 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
     pool[0].stamp_crc32();
 
     // Secondary existing attractor captures scattered heterogeneous residuals when aligned.
-    pool[1] = CrystallizedAttractorRecord::new_empty(22, ATTRACTOR_SLOT_KNOWLEDGE, 0x0020_0000);
+    pool[1] = PhaseAnchorRecord::new_empty(22, ATTRACTOR_SLOT_KNOWLEDGE, 0x0020_0000);
     pool[1].phase_profile = [48i8; MAX_ATTENTION_HEADS];
     pool[1].sample_count = 4;
     pool[1].base_energy = 1.0;
@@ -1344,12 +1315,12 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
     pool[1].stamp_crc32();
 
     let mut coupling = RelativeCouplingMatrix::<4>::new();
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = PointerTrail::default();
 
     // Case A: Closest to slot #0 (`|22-0| < |48-22|`), yet under high dispersion/saturation pressure,
     // the peeled residual (`22 - 0 = 22`) matches slot #1 (`48`) and scatters onto slot #1.
     let fact_scatter = ObjectiveFact::new([22i8; MAX_ATTENTION_HEADS], 1.5, 0x0030_0000, 90);
-    let (_, report_scatter) = CrystallizedAttractorRecord::step_dissipative_overflow_signal_64(
+    let (_, report_scatter) = PhaseAnchorRecord::step_dissipative_overflow_signal_64(
         &mut pool,
         &fact_scatter,
         0.65,
@@ -1371,7 +1342,7 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
 
     // Case B: Saturated basin cannot absorb an orthogonal sample into any existing node -> autonomous daughter birth!
     let fact_orphan = ObjectiveFact::new([-96i8; MAX_ATTENTION_HEADS], 1.8, 0x0040_0000, 91);
-    let (_, report_birth) = CrystallizedAttractorRecord::step_dissipative_overflow_signal_64(
+    let (_, report_birth) = PhaseAnchorRecord::step_dissipative_overflow_signal_64(
         &mut pool,
         &fact_orphan,
         0.65,
@@ -1390,13 +1361,13 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
 
 #[test]
 fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
-    // 1. Verify type-level cognitive aperture and unknowable void complement hierarchy.
+    // 1. Verify type-level cognitive aperture and unobserved lacuna complement hierarchy.
     assert_eq!(
         <SystemConstraint<()> as SystemConstraintSignal>::SYSTEM_APERTURE_MASK,
         THRESHOLD_SYSTEM_CONSTRAINT
     );
     assert_eq!(
-        <SystemConstraint<()> as SystemConstraintSignal>::SYSTEM_UNKNOWABLE_VOID_MASK,
+        <SystemConstraint<()> as SystemConstraintSignal>::SYSTEM_UNOBSERVED_LACUNA_MASK,
         !THRESHOLD_SYSTEM_CONSTRAINT
     );
     assert_eq!(
@@ -1404,7 +1375,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         THRESHOLD_OBJECTIVE_FACT
     );
     assert_eq!(
-        <ObjectiveFact<[i8; MAX_ATTENTION_HEADS]> as ObjectiveFactSignal>::FACT_UNKNOWABLE_VOID_MASK,
+        <ObjectiveFact<[i8; MAX_ATTENTION_HEADS]> as ObjectiveFactSignal>::FACT_UNOBSERVED_LACUNA_MASK,
         !THRESHOLD_OBJECTIVE_FACT
     );
     assert_eq!(
@@ -1412,7 +1383,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         THRESHOLD_SUBJECTIVE_PERSONA
     );
     assert_eq!(
-        <SubjectivePersona<[i8; MAX_ATTENTION_HEADS]> as SubjectivePersonaSignal>::PERSONA_UNKNOWABLE_VOID_MASK,
+        <SubjectivePersona<[i8; MAX_ATTENTION_HEADS]> as SubjectivePersonaSignal>::PERSONA_UNOBSERVED_LACUNA_MASK,
         !THRESHOLD_SUBJECTIVE_PERSONA
     );
     assert_eq!(
@@ -1420,7 +1391,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         THRESHOLD_CONTRADICTION_GUARD
     );
     assert_eq!(
-        <ContradictionGuard as ContradictionGuardSignal>::GUARD_UNKNOWABLE_VOID_MASK,
+        <ContradictionGuard as ContradictionGuardSignal>::GUARD_UNOBSERVED_LACUNA_MASK,
         !THRESHOLD_CONTRADICTION_GUARD
     );
     assert_eq!(
@@ -1428,7 +1399,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         THRESHOLD_MANIFOLD_GATEWAY
     );
     assert_eq!(
-        <EpistemicHorizonReading as ManifoldGatewaySignal>::GATEWAY_UNKNOWABLE_VOID_MASK,
+        <EpistemicHorizonReading as ManifoldGatewaySignal>::GATEWAY_UNOBSERVED_LACUNA_MASK,
         !THRESHOLD_MANIFOLD_GATEWAY
     );
     assert_eq!(
@@ -1436,7 +1407,7 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
         THRESHOLD_STIGMERGY_WIDE
     );
     assert_eq!(
-        <crate::stigmergy::substrate::StigmergicSubstrate as StigmergicSubstrateOps>::HUB_UNKNOWABLE_VOID_MASK,
+        <crate::stigmergy::substrate::StigmergicSubstrate as StigmergicSubstrateOps>::HUB_UNOBSERVED_LACUNA_MASK,
         !THRESHOLD_STIGMERGY_WIDE
     );
 
@@ -1529,30 +1500,30 @@ fn liminal_supertrait_aperture_shifting_and_mermaid_self_introspection() {
 
     // 4. Verify zero-alloc #![no_std] Mermaid flowchart generation captures live state cleanly.
     let snap = LiminalTopologyTelemetrySnapshot::capture(&field, &conflict_horizon, 4, 1);
-    let mut stack = AutonomousCoreLayerStack::new();
-    stack.liminal_layer = field;
-    let empty_venn = StigmergicOverlapSerendipityReport::default();
+    let mut stack = CoreStateStack::new();
+    stack.liminal = field;
+    let empty_overlap = OverlapDiscoveryReport::default();
     let mut buf = [0u8; 2048];
-    let len = snap.format_three_core_layers_mermaid(&stack, &empty_venn, &mut buf);
+    let len = snap.format_core_topology_mermaid(&stack, &empty_overlap, &mut buf);
     let diagram = core::str::from_utf8(&buf[..len]).expect("valid utf8 mermaid");
     assert!(diagram.starts_with("flowchart TD\n"));
     assert!(diagram.contains("Liminal"));
     assert!(diagram.contains("ManifoldGatewaySignal"));
     assert!(diagram.contains("L2_Substrate"));
-    assert!(diagram.contains("Crystals:4"));
+    assert!(diagram.contains("Anchors:4"));
     assert!(diagram.contains("Daughters:1"));
 }
 
 #[test]
 fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays() {
-    let mut t0 = gcso_pointer_trail_t {
+    let mut t0 = PointerTrail {
         target_anchor_id: 10,
         stigmergic_density: 1.5,
         ..Default::default()
     };
     t0.accumulated_phase_delta = [0i8; MAX_ATTENTION_HEADS];
 
-    let mut t1 = gcso_pointer_trail_t {
+    let mut t1 = PointerTrail {
         target_anchor_id: 20,
         stigmergic_density: 2.0,
         ..Default::default()
@@ -1569,13 +1540,12 @@ fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays(
     let mut coupling = RelativeCouplingMatrix::<2>::new();
     coupling.set_symmetric(0, 1, -120);
     let q_t1 = load_q7_words_64(&t1.accumulated_phase_delta);
-    let (frame_nested, horizon_nested) =
-        <[gcso_pointer_trail_t; 2]>::synthesize_slice_relative_gateway(
-            &nested,
-            coupling.row(0),
-            &q_t1,
-            0.35,
-        );
+    let (frame_nested, horizon_nested) = <[PointerTrail; 2]>::synthesize_slice_relative_gateway(
+        &nested,
+        coupling.row(0),
+        &q_t1,
+        0.35,
+    );
     assert_eq!(horizon_nested.regime(), EpistemicRegime::InternalConflict);
     assert_eq!(horizon_nested.opposing_anchor_id, 20);
     assert!(frame_nested.is_repulsed());
@@ -1589,10 +1559,10 @@ fn fractal_relative_node_self_similarity_across_trail_crystal_and_nested_arrays(
 }
 
 #[test]
-fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
+fn stigmergic_overlap_discovery_and_core_stack_feedback() {
     // Two attractors with mixed per-granule profiles:
-    // - Granules 0..4 share phase `16` -> Venn intersection core (`overlap == 2`)
-    // - Granule 4 covers only node A (`24`) -> Venn penumbra (`overlap == 1`)
+    // - Granules 0..4 share phase `16` -> overlap core (`overlap == 2`)
+    // - Granule 4 covers only node A (`24`) -> overlap fringe (`overlap == 1`)
     // - Granules 5..8 are orthogonal (`-100` vs `+100`), leaving a window around `0..100`
     let mut phases_a = [16i8; MAX_ATTENTION_HEADS];
     let mut phases_b = [16i8; MAX_ATTENTION_HEADS];
@@ -1625,22 +1595,22 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
     }
     let drifted_w = load_q7_words_64(&drifted_phases);
 
-    let venn =
-        ObjectiveFact::<[gcso_q7_t; MAX_ATTENTION_HEADS]>::evaluate_slice_venn_and_serendipity(
+    let overlap =
+        ObjectiveFact::<[PhaseQ7; MAX_ATTENTION_HEADS]>::evaluate_slice_overlap_and_discovery(
             &nodes, &query_w, &drifted_w, 0.70, 16,
         );
-    assert_eq!(venn.venn_core_mask & 0x0F, 0x0F);
-    assert_eq!(venn.venn_penumbra_mask & (1 << 4), 1 << 4);
-    assert_ne!(venn.void_exterior_mask & (1 << 6), 0);
-    assert_eq!(venn.serendipity_triggered, 1);
-    assert_ne!(venn.serendipity_excursion_mask & (1 << 6), 0);
-    assert_eq!(venn.serendipitous_granule_idx, 6);
-    assert!(venn.venn_intersection_energy > venn.penumbra_attenuation_energy);
+    assert_eq!(overlap.overlap_core_mask & 0x0F, 0x0F);
+    assert_eq!(overlap.overlap_fringe_mask & (1 << 4), 1 << 4);
+    assert_ne!(overlap.lacuna_exterior_mask & (1 << 6), 0);
+    assert_eq!(overlap.discovery_triggered, 1);
+    assert_ne!(overlap.discovery_excursion_mask & (1 << 6), 0);
+    assert_eq!(overlap.discovery_granule_idx, 6);
+    assert!(overlap.overlap_core_energy > overlap.overlap_fringe_energy);
 
     // Autonomous Core Layer Stack co-adaptation: Layer 1 noise discovery widens Layer 0 Fact aperture
-    let mut stack = AutonomousCoreLayerStack::new();
-    let init_threshold_floor_fact = stack.liminal_layer.threshold_floor_q7[1];
-    let init_tol_g0 = stack.stigmergic_layer.granule_noise_tolerance_q7[0];
+    let mut stack = CoreStateStack::new();
+    let init_threshold_floor_fact = stack.liminal.threshold_floor_q7[1];
+    let init_tol_g0 = stack.stigmergy.granule_noise_tolerance_q7[0];
     let ledger = CognitiveTrajectoryLedger::default();
     let horizon = EpistemicHorizonReading {
         total_memory_support: 1.5,
@@ -1653,25 +1623,22 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         reserved_align: [0; 3],
     };
-    stack.adapt_layers_branchless(&ledger, &horizon, &venn, None);
-    assert!(stack.liminal_layer.threshold_floor_q7[1] < init_threshold_floor_fact);
-    assert!(stack.stigmergic_layer.granule_noise_tolerance_q7[0] > init_tol_g0);
-    assert_eq!(
-        stack.stigmergic_layer.venn_overlap_mask,
-        venn.venn_core_mask
-    );
+    stack.adapt_layers_branchless(&ledger, &horizon, &overlap, None);
+    assert!(stack.liminal.threshold_floor_q7[1] < init_threshold_floor_fact);
+    assert!(stack.stigmergy.granule_noise_tolerance_q7[0] > init_tol_g0);
+    assert_eq!(stack.stigmergy.overlap_mask, overlap.overlap_core_mask);
 
     // Serendipitous attractor birth annexes the exterior granule out of Liminal
-    let mut c0 = CrystallizedAttractorRecord::default();
+    let mut c0 = PhaseAnchorRecord::default();
     let _ = c0.absorb_gateway_frame(&nodes[0].synthesize_gateway_frame());
-    let mut c1 = CrystallizedAttractorRecord::default();
+    let mut c1 = PhaseAnchorRecord::default();
     let _ = c1.absorb_gateway_frame(&nodes[1].synthesize_gateway_frame());
-    let mut crystals = [c0, c1, CrystallizedAttractorRecord::default()];
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut crystals = [c0, c1, PhaseAnchorRecord::default()];
+    let mut trail = PointerTrail::default();
     let (slot_idx, spawned_aid, did_nucleate) =
-        CrystallizedAttractorRecord::nucleate_serendipitous_attractor_from_void_64(
+        PhaseAnchorRecord::nucleate_discovered_anchor_from_lacuna_64(
             &mut crystals,
-            &venn,
+            &overlap,
             &drifted_w,
             901,
             Some(&mut trail),
@@ -1681,19 +1648,19 @@ fn stigmergic_venn_overlap_serendipity_and_core_layer_stack_feedback() {
     assert_eq!(spawned_aid, 901);
     assert!(crystals[2].verify_integrity());
 
-    let post_venn = evaluate_stigmergic_overlap_and_serendipity_words_64(
+    let post_overlap = evaluate_stigmergic_overlap_and_discovery_words_64(
         &crystals, &query_w, &drifted_w, 0.70, 16,
     );
-    // Granule 6 is no longer in the void exterior because Crystal 2 now covers it!
-    assert_eq!(post_venn.void_exterior_mask & (1 << 6), 0);
+    // Granule 6 is no longer in the unobserved exterior because Crystal 2 now covers it!
+    assert_eq!(post_overlap.lacuna_exterior_mask & (1 << 6), 0);
 
     // Verify zero-alloc Core Layer 0 + Layer 1 + Layer 2 Mermaid output
-    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_layer, &horizon, 3, 1);
+    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal, &horizon, 3, 1);
     let mut mermaid_buf = [0u8; 2048];
-    let len = snap.format_three_core_layers_mermaid(&stack, &venn, &mut mermaid_buf);
+    let len = snap.format_core_topology_mermaid(&stack, &overlap, &mut mermaid_buf);
     let txt = core::str::from_utf8(&mermaid_buf[..len]).expect("valid utf8 mermaid");
-    assert!(txt.contains("Core Layer 0: Liminal"));
-    assert!(txt.contains("Core Layer 1: StigmergicGranuleState"));
+    assert!(txt.contains("Liminal"));
+    assert!(txt.contains("StigmergicGranuleState"));
     assert!(txt.contains("Cross-Layer Feedback"));
 }
 
@@ -1816,10 +1783,10 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     assert!(ego_symbolic.counter_basin_thrust_q7 >= 24);
 
     // 3. Counter-basin orbital thrust & transgressive Liminal leap on GatewayFrame + Core Layers
-    let mut stack = AutonomousCoreLayerStack::new();
-    let venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
-        void_exterior_mask: 0xF0,
+    let mut stack = CoreStateStack::new();
+    let overlap = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
+        lacuna_exterior_mask: 0xF0,
         ..Default::default()
     };
     let strong_capture_horizon = EpistemicHorizonReading {
@@ -1836,14 +1803,14 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     };
     *basin_frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
 
-    let before_floor2 = stack.liminal_layer.threshold_floor_q7[2];
+    let before_floor2 = stack.liminal.threshold_floor_q7[2];
     let orig_basin_words = *basin_frame.phase_words_ref();
     let mut out_orbit = basin_frame;
     ego_rebel.intervene_on_layers_and_frame_branchless(
         &mut stack,
         &delta1,
         &strong_capture_horizon,
-        &venn,
+        &overlap,
         &mut out_orbit,
     );
     assert_ne!(
@@ -1851,7 +1818,7 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
         0
     );
     assert_ne!(out_orbit.phase_words_ref(), &orig_basin_words);
-    assert!(stack.liminal_layer.threshold_floor_q7[2] <= before_floor2);
+    assert!(stack.liminal.threshold_floor_q7[2] <= before_floor2);
 
     // Zero-gated Liminal exterior -> transgressive rebel dares step beyond rather than silence
     let mut liminal_ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
@@ -1865,7 +1832,7 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
         &mut stack,
         &delta0,
         &zeroed_horizon,
-        &venn,
+        &overlap,
         &mut out_transgress,
     );
     assert!(out_transgress.effective_energy > 0.0);
@@ -1913,8 +1880,8 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
     assert!(roundtrip.transgression_q7 > 0);
 
     // Unified 128-byte 3-layer stack (`Layer 0` + `Layer 1` + `Layer 2 Ego`)
-    let mut stack = AutonomousCoreLayerStack::new();
-    stack.ego_layer = ego_from_axes;
+    let mut stack = CoreStateStack::new();
+    stack.ego = ego_from_axes;
     let delta = LiminalBoundaryDelta::default();
     let horizon = EpistemicHorizonReading {
         total_memory_support: 2.0,
@@ -1924,9 +1891,9 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
-        void_exterior_mask: 0xF0,
+    let overlap = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
+        lacuna_exterior_mask: 0xF0,
         ..Default::default()
     };
     let mut frame = GatewayFrame {
@@ -1935,27 +1902,27 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
     };
     *frame.phase_words_mut() = [0x2424_2424_2424_2424u64; NUM_STIGMERGIC_GRANULES];
     let orig_words = *frame.phase_words_ref();
-    stack.intervene_ego_and_modulate_frame_branchless(&delta, &horizon, &venn, &mut frame);
-    assert!(stack.ego_layer.intervention_epochs >= 1);
-    assert_ne!(stack.ego_layer.last_intervened_mask, 0);
+    stack.intervene_ego_and_modulate_frame_branchless(&delta, &horizon, &overlap, &mut frame);
+    assert!(stack.ego.intervention_epochs >= 1);
+    assert_ne!(stack.ego.last_intervened_mask, 0);
     assert_ne!(frame.phase_words_ref(), &orig_words);
 
-    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal_layer, &horizon, 4, 1);
+    let snap = LiminalTopologyTelemetrySnapshot::capture(&stack.liminal, &horizon, 4, 1);
     let mut buf = [0u8; 2048];
-    let len = snap.format_three_core_layers_mermaid(&stack, &venn, &mut buf);
+    let len = snap.format_core_topology_mermaid(&stack, &overlap, &mut buf);
     let txt = core::str::from_utf8(&buf[..len]).expect("valid utf8 mermaid");
-    assert!(txt.contains("Core Layer 0: Liminal"));
-    assert!(txt.contains("Core Layer 1: StigmergicGranuleState"));
-    assert!(txt.contains("Core Layer 2: LiminalEgoState"));
+    assert!(txt.contains("Liminal"));
+    assert!(txt.contains("StigmergicGranuleState"));
+    assert!(txt.contains("LiminalEgoState"));
     assert!(txt.contains("Top-Down Intervention"));
 }
 
 #[test]
 fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
-    let mut stack = AutonomousCoreLayerStack::new();
-    stack.liminal_layer.threshold_floor_q7[1] = 20;
-    stack.liminal_layer.threshold_floor_q7[2] = 96;
-    stack.stigmergic_layer.granule_pheromone_q7 = [56, 56, 56, 56, 12, 12, 12, 12];
+    let mut stack = CoreStateStack::new();
+    stack.liminal.threshold_floor_q7[1] = 20;
+    stack.liminal.threshold_floor_q7[2] = 96;
+    stack.stigmergy.granule_pheromone_q7 = [56, 56, 56, 56, 12, 12, 12, 12];
 
     let fact = ObjectiveFact::new([24i8; MAX_ATTENTION_HEADS], 2.5, 0, 10);
     let persona = SubjectivePersona::new([-24i8; MAX_ATTENTION_HEADS], 2.0, 0, 20);
@@ -1966,29 +1933,29 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     assert_eq!(pers_mask_narrow, 0x0F);
 
     // Ego widens Persona's dynamic cognitive aperture across all 8 granules.
-    stack.ego_layer = LiminalEgoState::from_intent_axes(
+    stack.ego = LiminalEgoState::from_intent_axes(
         &EgoIntentAxes::new()
             .with_autonomy_q7(90)
             .with_transgression_q7(80)
             .with_devotion_q7(70),
     );
-    stack.ego_layer.trait_floor_bias_q7[2] = -24;
+    stack.ego.trait_floor_bias_q7[2] = -24;
     let (pers_mask_wide, _, _) = persona.resolve_dynamic_core_aperture(&stack);
     assert_eq!(pers_mask_wide, 0xFF);
 
     // Partitioned routing: Fact owns upper 4 granules (`0xF0`), Persona owns lower 4 (`0x0F`).
-    let mut split_stack = AutonomousCoreLayerStack::new();
-    split_stack.liminal_layer.threshold_floor_q7[1] = 96; // requires >= 48
-    split_stack.liminal_layer.threshold_floor_q7[2] = 96; // requires >= 48
-    split_stack.stigmergic_layer.granule_pheromone_q7 = [12, 12, 12, 12, 56, 56, 56, 56];
-    split_stack.ego_layer = LiminalEgoState::from_intent_axes(
+    let mut split_stack = CoreStateStack::new();
+    split_stack.liminal.threshold_floor_q7[1] = 96; // requires >= 48
+    split_stack.liminal.threshold_floor_q7[2] = 96; // requires >= 48
+    split_stack.stigmergy.granule_pheromone_q7 = [12, 12, 12, 12, 56, 56, 56, 56];
+    split_stack.ego = LiminalEgoState::from_intent_axes(
         &EgoIntentAxes::new()
             .with_transgression_q7(60)
             .with_active_granule_bias_mask(0x0F),
     );
-    split_stack.ego_layer.granule_autonomy_q7 = [88, 88, 88, 88, 0, 0, 0, 0];
-    split_stack.ego_layer.trigger_mask = EGO_TRIGGER_BASIN_CAPTURE;
-    split_stack.ego_layer.basin_escape_floor_q7 = 127; // keep slot routing clean for direct check
+    split_stack.ego.granule_autonomy_q7 = [88, 88, 88, 88, 0, 0, 0, 0];
+    split_stack.ego.trigger_mask = EGO_TRIGGER_BASIN_CAPTURE;
+    split_stack.ego.basin_escape_floor_q7 = 127; // keep slot routing clean for direct check
     let (m_fact, _, _) = fact.resolve_dynamic_core_aperture(&split_stack);
     let (m_pers, _, _) = persona.resolve_dynamic_core_aperture(&split_stack);
     assert_eq!(m_fact, 0xF0);
@@ -2001,12 +1968,12 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
+    let overlap = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
         ..Default::default()
     };
     let (paired, paired_w) =
-        fact.combine_pair_with_core_layers(&persona, &mut split_stack, &delta, &horizon, &venn);
+        fact.combine_pair_with_core_layers(&persona, &mut split_stack, &delta, &horizon, &overlap);
     assert!(paired.effective_energy > 0.0);
     let lower_mean = swar_q7_mean_i8_from_words_64(&[paired_w[0]; 8]);
     let upper_mean = swar_q7_mean_i8_from_words_64(&[paired_w[7]; 8]);
@@ -2037,13 +2004,13 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
         ObjectiveFact::new(p3, 2.0, 0, 4),
     ];
 
-    let mut passive_stack = AutonomousCoreLayerStack::new();
+    let mut passive_stack = CoreStateStack::new();
     let (ens_f, _, ens_rep) = ObjectiveFact::synthesize_fragment_ensemble_with_core_layers(
         &frags,
         &mut passive_stack,
         &delta,
         &horizon,
-        &venn,
+        &overlap,
     );
     assert_eq!(ens_rep.active_fragment_count, 4);
     assert_eq!(ens_rep.quorum_agreed_granule_mask, 0x3F);
@@ -2053,16 +2020,16 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     assert!(ens_f.effective_energy > 0.0);
 
     // With active Ego, contested granules 6..8 are tie-broken by Ego sovereign headings.
-    let mut ego_stack = AutonomousCoreLayerStack::new();
-    ego_stack.ego_layer = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
-    ego_stack.ego_layer.sovereign_granule_phase_q7[6] = 48;
-    ego_stack.ego_layer.sovereign_granule_phase_q7[7] = -48;
+    let mut ego_stack = CoreStateStack::new();
+    ego_stack.ego = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
+    ego_stack.ego.sovereign_granule_phase_q7[6] = 48;
+    ego_stack.ego.sovereign_granule_phase_q7[7] = -48;
     let (_, ego_w, ego_rep) = ObjectiveFact::synthesize_fragment_ensemble_with_core_layers(
         &frags,
         &mut ego_stack,
         &delta,
         &horizon,
-        &venn,
+        &overlap,
     );
     assert_eq!(ego_rep.split_contested_granule_mask, 0xC0);
     assert_eq!(ego_rep.ego_tiebreak_granule_mask, 0xC0);
@@ -2072,29 +2039,15 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
 struct MockSubstrateComposite {
     head_dim: u32,
     num_heads: u32,
-    default_phase: gcso_q7_t,
-}
-
-impl PhaseSteering for MockSubstrateComposite {
-    fn head_dim(&self) -> u32 {
-        self.head_dim
-    }
-
-    fn num_heads(&self) -> u32 {
-        self.num_heads
-    }
+    default_phase: PhaseQ7,
 }
 
 impl PointerSubstrate for MockSubstrateComposite {
-    fn reset(&mut self) -> GcsoResult<()> {
+    fn reset(&mut self) -> LmnkResult<()> {
         Ok(())
     }
 
-    fn step_pointer(
-        &mut self,
-        current_ptr: u64,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<()> {
+    fn step_pointer(&mut self, current_ptr: u64, trail_out: &mut PointerTrail) -> LmnkResult<()> {
         trail_out.record_pointer_transition(current_ptr, 1, 0.25);
         trail_out.accumulate_uniform_phase(self.default_phase);
         Ok(())
@@ -2103,8 +2056,8 @@ impl PointerSubstrate for MockSubstrateComposite {
     fn update_cellular_state_express(
         &mut self,
         _trail_id: u32,
-        _phase_delta: gcso_q7_t,
-    ) -> GcsoResult<()> {
+        _phase_delta: PhaseQ7,
+    ) -> LmnkResult<()> {
         Ok(())
     }
 
@@ -2113,7 +2066,7 @@ impl PointerSubstrate for MockSubstrateComposite {
         _trail_id: u32,
         _anchor_id: u32,
         _pull_force: f32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         Ok(())
     }
 
@@ -2121,7 +2074,7 @@ impl PointerSubstrate for MockSubstrateComposite {
         &mut self,
         _src_trail_id: u32,
         _dst_trail_id: u32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         Ok(())
     }
 
@@ -2137,9 +2090,9 @@ impl PointerSubstrate for MockSubstrateComposite {
 impl FastPathLedger for MockSubstrateComposite {
     fn evaluate_auto_tune(
         &self,
-        _slot: &gcso_ledger_slot_t,
-        _config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()> {
+        _slot: &LedgerSlot,
+        _config_out: &mut RuntimeConfig,
+    ) -> LmnkResult<()> {
         Ok(())
     }
 }
@@ -2150,8 +2103,10 @@ fn test_canonical_modules_and_substrate_composite() {
         substrate: &T,
     ) -> (u32, u32) {
         (
-            <T as crate::foundation::PhaseSteering>::head_dim(substrate),
-            <T as crate::foundation::PhaseSteering>::num_heads(substrate),
+            THRESHOLD_STIGMERGY_WIDE,
+            substrate
+                .inspect_substrate_horizon_partition(THRESHOLD_STIGMERGY_WIDE)
+                .0,
         )
     }
 
@@ -2160,9 +2115,12 @@ fn test_canonical_modules_and_substrate_composite() {
         num_heads: 2,
         default_phase: 24,
     };
-    assert_eq!(assert_substrate(&substrate), (8, 2));
+    assert_eq!(
+        assert_substrate(&substrate),
+        (THRESHOLD_STIGMERGY_WIDE, THRESHOLD_STIGMERGY_WIDE)
+    );
 
-    let mut mask = gcso_paged_bitmask_t::default();
+    let mut mask = PagedBitmask::default();
     mask.set_bit_branchless(7);
     assert!(mask.test_bit_branchless(7));
 
@@ -2170,11 +2128,11 @@ fn test_canonical_modules_and_substrate_composite() {
     let lmax = eval_gershgorin_lambda_max(&deg.as_aligned_slice()).unwrap();
     assert!((lmax - 6.0).abs() < 1e-5);
 
-    let mut ledger = gcso_ledger_slot_t::default();
+    let mut ledger = LedgerSlot::default();
     let bloom = ContrastivePhaseBloomFilter::new();
     let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
-    let mut trail = gcso_pointer_trail_t::default();
-    let input_ptr = gcso_tagged_ptr_t::pack_action(
+    let mut trail = PointerTrail::default();
+    let input_ptr = TaggedPtr::pack_action(
         0x0400,
         ATTRACTOR_SLOT_PERSONA,
         ACTION_PRESET_EXPRESS_PHASE,
@@ -2186,6 +2144,8 @@ fn test_canonical_modules_and_substrate_composite() {
             input_ptr.raw(),
             &mut ledger,
             &bloom,
+            substrate.head_dim,
+            substrate.num_heads,
             2,
             128,
             DEFAULT_PHASE_STEP_MIN_RAD,
@@ -2213,7 +2173,7 @@ fn test_phase_steering_closed_loop_gateway_signal() {
         pair[0] = 1.0;
     }
     let mut q_gw = AlignedBuffer32::new(q_data);
-    let mut trail_gw = gcso_pointer_trail_t::default();
+    let mut trail_gw = PointerTrail::default();
     let (frame, report) = GatewayPhaseSteeringExt::steer_gateway_signal_safe(
         &engine_gw,
         &(sys, fact, persona),
@@ -2236,22 +2196,22 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
         fn seek_to_token(
             &mut self,
             token_index: u32,
-            header_out: &mut gcso_kv_keyframe_header_t,
-        ) -> GcsoResult<()> {
+            header_out: &mut KvKeyframeHeader,
+        ) -> LmnkResult<()> {
             header_out.token_index = token_index;
             Ok(())
         }
     }
     let sys = MockColdSystem;
-    let mut cfg = gcso_config_t::default();
+    let mut cfg = RuntimeConfig::default();
     init_default_config(&mut cfg).unwrap();
     assert_eq!(validate_config_invariants(&cfg), Ok(()));
     assert_eq!(
         abi_version(),
         (
-            GCSO_ABI_VERSION_MAJOR,
-            GCSO_ABI_VERSION_MINOR,
-            GCSO_ABI_VERSION_PATCH
+            LMNK_ABI_VERSION_MAJOR,
+            LMNK_ABI_VERSION_MINOR,
+            LMNK_ABI_VERSION_PATCH
         )
     );
 
@@ -2260,7 +2220,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
 
     let lora_a = AlignedBuffer32::new([1.0f32; 16]);
     let lora_b = AlignedBuffer32::new([1.0f32; 16]);
-    let mut rank1_desc = gcso_rank1_residual_descriptor_t::default();
+    let mut rank1_desc = Rank1Descriptor::default();
     let mut prof_out = AlignedBuffer16::new([0i8; 16]);
     let mut scales_out = AlignedBuffer32::new([0.0f32; 4]);
     project_lora_with_block_scales(
@@ -2278,7 +2238,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
 
     let phases = AlignedBuffer16::new([32i8; 16]);
     let weights = AlignedBuffer32::new([1.0f32; 16]);
-    let mut header = gcso_kv_keyframe_header_t::default();
+    let mut header = KvKeyframeHeader::default();
     let (r_bar, kappa) = sys
         .aggregate_pruned_kv_circular_stats(
             &phases.as_aligned_slice(),
@@ -2294,7 +2254,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     let icache_anchor = [24i8; MAX_ATTENTION_HEADS];
     let pframes = [[4i8; MAX_ATTENTION_HEADS], [4i8; MAX_ATTENTION_HEADS]];
     let mut replayed = [0i8; MAX_ATTENTION_HEADS];
-    let mut gop_hdr = gcso_kv_keyframe_header_t::default();
+    let mut gop_hdr = KvKeyframeHeader::default();
     let (gop_lp, gop_r, gop_k, gop_rep) = sys
         .replay_liminal_pframe_chain_with_joint_log_prob(
             &icache_anchor,
@@ -2309,13 +2269,13 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     assert_eq!(replayed[0], 32);
     assert!(gop_lp > -0.05 && (gop_r - 1.0).abs() < 1e-4 && gop_k > 10.0);
 
-    let ledger_slot = gcso_ledger_slot_t {
+    let ledger_slot = LedgerSlot {
         mode: 1,
         ..Default::default()
     };
     let src_phases = [28i8; MAX_ATTENTION_HEADS];
     let mut pkt_buf = AlignedBuffer64::<u8, 64>::zeroed();
-    let crc_tag = encode_dnp_phase_packet(
+    let crc_tag = encode_phase_packet(
         &ledger_slot,
         ATTRACTOR_SLOT_PERSONA,
         ACTION_PRESET_FULL_ORCHESTRATION,
@@ -2324,7 +2284,7 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
     )
     .unwrap();
     let mut decoded_phases = [0i8; MAX_ATTENTION_HEADS];
-    let recovered_tag = decode_and_verify_dnp_packet(
+    let recovered_tag = decode_and_verify_phase_packet(
         &ledger_slot,
         &pkt_buf.as_aligned_slice(),
         crc_tag,
@@ -2337,8 +2297,8 @@ fn test_l2p_svd_pprc_limina_replay_unified_field_and_entropy_tunneling() {
         pack_action_slot_tag(ATTRACTOR_SLOT_PERSONA, ACTION_PRESET_FULL_ORCHESTRATION)
     );
 
-    let mut trail = gcso_pointer_trail_t {
-        current_ptr: gcso_tagged_ptr_t::pack_action(
+    let mut trail = PointerTrail {
+        current_ptr: TaggedPtr::pack_action(
             0x1000,
             ATTRACTOR_SLOT_PERSONA,
             ACTION_PRESET_EXPRESS_PHASE,
@@ -2381,24 +2341,24 @@ fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
             .unwrap();
     let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
     let mut k_buf = AlignedBuffer32::new([1.0f32; 16]);
-    let mut active_trail = gcso_pointer_trail_t {
+    let mut active_trail = PointerTrail {
         stigmergic_density: 1.2,
         accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
         ..Default::default()
     };
     // Verify Gateway + Online Toroidal k-Means closed-loop orchestration
-    let sys_cfg = gcso_config_t {
+    let sys_cfg = RuntimeConfig {
         head_dim: 8,
         num_heads: 2,
-        ripa_clamp_max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-        qdps_min_step_rad: 0.01,
+        phase_clamp_max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+        phase_step_min_rad: 0.01,
         ..Default::default()
     };
     let sys = SystemConstraint::new(&sys_cfg, 0.10, 0.05, 0xFF);
     let fact = ObjectiveFact::new([28i8; MAX_ATTENTION_HEADS], 2.0, 0x0010_0000, 77);
     let persona = SubjectivePersona::new([24i8; MAX_ATTENTION_HEADS], 2.5, 0x0020_0000, 42);
     let composite = (sys, fact, persona);
-    let mut centroids = [CrystallizedAttractorRecord::default(); 2];
+    let mut centroids = [PhaseAnchorRecord::default(); 2];
 
     let (gw_frame, gw_rep, c_idx, c_aid, c_coh, _spawned) = substrate
         .orchestrate_gateway_kmeans_and_select_action(
@@ -2433,8 +2393,8 @@ fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
             &mut self,
             _frame: &GatewayFrame,
             report: &SubstrateStepReport,
-            _trail: &gcso_pointer_trail_t,
-        ) -> GcsoResult<()> {
+            _trail: &PointerTrail,
+        ) -> LmnkResult<()> {
             if report.is_action_emergent(1.0) {
                 self.fired_count += 1;
                 self.last_anchor_id = report.dominant_anchor_id;
@@ -2493,8 +2453,8 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         fn synthesize_gateway_frame(&self) -> GatewayFrame {
             GatewayFrame {
                 effective_energy: 1.0,
-                ripa_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-                qdps_min_step_rad: 0.01,
+                phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+                phase_step_min_rad: 0.01,
                 effective_inv_temp: 1.0,
                 fact_persona_coherence: 1.0,
                 active_head_count: MAX_ATTENTION_HEADS as u16,
@@ -2540,19 +2500,19 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         2
     );
 
-    let stack = AutonomousCoreLayerStack::new();
+    let stack = CoreStateStack::new();
     let delta = LiminalBoundaryDelta::default();
     let horizon = EpistemicHorizonReading::default();
-    let venn = StigmergicOverlapSerendipityReport {
-        venn_core_mask: 0x0F,
-        void_exterior_mask: 0xF0,
-        ..StigmergicOverlapSerendipityReport::default()
+    let overlap = OverlapDiscoveryReport {
+        overlap_core_mask: 0x0F,
+        lacuna_exterior_mask: 0xF0,
+        ..OverlapDiscoveryReport::default()
     };
     let core_ctx = Some(CoreLayerEvalContext {
         stack: &stack,
         delta: &delta,
         horizon: &horizon,
-        venn: &venn,
+        venn: &overlap,
         derivative_alpha_q7: DEFAULT_DERIVATIVE_ALPHA_Q7,
         venn_partition: None,
         spine: None,
@@ -2562,9 +2522,9 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     let thresh = StigmergicThresholds::new();
 
     // 1. Normal mode: lane 0 acts on granules 0..4 (+10), sandbox lane 2 acts ONLY on
-    //    void granules 4..8 (+20) without polluting venn_core_mask, repulsion lane 1 is idle.
-    let mut ledger = gcso_ledger_slot_t::default();
-    let mut trail = gcso_pointer_trail_t::default();
+    //    unobserved granules 4..8 (+20) without polluting overlap_core_mask, repulsion lane 1 is idle.
+    let mut ledger = LedgerSlot::default();
+    let mut trail = PointerTrail::default();
     let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
             &MockSignal {
@@ -2587,7 +2547,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     assert_eq!(trail.accumulated_phase_delta[40], 20);
 
     // 2. Repulsion mode: ONLY repulsion lane 1 acts on granules 0..4 (-20); lane 0 & sandbox 2 are idle.
-    let mut trail_rep = gcso_pointer_trail_t::default();
+    let mut trail_rep = PointerTrail::default();
     let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
             &MockSignal {
@@ -2609,9 +2569,9 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     assert_eq!(trail_rep.accumulated_phase_delta[0], -20);
     assert_eq!(trail_rep.accumulated_phase_delta[40], 0);
 
-    // 3. Settle sandbox lane 2 -> now contributes into venn_core_mask granules 0..4 (+10 + +20 = +30).
+    // 3. Settle sandbox lane 2 -> now contributes into overlap_core_mask granules 0..4 (+10 + +20 = +30).
     assert!(substrate.settle_sandbox_lane(2).unwrap());
-    let mut trail_prom = gcso_pointer_trail_t::default();
+    let mut trail_prom = PointerTrail::default();
     let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
             &MockSignal {
@@ -2650,7 +2610,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
         ..EpistemicHorizonReading::default()
     };
     let delta = LiminalBoundaryDelta::default();
-    let venn = StigmergicOverlapSerendipityReport::default();
+    let overlap = OverlapDiscoveryReport::default();
     let ego = LiminalEgoState::new();
     let candidate_words = [0x0A0A_0A0A_0A0A_0A0A_u64; NUM_STIGMERGIC_GRANULES];
 
@@ -2659,7 +2619,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
             StigmergicActionDecision::ExpressPhaseSteer,
             &horizon,
             &delta,
-            &venn,
+            &overlap,
             &ego,
             0,
             0,
@@ -2767,7 +2727,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_promote_and_release() {
             StigmergicActionDecision::RepulsionEscape,
             &horizon,
             &delta,
-            &venn,
+            &overlap,
             &active_ego,
             0,
             0,
@@ -2819,10 +2779,10 @@ fn test_system_spine_physical_pinned_isolation() {
     assert_eq!(guarded.dominant_slot, ATTRACTOR_SLOT_REPULSION);
     assert_ne!(guarded.action_mode_flags & ACTION_MODE_PHASE_REPULSE, 0);
 
-    spine.ood_void_locked = 1;
-    let mut void_locked = ego_attempt;
-    spine.enforce_pinned_isolation_branchless(&baseline, &mut void_locked);
-    assert_eq!(void_locked.phase_deltas, baseline.phase_deltas);
+    spine.unobserved_locked = 1;
+    let mut locked_frame = ego_attempt;
+    spine.enforce_pinned_isolation_branchless(&baseline, &mut locked_frame);
+    assert_eq!(locked_frame.phase_deltas, baseline.phase_deltas);
 }
 
 #[test]
@@ -2836,19 +2796,21 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
     let spine = SystemSpineState::new();
     let stig = StigmergicGranuleState::new();
     let tension = DistortionTension::new(true);
-    let venn = EpistemicPartition {
-        shared_core_mask: 0x0F,
-        known_unknown_mask: 0x10,
+    let overlap = LacunaPartition8 {
+        self_ref_mask: 0x0F,
+        exterior_mask: 0x10,
         boundary_sensitivity_q7: 96,
-        ..EpistemicPartition::default()
+        ..LacunaPartition8::default()
     };
     let mut f1 = GatewayFrame::default();
     let mut f3 = f1;
 
-    let (_n1, h1, mask1) = net_1
-        .evaluate_pframe_chain_with_mask_branchless(&ego, &spine, &venn, &stig, &tension, &mut f1);
-    let (_n3, h3, entry) = net_3
-        .evaluate_pframe_chain_with_entry_branchless(&ego, &spine, &venn, &stig, &tension, &mut f3);
+    let (_n1, h1, mask1) = net_1.evaluate_pframe_chain_with_mask_branchless(
+        &ego, &spine, &overlap, &stig, &tension, &mut f1,
+    );
+    let (_n3, h3, entry) = net_3.evaluate_pframe_chain_with_entry_branchless(
+        &ego, &spine, &overlap, &stig, &tension, &mut f3,
+    );
     assert_eq!(h1, 1);
     assert!(
         mask1.count_ones() >= 2,
@@ -2908,7 +2870,7 @@ fn test_entropy_controller_init_setters_and_reset() {
     assert_eq!(engine.moving_z_entropy(), 0.0);
     assert!(engine.is_normal_mode());
 
-    let mut out_state = gcso_edbc_state_t::default();
+    let mut out_state = EntropyState::default();
     let h = engine
         .eval_surrogate_and_step(0.5, 0.5, 0.8, 0.2, 0.1, 1.0, 0.5, &mut out_state)
         .unwrap();
@@ -2920,7 +2882,7 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
     use crate::drivers::LiminalEgoState;
     use crate::runtime::{EpistemicHorizonReading, LayerDistortionKind, LiminalBoundaryDelta};
     use crate::stigmergy::{
-        StigmergicActionDecision, StigmergicOverlapSerendipityReport, StigmergicThresholds,
+        OverlapDiscoveryReport, StigmergicActionDecision, StigmergicThresholds,
         DEFAULT_DERIVATIVE_ALPHA_Q7,
     };
 
@@ -2930,7 +2892,7 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
         stationary_shortcut_ready: 1,
         ..LiminalBoundaryDelta::default()
     };
-    let venn = StigmergicOverlapSerendipityReport::default();
+    let overlap = OverlapDiscoveryReport::default();
     let ego_off = LiminalEgoState::default();
 
     // Simulate `byp=on` profile: high InertialLayerSkip (~72%) + modest PassiveSidecar (~19%)
@@ -2944,7 +2906,7 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
             StigmergicActionDecision::ExpressPhaseSteer
         };
         bank.record_step(
-            dec, &horizon, &delta, &venn, &ego_off, 0, 0, 0, false, false,
+            dec, &horizon, &delta, &overlap, &ego_off, 0, 0, 0, false, false,
         );
         if i % 2 == 0 {
             bank.record_whole_token_bypass();
@@ -2968,7 +2930,7 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
             StigmergicActionDecision::PassiveSidecar,
             &horizon,
             &delta,
-            &venn,
+            &overlap,
             &ego_off,
             0,
             0,
@@ -3035,7 +2997,7 @@ fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
         })
         .unwrap();
 
-    let trail = gcso_pointer_trail_t {
+    let trail = PointerTrail {
         accumulated_phase_delta: [32; MAX_ATTENTION_HEADS],
         ..Default::default()
     };

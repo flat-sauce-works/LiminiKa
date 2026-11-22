@@ -14,12 +14,12 @@ use crate::foundation::{
     branchless_clamp_f32, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, words_to_q7_array_64, Pod,
     RawPhaseProjectable, SWAR_SPLAT_BYTE_64,
 };
-use crate::liminal::{gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
-use crate::stigmergy::ledger::gcso_ledger_slot_t;
+use crate::liminal::{PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use crate::stigmergy::ledger::LedgerSlot;
 use crate::stigmergy::substrate::StigmergicThresholds;
 use crate::stigmergy::{LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_HISTORY_LEN};
 
-/// Multi-scale granularity tier within the self-similar GCSO hierarchy.
+/// Multi-scale granularity tier within the self-similar LiminiKa hierarchy.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum StigmergicScaleGranularity {
@@ -236,7 +236,7 @@ impl CognitiveStepOp {
     /// Projects this cognitive step into a non-wrapping signed Q7 phase contribution (`[-120, +120]`).
     #[inline(always)]
     #[must_use]
-    pub const fn to_signed_q7(self) -> gcso_q7_t {
+    pub const fn to_signed_q7(self) -> PhaseQ7 {
         if self.0 == 0 {
             return 0;
         }
@@ -268,7 +268,7 @@ pub struct CognitiveCircuitActivation {
     /// Firing intensity in Q0.7 (`0..=128`).
     pub intensity_q7: u8,
     /// Signed SWAR alignment (`-127..=127`) between the circuit bias and input field at this scale.
-    pub circuit_resonance_q7: gcso_q7_t,
+    pub circuit_resonance_q7: PhaseQ7,
     /// Active recorded step count observed inside the trajectory ledger (`0..=8`).
     pub trajectory_depth: u8,
 }
@@ -295,7 +295,7 @@ impl CognitiveCircuitActivation {
 /// 8-byte (`#[repr(C, align(8))]`) chronological trajectory ledger encoding the last 8
 /// multi-scale cognitive operations (`[Scale | Op | Intensity]`) inside a single `u64` register.
 ///
-/// Mirrors [`gcso_ledger_slot_t::telemetry_mini_ledger`] 1:1 so observed scale transitions and
+/// Mirrors [`LedgerSlot::telemetry_mini_ledger`] 1:1 so observed scale transitions and
 /// reasoning habits act directly as reusable persona circuit parameters via
 /// `ManifoldGatewaySignal` and `StigmergicScaleLayer`.
 #[repr(C, align(8))]
@@ -347,7 +347,7 @@ impl CognitiveTrajectoryLedger {
     /// Loads the cognitive trajectory directly from `slot.telemetry_mini_ledger`.
     #[inline(always)]
     #[must_use]
-    pub const fn from_ledger_slot(slot: &gcso_ledger_slot_t) -> Self {
+    pub const fn from_ledger_slot(slot: &LedgerSlot) -> Self {
         Self {
             steps: slot.telemetry_mini_ledger,
         }
@@ -356,7 +356,7 @@ impl CognitiveTrajectoryLedger {
     /// Stores this trajectory back into `slot.telemetry_mini_ledger` and sets
     /// [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] in `slot.auto_tune_flags`.
     #[inline(always)]
-    pub const fn write_to_ledger_slot(&self, slot: &mut gcso_ledger_slot_t) {
+    pub const fn write_to_ledger_slot(&self, slot: &mut LedgerSlot) {
         slot.telemetry_mini_ledger = self.steps;
         slot.auto_tune_flags |= LEDGER_FLAG_COGNITIVE_TRAJECTORY;
     }
@@ -543,7 +543,7 @@ impl CognitiveTrajectoryLedger {
         // Branchless closeness in `0..=128`: `128` = identical phase, `64` = orthogonal, `0` = antipodal.
         let local_close = 128u8.saturating_sub(mean_diff_local);
         let global_close = 128u8.saturating_sub(mean_diff_global);
-        let signed_resonance = (i16::from(local_close) - 64).clamp(-127, 127) as gcso_q7_t;
+        let signed_resonance = (i16::from(local_close) - 64).clamp(-127, 127) as PhaseQ7;
 
         let (op_hist, depth) = self.op_counts();
         let scale_hist = self.scale_counts();
@@ -794,12 +794,12 @@ impl CognitiveTrajectoryLedger {
         }
     }
 
-    /// Packs this [`CognitiveTrajectoryLedger`] into a 64-byte C-ABI [`gcso_ledger_slot_t`]
-    /// marked with [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] for `.gcso` persistence.
+    /// Packs this [`CognitiveTrajectoryLedger`] into a 64-byte C-ABI [`LedgerSlot`]
+    /// marked with [`LEDGER_FLAG_COGNITIVE_TRAJECTORY`] for `.lmnk` persistence.
     #[inline(always)]
     #[must_use]
-    pub fn to_persona_ledger_slot(&self) -> gcso_ledger_slot_t {
-        let mut slot = gcso_ledger_slot_t::default();
+    pub fn to_persona_ledger_slot(&self) -> LedgerSlot {
+        let mut slot = LedgerSlot::default();
         self.write_to_ledger_slot(&mut slot);
         slot.telemetry_ring_head = u16::from(self.op_counts().1);
         slot
@@ -888,7 +888,7 @@ impl CognitiveTrajectoryLedger {
 
 impl RawPhaseProjectable for CognitiveTrajectoryLedger {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         words_to_q7_array_64(&self.to_phase_words_64())
     }
 
@@ -1005,7 +1005,7 @@ pub trait CognitiveCircuitBankOps {
         let peel_gate_q7 = (peel_acc / weight_sum).min(128) as u8;
         let fuse_gate_q7 = (fuse_acc / weight_sum).min(128) as u8;
         let repulse_sensitivity_q7 = (repulse_acc / weight_sum).min(128) as u8;
-        let circuit_resonance_q7 = (res_acc / (weight_sum as i64)).clamp(-127, 127) as gcso_q7_t;
+        let circuit_resonance_q7 = (res_acc / (weight_sum as i64)).clamp(-127, 127) as PhaseQ7;
         let intensity_q7 = peel_gate_q7.max(fuse_gate_q7).max(repulse_sensitivity_q7);
         CognitiveCircuitActivation {
             peel_gate_q7,
@@ -1020,7 +1020,7 @@ pub trait CognitiveCircuitBankOps {
     }
 
     /// Folds the multi-unit RAM bank into a single 8-byte [`CognitiveTrajectoryLedger`] suitable
-    /// for `.gcso` persistence or `ManifoldGatewaySignal` synthesis.
+    /// for `.lmnk` persistence or `ManifoldGatewaySignal` synthesis.
     #[inline]
     fn to_consolidated_ledger(&self) -> CognitiveTrajectoryLedger {
         let units = self.units();
@@ -1106,7 +1106,7 @@ impl<const N: usize> CognitiveCircuitBankOps for CognitiveCircuitBank<N> {
 
 impl<const N: usize> RawPhaseProjectable for CognitiveCircuitBank<N> {
     #[inline]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.to_consolidated_ledger().project_to_q7_64()
     }
 

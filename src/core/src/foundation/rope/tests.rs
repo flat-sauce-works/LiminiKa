@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::foundation::aligned::{AlignedBuffer16, AlignedBuffer32, AlignedBuffer64};
-use crate::foundation::pod::{gcso_paged_bitmask_t, gcso_subhead_config_t};
+use crate::foundation::pod::{PagedBitmask, SubheadConfig};
 use crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD;
-use crate::liminal::gcso_q7_t;
+use crate::liminal::PhaseQ7;
 
 struct DummyRopeEngine {
     head_dim: u32,
@@ -70,7 +70,7 @@ fn test_subhead_routing_and_visual_mse_bitmask() {
         num_heads: 8,
     };
     assert_eq!(eng.head_dim(), 12);
-    let subhead_cfg = gcso_subhead_config_t {
+    let subhead_cfg = SubheadConfig {
         num_fact_heads: 2,
         num_logic_heads: 4,
         num_explore_heads: 2,
@@ -80,7 +80,7 @@ fn test_subhead_routing_and_visual_mse_bitmask() {
         ..Default::default()
     };
     let mut q_subhead = AlignedBuffer32::new([1.0_f32; 96]);
-    let bank = AlignedBuffer64::<gcso_q7_t, 512>::splat(24);
+    let bank = AlignedBuffer64::<PhaseQ7, 512>::splat(24);
     dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
         &mut q_subhead.as_aligned_slice_mut(),
         &[16i8; 64],
@@ -102,7 +102,7 @@ fn test_subhead_routing_and_visual_mse_bitmask() {
     let mut frame_cur = AlignedBuffer32::new([1.0_f32; 48]);
     let frame_prv = AlignedBuffer32::new([1.0_f32; 48]);
     frame_cur.data[0..12].fill(2.0);
-    let mut mask = gcso_paged_bitmask_t::default();
+    let mut mask = PagedBitmask::default();
     let active_patches = detect_frame_mse_bitmask(
         &frame_cur.as_aligned_slice(),
         &frame_prv.as_aligned_slice(),

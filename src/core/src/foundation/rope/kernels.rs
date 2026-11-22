@@ -97,11 +97,11 @@ pub const fn resolve_autonomous_swarm_rot_dim(
 
 #[inline(always)]
 #[must_use]
-pub(crate) const fn ptr_has_action_mode(tagged_ptr: gcso_tagged_ptr_t, mode_mask: u8) -> bool {
+pub(crate) const fn ptr_has_action_mode(tagged_ptr: TaggedPtr, mode_mask: u8) -> bool {
     (unpack_action_mode_from_tag(tagged_ptr.unpack_tag()) & mode_mask) == mode_mask
 }
 
-/// Resolves `(is_default_ripa_clamp, effective_max_rad, q7_to_norm_scale)` for `PhaseClamp` steering.
+/// Resolves `(is_default_phase_clamp, effective_max_rad, q7_to_norm_scale)` for `PhaseClamp` steering.
 #[inline(always)]
 #[must_use]
 pub(crate) const fn resolve_phase_clamp_norm_params(max_rad: f32) -> (bool, f32, f32) {
@@ -118,7 +118,7 @@ pub(crate) const fn resolve_phase_clamp_norm_params(max_rad: f32) -> (bool, f32,
 #[inline(always)]
 #[must_use]
 pub(crate) const fn eval_phase_clamp_sincos_with_params(
-    raw_q7: gcso_q7_t,
+    raw_q7: PhaseQ7,
     fold_geodesic: bool,
     is_default: bool,
     eff_max: f32,
@@ -406,7 +406,7 @@ pub(super) unsafe fn apply_phase_steering_nonuniform_avx2_ptr(
 #[inline(always)]
 pub(super) fn apply_phase_steering_nonuniform_slice_core(
     t_slice: &mut [f32],
-    p_slice: &[gcso_q7_t],
+    p_slice: &[PhaseQ7],
     head_dim: usize,
     num_heads: usize,
 ) {
@@ -442,7 +442,7 @@ pub(super) fn apply_phase_steering_nonuniform_slice_core(
 #[inline(never)]
 pub(super) fn apply_phase_steering_slice_core(
     t_slice: &mut [f32],
-    p_slice: &[gcso_q7_t],
+    p_slice: &[PhaseQ7],
     head_dim: usize,
     num_heads: usize,
 ) {
@@ -482,7 +482,7 @@ pub(super) fn apply_phase_steering_slice_core(
 /// when all `num_heads` heads in `p_slice` share the exact same phase byte (`p_slice[0]`).
 #[inline(always)]
 #[must_use]
-pub(super) fn is_phase_slice_uniform(p_slice: &[gcso_q7_t], num_heads: usize) -> bool {
+pub(super) fn is_phase_slice_uniform(p_slice: &[PhaseQ7], num_heads: usize) -> bool {
     let first_u8 = p_slice[0] as u8;
     if num_heads >= 2 && (p_slice[1] as u8) != first_u8 {
         return false;
@@ -546,7 +546,7 @@ pub(super) fn is_phase_slice_uniform(p_slice: &[gcso_q7_t], num_heads: usize) ->
 pub(super) fn apply_phase_steering_pair_slice_core(
     q_slice: &mut [f32],
     k_slice: &mut [f32],
-    p_slice: &[gcso_q7_t],
+    p_slice: &[PhaseQ7],
     head_dim: usize,
     num_heads: usize,
 ) {
@@ -787,7 +787,7 @@ pub(crate) fn rotate_phase_clamp_upper_heads_uniform_sincos(
 #[inline(never)]
 pub(super) fn apply_phase_clamp_single_slice_core(
     t_slice: &mut [f32],
-    p_slice: &[gcso_q7_t],
+    p_slice: &[PhaseQ7],
     head_dim: usize,
     num_heads: usize,
     fold_geodesic: bool,
@@ -848,7 +848,7 @@ pub(super) fn apply_phase_clamp_single_slice_core(
 #[inline(never)]
 pub(super) fn apply_phase_clamp_half_split_slice_core(
     t_slice: &mut [f32],
-    p_slice: &[gcso_q7_t],
+    p_slice: &[PhaseQ7],
     head_dim: usize,
     rotary_dim: usize,
     num_heads: usize,
@@ -902,7 +902,7 @@ pub(super) fn procrustes_q7_half_split_slice(
     head_dim: usize,
     rotary_dim: usize,
     num_heads: usize,
-    phases_out: &mut [gcso_q7_t],
+    phases_out: &mut [PhaseQ7],
 ) {
     let limit_heads = num_heads.min(MAX_ATTENTION_HEADS).min(phases_out.len());
     let half_rot = rotary_dim >> 1;
@@ -932,7 +932,7 @@ pub(super) fn procrustes_q7_half_split_slice(
         let mut w = word;
         let mut out_lane = 0usize;
         while out_lane < cell_heads {
-            phases_out[h_base + out_lane] = (w & 0xFF) as gcso_q7_t;
+            phases_out[h_base + out_lane] = (w & 0xFF) as PhaseQ7;
             w >>= 8;
             out_lane += 1;
         }
@@ -1155,7 +1155,7 @@ pub(super) unsafe fn apply_phase_clamp_default_nonuniform_avx2_ptr(
 #[inline(always)]
 pub(super) fn apply_phase_clamp_default_nonuniform_slice_core(
     t_slice: &mut [f32],
-    p_slice: &[gcso_q7_t],
+    p_slice: &[PhaseQ7],
     head_dim: usize,
     num_heads: usize,
     rot_dim: usize,
@@ -1189,7 +1189,7 @@ pub(super) fn apply_phase_clamp_default_nonuniform_slice_core(
 pub(super) fn apply_phase_clamp_pair_slice_core(
     q_slice: &mut [f32],
     k_slice: &mut [f32],
-    p_slice: &[gcso_q7_t],
+    p_slice: &[PhaseQ7],
     head_dim: usize,
     num_heads: usize,
     fold_geodesic: bool,
@@ -1273,7 +1273,7 @@ pub(crate) fn steer_phase_clamp_single_cell_from_word_core(
         if w == w.rotate_right(8) {
             if b0 != 0 {
                 let (sin_t, cos_t) = eval_phase_clamp_sincos_with_params(
-                    b0 as gcso_q7_t,
+                    b0 as PhaseQ7,
                     false,
                     is_default,
                     eff_max,
@@ -1294,7 +1294,7 @@ pub(crate) fn steer_phase_clamp_single_cell_from_word_core(
         let mut cached_q7 = i32::MIN;
         let mut cached_sincos = (0.0_f32, 1.0_f32);
         for head_buf in t_slice[base..base + span].chunks_exact_mut(head_dim) {
-            let q7_val = (w & 0xFF) as gcso_q7_t;
+            let q7_val = (w & 0xFF) as PhaseQ7;
             w >>= 8;
             if q7_val != 0 {
                 let q7_i32 = i32::from(q7_val);
@@ -1485,9 +1485,9 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
             if w0 == w0.rotate_right(8) {
                 if b0 != 0 {
                     let eff_q7 = if fold_geodesic {
-                        branchless_q7_fold_s1_geodesic(b0 as gcso_q7_t)
+                        branchless_q7_fold_s1_geodesic(b0 as PhaseQ7)
                     } else {
-                        b0 as gcso_q7_t
+                        b0 as PhaseQ7
                     };
                     let (sin_t, cos_t) =
                         branchless_sincos_q7_phase_clamp_preinv(eff_q7, eff_max, q7_to_norm_scale);
@@ -1519,9 +1519,9 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
                 if b0 != 0 {
                     let head_end = (c_end * HEADS_PER_CELL).min(num_heads);
                     let eff_q7 = if fold_geodesic {
-                        branchless_q7_fold_s1_geodesic(b0 as gcso_q7_t)
+                        branchless_q7_fold_s1_geodesic(b0 as PhaseQ7)
                     } else {
-                        b0 as gcso_q7_t
+                        b0 as PhaseQ7
                     };
                     let (sin_t, cos_t) =
                         branchless_sincos_q7_phase_clamp_preinv(eff_q7, eff_max, q7_to_norm_scale);

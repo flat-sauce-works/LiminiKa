@@ -49,7 +49,7 @@ pub fn sensitivity_4p1mp_f32(p: f32) -> f32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiminalThresholdState {
     /// Per-channel `Liminal` threshold floor in Q0.7 (`[8..=120]`): higher values expand the
-    /// unknowable exterior for that channel, filtering low-support signals cleanly to `0`.
+    /// unobserved exterior for that channel, filtering low-support signals cleanly to `0`.
     pub threshold_floor_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Per-channel cognitive window opening gain in Q0.7 (`[16..=127]`).
     pub aperture_gain_q7: [u8; NUM_LIMINAL_THRESHOLD_CHANNELS],

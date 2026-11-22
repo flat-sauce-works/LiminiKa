@@ -40,8 +40,8 @@ use crate::foundation::swar_simd::{
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::liminal::Q7_PHASE_INV_SCALE_RAD;
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u8, gcso_q7_t, GcsoResult, DEFAULT_ENTROPY_EPS,
-    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    branchless_select_f32, branchless_select_u8, LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS,
+    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
 };
 
 /// Executes an **Online Toroidal $k$-Means M-Step Centroid Update** in 8 register-resident `u64`
@@ -627,12 +627,12 @@ pub fn branchless_q7_synergy_fuse_words_64(
 /// and hoisted SWAR bias multipliers for both coherence evaluation and geodesic + liminal beat interpolation.
 #[inline]
 pub fn branchless_q7_synergy_fuse_64(
-    phases_a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    phases_a: &[PhaseQ7; MAX_ATTENTION_HEADS],
     weight_a: f32,
-    phases_b: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    phases_b: &[PhaseQ7; MAX_ATTENTION_HEADS],
     weight_b: f32,
     synergy_gain: f32,
-    fused_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    fused_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
 ) -> (f32, f32) {
     let a = load_q7_words_64(phases_a);
     let b = load_q7_words_64(phases_b);
@@ -704,9 +704,9 @@ pub fn branchless_q7_inhibit_words_64(
 /// register-resident pass (`0` redundant reloads of `target_phases`, hoisted SWAR bias multiplier).
 #[inline]
 pub fn branchless_q7_inhibit_64(
-    target_phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    target_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
     target_weight: f32,
-    inhibitor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    inhibitor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     inhibition_strength: f32,
 ) -> f32 {
     let mut t = load_q7_words_64(target_phases);
@@ -716,14 +716,14 @@ pub fn branchless_q7_inhibit_64(
     damped
 }
 
-/// Projects an arbitrary `&[f32]` feature/embedding slice onto $SO(2)^{64}$ (`[gcso_q7_t; 64]`)
+/// Projects an arbitrary `&[f32]` feature/embedding slice onto $SO(2)^{64}$ (`[PhaseQ7; 64]`)
 /// using 8-YMM (64-float) AVX2 SIMD accumulation for `values.len() >= 64` and branchless
 /// sanitization of non-finite values.
 #[inline]
 pub fn branchless_project_f32_slice_to_q7_64(
     values: &[f32],
     gain: f32,
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     let mut out = [0i8; MAX_ATTENTION_HEADS];
     if values.is_empty() {
         return out;
@@ -910,15 +910,15 @@ pub fn branchless_project_f32_slice_to_q7_64(
 /// and step filtering (`PhaseStepFilter`).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `phase_step_min_q7 > 127`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `phase_step_min_q7 > 127`.
 #[inline]
 pub fn encode_pframe_motion_delta_64(
-    prev_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    prev_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    curr_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     phase_step_min_q7: u8,
-) -> GcsoResult<KvMotionDeltaPacket> {
+) -> LmnkResult<KvMotionDeltaPacket> {
     if phase_step_min_q7 > 127 {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let pw = load_q7_words_64(prev_phases);
     let cw = load_q7_words_64(curr_phases);
@@ -1002,21 +1002,21 @@ pub fn finalize_pframe_chain_words_64(cur_w: &[u64; 8], phase_step_min_q7: u8) -
 /// Returns `(reconstructed_words, joint_log_prob, repulsed_count)`.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `seek_steps > pframes.len()`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `seek_steps > pframes.len()`,
 /// `phase_step_min_q7 > 127`, or `contradiction_threshold` is non-finite.
 #[inline]
 pub fn seek_pframe_chain_words_64(
-    anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     pframes: &[KvMotionDeltaPacket],
     seek_steps: usize,
     phase_step_min_q7: u8,
     contradiction_threshold: f32,
-) -> GcsoResult<([u64; 8], f32, u32)> {
+) -> LmnkResult<([u64; 8], f32, u32)> {
     if seek_steps > pframes.len()
         || phase_step_min_q7 > 127
         || !branchless_is_finite_f32(contradiction_threshold)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let safe_thresh = branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
     let mut cur_w = load_q7_words_64(anchor_phases);

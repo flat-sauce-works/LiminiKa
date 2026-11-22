@@ -22,7 +22,7 @@ use crate::foundation::swar_simd::{
     is_word_array_uniform_64, load_q7_words_64, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_scale_le128_with_bias_x8,
 };
-use crate::liminal::{branchless_select_i8, gcso_q7_t, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
+use crate::liminal::{branchless_select_i8, PhaseQ7, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
 
 /// Unchecked 8-lane SWAR shortest-arc $S^1$ geodesic interpolation for `1 <= s <= 127` and
 /// precomputed `bias_restore = (128 - s) * 0x0101_0101_0101_0101` (`0` branches).
@@ -752,8 +752,8 @@ pub fn coherence_from_word_arrays_64(a: &[u64; 8], b: &[u64; 8]) -> f32 {
 /// using 8-word SWAR circular differences and register-shifted Q14 cosine lookups.
 #[inline(always)]
 pub fn branchless_q7_coherence_64(
-    phases_a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    phases_b: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    phases_a: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    phases_b: &[PhaseQ7; MAX_ATTENTION_HEADS],
 ) -> f32 {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
@@ -781,8 +781,8 @@ pub fn branchless_q7_coherence_64(
 /// and bypassing the 64-head Q14 LUT reduction when either profile is zero.
 #[inline(always)]
 pub fn branchless_q7_resonant_pull_64(
-    trail_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    trail_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     base_energy: f32,
 ) -> (f32, f32) {
     let clean_energy = branchless_flush_subnormal_f32(branchless_relu_f32(base_energy));
@@ -1036,7 +1036,7 @@ pub(super) fn mean_sincos_from_words_with_uniform_flag_64(
     if w_is_uniform {
         let w0 = w[0];
         if w0 == w0.rotate_right(8) {
-            return branchless_sincos_q7((w0 & 0xFF) as u8 as gcso_q7_t);
+            return branchless_sincos_q7((w0 & 0xFF) as u8 as PhaseQ7);
         }
         let p = sum_sincos_biased_u64_from_word(w0);
         let sum_cos_q14 = ((p & 0xFFFF_FFFF) as i32) - Q14_BIAS_X8_I32;
@@ -1088,11 +1088,11 @@ pub fn circular_r_bar_from_words_64(w: &[u64; 8]) -> f32 {
 pub fn circular_resultant_from_words_with_uniform_flag_64(
     w: &[u64; 8],
     w_is_uniform: bool,
-) -> (f32, gcso_q7_t, f32) {
+) -> (f32, PhaseQ7, f32) {
     if w_is_uniform {
         let w0 = w[0];
         if w0 == w0.rotate_right(8) {
-            let q7 = (w0 & 0xFF) as u8 as gcso_q7_t;
+            let q7 = (w0 & 0xFF) as u8 as PhaseQ7;
             return (
                 1.0,
                 branchless_select_i8(q7 == -128, 127, q7),
@@ -1110,7 +1110,7 @@ pub fn circular_resultant_from_words_with_uniform_flag_64(
 /// directly from pre-loaded 8-word SWAR registers `w` (`0` unaligned byte loads).
 #[inline(always)]
 #[must_use]
-pub fn circular_resultant_from_words_64(w: &[u64; 8]) -> (f32, gcso_q7_t, f32) {
+pub fn circular_resultant_from_words_64(w: &[u64; 8]) -> (f32, PhaseQ7, f32) {
     circular_resultant_from_words_with_uniform_flag_64(w, is_word_array_uniform_64(w))
 }
 
@@ -1120,9 +1120,9 @@ pub fn circular_resultant_from_words_64(w: &[u64; 8]) -> (f32, gcso_q7_t, f32) {
 /// `avx2_coherence_from_diff_vec64` and `avx2_mean_sincos_from_vec64` with `0` Port-5 `vpinsrq` instructions).
 #[inline(always)]
 pub fn branchless_q7_coherence_and_resultant_64(
-    phases_a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    phases_b: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> (f32, f32, gcso_q7_t, f32) {
+    phases_a: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    phases_b: &[PhaseQ7; MAX_ATTENTION_HEADS],
+) -> (f32, f32, PhaseQ7, f32) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: `phases_a` and `phases_b` are 64 bytes each and `target_feature = "avx2"` is enabled.

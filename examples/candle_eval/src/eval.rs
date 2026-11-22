@@ -12,7 +12,7 @@ use liminika_adapter::{
     GcsoDualTrackTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
     ReflectionPolicy, SystemPressureReading, TrajectoryManifoldSnapshot,
 };
-use liminika_core::abi::{gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
 use liminika_core::drivers::{
     LiminalEgoPreset, TokenBypassObservation, SPINE_BYPASS_VETO_GUARD_ACTIVE,
     SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
@@ -125,7 +125,7 @@ pub(crate) fn apply_ego_mode(adapter: &mut ModelSteeringAdapter, mode: &EgoProfi
     }
 }
 
-pub(crate) fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<gcso_q7_t> {
+pub(crate) fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<lmnk_q7_t> {
     for arg in args {
         if let Some(val) = arg.strip_prefix("--kv-min-res=") {
             if let Ok(parsed) = val.parse::<i8>() {
@@ -440,7 +440,7 @@ impl KvTraceStats {
         &mut self,
         outcome: RamPhaseKvStepOutcome,
         elapsed_us: f64,
-        phase_deltas: &[gcso_q7_t; 64],
+        phase_deltas: &[lmnk_q7_t; 64],
     ) -> String {
         self.lookups += 1;
         self.lookup_us_sum += elapsed_us;
@@ -450,7 +450,7 @@ impl KvTraceStats {
             .sum();
         let ph_head = &phase_deltas[..6];
         match outcome {
-            RamPhaseKvStepOutcome::SkippedVoid => "VOID(skip)".to_string(),
+            RamPhaseKvStepOutcome::SkippedLiminal => "VOID(skip)".to_string(),
             RamPhaseKvStepOutcome::Unbacked => format!("VOID(miss,l1={ph_l1},h={ph_head:?})"),
             RamPhaseKvStepOutcome::StoredKeyframe {
                 slot_idx,
@@ -715,20 +715,20 @@ pub(crate) struct StepTelemetryTotals {
 impl StepTelemetryTotals {
     pub(crate) fn accumulate(&mut self, snap: &CoreTelemetrySnapshot) {
         self.core_bank.accumulate_snapshot(snap);
-        self.total_steps += snap.system.total_steps;
-        self.continuous_standard_steps += snap.system.continuous_standard_steps;
+        self.total_steps += snap.spine.total_steps;
+        self.continuous_standard_steps += snap.spine.continuous_standard_steps;
         for (dst, &src) in self
             .decision_counts
             .iter_mut()
-            .zip(snap.layer1.decision_counts.iter())
+            .zip(snap.stigmergy.decision_counts.iter())
         {
             *dst += src;
         }
-        self.excursion_steps += snap.layer0.regime_counts[1] + snap.layer0.regime_counts[2];
-        self.ego_interventions += snap.layer2.intervention_count;
-        self.escalation_swaps += snap.layer2.escalation_swaps;
-        self.slide_in_count += snap.layer0.slide_in_count;
-        self.slide_out_count += snap.layer0.slide_out_count;
+        self.excursion_steps += snap.liminal.regime_counts[1] + snap.liminal.regime_counts[2];
+        self.ego_interventions += snap.ego.intervention_count;
+        self.escalation_swaps += snap.ego.escalation_swaps;
+        self.slide_in_count += snap.liminal.slide_in_count;
+        self.slide_out_count += snap.liminal.slide_out_count;
     }
 
     pub(crate) fn distortion_report(&self) -> LayerDistortionReport {
@@ -761,8 +761,8 @@ impl StepTelemetryTotals {
 }
 
 pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
-    pub(crate) q7s: Option<&'a [Vec<gcso_q7_t>]>,
-    pub(crate) persona_q7s: Option<&'a [Vec<gcso_q7_t>]>,
+    pub(crate) q7s: Option<&'a [Vec<lmnk_q7_t>]>,
+    pub(crate) persona_q7s: Option<&'a [Vec<lmnk_q7_t>]>,
     pub(crate) resonant_ctx: Option<ResonantAnchors<'a>>,
     pub(crate) rope_rad: f32,
     pub(crate) srl: Option<(&'a [f32], &'a [f32], f32)>,
@@ -791,7 +791,7 @@ pub(crate) fn generate_steered_reply_with_offset(
     start_offset: usize,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
 ) -> Result<(String, Vec<u32>, f64), Box<dyn std::error::Error>> {
-    let mut trail = gcso_pointer_trail_t::default();
+    let mut trail = lmnk_pointer_trail_t::default();
     let ids = tokenizer
         .encode(formatted_prompt, false)
         .map_err(|e| format!("encode error: {e}"))?

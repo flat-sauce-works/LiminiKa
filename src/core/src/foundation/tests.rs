@@ -29,7 +29,7 @@ fn test_action_slot_tag_primitives() {
 
 #[test]
 fn test_pod_tagged_ptr_and_incremental_crc32() {
-    let ptr = gcso_tagged_ptr_t::pack(0x1234_5678, 0x05, 16);
+    let ptr = TaggedPtr::pack(0x1234_5678, 0x05, 16);
     assert_eq!(ptr.unpack_addr(), 0x1234_5678);
     assert_eq!(ptr.unpack_tag(), 0x05);
     assert_eq!(ptr.unpack_phase(), 16);
@@ -347,14 +347,14 @@ fn test_branchless_argmin_u8_x8_masked() {
 
 #[test]
 fn test_branchless_q7_weighted_ensemble_words_64() {
-    use crate::liminal::{gcso_q7_t, NUM_STIGMERGIC_GRANULES};
+    use crate::liminal::{PhaseQ7, NUM_STIGMERGIC_GRANULES};
     let base_zero = [0u64; NUM_STIGMERGIC_GRANULES];
     let p0 = [64i8; MAX_ATTENTION_HEADS];
     let p1 = [-64i8; MAX_ATTENTION_HEADS];
     let p2 = [120i8; MAX_ATTENTION_HEADS];
     let p3 = [-120i8; MAX_ATTENTION_HEADS];
     let p_zero = [0i8; MAX_ATTENTION_HEADS];
-    let profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8] =
+    let profiles: [&[PhaseQ7; MAX_ATTENTION_HEADS]; 8] =
         [&p0, &p1, &p2, &p3, &p_zero, &p_zero, &p_zero, &p_zero];
     let weights = [128u8, 64, 96, 96, 0, 0, 0, 0];
 
@@ -382,7 +382,7 @@ fn test_branchless_q7_weighted_ensemble_words_64() {
     let mut mixed_pos = [0i8; MAX_ATTENTION_HEADS];
     mixed_pos[0] = 65;
     mixed_pos[1] = -65;
-    let profiles_mix: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8] = [
+    let profiles_mix: [&[PhaseQ7; MAX_ATTENTION_HEADS]; 8] = [
         &mixed_pos, &mixed_pos, &mixed_pos, &p_zero, &p_zero, &p_zero, &p_zero, &p_zero,
     ];
     let w_mix = [128u8; 8];

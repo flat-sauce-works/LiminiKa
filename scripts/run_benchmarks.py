@@ -19,9 +19,9 @@ from typing import Any, cast
 
 PROFILES: dict[str, dict[str, str | None]] = {
     "standard": {
-        "description": "Core PhaseSteering and EntropyControl groups (excludes provisional .gcso)",
+        "description": "Core PhaseSteering and EntropyControl groups (excludes provisional .lmnk)",
         "filter": None,
-        "skip": "Provisional_GCSO_Container",
+        "skip": "Provisional_LMNK_Container",
     },
     "quick": {
         "description": "Fast smoke subset across PhaseSteering and EntropyControl core kernels",
@@ -32,7 +32,7 @@ PROFILES: dict[str, dict[str, str | None]] = {
             "online_toroidal_centroid_merge_and_prune_8centroids_64h|"
             "evaluate_adaptive_compute_and_pprc_gop_budget"
         ),
-        "skip": "Provisional_GCSO_Container",
+        "skip": "Provisional_LMNK_Container",
     },
     "extreme": {
         "description": "Extreme stress, boundary saturation, subnormal rescue, and singularity cases",
@@ -41,10 +41,10 @@ PROFILES: dict[str, dict[str, str | None]] = {
             "slerp_norm_guard_|subnormal|1m|chattering_|spike_recovery|"
             "odd_remainder|pitchfork|singularity"
         ),
-        "skip": "Provisional_GCSO_Container",
+        "skip": "Provisional_LMNK_Container",
     },
     "all": {
-        "description": "All Core and Provisional .gcso benchmark groups",
+        "description": "All Core and Provisional .lmnk benchmark groups",
         "filter": None,
         "skip": None,
     },
@@ -122,7 +122,7 @@ def clean_criterion_artifacts(
         for root in roots:
             if root.exists():
                 for entry in root.iterdir():
-                    if entry.is_dir() and "provisional_gcso" in entry.name.lower():
+                    if entry.is_dir() and "provisional_lmnk" in entry.name.lower():
                         shutil.rmtree(entry, ignore_errors=True)
 
 
@@ -255,7 +255,7 @@ def prepare_host_for_measurement(settle_ms: int = 150) -> None:
 def build_optimal_cargo_env(
     native_cpu: bool,
     extra_rustflags: str | None,
-    run_provisional_gcso: bool = False,
+    run_provisional_lmnk: bool = False,
     noise_threshold: float | None = 0.025,
 ) -> dict[str, str]:
     """Construct a deterministic single-thread-pool Cargo/Criterion environment dictionary."""
@@ -268,7 +268,7 @@ def build_optimal_cargo_env(
         "OPENBLAS_NUM_THREADS": "1",
         "TOKIO_WORKER_THREADS": "1",
         "RUST_BACKTRACE": "0",
-        "LIMINIKA_RUN_PROVISIONAL_GCSO": "1" if run_provisional_gcso else "0",
+        "LIMINIKA_RUN_PROVISIONAL_LMNK": "1" if run_provisional_lmnk else "0",
     }
     if noise_threshold is not None and noise_threshold > 0.0:
         env["LIMINIKA_NOISE_THRESHOLD"] = str(noise_threshold)
@@ -340,8 +340,8 @@ def parse_args(discovered_benches: list[str], default_core: int | None) -> argpa
                    help=f"Benchmark targets (default: {', '.join(discovered_benches)})")
     p.add_argument("--profile", choices=list(PROFILES.keys()), default="standard",
                    help="Pre-configured benchmark profile (default: standard)")
-    p.add_argument("--include-provisional-gcso", action="store_true", default=False,
-                   help="Also execute provisional .gcso storage benchmarks alongside the profile")
+    p.add_argument("--include-provisional-lmnk", action="store_true", default=False,
+                   help="Also execute provisional .lmnk storage benchmarks alongside the profile")
     p.add_argument("--filter", type=str, default=None, help="Custom Criterion filter regex")
     p.add_argument("--manifest-path", type=Path, default=None, help="Explicit Cargo.toml path")
     p.add_argument("--criterion-dir", type=Path, default=Path("target/criterion"), help="Criterion output dir")
@@ -384,9 +384,9 @@ def main() -> None:
     print_system_diagnostics()
 
     raw_filter = args.filter or PROFILES[args.profile]["filter"]
-    effective_skip = None if (args.filter or args.include_provisional_gcso) else PROFILES[args.profile].get("skip")
+    effective_skip = None if (args.filter or args.include_provisional_lmnk) else PROFILES[args.profile].get("skip")
     run_provisional = bool(
-        args.include_provisional_gcso
+        args.include_provisional_lmnk
         or args.profile == "all"
         or (raw_filter is not None and "provisional" in raw_filter.lower())
     )
@@ -417,7 +417,7 @@ def main() -> None:
         if raw_filter:
             print(f"Filter     : '{raw_filter}'")
         if effective_skip:
-            print(f"Skipped    : '{effective_skip}' (LIMINIKA_RUN_PROVISIONAL_GCSO=0)")
+            print(f"Skipped    : '{effective_skip}' (LIMINIKA_RUN_PROVISIONAL_LMNK=0)")
 
         cargo_args: list[str] = [raw_filter] if raw_filter else []
         for flag, val in (("--baseline", args.baseline), ("--save-baseline", args.save_baseline),

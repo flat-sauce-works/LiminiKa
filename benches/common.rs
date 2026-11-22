@@ -194,14 +194,14 @@ pub(crate) fn configured_noise_threshold() -> f64 {
         .unwrap_or(0.025)
 }
 
-/// Determines whether the isolated pre-v1.0 `Provisional_GCSO_Container` benchmark group
+/// Determines whether the isolated pre-v1.0 `Provisional_LMNK_Container` benchmark group
 /// should be registered and executed.
 ///
-/// Enabled only when `LIMINIKA_RUN_PROVISIONAL_GCSO` is set to `"1"`/`"true"`, or when the
-/// user explicitly passes a positional Criterion CLI filter targeting `Provisional_GCSO_Container`.
+/// Enabled only when `LIMINIKA_RUN_PROVISIONAL_LMNK` is set to `"1"`/`"true"`, or when the
+/// user explicitly passes a positional Criterion CLI filter targeting `Provisional_LMNK_Container`.
 #[inline]
-pub(crate) fn should_run_provisional_gcso() -> bool {
-    if let Ok(val) = std::env::var("LIMINIKA_RUN_PROVISIONAL_GCSO") {
+pub(crate) fn should_run_provisional_lmnk() -> bool {
+    if let Ok(val) = std::env::var("LIMINIKA_RUN_PROVISIONAL_LMNK") {
         let trimmed = val.trim();
         if trimmed == "1" || trimmed.eq_ignore_ascii_case("true") {
             return true;

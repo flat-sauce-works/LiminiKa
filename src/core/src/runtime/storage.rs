@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Zero-Copy In-Memory Mapped Storage (`MappedStorageEngine` 64B `Pod`,
-//! [`GcsoFourSectionView`] 4-section `.gcso` container zero-copy persistence & evolution,
-//! [`KvKeyframeCache`], [`MappedStorage`], DNP codecs, and [`KvKeyframePacket`]).
+//! [`LmnkFourSectionView`] 4-section `.lmnk` container zero-copy persistence & evolution,
+//! [`KvKeyframeCache`], [`MappedStorage`], phase packet codecs, and [`KvKeyframePacket`]).
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -26,93 +26,227 @@ use crate::foundation::{
     crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_indep_u64x2,
     crc32_step_block64_words, crc32_step_l16, crc32_step_l2, crc32_step_l3, crc32_step_l32,
     crc32_step_l4, crc32_step_l8, encode_pframe_motion_delta_64, finalize_pframe_chain_words_64,
-    gcso_tagged_ptr_t, is_aligned_to, load_q7_words_64, pack_action_slot_tag,
-    seek_pframe_chain_words_64, store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8,
-    swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8, swar_q7_phase_step_filter_words_64,
-    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, update_aligned64_blocks_crc32_raw,
-    AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSliceMut64, Pod,
+    is_aligned_to, load_q7_words_64, pack_action_slot_tag, seek_pframe_chain_words_64,
+    store_q7_words_64, swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8,
+    swar_q7_neg_sat_x8, swar_q7_phase_step_filter_words_64, unpack_action_mode_from_tag,
+    unpack_attractor_slot_from_tag, update_aligned64_blocks_crc32_raw, AlignedSlice,
+    AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSliceMut64, Pod, TaggedPtr,
     ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, gcso_config_t, gcso_q7_t, GcsoResult,
-    DEFAULT_ENTROPY_EPS, GCSO_ABI_VERSION_HEX, GCSO_ERROR_BUFFER_TOO_SMALL,
-    GCSO_ERROR_CONTAINER_CORRUPTED, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE,
-    GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_VERSION_MISMATCH, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
-};
-use crate::runtime::abi::types::{
-    gcso_descriptor_header_t, gcso_kv_keyframe_header_t, gcso_mapped_storage_descriptor_t,
-    gcso_snapshot_header_t,
+    branchless_select_f32, branchless_select_u32, LmnkResult, PhaseQ7, RuntimeConfig,
+    DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
+    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE,
+    LMNK_ERR_VERSION_MISMATCH, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use crate::runtime::gateway::signals::CausalProvenanceReport;
-use crate::stigmergy::crystal::{
-    crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b,
-};
+use crate::stigmergy::anchor::{crc32_crystal_stamp_contrib_128b, crc32_fold_stamped_crystal_128b};
 use crate::stigmergy::{
-    gcso_ledger_slot_t, gcso_pointer_trail_t, trail_phase_words_mut, CognitiveTrajectoryLedger,
-    ContrastivePhaseBloomFilter, CrystallizedAttractorRecord, ATTRACTOR_SLOT_REPULSION,
-    GCSO_SNAPSHOT_MAGIC_U32, LEDGER_FLAG_COGNITIVE_TRAJECTORY, MAX_ATTRACTOR_PULL_FORCE,
-    TRAIL_FLAG_REPULSION_ACTIVE,
+    trail_phase_words_mut, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LedgerSlot,
+    PhaseAnchorRecord, PointerTrail, ATTRACTOR_SLOT_REPULSION, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
+    MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
+};
+
+/// Binary magic constant for `.lmnk` snapshot headers (`0x4B4E4D4C` = ASCII `"LMNK"`).
+pub const LMNK_SNAPSHOT_MAGIC_U32: u32 = 0x4B4E_4D4C;
+
+/// Descriptor header for structure byte size and ABI version validation (8 bytes, 4-byte aligned).
+#[repr(C, align(4))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DescriptorHeader {
+    /// Size of the enclosing descriptor structure in bytes.
+    pub struct_size: u32,
+    /// ABI version bitmask matching [`LMNK_ABI_VERSION_HEX`].
+    pub abi_version: u32,
+}
+
+// SAFETY: `DescriptorHeader` is `#[repr(C, align(4))]` of exact size 8 bytes with zero padding.
+unsafe impl Pod for DescriptorHeader {}
+
+/// Internal 64-byte preamble (`#[repr(C, align(32))]`) stored in Section 0b (`offset 128..192`)
+/// of 4-section `.lmnk` container views. Kept crate-private outside the public C-ABI surface.
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MappedStoragePreamble {
+    pub(crate) mapped_address: u64,
+    pub(crate) file_size_bytes: u64,
+    pub(crate) dma_buffer_handle: u64,
+    pub(crate) flags: u32,
+    pub(crate) fd_handle: i32,
+    pub(crate) reserved: [u8; 32],
+}
+
+impl Default for MappedStoragePreamble {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            mapped_address: 0,
+            file_size_bytes: 0,
+            dma_buffer_handle: 0,
+            flags: 0,
+            fd_handle: -1,
+            reserved: [0; 32],
+        }
+    }
+}
+
+// SAFETY: `MappedStoragePreamble` is `#[repr(C, align(32))]` of exact size 64 bytes with zero padding.
+unsafe impl Pod for MappedStoragePreamble {}
+
+/// Unified `.lmnk` binary snapshot container header structure (128 bytes, 64-byte aligned).
+#[repr(C, align(64))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LmnkSnapshotHeader {
+    /// Format identifier magic constant (`0x4B4E4D4C` = ASCII `"LMNK"`).
+    pub magic: u32,
+    /// Snapshot ABI version matching [`LMNK_ABI_VERSION_HEX`].
+    pub version: u32,
+    /// Total binary size of container payload in bytes.
+    pub total_size: u64,
+    /// Byte offset to substrate section.
+    pub substrate_offset: u64,
+    /// Byte offset to anchor section.
+    pub anchor_offset: u64,
+    /// Byte offset to phase-steering section.
+    pub phase_steering_offset: u64,
+    /// Byte offset to Rank-1 residual adapter section.
+    pub rank1_offset: u64,
+    /// Byte offset to entropy controller section.
+    pub entropy_offset: u64,
+    /// IEEE 802.3 CRC32 integrity checksum over snapshot payload.
+    pub checksum_crc32: u32,
+    /// Byte offset to fast-path ledger slot section.
+    pub ledger_slot_offset: u32,
+    /// Epoch timestamp of snapshot serialization (seconds).
+    pub timestamp_epoch_sec: u64,
+    /// Explicit padding to enforce exact 128-byte size and 64-byte cacheline alignment (56 bytes).
+    pub reserved_padding: [u8; 56],
+}
+
+impl Default for LmnkSnapshotHeader {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            magic: 0,
+            version: LMNK_ABI_VERSION_HEX,
+            total_size: 0,
+            substrate_offset: 0,
+            anchor_offset: 0,
+            phase_steering_offset: 0,
+            rank1_offset: 0,
+            entropy_offset: 0,
+            checksum_crc32: 0,
+            ledger_slot_offset: 0,
+            timestamp_epoch_sec: 0,
+            reserved_padding: [0; 56],
+        }
+    }
+}
+
+// SAFETY: `LmnkSnapshotHeader` is `#[repr(C, align(64))]` of exact size 128 bytes with zero padding.
+unsafe impl Pod for LmnkSnapshotHeader {}
+
+/// KV-keyframe index header structure (64 bytes, 32-byte aligned).
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct KvKeyframeHeader {
+    /// Frame classification (`0` = I-Frame Keyframe Anchor, `1` = P-Frame Phase Motion Delta).
+    pub frame_type: u32,
+    /// Absolute token position index in sequence.
+    pub token_index: u32,
+    /// Dynamic entropy-driven Group of Pictures (GOP) length between keyframes.
+    pub gop_length: u32,
+    /// Mean resultant vector length $\bar{R}_c \in [0, 1]$ in circular statistics.
+    pub composite_vector_length: f32,
+    /// Concentration parameter $\kappa_c$ for von Mises phase distribution.
+    pub von_mises_kappa: f32,
+    /// Scalar residual magnitude / resultant phase angle $\bar{\theta}_c$ for sparse updates.
+    pub sparse_scalar_residual: f32,
+    /// Byte offset to Intra Key-Frame Cache (I-Cache) payload.
+    pub icache_payload_offset: u64,
+    /// Byte offset to Predictive Phase Motion Cache (P-Cache) payload.
+    pub pcache_payload_offset: u64,
+    /// Reserved space for future KV-keyframe extensions (24 bytes).
+    pub reserved: [u8; 24],
+}
+
+// SAFETY: `KvKeyframeHeader` is `#[repr(C, align(32))]` of exact size 64 bytes with zero padding.
+unsafe impl Pod for KvKeyframeHeader {}
+
+const _: () = {
+    assert!(size_of::<DescriptorHeader>() == 8 && align_of::<DescriptorHeader>() == 4);
+    assert!(size_of::<MappedStoragePreamble>() == 64 && align_of::<MappedStoragePreamble>() == 32);
+    assert!(size_of::<LmnkSnapshotHeader>() == 128 && align_of::<LmnkSnapshotHeader>() == 64);
+    assert!(offset_of!(LmnkSnapshotHeader, magic) == 0);
+    assert!(offset_of!(LmnkSnapshotHeader, version) == 4);
+    assert!(offset_of!(LmnkSnapshotHeader, total_size) == 8);
+    assert!(offset_of!(LmnkSnapshotHeader, substrate_offset) == 16);
+    assert!(offset_of!(LmnkSnapshotHeader, anchor_offset) == 24);
+    assert!(offset_of!(LmnkSnapshotHeader, phase_steering_offset) == 32);
+    assert!(offset_of!(LmnkSnapshotHeader, rank1_offset) == 40);
+    assert!(offset_of!(LmnkSnapshotHeader, entropy_offset) == 48);
+    assert!(offset_of!(LmnkSnapshotHeader, checksum_crc32) == 56);
+    assert!(offset_of!(LmnkSnapshotHeader, ledger_slot_offset) == 60);
+    assert!(offset_of!(LmnkSnapshotHeader, timestamp_epoch_sec) == 64);
+    assert!(offset_of!(LmnkSnapshotHeader, reserved_padding) == 72);
+    assert!(size_of::<KvKeyframeHeader>() == 64 && align_of::<KvKeyframeHeader>() == 32);
 };
 
 /// Precomputed 64-byte GF(2) shift $L^4(\text{0xFFFF\_FFFF})$ of the initial IEEE 802.3 CRC32 seed.
 const CRC32_L4_INITIAL_SEED: u32 = crc32_step_l4(0xFFFF_FFFFu32);
 
 /// Precomputed 64-byte IEEE 802.3 CRC32 accumulator state over the invariant fields of a default
-/// 4-section `.gcso` `gcso_mapped_storage_descriptor_t` (`mapped_address = 0`, `file_size_bytes = 0`,
+/// 4-section `.lmnk` `MappedStoragePreamble` (`mapped_address = 0`, `file_size_bytes = 0`,
 /// `dma_buffer_handle = 0`, `flags = 4`, `fd_handle = -1`, `reserved = [0; 32]`).
 const CRC32_MAPPED_STORAGE_DESC_BASE_SEED: u32 =
     CRC32_L4_INITIAL_SEED ^ crc32_step_l2(crc32_slice16_indep_u64x2(0, 0xFFFF_FFFF_0000_0004u64));
 
-/// Fixed byte length (`192` bytes = `128B` `gcso_snapshot_header_t` + `64B` `gcso_mapped_storage_descriptor_t`) of Section 0.
-pub const GCSO_FOUR_SECTION_HEADER_BYTES: usize = 192;
+/// Fixed byte length (`192` bytes = `128B` `LmnkSnapshotHeader` + `64B` `MappedStoragePreamble`) of Section 0.
+pub const LMNK_FOUR_SECTION_HEADER_BYTES: usize = 192;
 
-/// Byte offset (`128`) within the 192-byte Section 0 preamble where `gcso_mapped_storage_descriptor_t` is stored.
-pub const GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET: usize = 128;
+/// Byte offset (`128`) within the 192-byte Section 0 preamble where `MappedStoragePreamble` is stored.
+pub const LMNK_STORAGE_PREAMBLE_OFFSET: usize = 128;
 
-/// Constructs a canonical `gcso_descriptor_header_t` for type `T` stamped with [`GCSO_ABI_VERSION_HEX`].
+/// Constructs a canonical `DescriptorHeader` for type `T` stamped with [`LMNK_ABI_VERSION_HEX`].
 #[inline(always)]
 #[must_use]
-pub const fn init_descriptor_header<T>() -> gcso_descriptor_header_t {
-    gcso_descriptor_header_t {
+pub const fn init_descriptor_header<T>() -> DescriptorHeader {
+    DescriptorHeader {
         struct_size: size_of::<T>() as u32,
-        abi_version: GCSO_ABI_VERSION_HEX,
+        abi_version: LMNK_ABI_VERSION_HEX,
     }
 }
 
-/// Validates a `gcso_descriptor_header_t` against expected structure byte size and [`GCSO_ABI_VERSION_HEX`].
+/// Validates a `DescriptorHeader` against expected structure byte size and [`LMNK_ABI_VERSION_HEX`].
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `struct_size` or `abi_version` does not match.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `struct_size` or `abi_version` does not match.
 #[inline(always)]
-pub const fn validate_descriptor_header<T>(header: &gcso_descriptor_header_t) -> GcsoResult<()> {
+pub const fn validate_descriptor_header<T>(header: &DescriptorHeader) -> LmnkResult<()> {
     let valid = (header.struct_size as usize == size_of::<T>())
-        & (header.abi_version == GCSO_ABI_VERSION_HEX);
+        & (header.abi_version == LMNK_ABI_VERSION_HEX);
     if valid {
         Ok(())
     } else {
-        Err(GCSO_ERROR_VERSION_MISMATCH)
+        Err(LMNK_ERR_VERSION_MISMATCH)
     }
 }
 
-/// Constructs a canonical `gcso_snapshot_header_t` initialized with magic `"GCSO"` (`0x4F534347`),
-/// [`GCSO_ABI_VERSION_HEX`], and `total_size`.
+/// Constructs a canonical `LmnkSnapshotHeader` initialized with magic `"LMNK"` (`0x4B4E_4D4C`),
+/// [`LMNK_ABI_VERSION_HEX`], and `total_size`.
 #[inline(always)]
 #[must_use]
-pub const fn init_snapshot_header(
-    total_size: u64,
-    timestamp_epoch_sec: u64,
-) -> gcso_snapshot_header_t {
-    let hdr_size = size_of::<gcso_snapshot_header_t>() as u64;
-    gcso_snapshot_header_t {
-        magic: GCSO_SNAPSHOT_MAGIC_U32,
-        version: GCSO_ABI_VERSION_HEX,
+pub const fn init_snapshot_header(total_size: u64, timestamp_epoch_sec: u64) -> LmnkSnapshotHeader {
+    let hdr_size = size_of::<LmnkSnapshotHeader>() as u64;
+    LmnkSnapshotHeader {
+        magic: LMNK_SNAPSHOT_MAGIC_U32,
+        version: LMNK_ABI_VERSION_HEX,
         total_size,
-        action_hub_offset: hdr_size,
-        attractor_field_offset: hdr_size,
-        dpsr_state_offset: hdr_size,
-        rank1_state_offset: hdr_size,
-        edbc_state_offset: hdr_size,
+        substrate_offset: hdr_size,
+        anchor_offset: hdr_size,
+        phase_steering_offset: hdr_size,
+        rank1_offset: hdr_size,
+        entropy_offset: hdr_size,
         checksum_crc32: 0,
         ledger_slot_offset: hdr_size as u32,
         timestamp_epoch_sec,
@@ -120,84 +254,84 @@ pub const fn init_snapshot_header(
     }
 }
 
-/// Validates a `gcso_snapshot_header_t` against the `.gcso` container magic (`0x4F534347`),
-/// [`GCSO_ABI_VERSION_HEX`], and payload buffer bounds.
+/// Validates a `LmnkSnapshotHeader` against the `.lmnk` container magic (`0x4F534347`),
+/// [`LMNK_ABI_VERSION_HEX`], and payload buffer bounds.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `magic` is invalid, `total_size` is smaller than
-/// `size_of::<gcso_snapshot_header_t>()`, `available_bytes < total_size`, or any track offset exceeds `total_size`.
-/// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `version != GCSO_ABI_VERSION_HEX`.
+/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `magic` is invalid, `total_size` is smaller than
+/// `size_of::<LmnkSnapshotHeader>()`, `available_bytes < total_size`, or any track offset exceeds `total_size`.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version != LMNK_ABI_VERSION_HEX`.
 #[inline]
 pub const fn validate_snapshot_header(
-    header: &gcso_snapshot_header_t,
+    header: &LmnkSnapshotHeader,
     available_bytes: usize,
-) -> GcsoResult<()> {
-    if header.magic != GCSO_SNAPSHOT_MAGIC_U32 {
-        return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+) -> LmnkResult<()> {
+    if header.magic != LMNK_SNAPSHOT_MAGIC_U32 {
+        return Err(LMNK_ERR_CONTAINER_CORRUPTED);
     }
-    if header.version != GCSO_ABI_VERSION_HEX {
-        return Err(GCSO_ERROR_VERSION_MISMATCH);
+    if header.version != LMNK_ABI_VERSION_HEX {
+        return Err(LMNK_ERR_VERSION_MISMATCH);
     }
-    let min_hdr = size_of::<gcso_snapshot_header_t>() as u64;
+    let min_hdr = size_of::<LmnkSnapshotHeader>() as u64;
     let total = header.total_size;
     let ledger_off = header.ledger_slot_offset as u64;
     let offsets_in_bounds = (total >= min_hdr)
         & ((available_bytes as u64) >= total)
-        & (header.action_hub_offset >= min_hdr)
-        & (header.action_hub_offset <= total)
-        & (header.attractor_field_offset >= min_hdr)
-        & (header.attractor_field_offset <= total)
-        & (header.dpsr_state_offset >= min_hdr)
-        & (header.dpsr_state_offset <= total)
-        & (header.rank1_state_offset >= min_hdr)
-        & (header.rank1_state_offset <= total)
-        & (header.edbc_state_offset >= min_hdr)
-        & (header.edbc_state_offset <= total)
+        & (header.substrate_offset >= min_hdr)
+        & (header.substrate_offset <= total)
+        & (header.anchor_offset >= min_hdr)
+        & (header.anchor_offset <= total)
+        & (header.phase_steering_offset >= min_hdr)
+        & (header.phase_steering_offset <= total)
+        & (header.rank1_offset >= min_hdr)
+        & (header.rank1_offset <= total)
+        & (header.entropy_offset >= min_hdr)
+        & (header.entropy_offset <= total)
         & (ledger_off >= min_hdr)
         & (ledger_off <= total);
     if offsets_in_bounds {
         Ok(())
     } else {
-        Err(GCSO_ERROR_CONTAINER_CORRUPTED)
+        Err(LMNK_ERR_CONTAINER_CORRUPTED)
     }
 }
 
-/// Validates a `.gcso` snapshot header, computes the IEEE 802.3 CRC32 checksum over the payload
+/// Validates a `.lmnk` snapshot header, computes the IEEE 802.3 CRC32 checksum over the payload
 /// bytes following the 128-byte header (`container_bytes[128..total_size]`), and stamps
 /// `header.checksum_crc32` in-place.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if header offsets or payload bounds are invalid.
-/// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `header.version != GCSO_ABI_VERSION_HEX`.
+/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if header offsets or payload bounds are invalid.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `header.version != LMNK_ABI_VERSION_HEX`.
 #[inline]
 pub fn finalize_snapshot_header_crc32(
-    header: &mut gcso_snapshot_header_t,
+    header: &mut LmnkSnapshotHeader,
     container_bytes: &[u8],
-) -> GcsoResult<u32> {
+) -> LmnkResult<u32> {
     validate_snapshot_header(header, container_bytes.len())?;
-    let hdr_size = size_of::<gcso_snapshot_header_t>();
+    let hdr_size = size_of::<LmnkSnapshotHeader>();
     let crc = compute_crc32_ieee(&container_bytes[hdr_size..(header.total_size as usize)]);
     header.checksum_crc32 = crc;
     Ok(crc)
 }
 
-/// Validates a `.gcso` snapshot header and verifies the IEEE 802.3 CRC32 checksum over the payload
+/// Validates a `.lmnk` snapshot header and verifies the IEEE 802.3 CRC32 checksum over the payload
 /// bytes following the 128-byte header (`container_bytes[128..total_size]`).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if header bounds or CRC32 verification fail.
-/// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `header.version != GCSO_ABI_VERSION_HEX`.
+/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if header bounds or CRC32 verification fail.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `header.version != LMNK_ABI_VERSION_HEX`.
 #[inline]
 pub fn verify_snapshot_payload_crc32(
-    header: &gcso_snapshot_header_t,
+    header: &LmnkSnapshotHeader,
     container_bytes: &[u8],
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     validate_snapshot_header(header, container_bytes.len())?;
     if header.checksum_crc32 != 0 {
-        let hdr_size = size_of::<gcso_snapshot_header_t>();
+        let hdr_size = size_of::<LmnkSnapshotHeader>();
         let computed = compute_crc32_ieee(&container_bytes[hdr_size..(header.total_size as usize)]);
         if computed != header.checksum_crc32 {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
     }
     Ok(())
@@ -205,22 +339,22 @@ pub fn verify_snapshot_payload_crc32(
 
 /// 128-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Keyframe (I-Frame) Packet** (Section 4.3).
 ///
-/// Packs the 64-byte [`gcso_kv_keyframe_header_t`] metadata header (`offset 0..64`) and the
+/// Packs the 64-byte [`KvKeyframeHeader`] metadata header (`offset 0..64`) and the
 /// uncompressed 64-head Q7 phase anchor snapshot (`offset 64..128`) for lightweight video-codec-style
-/// `.gcso` memory & persona streams (portable container distribution ready).
+/// `.lmnk` memory & persona streams (portable container distribution ready).
 ///
 /// The 24-byte `header.reserved` field encodes:
 /// - `reserved[0..4]`: Little-endian IEEE 802.3 CRC32 checksum of `anchor_phases`.
-/// - `reserved[4..8]`: Little-endian 32-bit `provenance_bits` causal mask.
+/// - `reserved[4..8]`: Little-endian 32-bit `lineage_flags` causal mask.
 /// - `reserved[8..12]`: Little-endian 32-bit macro Toroidal $k$-Means `cluster_id`.
 /// - `reserved[12]`: 3-bit working-lane `slot_id` (`0..=7`).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KvKeyframePacket {
     /// 64-byte C-ABI KV-keyframe index header (`offset 0..64`, `frame_type == 0`).
-    pub header: gcso_kv_keyframe_header_t,
+    pub header: KvKeyframeHeader,
     /// 64-head Q7 phase anchor snapshot on $SO(2)^{64}$ (`offset 64..128`).
-    pub anchor_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub anchor_phases: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
 
 // SAFETY: `KvKeyframePacket` is `#[repr(C, align(64))]` of 128 bytes with zero padding traps.
@@ -230,7 +364,7 @@ impl Default for KvKeyframePacket {
     #[inline(always)]
     fn default() -> Self {
         Self {
-            header: gcso_kv_keyframe_header_t {
+            header: KvKeyframeHeader {
                 frame_type: 0,
                 token_index: 0,
                 gop_length: 1,
@@ -250,7 +384,7 @@ impl KvKeyframePacket {
     /// Computes the IEEE 802.3 CRC32 checksum over the 64-head `anchor_phases` payload in `const fn` mode.
     #[inline(always)]
     #[must_use]
-    pub const fn compute_anchor_crc32(anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> u32 {
+    pub const fn compute_anchor_crc32(anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS]) -> u32 {
         let mut raw_bytes = [0u8; MAX_ATTENTION_HEADS];
         let mut idx = 0usize;
         while idx < MAX_ATTENTION_HEADS {
@@ -270,14 +404,14 @@ impl KvKeyframePacket {
         composite_vector_length: f32,
         von_mises_kappa: f32,
         sparse_scalar_residual: f32,
-        provenance_bits: u32,
+        lineage_flags: u32,
         cluster_id: u32,
         slot_id: u8,
-        anchor_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        anchor_phases: [PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> Self {
         let crc = Self::compute_anchor_crc32(&anchor_phases);
         let crc_le = crc.to_le_bytes();
-        let prov_le = provenance_bits.to_le_bytes();
+        let prov_le = lineage_flags.to_le_bytes();
         let cid_le = cluster_id.to_le_bytes();
         let mut reserved = [0u8; 24];
         reserved[0] = crc_le[0];
@@ -295,7 +429,7 @@ impl KvKeyframePacket {
         reserved[12] = slot_id & ATTRACTOR_SLOT_ID_MASK;
 
         Self {
-            header: gcso_kv_keyframe_header_t {
+            header: KvKeyframeHeader {
                 frame_type: 0,
                 token_index,
                 gop_length: if gop_length > 0 { gop_length } else { 1 },
@@ -322,10 +456,10 @@ impl KvKeyframePacket {
         ])
     }
 
-    /// Extracts the 32-bit `provenance_bits` causal mask from `header.reserved[4..8]`.
+    /// Extracts the 32-bit `lineage_flags` causal mask from `header.reserved[4..8]`.
     #[inline(always)]
     #[must_use]
-    pub const fn provenance_bits(&self) -> u32 {
+    pub const fn lineage_flags(&self) -> u32 {
         u32::from_le_bytes([
             self.header.reserved[4],
             self.header.reserved[5],
@@ -357,15 +491,15 @@ impl KvKeyframePacket {
     /// `anchor_phases` matches `self.payload_crc32()`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `frame_type != 0` or CRC32 verification fails.
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `frame_type != 0` or CRC32 verification fails.
     #[inline(always)]
-    pub const fn verify_integrity(&self) -> GcsoResult<()> {
+    pub const fn verify_integrity(&self) -> LmnkResult<()> {
         if self.header.frame_type != 0 {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
         let expected_crc = self.payload_crc32();
         if expected_crc != 0 && Self::compute_anchor_crc32(&self.anchor_phases) != expected_crc {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
         Ok(())
     }
@@ -376,29 +510,29 @@ pub trait KvKeyframeCache: Send + Sync {
     /// Seeks to `token_index` in the KV-keyframe keyframe cache and populates `header_out`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `token_index` is out of bounds.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `token_index` is out of bounds.
     fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_kv_keyframe_header_t,
-    ) -> GcsoResult<()>;
+        header_out: &mut KvKeyframeHeader,
+    ) -> LmnkResult<()>;
 
     /// Computes Circular Statistics resultant vector length $\bar{R}_c \in [0, 1]$ and von Mises
     /// concentration $\kappa_c$ using $\mathcal{O}(1)$ 256-entry Q7 lookup (`branchless_sincos_q7`)
     /// and division-free (`0 fdiv`) `branchless_inv_pos_f32` (Section 4.2).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `pruned_phases` is empty or its length does not
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `pruned_phases` is empty or its length does not
     /// match `token_weights.len()`.
     #[inline]
     fn aggregate_pruned_kv_circular_stats(
         &self,
-        pruned_phases: &AlignedSlice16<'_, gcso_q7_t>,
+        pruned_phases: &AlignedSlice16<'_, PhaseQ7>,
         token_weights: &AlignedSlice32<'_, f32>,
-        header_out: &mut gcso_kv_keyframe_header_t,
-    ) -> GcsoResult<(f32, f32)> {
+        header_out: &mut KvKeyframeHeader,
+    ) -> LmnkResult<(f32, f32)> {
         if pruned_phases.is_empty() || pruned_phases.len() != token_weights.len() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let phases = pruned_phases.as_slice();
         let weights = token_weights.as_slice();
@@ -511,23 +645,23 @@ pub trait KvKeyframeCache: Send + Sync {
     /// using 8-lane SWAR saturating addition and SWAR `PhaseStepFilter` filtering without forward passes.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `phase_step_min_q7 > 127`.
     #[inline]
     fn reconstruct_pframe_phase_trajectory(
         &self,
-        icache_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        pcache_motion_deltas: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        qdps_min_step_q7: u8,
-        reconstructed_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<()> {
-        if qdps_min_step_q7 > 127 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        icache_anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        pcache_motion_deltas: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
+        phase_step_min_q7: u8,
+        reconstructed_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+    ) -> LmnkResult<()> {
+        if phase_step_min_q7 > 127 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         *reconstructed_out = *icache_anchor_phases;
         for delta in pcache_motion_deltas {
             branchless_q7_accumulate_64(reconstructed_out, delta);
         }
-        branchless_q7_phase_step_filter_64(reconstructed_out, qdps_min_step_q7);
+        branchless_q7_phase_step_filter_64(reconstructed_out, phase_step_min_q7);
         Ok(())
     }
 
@@ -536,17 +670,17 @@ pub trait KvKeyframeCache: Send + Sync {
     /// folds onto `[-64, +64]`, and applies 8-lane SWAR step filtering (`PhaseStepFilter`).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `phase_step_min_q7 > 127`.
     #[inline]
     fn reconstruct_pframe_geodesic_trajectory(
         &self,
-        icache_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        pcache_motion_deltas: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        qdps_min_step_q7: u8,
-        reconstructed_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<()> {
-        if qdps_min_step_q7 > 127 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        icache_anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        pcache_motion_deltas: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
+        phase_step_min_q7: u8,
+        reconstructed_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+    ) -> LmnkResult<()> {
+        if phase_step_min_q7 > 127 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let mut cur_w = load_q7_words_64(icache_anchor_phases);
         for delta in pcache_motion_deltas {
@@ -570,7 +704,7 @@ pub trait KvKeyframeCache: Send + Sync {
             swar_q7_fold_s1_geodesic_x8(cur_w[6]),
             swar_q7_fold_s1_geodesic_x8(cur_w[7]),
         ];
-        let filt_w = swar_q7_phase_step_filter_words_64(&folded_w, qdps_min_step_q7);
+        let filt_w = swar_q7_phase_step_filter_words_64(&folded_w, phase_step_min_q7);
         store_q7_words_64(reconstructed_out, &filt_w);
         Ok(())
     }
@@ -586,19 +720,19 @@ pub trait KvKeyframeCache: Send + Sync {
     /// `(joint_log_prob, r_bar, kappa_c, repulsed_pframe_count)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127` or `contradiction_threshold` is non-finite.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `phase_step_min_q7 > 127` or `contradiction_threshold` is non-finite.
     #[inline]
     fn replay_liminal_pframe_chain_with_joint_log_prob(
         &self,
-        icache_anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        pcache_motion_deltas: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
-        qdps_min_step_q7: u8,
+        icache_anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        pcache_motion_deltas: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
+        phase_step_min_q7: u8,
         contradiction_threshold: f32,
-        reconstructed_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-        header_out: &mut gcso_kv_keyframe_header_t,
-    ) -> GcsoResult<(f32, f32, f32, u32)> {
-        if qdps_min_step_q7 > 127 || !branchless_is_finite_f32(contradiction_threshold) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        reconstructed_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+        header_out: &mut KvKeyframeHeader,
+    ) -> LmnkResult<(f32, f32, f32, u32)> {
+        if phase_step_min_q7 > 127 || !branchless_is_finite_f32(contradiction_threshold) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let safe_thresh =
             branchless_clamp_f32(branchless_abs_f32(contradiction_threshold), 0.0, 1.0);
@@ -652,7 +786,7 @@ pub trait KvKeyframeCache: Send + Sync {
             swar_q7_fold_s1_geodesic_x8(cur_w[6]),
             swar_q7_fold_s1_geodesic_x8(cur_w[7]),
         ];
-        let filt_w = swar_q7_phase_step_filter_words_64(&folded_w, qdps_min_step_q7);
+        let filt_w = swar_q7_phase_step_filter_words_64(&folded_w, phase_step_min_q7);
         store_q7_words_64(reconstructed_out, &filt_w);
 
         let r_bar = circular_r_bar_from_words_64(&filt_w);
@@ -670,15 +804,15 @@ pub trait KvKeyframeCache: Send + Sync {
     /// 64-head Q7 phase profile (`anchor_phases`), computing Circular Statistics resultant vector
     /// length $\bar{R}_c \in [0, 1]$, von Mises concentration $\kappa_c$, resultant mean phase
     /// angle $\bar{\theta}_c$, and stamping the IEEE 802.3 CRC32 integrity checksum plus causal
-    /// provenance metadata (`provenance_bits`, `cluster_id`, `slot_id`).
+    /// provenance metadata (`lineage_flags`, `cluster_id`, `slot_id`).
     #[inline]
     #[must_use]
     fn encode_kv_keyframe_iframe_packet(
         &self,
         token_index: u32,
         gop_length: u32,
-        anchor_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        provenance_bits: u32,
+        anchor_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        lineage_flags: u32,
         cluster_id: u32,
         slot_id: u8,
     ) -> KvKeyframePacket {
@@ -691,7 +825,7 @@ pub trait KvKeyframeCache: Send + Sync {
             r_bar,
             kappa_c,
             theta_bar,
-            provenance_bits,
+            lineage_flags,
             cluster_id,
             slot_id,
             *anchor_phases,
@@ -705,15 +839,15 @@ pub trait KvKeyframeCache: Send + Sync {
     /// step filtering (`PhaseStepFilter`) (`swar_q7_phase_step_filter_words_64`).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `qdps_min_step_q7 > 127`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `phase_step_min_q7 > 127`.
     #[inline]
     fn encode_kv_keyframe_pframe_delta_packet(
         &self,
-        prev_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        qdps_min_step_q7: u8,
-    ) -> GcsoResult<KvMotionDeltaPacket> {
-        encode_pframe_motion_delta_64(prev_phases, curr_phases, qdps_min_step_q7)
+        prev_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        curr_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        phase_step_min_q7: u8,
+    ) -> LmnkResult<KvMotionDeltaPacket> {
+        encode_pframe_motion_delta_64(prev_phases, curr_phases, phase_step_min_q7)
     }
 
     /// Executes **Zero-Forward Latency Seek (Instantaneous Persona & Memory Replay)** over a
@@ -724,26 +858,26 @@ pub trait KvKeyframeCache: Send + Sync {
     /// Returns `(joint_log_prob, r_bar, kappa_c, virtual_pos_shift, repulsed_pframe_count)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `keyframe.verify_integrity()` fails, or
-    /// [`GCSO_ERROR_INVALID_ARGUMENT`] if `seek_pframe_steps > pframes.len()`,
-    /// `qdps_min_step_q7 > 127`, or `contradiction_threshold` is non-finite.
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `keyframe.verify_integrity()` fails, or
+    /// [`LMNK_ERR_INVALID_ARGUMENT`] if `seek_pframe_steps > pframes.len()`,
+    /// `phase_step_min_q7 > 127`, or `contradiction_threshold` is non-finite.
     #[inline]
     fn seek_and_reconstruct_persona_from_gop(
         &self,
         keyframe: &KvKeyframePacket,
         pframes: &[KvMotionDeltaPacket],
         seek_pframe_steps: usize,
-        qdps_min_step_q7: u8,
+        phase_step_min_q7: u8,
         contradiction_threshold: f32,
         mean_base_rope_freq: f32,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(f32, f32, f32, f32, u32)> {
+        trail_out: &mut PointerTrail,
+    ) -> LmnkResult<(f32, f32, f32, f32, u32)> {
         keyframe.verify_integrity()?;
         let (filt_w, clean_lp, repulsed_count) = seek_pframe_chain_words_64(
             &keyframe.anchor_phases,
             pframes,
             seek_pframe_steps,
-            qdps_min_step_q7,
+            phase_step_min_q7,
             contradiction_threshold,
         )?;
         store_q7_words_64(&mut trail_out.accumulated_phase_delta, &filt_w);
@@ -752,20 +886,19 @@ pub trait KvKeyframeCache: Send + Sync {
         let mean_rad = (mean_q7 as f32) * Q7_PHASE_SCALE_RAD;
         let virtual_pos_shift = self.compute_virtual_position_shift(mean_rad, mean_base_rope_freq);
 
-        let cur_mode =
-            unpack_action_mode_from_tag(gcso_tagged_ptr_t(trail_out.current_ptr).unpack_tag());
+        let cur_mode = unpack_action_mode_from_tag(TaggedPtr(trail_out.current_ptr).unpack_tag());
         let target_token = keyframe
             .header
             .token_index
             .wrapping_add(seek_pframe_steps as u32);
-        trail_out.current_ptr = gcso_tagged_ptr_t::pack_action(
+        trail_out.current_ptr = TaggedPtr::pack_action(
             u64::from(target_token),
             keyframe.slot_id(),
             cur_mode,
             mean_q7,
         )
         .raw();
-        trail_out.user_data |= u64::from(keyframe.provenance_bits());
+        trail_out.user_data |= u64::from(keyframe.lineage_flags());
         trail_out.target_anchor_id = keyframe.cluster_id();
         trail_out.cluster_id = keyframe.cluster_id();
         if trail_out.stigmergic_density < r_bar {
@@ -779,25 +912,25 @@ pub trait KvKeyframeCache: Send + Sync {
     /// returning the total byte length written.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `keyframe.verify_integrity()` fails, or
-    /// [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < 128 + pframes.len() * 64`.
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `keyframe.verify_integrity()` fails, or
+    /// [`LMNK_ERR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < 128 + pframes.len() * 64`.
     #[inline]
     fn pack_kv_gop_stream_bytes(
         &self,
         keyframe: &KvKeyframePacket,
         pframes: &[KvMotionDeltaPacket],
         dst_bytes: &mut [u8],
-    ) -> GcsoResult<usize> {
+    ) -> LmnkResult<usize> {
         keyframe.verify_integrity()?;
         let p_bytes = pframes
             .len()
             .checked_mul(core::mem::size_of::<KvMotionDeltaPacket>())
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         let total_bytes = core::mem::size_of::<KvKeyframePacket>()
             .checked_add(p_bytes)
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if dst_bytes.len() < total_bytes {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         keyframe.write_unaligned_to(dst_bytes, 0)?;
         KvMotionDeltaPacket::write_unaligned_slice_to(
@@ -816,30 +949,30 @@ pub trait KvKeyframeCache: Send + Sync {
     /// Returns `(joint_log_prob, r_bar, kappa_c, virtual_pos_shift, repulsed_pframe_count)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `stream_bytes` is truncated,
-    /// [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the I-Frame header or CRC32 is invalid, or
-    /// [`GCSO_ERROR_INVALID_ARGUMENT`] if parameters are out of range.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `stream_bytes` is truncated,
+    /// [`LMNK_ERR_CONTAINER_CORRUPTED`] if the I-Frame header or CRC32 is invalid, or
+    /// [`LMNK_ERR_INVALID_ARGUMENT`] if parameters are out of range.
     #[inline]
     fn unpack_and_seek_kv_gop_stream_bytes(
         &self,
         stream_bytes: &[u8],
         seek_pframe_steps: usize,
-        qdps_min_step_q7: u8,
+        phase_step_min_q7: u8,
         contradiction_threshold: f32,
         mean_base_rope_freq: f32,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<(f32, f32, f32, f32, u32)> {
-        if qdps_min_step_q7 > 127 || !branchless_is_finite_f32(contradiction_threshold) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        trail_out: &mut PointerTrail,
+    ) -> LmnkResult<(f32, f32, f32, f32, u32)> {
+        if phase_step_min_q7 > 127 || !branchless_is_finite_f32(contradiction_threshold) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let iframe_size = core::mem::size_of::<KvKeyframePacket>();
         let pframe_size = core::mem::size_of::<KvMotionDeltaPacket>();
         let needed_bytes = seek_pframe_steps
             .checked_mul(pframe_size)
             .and_then(|b| b.checked_add(iframe_size))
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if stream_bytes.len() < needed_bytes {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         let keyframe = KvKeyframePacket::read_unaligned_from(stream_bytes, 0)?;
         keyframe.verify_integrity()?;
@@ -863,7 +996,7 @@ pub trait KvKeyframeCache: Send + Sync {
             step += 1;
         }
 
-        let filt_w = finalize_pframe_chain_words_64(&cur_w, qdps_min_step_q7);
+        let filt_w = finalize_pframe_chain_words_64(&cur_w, phase_step_min_q7);
         store_q7_words_64(&mut trail_out.accumulated_phase_delta, &filt_w);
 
         let (r_bar, mean_q7, kappa_c) = circular_resultant_from_words_64(&filt_w);
@@ -871,20 +1004,19 @@ pub trait KvKeyframeCache: Send + Sync {
         let mean_rad = (mean_q7 as f32) * Q7_PHASE_SCALE_RAD;
         let virtual_pos_shift = self.compute_virtual_position_shift(mean_rad, mean_base_rope_freq);
 
-        let cur_mode =
-            unpack_action_mode_from_tag(gcso_tagged_ptr_t(trail_out.current_ptr).unpack_tag());
+        let cur_mode = unpack_action_mode_from_tag(TaggedPtr(trail_out.current_ptr).unpack_tag());
         let target_token = keyframe
             .header
             .token_index
             .wrapping_add(seek_pframe_steps as u32);
-        trail_out.current_ptr = gcso_tagged_ptr_t::pack_action(
+        trail_out.current_ptr = TaggedPtr::pack_action(
             u64::from(target_token),
             keyframe.slot_id(),
             cur_mode,
             mean_q7,
         )
         .raw();
-        trail_out.user_data |= u64::from(keyframe.provenance_bits());
+        trail_out.user_data |= u64::from(keyframe.lineage_flags());
         trail_out.target_anchor_id = keyframe.cluster_id();
         trail_out.cluster_id = keyframe.cluster_id();
         if trail_out.stigmergic_density < r_bar {
@@ -895,48 +1027,48 @@ pub trait KvKeyframeCache: Send + Sync {
 }
 
 // ===================================================================
-// Dynamic Node Protocol (GCSO-DNP) Distributed Phase Synchronization
+// Compact 64-Byte Phase Synchronization Packet Helpers
 // ===================================================================
 
-/// Dispatches a compact 64-byte GCSO-DNP phase/repulsion synchronization packet in zero-allocation mode.
+/// Dispatches a compact 64-byte phase/repulsion synchronization packet in zero-allocation mode.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1` (Network Plugin Mode).
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
+/// Returns [`LMNK_ERR_INVALID_STATE`] if `ledger_slot.mode != 1` (Network Plugin Mode).
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
 #[inline]
-pub fn dispatch_dnp_packet(
-    ledger_slot: &gcso_ledger_slot_t,
+pub fn dispatch_phase_packet(
+    ledger_slot: &LedgerSlot,
     packet_payload: &AlignedSlice64<'_, u8>,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     if ledger_slot.mode != 1 {
-        return Err(GCSO_ERROR_INVALID_STATE);
+        return Err(LMNK_ERR_INVALID_STATE);
     }
     if packet_payload.len() < 64 {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     Ok(())
 }
 
-/// Encodes a 64-head Q7 phase/repulsion vector into a 64-byte cacheline-aligned GCSO-DNP
+/// Encodes a 64-head Q7 phase/repulsion vector into a 64-byte cacheline-aligned phase
 /// packet (`packet_out`) using bulk `Pod` copy and returns its branchless IEEE 802.3 CRC32 integrity tag.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_out.len() < 64` or `source_slot_id >= 8`.
+/// Returns [`LMNK_ERR_INVALID_STATE`] if `ledger_slot.mode != 1`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `packet_out.len() < 64` or `source_slot_id >= 8`.
 #[inline]
-pub fn encode_dnp_phase_packet(
-    ledger_slot: &gcso_ledger_slot_t,
+pub fn encode_phase_packet(
+    ledger_slot: &LedgerSlot,
     source_slot_id: u8,
     action_mode_flags: u8,
-    phase_deltas: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    phase_deltas: &[PhaseQ7; MAX_ATTENTION_HEADS],
     packet_out: &mut AlignedSliceMut64<'_, u8>,
-) -> GcsoResult<u32> {
+) -> LmnkResult<u32> {
     if ledger_slot.mode != 1 {
-        return Err(GCSO_ERROR_INVALID_STATE);
+        return Err(LMNK_ERR_INVALID_STATE);
     }
     if packet_out.len() < MAX_ATTENTION_HEADS || (source_slot_id as usize) >= MAX_ATTRACTOR_DOMAINS
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let phase_w = load_q7_words_64(phase_deltas);
     let dst = &mut packet_out.as_mut_slice()[..MAX_ATTENTION_HEADS];
@@ -951,25 +1083,25 @@ pub fn encode_dnp_phase_packet(
     Ok(crc)
 }
 
-/// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
+/// Verifies and decodes a 64-byte cacheline-aligned phase packet (`packet_payload`) into
 /// 8 register-resident `u64` SWAR words and the recovered 8-bit tag byte.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
-/// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
+/// Returns [`LMNK_ERR_INVALID_STATE`] if `ledger_slot.mode != 1`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
+/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
 /// checksum do not match `expected_crc32`.
 #[inline(always)]
-pub fn decode_and_verify_dnp_words(
-    ledger_slot: &gcso_ledger_slot_t,
+pub fn decode_and_verify_phase_packet_words(
+    ledger_slot: &LedgerSlot,
     packet_payload: &AlignedSlice64<'_, u8>,
     expected_crc32: u32,
-) -> GcsoResult<([u64; 8], u8)> {
+) -> LmnkResult<([u64; 8], u8)> {
     if ledger_slot.mode != 1 {
-        return Err(GCSO_ERROR_INVALID_STATE);
+        return Err(LMNK_ERR_INVALID_STATE);
     }
     if packet_payload.len() < MAX_ATTENTION_HEADS {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let src = &packet_payload.as_slice()[..MAX_ATTENTION_HEADS];
     let payload_words = [
@@ -1001,33 +1133,33 @@ pub fn decode_and_verify_dnp_words(
     let raw_crc = crc32_block64_zero_seed_words(&payload_words);
     let diff = raw_crc ^ expected_crc32;
     if (diff & 0xFFFF_FF00) != 0 {
-        return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+        return Err(LMNK_ERR_CONTAINER_CORRUPTED);
     }
     Ok((payload_words, (diff & 0xFF) as u8))
 }
 
-/// Verifies and decodes a 64-byte cacheline-aligned GCSO-DNP packet (`packet_payload`) into
+/// Verifies and decodes a 64-byte cacheline-aligned LiminiKa Phase Packet (`packet_payload`) into
 /// a 64-head Q7 phase/repulsion vector (`phases_out`), returning the recovered 8-bit tag byte.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_STATE`] if `ledger_slot.mode != 1`.
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
-/// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
+/// Returns [`LMNK_ERR_INVALID_STATE`] if `ledger_slot.mode != 1`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `packet_payload.len() < 64`.
+/// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if the upper 24 bits of the IEEE 802.3 CRC32
 /// checksum do not match `expected_crc32`.
 #[inline]
-pub fn decode_and_verify_dnp_packet(
-    ledger_slot: &gcso_ledger_slot_t,
+pub fn decode_and_verify_phase_packet(
+    ledger_slot: &LedgerSlot,
     packet_payload: &AlignedSlice64<'_, u8>,
     expected_crc32: u32,
-    phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> GcsoResult<u8> {
-    match decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32) {
+    phases_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+) -> LmnkResult<u8> {
+    match decode_and_verify_phase_packet_words(ledger_slot, packet_payload, expected_crc32) {
         Ok((payload_words, tag_byte)) => {
             store_q7_words_64(phases_out, &payload_words);
             Ok(tag_byte)
         }
         Err(err) => {
-            if err == GCSO_ERROR_CONTAINER_CORRUPTED {
+            if err == LMNK_ERR_CONTAINER_CORRUPTED {
                 *phases_out = [0i8; MAX_ATTENTION_HEADS];
             }
             Err(err)
@@ -1035,22 +1167,22 @@ pub fn decode_and_verify_dnp_packet(
     }
 }
 
-/// Verifies a 64-byte GCSO-DNP packet and applies its decoded 64-head phase/repulsion vector
+/// Verifies a 64-byte LiminiKa Phase Packet and applies its decoded 64-head phase/repulsion vector
 /// directly to `trail` (and `bloom_filter` if repulsive).
 ///
 /// # Errors
-/// Propagates any error returned by [`decode_and_verify_dnp_packet`].
+/// Propagates any error returned by [`decode_and_verify_phase_packet`].
 #[inline]
-pub fn decode_and_apply_dnp_packet_to_trail(
-    ledger_slot: &gcso_ledger_slot_t,
+pub fn decode_and_apply_phase_packet_to_trail(
+    ledger_slot: &LedgerSlot,
     packet_payload: &AlignedSlice64<'_, u8>,
     expected_crc32: u32,
     inhibition_strength: f32,
     bloom_filter: Option<&mut ContrastivePhaseBloomFilter>,
-    trail: &mut gcso_pointer_trail_t,
-) -> GcsoResult<(u8, u8, bool)> {
+    trail: &mut PointerTrail,
+) -> LmnkResult<(u8, u8, bool)> {
     let (payload_words, tag_byte) =
-        decode_and_verify_dnp_words(ledger_slot, packet_payload, expected_crc32)?;
+        decode_and_verify_phase_packet_words(ledger_slot, packet_payload, expected_crc32)?;
     let slot_id = unpack_attractor_slot_from_tag(tag_byte);
     let mode_flags = unpack_action_mode_from_tag(tag_byte);
     let is_repulsion =
@@ -1088,70 +1220,53 @@ pub fn decode_and_apply_dnp_packet_to_trail(
 
 /// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (mapped-storage) (**Storage / Persistence Level**).
 pub trait MappedStorage: Send + Sync {
-    /// Serializes active runtime state into a `.gcso` binary snapshot buffer.
+    /// Serializes active runtime state into a `.lmnk` binary snapshot buffer.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `buffer.len() < *required_size`.
-    fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()>;
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `buffer.len() < *required_size`.
+    fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> LmnkResult<()>;
 
-    /// Deserializes a `.gcso` binary snapshot buffer to restore context state.
+    /// Deserializes a `.lmnk` binary snapshot buffer to restore context state.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] or [`GCSO_ERROR_VERSION_MISMATCH`]
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] or [`LMNK_ERR_VERSION_MISMATCH`]
     /// if the snapshot header or checksum is invalid.
     fn deserialize_snapshot(
         &mut self,
         buffer: &[u8],
-        config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()>;
+        config_out: &mut RuntimeConfig,
+    ) -> LmnkResult<()>;
 
-    /// Opens a memory-mapped zero-copy handle for a `.gcso` container payload.
-    ///
-    /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `file_path` is empty, or
-    /// [`crate::liminal::GCSO_ERROR_MAPPED_STORAGE_FAILED`] if OS `mmap` fails.
-    fn open_mmap(
-        &mut self,
-        file_path: &str,
-        descriptor_out: &mut gcso_mapped_storage_descriptor_t,
-    ) -> GcsoResult<()>;
-
-    /// Unmaps a zero-copy mapped-storage memory handle and releases Direct-DMA resources.
-    ///
-    /// # Errors
-    /// Returns [`crate::liminal::GCSO_ERROR_IO_FAILURE`] if unmapping fails.
-    fn close_mmap(&mut self, descriptor: &mut gcso_mapped_storage_descriptor_t) -> GcsoResult<()>;
-
-    /// Retrieves the byte offset for a specific track in a `.gcso` container
+    /// Retrieves the byte offset for a specific track in a `.lmnk` container
     /// (`0` = `CORE`, `1` = `I-CACHE`, `2` = `P-CACHE`, `3` = `SNAPSHOT`).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `track_id > 3`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `track_id > 3`.
     #[inline(always)]
-    fn get_track_offset(&self, track_id: u32) -> GcsoResult<u64> {
-        let header_size = core::mem::size_of::<gcso_snapshot_header_t>() as u64;
+    fn get_track_offset(&self, track_id: u32) -> LmnkResult<u64> {
+        let header_size = core::mem::size_of::<LmnkSnapshotHeader>() as u64;
         match track_id {
             0 => Ok(header_size),
             1 => Ok(header_size + 1024),
             2 => Ok(header_size + 2048),
             3 => Ok(header_size + 3072),
-            _ => Err(GCSO_ERROR_INVALID_ARGUMENT),
+            _ => Err(LMNK_ERR_INVALID_ARGUMENT),
         }
     }
 
-    /// Reads and validates a `.gcso` container's 128-byte [`gcso_snapshot_header_t`] via [`verify_snapshot_payload_crc32`].
+    /// Reads and validates a `.lmnk` container's 128-byte [`LmnkSnapshotHeader`] via [`verify_snapshot_payload_crc32`].
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if `container_bytes` is truncated, magic/offsets
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `container_bytes` is truncated, magic/offsets
     /// are invalid, or CRC32 verification fails.
-    /// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `version != GCSO_ABI_VERSION_HEX`.
+    /// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version != LMNK_ABI_VERSION_HEX`.
     #[inline]
     fn inspect_and_verify_container(
         &self,
         container_bytes: &[u8],
-    ) -> GcsoResult<gcso_snapshot_header_t> {
-        let header = gcso_snapshot_header_t::read_unaligned_from(container_bytes, 0)
-            .map_err(|_| GCSO_ERROR_CONTAINER_CORRUPTED)?;
+    ) -> LmnkResult<LmnkSnapshotHeader> {
+        let header = LmnkSnapshotHeader::read_unaligned_from(container_bytes, 0)
+            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
         verify_snapshot_payload_crc32(&header, container_bytes)?;
         Ok(header)
     }
@@ -1160,76 +1275,76 @@ pub trait MappedStorage: Send + Sync {
     /// into the beginning of `container_bytes`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] or [`GCSO_ERROR_VERSION_MISMATCH`]
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] or [`LMNK_ERR_VERSION_MISMATCH`]
     /// if `header` or `container_bytes` bounds are invalid.
     #[inline]
     fn stamp_and_write_snapshot_header(
         &self,
-        header: &mut gcso_snapshot_header_t,
+        header: &mut LmnkSnapshotHeader,
         container_bytes: &mut [u8],
-    ) -> GcsoResult<u32> {
+    ) -> LmnkResult<u32> {
         let crc = finalize_snapshot_header_crc32(header, container_bytes)?;
         header
             .write_unaligned_to(container_bytes, 0)
-            .map_err(|_| GCSO_ERROR_CONTAINER_CORRUPTED)?;
+            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
         Ok(crc)
     }
 
     /// Extracts a zero-copy byte slice `&'a [u8]` of length `track_len` for `track_id` (`0..=3`) from `container_bytes`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `track_id > 3`.
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `container_bytes` cannot hold `offset + track_len`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `track_id > 3`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `container_bytes` cannot hold `offset + track_len`.
     #[inline]
     fn extract_track_slice<'a>(
         &self,
         container_bytes: &'a [u8],
         track_id: u32,
         track_len: usize,
-    ) -> GcsoResult<&'a [u8]> {
+    ) -> LmnkResult<&'a [u8]> {
         let start = usize::try_from(self.get_track_offset(track_id)?)
-            .map_err(|_| GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .map_err(|_| LMNK_ERR_BUFFER_TOO_SMALL)?;
         let end = start
             .checked_add(track_len)
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if container_bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         Ok(&container_bytes[start..end])
     }
 
     /// Extracts a hardware-aligned zero-copy [`AlignedSlice`] (`AlignedSlice<'a, T, ALIGN>`) of `elem_count` elements
-    /// for `track_id` (`0..=3`) directly from a mapped-storage memory-mapped `.gcso` container buffer.
+    /// for `track_id` (`0..=3`) directly from a mapped-storage memory-mapped `.lmnk` container buffer.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `track_id > 3` or `T` is zero-sized.
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `container_bytes` is too small.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the track start address violates `ALIGN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `track_id > 3` or `T` is zero-sized.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `container_bytes` is too small.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the track start address violates `ALIGN`.
     #[inline]
     fn extract_aligned_track_slice<'a, T: Pod, const ALIGN: usize>(
         &self,
         container_bytes: &'a [u8],
         track_id: u32,
         elem_count: usize,
-    ) -> GcsoResult<AlignedSlice<'a, T, ALIGN>> {
+    ) -> LmnkResult<AlignedSlice<'a, T, ALIGN>> {
         let start = usize::try_from(self.get_track_offset(track_id)?)
-            .map_err(|_| GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .map_err(|_| LMNK_ERR_BUFFER_TOO_SMALL)?;
         let typed_slice = T::slice_from_bytes_at(container_bytes, start, elem_count)?;
         AlignedSlice::<T, ALIGN>::new(typed_slice)
     }
 }
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
-/// Zero-Copy In-Memory Mapped Storage (mapped-storage `.gcso` containers), KV-keyframe keyframe/delta video-stream
+/// Zero-Copy In-Memory Mapped Storage (mapped-storage `.lmnk` containers), KV-keyframe keyframe/delta video-stream
 /// memory & persona reproduction, and DNP 64-byte phase packet dispatch.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MappedStorageEngine {
     /// Embedded 64-byte C-ABI mapped-storage memory-map & track descriptor (`offset 0..64`).
-    pub descriptor: gcso_mapped_storage_descriptor_t,
+    pub(crate) descriptor: MappedStoragePreamble,
 }
 
-// SAFETY: `MappedStorageEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_mapped_storage_descriptor_t`.
+// SAFETY: `MappedStorageEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `MappedStoragePreamble`.
 unsafe impl Pod for MappedStorageEngine {}
 
 impl Default for MappedStorageEngine {
@@ -1245,7 +1360,7 @@ impl MappedStorageEngine {
     #[must_use]
     pub const fn new(file_size_bytes: u64, flags: u32) -> Self {
         Self {
-            descriptor: gcso_mapped_storage_descriptor_t {
+            descriptor: MappedStoragePreamble {
                 mapped_address: 0,
                 file_size_bytes,
                 dma_buffer_handle: 0,
@@ -1256,14 +1371,14 @@ impl MappedStorageEngine {
         }
     }
 
-    /// Validates the embedded `gcso_mapped_storage_descriptor_t` fields.
+    /// Validates the embedded `MappedStoragePreamble` fields.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `flags == 0` when `file_size_bytes == 0`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `flags == 0` when `file_size_bytes == 0`.
     #[inline(always)]
-    pub const fn validate(&self) -> GcsoResult<()> {
+    pub const fn validate(&self) -> LmnkResult<()> {
         if self.descriptor.file_size_bytes == 0 && self.descriptor.flags == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         Ok(())
     }
@@ -1274,8 +1389,8 @@ impl KvKeyframeCache for MappedStorageEngine {
     fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_kv_keyframe_header_t,
-    ) -> GcsoResult<()> {
+        header_out: &mut KvKeyframeHeader,
+    ) -> LmnkResult<()> {
         header_out.token_index = token_index;
         header_out.gop_length = 1;
         header_out.composite_vector_length = 1.0;
@@ -1285,11 +1400,11 @@ impl KvKeyframeCache for MappedStorageEngine {
 
 impl MappedStorage for MappedStorageEngine {
     #[inline]
-    fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> GcsoResult<()> {
-        let hdr_len = size_of::<gcso_snapshot_header_t>();
+    fn serialize_snapshot(&self, buffer: &mut [u8], required_size: &mut usize) -> LmnkResult<()> {
+        let hdr_len = size_of::<LmnkSnapshotHeader>();
         *required_size = hdr_len;
         if buffer.len() < hdr_len {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         let mut hdr = init_snapshot_header(hdr_len as u64, 0);
         let _ = self.stamp_and_write_snapshot_header(&mut hdr, &mut buffer[..hdr_len])?;
@@ -1300,78 +1415,57 @@ impl MappedStorage for MappedStorageEngine {
     fn deserialize_snapshot(
         &mut self,
         buffer: &[u8],
-        _config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()> {
-        let header = gcso_snapshot_header_t::read_unaligned_from(buffer, 0)?;
+        _config_out: &mut RuntimeConfig,
+    ) -> LmnkResult<()> {
+        let header = LmnkSnapshotHeader::read_unaligned_from(buffer, 0)?;
         verify_snapshot_payload_crc32(&header, buffer)?;
         self.descriptor.file_size_bytes = header.total_size;
         Ok(())
     }
-
-    #[inline]
-    fn open_mmap(
-        &mut self,
-        file_path: &str,
-        descriptor_out: &mut gcso_mapped_storage_descriptor_t,
-    ) -> GcsoResult<()> {
-        if file_path.is_empty() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        *descriptor_out = self.descriptor;
-        Ok(())
-    }
-
-    #[inline]
-    fn close_mmap(&mut self, descriptor: &mut gcso_mapped_storage_descriptor_t) -> GcsoResult<()> {
-        descriptor.mapped_address = 0;
-        descriptor.fd_handle = -1;
-        self.descriptor = *descriptor;
-        Ok(())
-    }
 }
 
 // ===================================================================
-// 8.5. 4-Section `.gcso` (mapped-storage) Zero-Copy Container View (`GcsoFourSectionView`)
+// 8.5. 4-Section `.lmnk` Zero-Copy Container View (`LmnkFourSectionView`)
 // ===================================================================
 
-/// Zero-copy view over a 128B-aligned 4-section `.gcso` (mapped-storage) memory-mapped container.
+/// Zero-copy view over a 128B-aligned 4-section `.lmnk` memory-mapped container.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GcsoFourSectionView<'a> {
-    /// Section 0a: Validated 128-byte `.gcso` snapshot header (`offset 0..128`).
-    pub header: &'a gcso_snapshot_header_t,
-    /// Section 0b: Validated 64-byte mapped-storage memory-map & track descriptor (`offset 128..192`).
-    pub mapped_storage_descriptor: &'a gcso_mapped_storage_descriptor_t,
+pub struct LmnkFourSectionView<'a> {
+    /// Section 0a: Validated 128-byte `.lmnk` snapshot header (`offset 0..128`).
+    pub header: &'a LmnkSnapshotHeader,
+    /// Section 0b: Crate-private 64-byte section preamble (`offset 128..192`).
+    pub(crate) mapped_storage_descriptor: &'a MappedStoragePreamble,
     /// Section 1: Zero-copy slice of crystallized macro attractor centroids (`128B` each).
-    pub crystals: &'a [CrystallizedAttractorRecord],
+    pub crystals: &'a [PhaseAnchorRecord],
     /// Section 2: Zero-copy slice of stigmergic pointer trails (`128B` each).
-    pub trails: &'a [gcso_pointer_trail_t],
+    pub trails: &'a [PointerTrail],
     /// Section 3a: Optional zero-copy reference to the 64-byte Contrastive Phase Bloom Filter.
     pub bloom: Option<&'a ContrastivePhaseBloomFilter>,
     /// Section 3b: Optional zero-copy reference to the 64-byte FastPathLedger telemetry & shortcut slot.
-    pub ledger: Option<&'a gcso_ledger_slot_t>,
+    pub ledger: Option<&'a LedgerSlot>,
     /// Section 3c: Zero-copy slice of 16-byte [`CausalProvenanceReport`] diagnostic history entries.
     pub provenance_reports: &'a [CausalProvenanceReport],
 }
 
-impl<'a> GcsoFourSectionView<'a> {
+impl<'a> LmnkFourSectionView<'a> {
     /// Computes the exact 128-byte-aligned container byte length required for the 4 sections (`num_reports = 0`).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] on arithmetic overflow.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on arithmetic overflow.
     #[inline]
     pub const fn required_byte_len(
         num_crystals: usize,
         num_trails: usize,
         has_bloom: bool,
         has_ledger: bool,
-    ) -> GcsoResult<usize> {
+    ) -> LmnkResult<usize> {
         Self::required_byte_len_with_reports(num_crystals, num_trails, has_bloom, has_ledger, 0)
     }
 
     /// Computes the exact 128-byte-aligned container byte length required for the 4 sections including `num_reports`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] on arithmetic overflow.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on arithmetic overflow.
     #[inline]
     pub const fn required_byte_len_with_reports(
         num_crystals: usize,
@@ -1379,22 +1473,20 @@ impl<'a> GcsoFourSectionView<'a> {
         has_bloom: bool,
         has_ledger: bool,
         num_reports: usize,
-    ) -> GcsoResult<usize> {
-        let off_crystals = GCSO_FOUR_SECTION_HEADER_BYTES;
-        let Some(crystals_bytes) =
-            num_crystals.checked_mul(size_of::<CrystallizedAttractorRecord>())
-        else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    ) -> LmnkResult<usize> {
+        let off_crystals = LMNK_FOUR_SECTION_HEADER_BYTES;
+        let Some(crystals_bytes) = num_crystals.checked_mul(size_of::<PhaseAnchorRecord>()) else {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
         let Some(after_crystals) = off_crystals.checked_add(crystals_bytes) else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
         let off_trails = (after_crystals + 127) & !127usize;
-        let Some(trails_bytes) = num_trails.checked_mul(size_of::<gcso_pointer_trail_t>()) else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        let Some(trails_bytes) = num_trails.checked_mul(size_of::<PointerTrail>()) else {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
         let Some(off_bloom) = off_trails.checked_add(trails_bytes) else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
         let bloom_bytes = if has_bloom {
             size_of::<ContrastivePhaseBloomFilter>()
@@ -1402,25 +1494,25 @@ impl<'a> GcsoFourSectionView<'a> {
             0
         };
         let Some(off_ledger) = off_bloom.checked_add(bloom_bytes) else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
         let ledger_bytes = if has_ledger {
-            size_of::<gcso_ledger_slot_t>()
+            size_of::<LedgerSlot>()
         } else {
             0
         };
         let Some(off_reports) = off_ledger.checked_add(ledger_bytes) else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
         let Some(reports_bytes) = num_reports.checked_mul(size_of::<CausalProvenanceReport>())
         else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
         let Some(raw_end) = off_reports.checked_add(reports_bytes) else {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         };
-        let min_end = if raw_end < GCSO_FOUR_SECTION_HEADER_BYTES {
-            GCSO_FOUR_SECTION_HEADER_BYTES
+        let min_end = if raw_end < LMNK_FOUR_SECTION_HEADER_BYTES {
+            LMNK_FOUR_SECTION_HEADER_BYTES
         } else {
             raw_end
         };
@@ -1430,17 +1522,17 @@ impl<'a> GcsoFourSectionView<'a> {
     /// Serializes `crystals`, `trails`, `bloom_opt`, `ledger_opt`, and `provenance_reports` into `dst_bytes`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < required_byte_len_with_reports(...)`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `dst_bytes.len() < required_byte_len_with_reports(...)`.
     #[inline]
     pub fn write_four_section_with_reports_to_bytes(
-        crystals: &[CrystallizedAttractorRecord],
-        trails: &[gcso_pointer_trail_t],
+        crystals: &[PhaseAnchorRecord],
+        trails: &[PointerTrail],
         bloom_opt: Option<&ContrastivePhaseBloomFilter>,
-        ledger_opt: Option<&gcso_ledger_slot_t>,
+        ledger_opt: Option<&LedgerSlot>,
         provenance_reports: &[CausalProvenanceReport],
         timestamp_epoch_sec: u64,
         dst_bytes: &mut [u8],
-    ) -> GcsoResult<usize> {
+    ) -> LmnkResult<usize> {
         let total_len = Self::required_byte_len_with_reports(
             crystals.len(),
             trails.len(),
@@ -1449,12 +1541,12 @@ impl<'a> GcsoFourSectionView<'a> {
             provenance_reports.len(),
         )?;
         if dst_bytes.len() < total_len {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
 
         let buf = &mut dst_bytes[..total_len];
-        let off_crystals = GCSO_FOUR_SECTION_HEADER_BYTES;
-        let crystals_bytes = CrystallizedAttractorRecord::write_records_to_container_bytes(
+        let off_crystals = LMNK_FOUR_SECTION_HEADER_BYTES;
+        let crystals_bytes = PhaseAnchorRecord::write_records_to_container_bytes(
             crystals,
             &mut buf[off_crystals..],
         )?;
@@ -1470,7 +1562,7 @@ impl<'a> GcsoFourSectionView<'a> {
             };
         let off_reports = off_ledger
             + if ledger_opt.is_some() {
-                size_of::<gcso_ledger_slot_t>()
+                size_of::<LedgerSlot>()
             } else {
                 0
             };
@@ -1480,7 +1572,7 @@ impl<'a> GcsoFourSectionView<'a> {
         if off_trails > after_crystals {
             buf[after_crystals..off_trails].fill(0);
         }
-        gcso_pointer_trail_t::write_unaligned_slice_to(trails, buf, off_trails)?;
+        PointerTrail::write_unaligned_slice_to(trails, buf, off_trails)?;
         if let Some(bloom) = bloom_opt {
             bloom.write_unaligned_to(buf, off_bloom)?;
         }
@@ -1491,7 +1583,7 @@ impl<'a> GcsoFourSectionView<'a> {
         if total_len > end_reports {
             buf[end_reports..total_len].fill(0);
         }
-        let storage_desc = gcso_mapped_storage_descriptor_t {
+        let storage_desc = MappedStoragePreamble {
             mapped_address: 0,
             file_size_bytes: total_len as u64,
             dma_buffer_handle: 0,
@@ -1499,21 +1591,21 @@ impl<'a> GcsoFourSectionView<'a> {
             fd_handle: -1,
             reserved: [0; 32],
         };
-        storage_desc.write_unaligned_to(buf, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET)?;
+        storage_desc.write_unaligned_to(buf, LMNK_STORAGE_PREAMBLE_OFFSET)?;
 
         let checksum_crc32 = Self::compute_container_crc32_with_stamped_crystals(
             buf,
-            size_of::<gcso_snapshot_header_t>(),
+            size_of::<LmnkSnapshotHeader>(),
             off_crystals,
             crystals.len(),
             after_crystals,
             total_len,
         );
         let mut header = init_snapshot_header(total_len as u64, timestamp_epoch_sec);
-        header.attractor_field_offset = off_crystals as u64;
-        header.dpsr_state_offset = after_crystals as u64;
-        header.edbc_state_offset = off_bloom as u64;
-        header.action_hub_offset = off_trails as u64;
+        header.anchor_offset = off_crystals as u64;
+        header.phase_steering_offset = after_crystals as u64;
+        header.entropy_offset = off_bloom as u64;
+        header.substrate_offset = off_trails as u64;
         header.ledger_slot_offset = off_ledger as u32;
         header.checksum_crc32 = checksum_crc32;
         header.reserved_padding[0] = u8::from(bloom_opt.is_some());
@@ -1527,58 +1619,56 @@ impl<'a> GcsoFourSectionView<'a> {
         Ok(total_len)
     }
 
-    /// Validates and maps a 128-byte aligned 4-section `.gcso` (mapped-storage) container byte slice
-    /// into a zero-copy [`GcsoFourSectionView`] ($C_{\mathrm{alloc}} = 0$).
+    /// Validates and maps a 128-byte aligned 4-section `.lmnk` (mapped-storage) container byte slice
+    /// into a zero-copy [`LmnkFourSectionView`] ($C_{\mathrm{alloc}} = 0$).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`], [`GCSO_ERROR_MISALIGNED_POINTER`],
-    /// [`GCSO_ERROR_CONTAINER_CORRUPTED`], or [`GCSO_ERROR_VERSION_MISMATCH`]
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`], [`LMNK_ERR_ALIGNMENT`],
+    /// [`LMNK_ERR_CONTAINER_CORRUPTED`], or [`LMNK_ERR_VERSION_MISMATCH`]
     /// if the container header, alignment, section offsets, or IEEE 802.3 CRC32 checksums are invalid.
     #[inline]
-    pub fn from_container_bytes_zero_copy(bytes: &'a [u8]) -> GcsoResult<Self> {
-        if bytes.len() < GCSO_FOUR_SECTION_HEADER_BYTES {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+    pub fn from_container_bytes_zero_copy(bytes: &'a [u8]) -> LmnkResult<Self> {
+        if bytes.len() < LMNK_FOUR_SECTION_HEADER_BYTES {
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if !is_aligned_to(bytes, 128) {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
 
-        let header = gcso_snapshot_header_t::from_bytes_at(bytes, 0)?;
+        let header = LmnkSnapshotHeader::from_bytes_at(bytes, 0)?;
         validate_snapshot_header(header, bytes.len())?;
-        let mapped_storage_descriptor = gcso_mapped_storage_descriptor_t::from_bytes_at(
-            bytes,
-            GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
-        )?;
+        let mapped_storage_descriptor =
+            MappedStoragePreamble::from_bytes_at(bytes, LMNK_STORAGE_PREAMBLE_OFFSET)?;
         if mapped_storage_descriptor.file_size_bytes != 0
             && mapped_storage_descriptor.file_size_bytes != header.total_size
         {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
         let total_len = header.total_size as usize;
-        let hdr_size = size_of::<gcso_snapshot_header_t>();
-        let off_crystals = header.attractor_field_offset as usize;
-        let end_crystals = header.dpsr_state_offset as usize;
-        let off_trails = header.action_hub_offset as usize;
-        let off_bloom = header.edbc_state_offset as usize;
+        let hdr_size = size_of::<LmnkSnapshotHeader>();
+        let off_crystals = header.anchor_offset as usize;
+        let end_crystals = header.phase_steering_offset as usize;
+        let off_trails = header.substrate_offset as usize;
+        let off_bloom = header.entropy_offset as usize;
         let off_ledger = header.ledger_slot_offset as usize;
 
-        if off_crystals < GCSO_FOUR_SECTION_HEADER_BYTES
+        if off_crystals < LMNK_FOUR_SECTION_HEADER_BYTES
             || off_crystals > end_crystals
             || end_crystals > off_trails
             || off_trails > off_bloom
             || off_bloom > off_ledger
             || off_ledger > total_len
         {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
         let crystals_byte_len = end_crystals - off_crystals;
-        if (crystals_byte_len % size_of::<CrystallizedAttractorRecord>()) != 0 {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+        if (crystals_byte_len % size_of::<PhaseAnchorRecord>()) != 0 {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
-        let num_crystals = crystals_byte_len / size_of::<CrystallizedAttractorRecord>();
-        let crystals = CrystallizedAttractorRecord::slice_from_container_bytes_zero_copy(
+        let num_crystals = crystals_byte_len / size_of::<PhaseAnchorRecord>();
+        let crystals = PhaseAnchorRecord::slice_from_container_bytes_zero_copy(
             &bytes[off_crystals..end_crystals],
             num_crystals,
         )?;
@@ -1592,18 +1682,18 @@ impl<'a> GcsoFourSectionView<'a> {
                 total_len,
             );
             if computed != header.checksum_crc32 {
-                return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+                return Err(LMNK_ERR_CONTAINER_CORRUPTED);
             }
         }
 
         let trails_byte_len = off_bloom - off_trails;
-        if (trails_byte_len % size_of::<gcso_pointer_trail_t>()) != 0 {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+        if (trails_byte_len % size_of::<PointerTrail>()) != 0 {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
-        let num_trails = trails_byte_len / size_of::<gcso_pointer_trail_t>();
-        let trails = gcso_pointer_trail_t::slice_from_bytes_at(bytes, off_trails, num_trails)?;
+        let num_trails = trails_byte_len / size_of::<PointerTrail>();
+        let trails = PointerTrail::slice_from_bytes_at(bytes, off_trails, num_trails)?;
 
-        // SAFETY: `gcso_snapshot_header_t` is 128-byte aligned (`>= 8`) `#[repr(C)]` POD of 16 `u64` words; offset 9*8 = 72 is in-bounds.
+        // SAFETY: `LmnkSnapshotHeader` is 128-byte aligned (`>= 8`) `#[repr(C)]` POD of 16 `u64` words; offset 9*8 = 72 is in-bounds.
         #[cfg(target_endian = "little")]
         let pad_w0 = unsafe { *core::ptr::from_ref(header).cast::<u64>().add(9) };
         #[cfg(target_endian = "little")]
@@ -1634,16 +1724,15 @@ impl<'a> GcsoFourSectionView<'a> {
             None
         };
 
-        let has_ledger =
-            has_ledger_flag & ((total_len - off_ledger) >= size_of::<gcso_ledger_slot_t>());
+        let has_ledger = has_ledger_flag & ((total_len - off_ledger) >= size_of::<LedgerSlot>());
         let ledger = if has_ledger {
-            Some(gcso_ledger_slot_t::from_bytes_at(bytes, off_ledger)?)
+            Some(LedgerSlot::from_bytes_at(bytes, off_ledger)?)
         } else {
             None
         };
         let off_reports = off_ledger
             + if has_ledger {
-                size_of::<gcso_ledger_slot_t>()
+                size_of::<LedgerSlot>()
             } else {
                 0
             };
@@ -1721,11 +1810,10 @@ impl<'a> GcsoFourSectionView<'a> {
                 };
                 let mut idx = 0usize;
                 while idx + 4 <= num_crystals {
-                    let w6_off0 =
-                        off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
-                    let w6_off1 = w6_off0 + size_of::<CrystallizedAttractorRecord>();
-                    let w6_off2 = w6_off1 + size_of::<CrystallizedAttractorRecord>();
-                    let w6_off3 = w6_off2 + size_of::<CrystallizedAttractorRecord>();
+                    let w6_off0 = off_crystals + idx * size_of::<PhaseAnchorRecord>() + 48;
+                    let w6_off1 = w6_off0 + size_of::<PhaseAnchorRecord>();
+                    let w6_off2 = w6_off1 + size_of::<PhaseAnchorRecord>();
+                    let w6_off3 = w6_off2 + size_of::<PhaseAnchorRecord>();
                     // SAFETY: `buf` is >= 8-byte aligned and `w6_off0 + 8 <= total_len`.
                     let rec_crc0 =
                         (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
@@ -1748,9 +1836,8 @@ impl<'a> GcsoFourSectionView<'a> {
                     idx += 4;
                 }
                 while idx + 2 <= num_crystals {
-                    let w6_off0 =
-                        off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
-                    let w6_off1 = w6_off0 + size_of::<CrystallizedAttractorRecord>();
+                    let w6_off0 = off_crystals + idx * size_of::<PhaseAnchorRecord>() + 48;
+                    let w6_off1 = w6_off0 + size_of::<PhaseAnchorRecord>();
                     // SAFETY: `buf` is >= 8-byte aligned and `w6_off0 + 8 <= total_len`.
                     let rec_crc0 =
                         (unsafe { *buf.as_ptr().add(w6_off0).cast::<u64>() } >> 32) as u32;
@@ -1763,7 +1850,7 @@ impl<'a> GcsoFourSectionView<'a> {
                     idx += 2;
                 }
                 if idx < num_crystals {
-                    let w6_off = off_crystals + idx * size_of::<CrystallizedAttractorRecord>() + 48;
+                    let w6_off = off_crystals + idx * size_of::<PhaseAnchorRecord>() + 48;
                     // SAFETY: `buf` is >= 8-byte aligned and `w6_off + 8 <= total_len`.
                     let rec_crc = (unsafe { *buf.as_ptr().add(w6_off).cast::<u64>() } >> 32) as u32;
                     crc = crc32_fold_stamped_crystal_128b(crc, rec_crc);
@@ -1807,13 +1894,13 @@ mod tests {
         let engine = MappedStorageEngine::new(4096, 1);
         assert_eq!(engine.validate(), Ok(()));
 
-        let ledger_slot = gcso_ledger_slot_t {
+        let ledger_slot = LedgerSlot {
             mode: 1,
             ..Default::default()
         };
         let mut packet_buf = AlignedBuffer64::new([0u8; 64]);
         let phases = [12i8; MAX_ATTENTION_HEADS];
-        let crc = encode_dnp_phase_packet(
+        let crc = encode_phase_packet(
             &ledger_slot,
             2,
             0x09,
@@ -1821,8 +1908,8 @@ mod tests {
             &mut packet_buf.as_aligned_slice_mut(),
         )
         .unwrap();
-        let mut trail = gcso_pointer_trail_t::default();
-        let (slot, mode, is_repulsion) = decode_and_apply_dnp_packet_to_trail(
+        let mut trail = PointerTrail::default();
+        let (slot, mode, is_repulsion) = decode_and_apply_phase_packet_to_trail(
             &ledger_slot,
             &packet_buf.as_aligned_slice(),
             crc,
@@ -1836,7 +1923,7 @@ mod tests {
         assert!(!is_repulsion);
         assert_eq!(trail.accumulated_phase_delta[0], 12);
 
-        let rep_crc = encode_dnp_phase_packet(
+        let rep_crc = encode_phase_packet(
             &ledger_slot,
             3,
             0x05,
@@ -1844,8 +1931,8 @@ mod tests {
             &mut packet_buf.as_aligned_slice_mut(),
         )
         .unwrap();
-        let mut rep_trail = gcso_pointer_trail_t::default();
-        let (rep_slot, rep_mode, rep_is_repulsion) = decode_and_apply_dnp_packet_to_trail(
+        let mut rep_trail = PointerTrail::default();
+        let (rep_slot, rep_mode, rep_is_repulsion) = decode_and_apply_phase_packet_to_trail(
             &ledger_slot,
             &packet_buf.as_aligned_slice(),
             rep_crc,
@@ -1891,7 +1978,7 @@ mod tests {
             .unwrap();
         assert_eq!(written, 256);
 
-        let mut seek_trail = gcso_pointer_trail_t::default();
+        let mut seek_trail = PointerTrail::default();
         let (lp, r_bar, kappa, v_shift, rep_cnt) = engine
             .unpack_and_seek_kv_gop_stream_bytes(
                 &stream_bytes[..written],
@@ -1909,7 +1996,7 @@ mod tests {
             (seek_trail.user_data as u32) & CAUSAL_AXIS_SUBJECTIVE_PERSONA,
             CAUSAL_AXIS_SUBJECTIVE_PERSONA
         );
-        assert_eq!(gcso_tagged_ptr_t(seek_trail.current_ptr).unpack_addr(), 102);
+        assert_eq!(TaggedPtr(seek_trail.current_ptr).unpack_addr(), 102);
         assert!(lp > -0.05 && (r_bar - 1.0).abs() < 1.0e-4 && kappa > 10.0 && v_shift > 0.0);
     }
 }

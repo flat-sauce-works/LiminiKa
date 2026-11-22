@@ -1,7 +1,7 @@
-// name: src/core/src/stigmergy/crystal/crc32_delta.rs
+// name: src/core/src/stigmergy/anchor/crc32_delta.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! 128-byte `"CSTL"` [`super::CrystallizedAttractorRecord`] GF(2) differential IEEE 802.3 CRC32
+//! 128-byte `"LNKR"` [`super::PhaseAnchorRecord`] GF(2) differential IEEE 802.3 CRC32
 //! lookup tables and O(1) incremental checksum update helpers.
 
 use crate::foundation::lut_crc32::{
@@ -12,7 +12,7 @@ use crate::foundation::lut_crc32::{
 };
 use crate::foundation::DEFAULT_PHASE_CLAMP_MAX_RAD;
 
-use super::{GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION};
+use super::{LMNK_PHASE_ANCHOR_MAGIC, LMNK_PHASE_ANCHOR_VERSION};
 
 /// 64B-aligned 4KB GF(2) affine operator table fusing $L^4(L_{12}(\text{record\_crc32})) \oplus (\neg\text{record\_crc32}) \oplus L^8(\text{0xFFFF\_FFFF})$
 /// into a single 4-lookup stage (`0` branches, `1` lookup stage instead of `2` serial stages).
@@ -41,7 +41,7 @@ pub(crate) const CRC32_IEEE_CRYSTAL_STAMP_LUT: AlignedLut4x256<u32> = {
 pub(crate) const CRC32_IEEE_CRYSTAL_STAMP_REF: &[[u32; 256]; 4] = &CRC32_IEEE_CRYSTAL_STAMP_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for low-byte `sample_count` increments
-/// (`offset 12..16` inside a 128-byte `CrystallizedAttractorRecord`, shifted by 112 bytes),
+/// (`offset 12..16` inside a 128-byte `PhaseAnchorRecord`, shifted by 112 bytes),
 /// updating a stationary centroid's `checksum_crc32` in 1 table lookup (`1` cycle).
 pub(crate) const CRC32_CRYSTAL_SC_BYTE0_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
@@ -58,7 +58,7 @@ pub(crate) const CRC32_CRYSTAL_SC_BYTE0_LUT: AlignedLut256<u32> = {
 pub(crate) const CRC32_CRYSTAL_SC_BYTE0_REF: &[u32; 256] = &CRC32_CRYSTAL_SC_BYTE0_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for low-byte `anchor_id` values
-/// (`offset 8..12` inside a 128-byte `CrystallizedAttractorRecord`, shifted by 116 bytes via $L^7$),
+/// (`offset 8..12` inside a 128-byte `PhaseAnchorRecord`, shifted by 116 bytes via $L^7$),
 /// evaluating `anchor_id < 256` contributions in 1 table lookup (`1` cycle, `0` serial $L^3/L^4$ stages).
 pub(crate) const CRC32_CRYSTAL_AID_BYTE0_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
@@ -75,7 +75,7 @@ pub(crate) const CRC32_CRYSTAL_AID_BYTE0_LUT: AlignedLut256<u32> = {
 pub(crate) const CRC32_CRYSTAL_AID_BYTE0_REF: &[u32; 256] = &CRC32_CRYSTAL_AID_BYTE0_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-1 `anchor_id` values
-/// (`offset 9` inside a 128-byte `CrystallizedAttractorRecord`, shifted by 116 bytes via $L^7$),
+/// (`offset 9` inside a 128-byte `PhaseAnchorRecord`, shifted by 116 bytes via $L^7$),
 /// evaluating `anchor_id < 65536` contributions in 2 parallel table lookups (`0` serial $L^3/L^4$ stages).
 pub(crate) const CRC32_CRYSTAL_AID_BYTE1_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
@@ -92,7 +92,7 @@ pub(crate) const CRC32_CRYSTAL_AID_BYTE1_LUT: AlignedLut256<u32> = {
 pub(crate) const CRC32_CRYSTAL_AID_BYTE1_REF: &[u32; 256] = &CRC32_CRYSTAL_AID_BYTE1_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-1 (`(zoff >> 8) & 0xFF`, `offset 17`)
-/// of `mapped_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
+/// of `mapped_section_offset48` inside a 128-byte `PhaseAnchorRecord`, pre-shifted by
 /// 96 bytes via $L^6$ so 4KB-aligned mapped-storage section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE1_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
@@ -108,7 +108,7 @@ pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE1_LUT: AlignedLut256<u32> = {
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE1_REF: &[u32; 256] = &CRC32_CRYSTAL_ZOFF_BYTE1_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-2 (`(zoff >> 16) & 0xFF`, `offset 18`)
-/// of `mapped_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
+/// of `mapped_section_offset48` inside a 128-byte `PhaseAnchorRecord`, pre-shifted by
 /// 96 bytes via $L^6$ so 64KB-aligned mapped-storage section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE2_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
@@ -124,7 +124,7 @@ pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE2_LUT: AlignedLut256<u32> = {
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE2_REF: &[u32; 256] = &CRC32_CRYSTAL_ZOFF_BYTE2_LUT.0;
 
 /// 64B-aligned 1KB GF(2) differential CRC32 table for byte-3 (`(zoff >> 24) & 0xFF`, `offset 19`)
-/// of `mapped_section_offset48` inside a 128-byte `CrystallizedAttractorRecord`, pre-shifted by
+/// of `mapped_section_offset48` inside a 128-byte `PhaseAnchorRecord`, pre-shifted by
 /// 96 bytes via $L^6$ so 64KB-aligned mapped-storage section offsets fold in 1 lookup stage (`0` serial $L^6$ stages).
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE3_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
@@ -139,8 +139,8 @@ pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE3_LUT: AlignedLut256<u32> = {
 /// Promoted `.rodata` reference to the 1KB `mapped_section_offset48` byte-3 differential CRC32 table.
 pub(crate) const CRC32_CRYSTAL_ZOFF_BYTE3_REF: &[u32; 256] = &CRC32_CRYSTAL_ZOFF_BYTE3_LUT.0;
 
-/// 64B-aligned 1KB GF(2) differential CRC32 table for byte-0 `provenance_bits` values
-/// (`offset 48` inside a 128-byte `CrystallizedAttractorRecord`, shifted by 64 bytes via $L^5$),
+/// 64B-aligned 1KB GF(2) differential CRC32 table for byte-0 `lineage_flags` values
+/// (`offset 48` inside a 128-byte `PhaseAnchorRecord`, shifted by 64 bytes via $L^5$),
 /// evaluating low-byte provenance bitmasks in 1 table lookup (`0` serial $L^4$ stages).
 pub(crate) const CRC32_CRYSTAL_PROV_BYTE0_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
@@ -152,12 +152,12 @@ pub(crate) const CRC32_CRYSTAL_PROV_BYTE0_LUT: AlignedLut256<u32> = {
     AlignedLut256(lut)
 };
 
-/// Promoted `.rodata` reference to the 1KB `provenance_bits` byte-0 differential CRC32 table.
+/// Promoted `.rodata` reference to the 1KB `lineage_flags` byte-0 differential CRC32 table.
 pub(crate) const CRC32_CRYSTAL_PROV_BYTE0_REF: &[u32; 256] = &CRC32_CRYSTAL_PROV_BYTE0_LUT.0;
 
-/// 64B-aligned 1KB GF(2) differential CRC32 table for byte-1 `provenance_bits` values
-/// (`offset 49` inside a 128-byte `CrystallizedAttractorRecord`, shifted by 64 bytes via $L^5$),
-/// evaluating 16-bit provenance bitmasks (`provenance_bits <= 0xFFFF`) in 2 parallel table lookups.
+/// 64B-aligned 1KB GF(2) differential CRC32 table for byte-1 `lineage_flags` values
+/// (`offset 49` inside a 128-byte `PhaseAnchorRecord`, shifted by 64 bytes via $L^5$),
+/// evaluating 16-bit provenance bitmasks (`lineage_flags <= 0xFFFF`) in 2 parallel table lookups.
 pub(crate) const CRC32_CRYSTAL_PROV_BYTE1_LUT: AlignedLut256<u32> = {
     let mut lut = [0u32; 256];
     let mut d = 0usize;
@@ -168,7 +168,7 @@ pub(crate) const CRC32_CRYSTAL_PROV_BYTE1_LUT: AlignedLut256<u32> = {
     AlignedLut256(lut)
 };
 
-/// Promoted `.rodata` reference to the 1KB `provenance_bits` byte-1 differential CRC32 table.
+/// Promoted `.rodata` reference to the 1KB `lineage_flags` byte-1 differential CRC32 table.
 pub(crate) const CRC32_CRYSTAL_PROV_BYTE1_REF: &[u32; 256] = &CRC32_CRYSTAL_PROV_BYTE1_LUT.0;
 
 /// Pre-shifted 8-entry GF(2) differential CRC32 table for `dominant_slot & 7` (`offset 56`),
@@ -198,7 +198,7 @@ pub(crate) const CRC32_CRYSTAL_ACTION_BYTE57_LUT: AlignedLut256<u32> = {
 pub(crate) const CRC32_CRYSTAL_ACTION_BYTE57_REF: &[u32; 256] = &CRC32_CRYSTAL_ACTION_BYTE57_LUT.0;
 
 /// 64B-aligned 4KB GF(2) differential CRC32 table for `base_energy` (`offset 24..28`),
-/// pre-shifted to the end of the 128-byte `CrystallizedAttractorRecord` via $L^6(\text{indep\_lo1}(x))$.
+/// pre-shifted to the end of the 128-byte `PhaseAnchorRecord` via $L^6(\text{indep\_lo1}(x))$.
 pub(crate) const CRC32_CRYSTAL_BE24_FINAL_LUT: AlignedLut4x256<u32> = {
     let mut lut = [[0u32; 256]; 4];
     let mut byte_pos = 0usize;
@@ -218,7 +218,7 @@ pub(crate) const CRC32_CRYSTAL_BE24_FINAL_LUT: AlignedLut4x256<u32> = {
 pub(crate) const CRC32_CRYSTAL_BE24_FINAL_REF: &[[u32; 256]; 4] = &CRC32_CRYSTAL_BE24_FINAL_LUT.0;
 
 /// 64B-aligned 4KB GF(2) differential CRC32 table for `phase_gravity_mass` (`offset 36..40`),
-/// pre-shifted to the end of the 128-byte `CrystallizedAttractorRecord` via $L^5(\text{indep\_hi0}(x))$.
+/// pre-shifted to the end of the 128-byte `PhaseAnchorRecord` via $L^5(\text{indep\_hi0}(x))$.
 pub(crate) const CRC32_CRYSTAL_GM36_FINAL_LUT: AlignedLut4x256<u32> = {
     let mut lut = [[0u32; 256]; 4];
     let mut byte_pos = 0usize;
@@ -267,7 +267,7 @@ pub(crate) const fn crc32_crystal_zoff16_final_u32(zoff_lo: u32) -> u32 {
 }
 
 /// Evaluates the exact 128B final GF(2) CRC32 contribution of a 32-bit word at `offset 40..44`
-/// (`ripa_clamp_rad`) using the L1D-resident `CRC32_IEEE_SLICE16_REF` and `CRC32_IEEE_L5_REF` tables.
+/// (`phase_clamp_rad`) using the L1D-resident `CRC32_IEEE_SLICE16_REF` and `CRC32_IEEE_L5_REF` tables.
 #[inline(always)]
 pub(crate) const fn crc32_crystal_cl40_final_u32(cl_bits: u32) -> u32 {
     if cl_bits == 0 {
@@ -299,18 +299,18 @@ pub(crate) const fn crc32_crystal_stamp_contrib_128b(record_crc32: u32) -> u32 {
 }
 
 /// Advances an uninverted IEEE 802.3 CRC32 accumulator (`crc`) across an entire 128-byte stamped
-/// `CrystallizedAttractorRecord` using GF(2) linearity ($L^8(\text{crc}) \oplus \text{stamp}(\text{record\_crc32})$)
+/// `PhaseAnchorRecord` using GF(2) linearity ($L^8(\text{crc}) \oplus \text{stamp}(\text{record\_crc32})$)
 /// in a single 4-lookup stage (`0` branches).
 #[inline(always)]
 pub(crate) const fn crc32_fold_stamped_crystal_128b(crc: u32, record_crc32: u32) -> u32 {
     crc32_step_l8(crc) ^ crc32_crystal_stamp_contrib_128b(record_crc32)
 }
 
-/// Updates a stamped `CrystallizedAttractorRecord`'s IEEE 802.3 `checksum_crc32` in $\mathcal{O}(1)$
+/// Updates a stamped `PhaseAnchorRecord`'s IEEE 802.3 `checksum_crc32` in $\mathcal{O}(1)$
 /// via GF(2) linearity when `phase_profile` (`offset 64..128`), `anchor_id`, `mapped_section_offset48`,
 /// `resultant_r_bar`, and `von_mises_kappa` remained stationary while `sample_count` (`offset 12..16`),
-/// `base_energy` (`offset 24..28`), `phase_gravity_mass` (`offset 36..40`), `ripa_clamp_rad`
-/// (`offset 40..44`), `effective_inv_temp` (`offset 44..48`), `provenance_bits` (`offset 48..52`),
+/// `base_energy` (`offset 24..28`), `phase_gravity_mass` (`offset 36..40`), `phase_clamp_rad`
+/// (`offset 40..44`), `effective_inv_temp` (`offset 44..48`), `lineage_flags` (`offset 48..52`),
 /// or `w7_lo` (`dominant_slot` / `action_mode_flags` at `offset 56..58`) changed.
 #[inline(always)]
 pub(crate) const fn crc32_update_crystal_stationary_fields_delta(
@@ -377,7 +377,7 @@ pub(crate) const fn crc32_update_crystal_stationary_fields_delta(
     old_crc32 ^ direct_xor ^ l5_out
 }
 
-/// Updates a stamped `CrystallizedAttractorRecord`'s IEEE 802.3 `checksum_crc32` in $\mathcal{O}(1)$
+/// Updates a stamped `PhaseAnchorRecord`'s IEEE 802.3 `checksum_crc32` in $\mathcal{O}(1)$
 /// via GF(2) linearity when only `base_energy` (`offset 24..28`) and `phase_gravity_mass`
 /// (`offset 36..40`) changed (such as during multiplicative evaporative decay in
 /// `merge_and_prune_centroids_64`), using 8 parallel table lookups with `0` branches.
@@ -393,26 +393,26 @@ pub(crate) const fn crc32_update_crystal_energy_and_mass_delta(
 }
 
 /// Precomputed Slice-by-16 accumulator contribution for the invariant 8-byte header
-/// `w0 = (GCSO_CRYSTAL_RECORD_MAGIC as u64) | ((GCSO_CRYSTAL_RECORD_VERSION as u64) << 32)`
+/// `w0 = (LMNK_PHASE_ANCHOR_MAGIC as u64) | ((LMNK_PHASE_ANCHOR_VERSION as u64) << 32)`
 /// XORed with the initial IEEE 802.3 seed `0xFFFF_FFFF`, eliminating 8 table lookups on every
-/// `CrystallizedAttractorRecord` checksum evaluation.
+/// `PhaseAnchorRecord` checksum evaluation.
 pub(crate) const CRYSTAL_CRC32_W0_SEED_CONTRIB: u32 =
-    crc32_slice16_dep_lo0(GCSO_CRYSTAL_RECORD_MAGIC ^ 0xFFFF_FFFFu32)
-        ^ crc32_slice16_indep_hi0_u32(GCSO_CRYSTAL_RECORD_VERSION);
+    crc32_slice16_dep_lo0(LMNK_PHASE_ANCHOR_MAGIC ^ 0xFFFF_FFFFu32)
+        ^ crc32_slice16_indep_hi0_u32(LMNK_PHASE_ANCHOR_VERSION);
 
-/// Precomputed Slice-by-16 accumulator contribution for the default `w5` (`ripa_clamp_rad = 0.24`,
-/// `effective_inv_temp = 1.0`) field pair inside a `CrystallizedAttractorRecord`, eliminating 8 table lookups.
+/// Precomputed Slice-by-16 accumulator contribution for the default `w5` (`phase_clamp_rad = 0.24`,
+/// `effective_inv_temp = 1.0`) field pair inside a `PhaseAnchorRecord`, eliminating 8 table lookups.
 pub(crate) const CRYSTAL_CRC32_DEFAULT_W5_CONTRIB: u32 =
     crc32_slice16_indep_lo1_u32(DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits())
         ^ crc32_slice16_indep_hi1_u32(0x3F80_0000u32);
 
 /// Pre-shifted final 128B GF(2) CRC32 contribution $L^7(\text{CRYSTAL\_CRC32\_W0\_SEED\_CONTRIB})$
-/// for the invariant `(GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION)` header and initial seed.
+/// for the invariant `(LMNK_PHASE_ANCHOR_MAGIC, LMNK_PHASE_ANCHOR_VERSION)` header and initial seed.
 pub(crate) const CRYSTAL_CRC32_W0_FINAL_CONTRIB: u32 =
     crc32_step_l4(crc32_step_l3(CRYSTAL_CRC32_W0_SEED_CONTRIB));
 
 /// Pre-shifted final 128B GF(2) CRC32 contribution $L^5(\text{CRYSTAL\_CRC32\_DEFAULT\_W5\_CONTRIB})$
-/// for the default `w5` (`ripa_clamp_rad = 0.24`, `effective_inv_temp = 1.0`) field pair.
+/// for the default `w5` (`phase_clamp_rad = 0.24`, `effective_inv_temp = 1.0`) field pair.
 pub(crate) const CRYSTAL_CRC32_DEFAULT_W5_FINAL_CONTRIB: u32 =
     crc32_step_l5(CRYSTAL_CRC32_DEFAULT_W5_CONTRIB);
 
@@ -551,7 +551,7 @@ pub(crate) const fn crc32_crystal_header_delta_c3(
     (final_xor, prov_c ^ w7_c)
 }
 
-/// Updates a stamped `CrystallizedAttractorRecord`'s IEEE 802.3 `checksum_crc32` via GF(2)
+/// Updates a stamped `PhaseAnchorRecord`'s IEEE 802.3 `checksum_crc32` via GF(2)
 /// linearity across any absorption step, folding `c3` directly into `dw[0]` via
 /// `crc32_step_block64_words(c3, &dw)` when `phase_profile` changed (`0` `crc32_step_l4` lookups).
 #[inline(always)]

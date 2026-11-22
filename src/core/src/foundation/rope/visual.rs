@@ -9,7 +9,7 @@ use core::arch::x86_64::*;
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::phase_ops::avx2_hsum_ps;
-use crate::foundation::pod::{gcso_paged_bitmask_t, PAGED_BITMASK_BITS};
+use crate::foundation::pod::{PagedBitmask, PAGED_BITMASK_BITS};
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::scalar_math::branchless_rotate_so2_pair;
 use crate::foundation::scalar_math::{
@@ -17,7 +17,7 @@ use crate::foundation::scalar_math::{
 };
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::simd_stats::avx2_rotate_so2_block32;
-use crate::liminal::{gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT};
+use crate::liminal::{LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT};
 
 // ===================================================================
 // 1. AVX2 / Scalar SIMD Kernels for 2D/3D Visual RoPE
@@ -324,12 +324,12 @@ fn patch_diff_sum_sq_unrolled4(cur_patch: &[f32], prv_patch: &[f32]) -> f32 {
 #[inline(always)]
 fn steer_visual_grid_bitmask_core<F>(
     grid_tensor: &mut AlignedSliceMut32<'_, f32>,
-    active_patch_mask: &gcso_paged_bitmask_t,
+    active_patch_mask: &PagedBitmask,
     patch_stride_elems: usize,
     num_patches: usize,
     min_dim_multiple: usize,
     mut rotate_patch_fn: F,
-) -> GcsoResult<u32>
+) -> LmnkResult<u32>
 where
     F: FnMut(&mut [f32]),
 {
@@ -338,13 +338,13 @@ where
         || patch_stride_elems == 0
         || (patch_stride_elems % min_dim_multiple) != 0
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let required_elems = num_patches
         .checked_mul(patch_stride_elems)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     if grid_tensor.len() < required_elems {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let g_slice = grid_tensor.as_mut_slice();
@@ -385,16 +385,16 @@ where
 #[inline(always)]
 #[must_use]
 pub fn detect_frame_delta_bitmask(
-    prev_mask: &gcso_paged_bitmask_t,
-    curr_mask: &gcso_paged_bitmask_t,
-) -> (gcso_paged_bitmask_t, u32) {
+    prev_mask: &PagedBitmask,
+    curr_mask: &PagedBitmask,
+) -> (PagedBitmask, u32) {
     let w0 = prev_mask.bits[0] ^ curr_mask.bits[0];
     let w1 = prev_mask.bits[1] ^ curr_mask.bits[1];
     let w2 = prev_mask.bits[2] ^ curr_mask.bits[2];
     let w3 = prev_mask.bits[3] ^ curr_mask.bits[3];
     let changed = w0.count_ones() + w1.count_ones() + w2.count_ones() + w3.count_ones();
     (
-        gcso_paged_bitmask_t {
+        PagedBitmask {
             bits: [w0, w1, w2, w3],
         },
         changed,
@@ -403,10 +403,10 @@ pub fn detect_frame_delta_bitmask(
 
 /// Detects active visual patches between raw `f32` frame buffers `current_frame` and `prev_frame`
 /// whose mean squared difference exceeds `delta_threshold_sq`, populating a 256-bit
-/// [`gcso_paged_bitmask_t`] (`mask_out`) and returning the active patch count (`0..=256`).
+/// [`PagedBitmask`] (`mask_out`) and returning the active patch count (`0..=256`).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `num_patches == 0`, `num_patches > 256`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `num_patches == 0`, `num_patches > 256`,
 /// `patch_stride_elems == 0`, `delta_threshold_sq < 0.0`, or frame buffers are too small.
 #[inline]
 pub fn detect_frame_mse_bitmask(
@@ -415,11 +415,11 @@ pub fn detect_frame_mse_bitmask(
     num_patches: usize,
     patch_stride_elems: usize,
     delta_threshold_sq: f32,
-    mask_out: &mut gcso_paged_bitmask_t,
-) -> GcsoResult<u32> {
+    mask_out: &mut PagedBitmask,
+) -> LmnkResult<u32> {
     let total_elems = num_patches
         .checked_mul(patch_stride_elems)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     if num_patches == 0
         || num_patches > (PAGED_BITMASK_BITS as usize)
         || patch_stride_elems == 0
@@ -428,10 +428,10 @@ pub fn detect_frame_mse_bitmask(
         || current_frame.len() < total_elems
         || prev_frame.len() < total_elems
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
-    *mask_out = gcso_paged_bitmask_t::default();
+    *mask_out = PagedBitmask::default();
     let cur_s = &current_frame.as_slice()[..total_elems];
     let prv_s = &prev_frame.as_slice()[..total_elems];
     let inv_stride = fast_inv_len_f32(patch_stride_elems);
@@ -457,17 +457,17 @@ pub fn detect_frame_mse_bitmask(
 /// using `ctz` bit-scanning (`word &= word - 1`) in $\mathcal{O}(\mathrm{popcount}(\mathbf{M}))$.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `num_patches == 0`, `num_patches > 256`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `num_patches == 0`, `num_patches > 256`,
 /// `patch_stride_elems` is zero or not a multiple of `4`, or `grid_tensor` is too small.
 #[inline]
 pub fn steer_visual_grid_2d_bitmask_gated(
     grid_tensor: &mut AlignedSliceMut32<'_, f32>,
-    active_patch_mask: &gcso_paged_bitmask_t,
+    active_patch_mask: &PagedBitmask,
     patch_stride_elems: usize,
     num_patches: usize,
-    phase_x_q7: gcso_q7_t,
-    phase_y_q7: gcso_q7_t,
-) -> GcsoResult<u32> {
+    phase_x_q7: PhaseQ7,
+    phase_y_q7: PhaseQ7,
+) -> LmnkResult<u32> {
     let (sin_x, cos_x) = branchless_sincos_q7(phase_x_q7);
     let (sin_y, cos_y) = branchless_sincos_q7(phase_y_q7);
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -504,18 +504,18 @@ pub fn steer_visual_grid_2d_bitmask_gated(
 /// using `ctz` bit-scanning (`word &= word - 1`) in $\mathcal{O}(\mathrm{popcount}(\mathbf{M}))$.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `num_patches == 0`, `num_patches > 256`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `num_patches == 0`, `num_patches > 256`,
 /// `patch_stride_elems` is zero or not a multiple of `6`, or `grid_tensor` is too small.
 #[inline]
 pub fn steer_visual_grid_3d_bitmask_gated(
     grid_tensor: &mut AlignedSliceMut32<'_, f32>,
-    active_patch_mask: &gcso_paged_bitmask_t,
+    active_patch_mask: &PagedBitmask,
     patch_stride_elems: usize,
     num_patches: usize,
-    phase_t_q7: gcso_q7_t,
-    phase_x_q7: gcso_q7_t,
-    phase_y_q7: gcso_q7_t,
-) -> GcsoResult<u32> {
+    phase_t_q7: PhaseQ7,
+    phase_x_q7: PhaseQ7,
+    phase_y_q7: PhaseQ7,
+) -> LmnkResult<u32> {
     let (sin_t, cos_t) = branchless_sincos_q7(phase_t_q7);
     let (sin_x, cos_x) = branchless_sincos_q7(phase_x_q7);
     let (sin_y, cos_y) = branchless_sincos_q7(phase_y_q7);

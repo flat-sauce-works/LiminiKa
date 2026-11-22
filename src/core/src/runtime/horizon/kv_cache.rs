@@ -18,10 +18,10 @@ use crate::foundation::{
     KvMotionDeltaPacket, RawPhaseProjectable, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, BitCut32, GcsoResult, Lacuna, GCSO_ERROR_INVALID_ARGUMENT,
+    branchless_select_f32, BitCut32, Lacuna, LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
-use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::context::CoreStateStack;
 use crate::runtime::gateway::{
     tangent_cosine_active_heads_64, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy,
     CognitiveGroundingSignal, GatewayFrame, ManifoldGatewaySignal, ObjectiveFactSignal,
@@ -99,7 +99,7 @@ impl RamPhaseKvEntry {
     #[must_use]
     pub fn with_reconstructed_phases(
         &self,
-        restored_phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        restored_phases: [PhaseQ7; MAX_ATTENTION_HEADS],
         token_shift: u32,
         r_bar: f32,
     ) -> Self {
@@ -110,7 +110,7 @@ impl RamPhaseKvEntry {
                 r_bar,
                 1.0 + r_bar * 4.0,
                 0.0,
-                self.keyframe.provenance_bits(),
+                self.keyframe.lineage_flags(),
                 self.keyframe.cluster_id(),
                 self.keyframe.slot_id(),
                 restored_phases,
@@ -122,7 +122,7 @@ impl RamPhaseKvEntry {
 
 impl RawPhaseProjectable for RamPhaseKvEntry {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.keyframe.anchor_phases
     }
 
@@ -135,13 +135,13 @@ impl RawPhaseProjectable for RamPhaseKvEntry {
 impl CausalProvenanceSignal for RamPhaseKvEntry {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        self.keyframe.provenance_bits() | self.circuit.causal_provenance_bits()
+        self.keyframe.lineage_flags() | self.circuit.causal_provenance_bits()
     }
 }
 
 impl CognitiveGroundingSignal for RamPhaseKvEntry {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.keyframe.anchor_phases
     }
 
@@ -183,7 +183,7 @@ pub trait RamPhaseKvCacheOps {
         context_hash: u64,
         token_index: u32,
         anchor_id: u32,
-        phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         circuit: CognitiveTrajectoryLedger,
         activation: CognitiveCircuitActivation,
         epoch: u32,
@@ -324,16 +324,16 @@ pub trait RamPhaseKvCacheOps {
         &mut self,
         context_hash: u64,
         query_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        min_resonance_q7: gcso_q7_t,
+        min_resonance_q7: PhaseQ7,
         epoch: u32,
-    ) -> Option<(usize, bool, gcso_q7_t)> {
+    ) -> Option<(usize, bool, PhaseQ7)> {
         let entries = self.entries_mut();
         if entries.is_empty() {
             return None;
         }
         let query_nonzero = swar_words_nonzero_64(query_words);
         let mut best_idx: Option<usize> = None;
-        let mut best_res: gcso_q7_t = i8::MIN;
+        let mut best_res: PhaseQ7 = i8::MIN;
         let mut i = 0usize;
         while i < entries.len() {
             if !entries[i].is_occupied() {
@@ -374,7 +374,7 @@ pub trait RamPhaseKvCacheOps {
                     } else {
                         scaled - 0.5
                     };
-                    (rounded as i32).clamp(-127, 127) as gcso_q7_t
+                    (rounded as i32).clamp(-127, 127) as PhaseQ7
                 } else {
                     0
                 };
@@ -397,22 +397,26 @@ pub trait RamPhaseKvCacheOps {
     /// `slot_idx` and `curr_phases`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_idx` is out of bounds or unoccupied, or
-    /// `qdps_min_step_q7 > 127`. Also propagates [`KvKeyframePacket::verify_integrity`] errors.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `slot_idx` is out of bounds or unoccupied, or
+    /// `phase_step_min_q7 > 127`. Also propagates [`KvKeyframePacket::verify_integrity`] errors.
     #[inline]
     fn encode_slot_pframe_delta(
         &self,
         slot_idx: usize,
-        curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        qdps_min_step_q7: u8,
-    ) -> GcsoResult<KvMotionDeltaPacket> {
+        curr_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        phase_step_min_q7: u8,
+    ) -> LmnkResult<KvMotionDeltaPacket> {
         let entries = self.entries();
-        let entry = entries.get(slot_idx).ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        let entry = entries.get(slot_idx).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         if !entry.is_occupied() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         entry.keyframe.verify_integrity()?;
-        encode_pframe_motion_delta_64(&entry.keyframe.anchor_phases, curr_phases, qdps_min_step_q7)
+        encode_pframe_motion_delta_64(
+            &entry.keyframe.anchor_phases,
+            curr_phases,
+            phase_step_min_q7,
+        )
     }
 
     /// Executes Zero-Forward Seek on `slot_idx` by replaying `pframes[..seek_steps]` onto the
@@ -420,8 +424,8 @@ pub trait RamPhaseKvCacheOps {
     /// `(restored_phases, joint_log_prob, r_bar, repulsed_count)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_idx` is out of bounds / unoccupied,
-    /// `seek_steps > pframes.len()`, `qdps_min_step_q7 > 127`, or `contradiction_threshold` is
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `slot_idx` is out of bounds / unoccupied,
+    /// `seek_steps > pframes.len()`, `phase_step_min_q7 > 127`, or `contradiction_threshold` is
     /// non-finite; propagates [`KvKeyframePacket::verify_integrity`] errors on corrupted frames.
     #[inline]
     fn seek_slot_with_pframes(
@@ -429,23 +433,21 @@ pub trait RamPhaseKvCacheOps {
         slot_idx: usize,
         pframes: &[KvMotionDeltaPacket],
         seek_steps: usize,
-        qdps_min_step_q7: u8,
+        phase_step_min_q7: u8,
         contradiction_threshold: f32,
         epoch: u32,
-    ) -> GcsoResult<([gcso_q7_t; MAX_ATTENTION_HEADS], f32, f32, u32)> {
+    ) -> LmnkResult<([PhaseQ7; MAX_ATTENTION_HEADS], f32, f32, u32)> {
         let entries = self.entries_mut();
-        let entry = entries
-            .get_mut(slot_idx)
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        let entry = entries.get_mut(slot_idx).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         if !entry.is_occupied() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         entry.keyframe.verify_integrity()?;
         let (filt_w, clean_lp, repulsed_count) = seek_pframe_chain_words_64(
             &entry.keyframe.anchor_phases,
             pframes,
             seek_steps,
-            qdps_min_step_q7,
+            phase_step_min_q7,
             contradiction_threshold,
         )?;
         let (r_bar, _mean_q7, _kappa_c) = circular_resultant_from_words_64(&filt_w);
@@ -468,15 +470,15 @@ pub trait RamPhaseKvCacheOps {
         slot_idx: usize,
         pframes: &[KvMotionDeltaPacket],
         seek_steps: usize,
-        qdps_min_step_q7: u8,
+        phase_step_min_q7: u8,
         contradiction_threshold: f32,
         epoch: u32,
-    ) -> GcsoResult<GatewayFrame> {
+    ) -> LmnkResult<GatewayFrame> {
         let (restored_phases, _clean_lp, r_bar, _repulsed_count) = self.seek_slot_with_pframes(
             slot_idx,
             pframes,
             seek_steps,
-            qdps_min_step_q7,
+            phase_step_min_q7,
             contradiction_threshold,
             epoch,
         )?;
@@ -522,7 +524,7 @@ impl<const N: usize> RamPhaseKvCache<N> {
         Self {
             slots: [RamPhaseKvEntry {
                 keyframe: KvKeyframePacket {
-                    header: crate::abi::gcso_kv_keyframe_header_t {
+                    header: crate::runtime::storage::KvKeyframeHeader {
                         frame_type: 0,
                         token_index: 0,
                         gop_length: 1,
@@ -589,7 +591,7 @@ pub struct RamPhaseKvGopCache<const N: usize, const P: usize> {
     /// Per-slot ring buffer of 64-byte P-Frame phase-motion deltas.
     pub pframes: [[KvMotionDeltaPacket; P]; N],
     /// Last reconstructed/stored 64-head phase per slot (used to encode incremental P-Frame steps).
-    pub last_phases: [[gcso_q7_t; MAX_ATTENTION_HEADS]; N],
+    pub last_phases: [[PhaseQ7; MAX_ATTENTION_HEADS]; N],
     /// Number of valid P-Frames currently stored in each slot's ring (`<= P`).
     pub pframe_counts: [u8; N],
     /// Next write index in each slot's P-Frame ring (`< P`).
@@ -627,7 +629,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         context_hash: u64,
         token_index: u32,
         anchor_id: u32,
-        phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         circuit: CognitiveTrajectoryLedger,
         activation: CognitiveCircuitActivation,
         epoch: u32,
@@ -661,23 +663,23 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     /// phase state to `curr_phases`, updating the slot's LRU epoch.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_idx >= N`, the slot is unoccupied,
-    /// `P == 0`, or `qdps_min_step_q7 > 127`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `slot_idx >= N`, the slot is unoccupied,
+    /// `P == 0`, or `phase_step_min_q7 > 127`.
     #[inline]
     pub fn append_context_pframe(
         &mut self,
         slot_idx: usize,
-        curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-        qdps_min_step_q7: u8,
+        curr_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+        phase_step_min_q7: u8,
         epoch: u32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         if slot_idx >= N || P == 0 || !self.base.slots[slot_idx].is_occupied() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let delta = encode_pframe_motion_delta_64(
             &self.last_phases[slot_idx],
             curr_phases,
-            qdps_min_step_q7,
+            phase_step_min_q7,
         )?;
         let head = usize::from(self.pframe_heads[slot_idx]) % P;
         self.pframes[slot_idx][head] = delta;
@@ -726,12 +728,12 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     pub fn seek_slot_history(
         &mut self,
         slot_idx: usize,
-        qdps_min_step_q7: u8,
+        phase_step_min_q7: u8,
         contradiction_threshold: f32,
         epoch: u32,
-    ) -> GcsoResult<([gcso_q7_t; MAX_ATTENTION_HEADS], f32, f32, u32)> {
+    ) -> LmnkResult<([PhaseQ7; MAX_ATTENTION_HEADS], f32, f32, u32)> {
         if slot_idx >= N || !self.base.slots[slot_idx].is_occupied() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let count = usize::from(self.pframe_counts[slot_idx]).min(P);
         let mut ordered = [KvMotionDeltaPacket {
@@ -750,7 +752,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
             slot_idx,
             &ordered[..count],
             count,
-            qdps_min_step_q7,
+            phase_step_min_q7,
             contradiction_threshold,
             epoch,
         )
@@ -765,12 +767,12 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     pub fn synthesize_slot_history_gateway_frame(
         &mut self,
         slot_idx: usize,
-        qdps_min_step_q7: u8,
+        phase_step_min_q7: u8,
         contradiction_threshold: f32,
         epoch: u32,
-    ) -> GcsoResult<GatewayFrame> {
+    ) -> LmnkResult<GatewayFrame> {
         let (restored_phases, _clean_lp, r_bar, _repulsed) =
-            self.seek_slot_history(slot_idx, qdps_min_step_q7, contradiction_threshold, epoch)?;
+            self.seek_slot_history(slot_idx, phase_step_min_q7, contradiction_threshold, epoch)?;
         let count = self.slot_pframe_count(slot_idx);
         let entry = &self.base.slots[slot_idx];
         Ok(entry
@@ -793,12 +795,12 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         count
     }
 
-    /// Executes one full autonomous GOP KV-cache step (void gate, $S^{H-1}$ resonance lookup,
+    /// Executes one full autonomous GOP KV-cache step (liminal gate, $S^{H-1}$ resonance lookup,
     /// Zero-Forward Seek replay, cognitive circuit composition, and P-Frame/I-Frame update)
     /// deriving all gating thresholds from `policy` and `frame` invariants.
     ///
     /// # Errors
-    /// Propagates [`GCSO_ERROR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
+    /// Propagates [`LMNK_ERR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
     #[inline]
     pub fn step_with_gateway_autonomous<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
         &mut self,
@@ -809,7 +811,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         activation: CognitiveCircuitActivation,
         policy: &Pol,
         epoch: u32,
-    ) -> GcsoResult<RamPhaseKvStepOutcome> {
+    ) -> LmnkResult<RamPhaseKvStepOutcome> {
         self.step_with_gateway_and_override(
             context_hash,
             token_index,
@@ -826,7 +828,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     /// `override_min_resonance_q7` (when `None`, derives the $2 / \sqrt{H}$ floor from `policy`).
     ///
     /// # Errors
-    /// Propagates [`GCSO_ERROR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
+    /// Propagates [`LMNK_ERR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
     #[inline]
     #[allow(clippy::too_many_arguments)]
     pub fn step_with_gateway_and_override<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
@@ -837,13 +839,13 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
         circuit: &mut CognitiveTrajectoryLedger,
         activation: CognitiveCircuitActivation,
         policy: &Pol,
-        override_min_resonance_q7: Option<gcso_q7_t>,
+        override_min_resonance_q7: Option<PhaseQ7>,
         epoch: u32,
-    ) -> GcsoResult<RamPhaseKvStepOutcome> {
-        let ungrounded_void =
-            context_hash == 0 && (frame.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT) == 0;
-        if ungrounded_void {
-            return Ok(RamPhaseKvStepOutcome::SkippedVoid);
+    ) -> LmnkResult<RamPhaseKvStepOutcome> {
+        let outside_horizon =
+            context_hash == 0 && (frame.lineage_flags & CAUSAL_AXIS_OBJECTIVE_FACT) == 0;
+        if outside_horizon {
+            return Ok(RamPhaseKvStepOutcome::SkippedLiminal);
         }
         let occupied = self.occupied_slot_count();
         let min_resonance_q7 = override_min_resonance_q7.unwrap_or_else(|| {
@@ -855,14 +857,14 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
             min_resonance_q7,
             epoch,
         ) {
-            let qdps_step = frame.qdps_min_step_q7.max(1);
+            let min_step_q7 = frame.phase_step_min_q7.max(1);
             let mut seek_r_bar = 1.0_f32;
             let mut seek_repulsed = 0_u32;
             let mut seek_executed = false;
             if self.slot_pframe_count(slot_idx) > 0 {
                 let (_restored, _lp, r_bar, repulsed) = self.seek_slot_history(
                     slot_idx,
-                    qdps_step,
+                    min_step_q7,
                     policy.kv_contradiction_threshold(),
                     epoch,
                 )?;
@@ -904,7 +906,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
                     epoch,
                 );
             } else {
-                self.append_context_pframe(slot_idx, &frame.phase_deltas, qdps_step, epoch)?;
+                self.append_context_pframe(slot_idx, &frame.phase_deltas, min_step_q7, epoch)?;
             }
             let pframe_count = self.slot_pframe_count(slot_idx);
             return Ok(RamPhaseKvStepOutcome::ResonatedSeeked {
@@ -942,13 +944,13 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RamPhaseKvStepOutcome {
     /// Query carried neither a context fingerprint nor factual grounding (`Liminal`).
-    SkippedVoid,
+    SkippedLiminal,
     /// No existing slot resonated above the autonomous threshold; stored a new I-Frame slot.
     StoredKeyframe {
         /// Allocated slot index.
         slot_idx: usize,
         /// Autonomous or overridden resonance floor applied during lookup.
-        min_resonance_q7: gcso_q7_t,
+        min_resonance_q7: PhaseQ7,
     },
     /// Matched an existing I-Frame slot by exact hash or phase resonance, replayed P-Frames, and appended a delta.
     ResonatedSeeked {
@@ -957,9 +959,9 @@ pub enum RamPhaseKvStepOutcome {
         /// True on exact `context_hash` match.
         exact_hit: bool,
         /// Resonance score (`127` on exact match).
-        resonance_q7: gcso_q7_t,
+        resonance_q7: PhaseQ7,
         /// Autonomous or overridden resonance floor applied during lookup.
-        min_resonance_q7: gcso_q7_t,
+        min_resonance_q7: PhaseQ7,
         /// Total valid P-Frames now in `slot_idx`.
         pframe_count: usize,
         /// Circular resultant concentration $\bar{R}$ from Zero-Forward Seek (`1.0` if no prior P-Frames).
@@ -1030,7 +1032,7 @@ pub struct ResidualSpilloverHorizonSlot<const N: usize> {
     /// Total retractions executed via `on_slide_out`.
     pub retractions: u64,
     /// Staged or computed orthogonal residual phases for the active auxiliary dimension.
-    pub active_spillover_residual_q7: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub active_spillover_residual_q7: [PhaseQ7; MAX_ATTENTION_HEADS],
     /// Most recent context hash associated with the active spillover step.
     pub last_context_hash: u64,
     /// Cache slot index hit on the latest slide-in step (for targeted contradiction penalty).
@@ -1090,7 +1092,7 @@ impl<const N: usize> ResidualSpilloverHorizonSlot<N> {
 
     /// Manually stages an auxiliary 64-head residual vector for miss-path dimension elevation.
     #[inline]
-    pub fn stage_residual_phases(&mut self, phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) {
+    pub fn stage_residual_phases(&mut self, phases: &[PhaseQ7; MAX_ATTENTION_HEADS]) {
         self.active_spillover_residual_q7 = *phases;
         self.has_staged_residual = true;
     }
@@ -1102,7 +1104,7 @@ impl<const N: usize> ResidualSpilloverHorizonSlot<N> {
     pub fn commit_verified_experience(
         &mut self,
         context_hash: u64,
-        residual_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        residual_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         coherence: f32,
         resolved: bool,
     ) -> (bool, u32) {
@@ -1200,11 +1202,11 @@ impl<const N: usize> LatentHorizonSlot for ResidualSpilloverHorizonSlot<N> {
     fn on_slide_in_modulate(
         &mut self,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         _trigger: &HorizonTriggerInput,
     ) {
         if !self.engaged {
-            self.saved_aperture_mask = stack.liminal_layer.active_aperture_mask;
+            self.saved_aperture_mask = stack.liminal.active_aperture_mask;
             self.engaged = true;
         }
         self.epoch = self.epoch.wrapping_add(1);
@@ -1229,7 +1231,7 @@ impl<const N: usize> LatentHorizonSlot for ResidualSpilloverHorizonSlot<N> {
             }
             *frame.phase_words_mut() = frame_w;
             frame.action_mode_flags |= ACTION_MODE_SUBHEAD_ROUTE | ACTION_MODE_RANK1_INJECT;
-            stack.liminal_layer.active_aperture_mask |= 1 << 6;
+            stack.liminal.active_aperture_mask |= 1 << 6;
             self.last_hit_slot = Some(slot_idx);
             self.cache_hits = self.cache_hits.saturating_add(1);
             return;
@@ -1253,7 +1255,7 @@ impl<const N: usize> LatentHorizonSlot for ResidualSpilloverHorizonSlot<N> {
         }
         *frame.phase_words_mut() = frame_w;
         frame.action_mode_flags |= ACTION_MODE_SUBHEAD_ROUTE;
-        stack.liminal_layer.active_aperture_mask |= 1 << 6;
+        stack.liminal.active_aperture_mask |= 1 << 6;
         self.has_staged_residual = false;
         self.spillover_modulations = self.spillover_modulations.saturating_add(1);
     }
@@ -1262,11 +1264,11 @@ impl<const N: usize> LatentHorizonSlot for ResidualSpilloverHorizonSlot<N> {
     fn on_slide_out(
         &mut self,
         _frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         _trigger: &HorizonTriggerInput,
     ) {
         let added = BitCut32::split(1 << 6, self.saved_aperture_mask).outside;
-        stack.liminal_layer.active_aperture_mask &= !added;
+        stack.liminal.active_aperture_mask &= !added;
         self.engaged = false;
         self.last_hit_slot = None;
         self.has_staged_residual = false;
@@ -1279,8 +1281,8 @@ impl<const N: usize> HorizonEscalationProvider for ResidualSpilloverHorizonSlot<
     fn try_escalate_horizon(
         &mut self,
         req: &HorizonEscalationRequest,
-        slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<Option<f32>> {
+        slot_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+    ) -> LmnkResult<Option<f32>> {
         use PheromoneDensityOps;
         if !req.trigger.is_destabilized() {
             return Ok(None);

@@ -250,29 +250,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_default_c_abi_smoke() -> Result<(), Box<dyn std::error::Error>> {
-    println!("LiminiKa GCSO Core Engine v{}", env!("CARGO_PKG_VERSION"));
+    println!("LiminiKa Core Engine v{}", env!("CARGO_PKG_VERSION"));
 
-    // SAFETY: `gcso_abi_get_version_string` returns a static NUL-terminated C string literal.
+    // SAFETY: `lmnk_abi_version_string` returns a static NUL-terminated C string literal.
     let version_str = unsafe {
-        let ptr = liminika_core::abi::gcso_abi_get_version_string();
+        let ptr = liminika_core::abi::lmnk_abi_version_string();
         std::ffi::CStr::from_ptr(ptr).to_str()?
     };
     println!("Loaded C-ABI Engine Version: {}", version_str);
 
-    let mut config = liminika_core::abi::gcso_config_t::default();
-    // SAFETY: `&mut config` points to a valid, uniquely borrowed `gcso_config_t`.
-    let status = unsafe { liminika_core::abi::gcso_config_init_default(&mut config) };
-    assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
+    let mut config = liminika_core::abi::lmnk_config_t::default();
+    // SAFETY: `&mut config` points to a valid, uniquely borrowed `lmnk_config_t`.
+    let status = unsafe { liminika_core::abi::lmnk_config_init_default(&mut config) };
+    assert_eq!(status, liminika_core::abi::LMNK_OK);
 
-    let mut ctx_handle: liminika_core::abi::GcsoContextHandle = std::ptr::null_mut();
+    let mut ctx_handle: liminika_core::abi::LmnkContextHandle = std::ptr::null_mut();
     // SAFETY: `&config` and `&mut ctx_handle` are valid, aligned stack references.
-    let status = unsafe { liminika_core::abi::gcso_context_create(&config, &mut ctx_handle) };
-    assert_eq!(status, liminika_core::abi::GCSO_SUCCESS);
+    let status = unsafe { liminika_core::abi::lmnk_context_create(&config, &mut ctx_handle) };
+    assert_eq!(status, liminika_core::abi::LMNK_OK);
 
     println!("Context initialized successfully. Ready for token stepping.");
 
-    // SAFETY: `ctx_handle` was initialized by `gcso_context_create` and is destroyed once.
-    unsafe { liminika_core::abi::gcso_context_destroy(ctx_handle) };
+    // SAFETY: `ctx_handle` was initialized by `lmnk_context_create` and is destroyed once.
+    unsafe { liminika_core::abi::lmnk_context_destroy(ctx_handle) };
     Ok(())
 }
 

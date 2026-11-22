@@ -368,7 +368,7 @@ pub trait AttractorTrajectoryEvaluator {
 /// undigested Known Unknowns ($O \setminus S$), exit entropy spikes, or Guard traps.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReflectionGateInput {
-    /// $4p(1-p)$ boundary sensitivity in Q0.7 (`0..=127`) from [`liminika_core::liminal::EpistemicPartition`].
+    /// $4p(1-p)$ boundary sensitivity in Q0.7 (`0..=127`) from [`liminika_core::liminal::LacunaPartition8`].
     pub boundary_sensitivity_q7: u8,
     /// True when the query contains an undigested Known Unknown ($O \setminus S$) exterior pointer.
     pub has_undigested_known_unknown: bool,

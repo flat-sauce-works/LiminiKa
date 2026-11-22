@@ -4,24 +4,24 @@
 //! Training-free LoRA-to-Phase SVD projection (`project_lora`, `project_lora_with_block_scales`).
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut16, AlignedSliceMut32};
-use crate::foundation::pod::gcso_rank1_residual_descriptor_t;
+use crate::foundation::pod::Rank1Descriptor;
 use crate::foundation::scalar_math::{
     branchless_atan2_to_q7_fast, branchless_flush_subnormal_f32, branchless_sqrt_f32,
 };
 use crate::foundation::simd_stats::{
     atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, sum_sq_f32_simd8,
 };
-use crate::liminal::{branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT};
+use crate::liminal::{branchless_select_f32, LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT};
 
 // ===================================================================
-// Training-Free LoRA-to-Phase SVD Projection (L2P-SVD)
+// Training-Free LoRA-to-Phase SVD Projection (LoRA-to-Phase SVD)
 // ===================================================================
 
 /// Projects fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}, W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$)
 /// via first-order SVD approximation into phase profiles and Rank-1 residual vectors (Section 5.2).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
 /// `dim_out` is odd, matrix slices are smaller than `rank * dim_in` / `dim_out * rank`,
 /// or `phase_profile_out` is empty.
 #[inline]
@@ -31,24 +31,18 @@ pub fn project_lora(
     rank: usize,
     dim_in: usize,
     dim_out: usize,
-    rank1_out: &mut gcso_rank1_residual_descriptor_t,
-    phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
-) -> GcsoResult<()> {
+    rank1_out: &mut Rank1Descriptor,
+    phase_profile_out: &mut AlignedSliceMut16<'_, PhaseQ7>,
+) -> LmnkResult<()> {
     if rank == 0
         || dim_in == 0
         || dim_out == 0
         || (dim_out & 1) != 0
-        || lora_a.len()
-            < rank
-                .checked_mul(dim_in)
-                .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?
-        || lora_b.len()
-            < dim_out
-                .checked_mul(rank)
-                .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?
+        || lora_a.len() < rank.checked_mul(dim_in).ok_or(LMNK_ERR_INVALID_ARGUMENT)?
+        || lora_b.len() < dim_out.checked_mul(rank).ok_or(LMNK_ERR_INVALID_ARGUMENT)?
         || phase_profile_out.is_empty()
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let b_slice = lora_b.as_slice();
@@ -101,7 +95,7 @@ pub fn project_lora(
         let w_bytes = word.to_le_bytes();
         let mut lane_out = 0usize;
         while lane_out < 8 {
-            out_phases[h_base + lane_out] = w_bytes[lane_out] as gcso_q7_t;
+            out_phases[h_base + lane_out] = w_bytes[lane_out] as PhaseQ7;
             lane_out += 1;
         }
         cell += 1;
@@ -121,7 +115,7 @@ pub fn project_lora(
 /// profile, and an **Isotropic Block-Diagonal Scaling** vector $\mathbf{D}$ (Theorem 1.1 & Section 5.2).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
 /// `dim_out` is odd, matrix slices are too small, `phase_profile_out` is empty, or
 /// `block_scales_out.len() < dim_out / 2`.
 #[inline]
@@ -131,13 +125,13 @@ pub fn project_lora_with_block_scales(
     rank: usize,
     dim_in: usize,
     dim_out: usize,
-    rank1_out: &mut gcso_rank1_residual_descriptor_t,
-    phase_profile_out: &mut AlignedSliceMut16<'_, gcso_q7_t>,
+    rank1_out: &mut Rank1Descriptor,
+    phase_profile_out: &mut AlignedSliceMut16<'_, PhaseQ7>,
     block_scales_out: &mut AlignedSliceMut32<'_, f32>,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let num_pairs = dim_out / 2;
     if num_pairs == 0 || block_scales_out.len() < num_pairs {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     project_lora(
         lora_a,

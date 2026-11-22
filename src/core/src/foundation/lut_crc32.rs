@@ -13,7 +13,7 @@ use crate::foundation::scalar_math::{
     VON_MISES_KAPPA_AT_MAX_R,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u8, branchless_select_usize, gcso_q7_t,
+    branchless_select_f32, branchless_select_u8, branchless_select_usize, PhaseQ7,
     Q7_PHASE_SCALE_RAD,
 };
 
@@ -92,7 +92,7 @@ pub(crate) struct AlignedLut16x256<T>(pub [[T; 256]; 16]);
 
 /// 64B-aligned 16KB Slice-by-16 IEEE 802.3 CRC32 lookup table (`0xEDB8_8320` reflected polynomial)
 /// enabling 16-byte (`2 x u64`) parallel XOR-table folding per step (`16x` fewer serial dependency
-/// steps than byte-serial lookup and `2x` fewer than Slice-by-8 on `.gcso` mapped-storage containers and
+/// steps than byte-serial lookup and `2x` fewer than Slice-by-8 on `.lmnk` mapped-storage containers and
 /// 128-byte `CrystallizedAttractorRecord` blocks).
 pub(crate) const CRC32_IEEE_SLICE16_LUT: AlignedLut16x256<u32> = {
     let mut lut = [[0u32; 256]; 16];
@@ -143,7 +143,7 @@ pub(crate) const Q7_FULL_SIN_LUT: AlignedLut256<f32> = {
     let mut lut = [0.0_f32; 256];
     let mut b = 0usize;
     while b < 256 {
-        let phase_q7 = (b as u8) as gcso_q7_t;
+        let phase_q7 = (b as u8) as PhaseQ7;
         let u = branchless_q7_abs_u8(phase_q7);
         let gt_64 = u > 64;
         let k = branchless_select_u8(gt_64, 128u8.wrapping_sub(u), u) as usize;
@@ -159,7 +159,7 @@ pub(crate) const Q7_FULL_COS_LUT: AlignedLut256<f32> = {
     let mut lut = [1.0_f32; 256];
     let mut b = 0usize;
     while b < 256 {
-        let phase_q7 = (b as u8) as gcso_q7_t;
+        let phase_q7 = (b as u8) as PhaseQ7;
         let u = branchless_q7_abs_u8(phase_q7);
         let gt_64 = u > 64;
         let k = branchless_select_u8(gt_64, 128u8.wrapping_sub(u), u) as usize;
@@ -272,7 +272,7 @@ pub(crate) const Q7_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256: AlignedLut256<(f32, f32)
     let mut lut = [(0.0_f32, 1.0_f32); 256];
     let mut b = 0usize;
     while b < 256 {
-        let phase_q7 = (b as u8) as gcso_q7_t;
+        let phase_q7 = (b as u8) as PhaseQ7;
         let u = branchless_q7_abs_u8(phase_q7);
         let safe_theta = DEFAULT_PHASE_CLAMP_MAX_RAD
             * tanh_lut_eval_nonneg((u as f32) * DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE);
@@ -781,7 +781,7 @@ pub(crate) const fn crc32_uniform56_pad8_zero_seed_raw(w0: u64) -> u32 {
 
 /// 64B-aligned 1KB GF(2)-linear lookup table mapping any uniform byte `b in 0..=255` to the exact
 /// unseeded 64-byte IEEE 802.3 CRC32 operator over 56 uniform bytes followed by 8 zero bytes
-/// (`[b; 56] ++ [0; 8]`, matching `gcso_pointer_trail_t` Block 1 `offset 64..128` in `1` lookup instead of `9`).
+/// (`[b; 56] ++ [0; 8]`).
 pub(crate) const CRC32_UNIFORM56_PAD8_ZERO_SEED_LUT_256: AlignedLut256<u32> = {
     let mut basis = [0u32; 8];
     let mut k = 0usize;
@@ -808,7 +808,7 @@ pub(crate) const CRC32_UNIFORM56_PAD8_ZERO_SEED_REF: &[u32; 256] =
 /// `seed == 0` via 4-way independent 16B Slice-by-16 evaluation (`p0, p1, p2, p3` in parallel)
 /// followed by GF(2) operator folding (`crc32_step_l3(p0) ^ crc32_step_l2(p1) ^ crc32_slice16_dep_lo0(p2) ^ p3`),
 /// reducing serial L1D load dependency depth to 2 stages while fast-pathing byte/word-uniform blocks
-/// and `gcso_pointer_trail_t` Block 1 (`56B` uniform phase delta + `8B` zero reserved padding).
+/// and 56-byte uniform prefixes followed by 8 zero tail bytes.
 /// Evaluates the zero-seed IEEE 802.3 CRC32 of a 64-byte block `[w0, w0, w0, w0, w0, w0, w0, w7]`
 /// whose first 7 64-bit words are already known to equal `w0` (`0` duplicate uniformity checks).
 #[inline(always)]

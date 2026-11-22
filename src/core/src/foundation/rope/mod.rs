@@ -3,7 +3,7 @@
 
 //! Lv.1 Capability 1: RoPE & Inline Tensor Modulation ([`PhaseSteering`] trait plus pure
 //! sub-head routing, Rank-1 residual, and visual attention steering kernels) for the
-//! Geometric Cellular Sheaf Orchestrator (GCSO).
+//! LiminiKa.
 //!
 //! # Key Optimizations & Architectural Guarantees
 //! - **`PhaseClamp` Upper-Quarter ($d_{\mathrm{head}}/4$) Low-Frequency Slicing**: All `PhaseClamp` soft-clamped
@@ -53,8 +53,7 @@ use crate::foundation::lut_crc32::{
     SWAR_SPLAT_BYTE_64,
 };
 use crate::foundation::pod::{
-    gcso_rank1_residual_descriptor_t, gcso_subhead_config_t, gcso_tagged_ptr_t,
-    unpack_action_mode_from_tag, ACTION_MODE_PHASE_STEER,
+    unpack_action_mode_from_tag, Rank1Descriptor, SubheadConfig, TaggedPtr, ACTION_MODE_PHASE_STEER,
 };
 use crate::foundation::scalar_math::{
     branchless_clamp_f32, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32,
@@ -77,9 +76,8 @@ use crate::foundation::swar_simd::{
     swar_q7_scale_u7_x8, swar_u8_sum_x8,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_q7_t, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY,
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    branchless_select_f32, LmnkResult, PhaseQ7, LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY,
+    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
 };
 use core::f32::consts::FRAC_PI_2;
 use core::mem::{align_of, size_of};
@@ -106,10 +104,10 @@ pub(crate) mod visual;
 pub use visual::*;
 
 const _: () = {
-    assert!(size_of::<gcso_subhead_config_t>() == 32);
-    assert!(align_of::<gcso_subhead_config_t>() == 16);
-    assert!(size_of::<gcso_rank1_residual_descriptor_t>() == 64);
-    assert!(align_of::<gcso_rank1_residual_descriptor_t>() == 32);
+    assert!(size_of::<SubheadConfig>() == 32);
+    assert!(align_of::<SubheadConfig>() == 16);
+    assert!(size_of::<Rank1Descriptor>() == 64);
+    assert!(align_of::<Rank1Descriptor>() == 32);
     assert!(NUM_SWARM_CELLS * HEADS_PER_CELL == MAX_ATTENTION_HEADS);
 };
 

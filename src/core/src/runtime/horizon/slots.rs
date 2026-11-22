@@ -5,9 +5,9 @@
 //! [`HorizonEscalationProvider`], dwell anti-chattering state, and [`StigmergicSubstrate`] escalation.
 
 use crate::liminal::{
-    gcso_q7_t, GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
-use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::context::CoreStateStack;
 use crate::runtime::gateway::{GatewayFrame, ROOT_CAUSE_NOMINAL};
 use crate::stigmergy::{
     StigmergicSubstrate, WorkbenchLanePlacement, WorkbenchSlotSpec, WORKBENCH_LANE_FLAG_PINNED,
@@ -148,7 +148,7 @@ pub trait LatentHorizonSlot {
     fn on_slide_in_modulate(
         &mut self,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         trigger: &HorizonTriggerInput,
     );
 
@@ -157,7 +157,7 @@ pub trait LatentHorizonSlot {
     fn on_slide_out(
         &mut self,
         _frame: &mut GatewayFrame,
-        _stack: &mut AutonomousCoreLayerStack,
+        _stack: &mut CoreStateStack,
         _trigger: &HorizonTriggerInput,
     ) {
     }
@@ -170,7 +170,7 @@ pub trait LatentHorizonSlot {
         active_mask: &mut u32,
         trigger: &HorizonTriggerInput,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
     ) -> (u32, u32) {
         let slot_bit = self.horizon_slot_mask();
         if slot_bit == 0 {
@@ -232,7 +232,7 @@ impl<T: LatentHorizonSlot + ?Sized> LatentHorizonSlot for &mut T {
     fn on_slide_in_modulate(
         &mut self,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         trigger: &HorizonTriggerInput,
     ) {
         (**self).on_slide_in_modulate(frame, stack, trigger);
@@ -242,7 +242,7 @@ impl<T: LatentHorizonSlot + ?Sized> LatentHorizonSlot for &mut T {
     fn on_slide_out(
         &mut self,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         trigger: &HorizonTriggerInput,
     ) {
         (**self).on_slide_out(frame, stack, trigger);
@@ -254,7 +254,7 @@ impl<T: LatentHorizonSlot + ?Sized> LatentHorizonSlot for &mut T {
         active_mask: &mut u32,
         trigger: &HorizonTriggerInput,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
     ) -> (u32, u32) {
         (**self).apply_horizon_slot(active_mask, trigger, frame, stack)
     }
@@ -280,7 +280,7 @@ impl LatentHorizonSlot for () {
     fn on_slide_in_modulate(
         &mut self,
         _frame: &mut GatewayFrame,
-        _stack: &mut AutonomousCoreLayerStack,
+        _stack: &mut CoreStateStack,
         _trigger: &HorizonTriggerInput,
     ) {
     }
@@ -306,7 +306,7 @@ impl<A: LatentHorizonSlot, B: LatentHorizonSlot> LatentHorizonSlot for (A, B) {
     fn on_slide_in_modulate(
         &mut self,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         trigger: &HorizonTriggerInput,
     ) {
         if self.0.should_slide_in(trigger) {
@@ -321,7 +321,7 @@ impl<A: LatentHorizonSlot, B: LatentHorizonSlot> LatentHorizonSlot for (A, B) {
     fn on_slide_out(
         &mut self,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         trigger: &HorizonTriggerInput,
     ) {
         self.0.on_slide_out(frame, stack, trigger);
@@ -334,7 +334,7 @@ impl<A: LatentHorizonSlot, B: LatentHorizonSlot> LatentHorizonSlot for (A, B) {
         active_mask: &mut u32,
         trigger: &HorizonTriggerInput,
         frame: &mut GatewayFrame,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
     ) -> (u32, u32) {
         let (in_a, out_a) = self
             .0
@@ -355,7 +355,7 @@ pub fn apply_latent_horizon_slots<H: LatentHorizonSlot + ?Sized>(
     active_mask: &mut u32,
     trigger: &HorizonTriggerInput,
     frame: &mut GatewayFrame,
-    stack: &mut AutonomousCoreLayerStack,
+    stack: &mut CoreStateStack,
 ) -> (u32, u32) {
     slots.apply_horizon_slot(active_mask, trigger, frame, stack)
 }
@@ -393,19 +393,19 @@ impl Default for HorizonEscalationRequest {
 }
 
 /// Cold-path boundary trait allowing the orchestrator to pull external phases (e.g. from NVMe
-/// `.gcso` `MappedStorage` containers or `std` corpus recall) into an anonymous workbench lane when local
+/// `.lmnk` `MappedStorage` containers or `std` corpus recall) into an anonymous workbench lane when local
 /// Hot-Path resources cannot resolve destabilization.
 pub trait HorizonEscalationProvider {
     /// Attempts to populate `slot_phase_out` with external phases matching `req`, returning
     /// `Ok(Some(lane_weight))` when new phases were pulled in or `Ok(None)` when no swap-in occurred.
     ///
     /// # Errors
-    /// Returns a [`GcsoResult`] error code if external storage or recall fails.
+    /// Returns a [`LmnkResult`] error code if external storage or recall fails.
     fn try_escalate_horizon(
         &mut self,
         req: &HorizonEscalationRequest,
-        slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<Option<f32>>;
+        slot_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+    ) -> LmnkResult<Option<f32>>;
 }
 
 impl HorizonEscalationProvider for () {
@@ -413,8 +413,8 @@ impl HorizonEscalationProvider for () {
     fn try_escalate_horizon(
         &mut self,
         _req: &HorizonEscalationRequest,
-        _slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    ) -> GcsoResult<Option<f32>> {
+        _slot_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+    ) -> LmnkResult<Option<f32>> {
         Ok(None)
     }
 }
@@ -425,8 +425,8 @@ impl StigmergicSubstrate {
     /// `active_lane_inout`, or cleanly releases that lane when `req.trigger.can_retract()` holds.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `req.placement` specifies an explicit lane
-    /// `>= MAX_ATTRACTOR_DOMAINS`, [`crate::liminal::GCSO_ERROR_ACTION_HUB_FULL`] if all lanes are pinned during
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `req.placement` specifies an explicit lane
+    /// `>= MAX_ATTRACTOR_DOMAINS`, [`crate::liminal::LMNK_ERR_SUBSTRATE_FULL`] if all lanes are pinned during
     /// `AutoFree` allocation, or propagates any error returned by `escalation_provider`.
     #[inline]
     pub fn apply_horizon_escalation<E: HorizonEscalationProvider + ?Sized>(
@@ -434,10 +434,10 @@ impl StigmergicSubstrate {
         req: &HorizonEscalationRequest,
         active_lane_inout: &mut Option<u8>,
         escalation_provider: &mut E,
-    ) -> GcsoResult<bool> {
+    ) -> LmnkResult<bool> {
         if let WorkbenchLanePlacement::Explicit { lane, .. } = req.placement {
             if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
         }
         if req.trigger.is_destabilized() {

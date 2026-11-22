@@ -17,16 +17,16 @@ use core::ptr::NonNull;
 
 use crate::foundation::{raw_regions_overlap_or_same_zst, Pod, PtrAlignCheck};
 use crate::liminal::{
-    GcsoResult, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_NULL_POINTER,
+    LmnkResult, LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER,
 };
 
 #[inline(always)]
-fn validate_non_null_aligned_ptr<T>(raw_ptr: *mut T, align_mask: usize) -> GcsoResult<NonNull<T>> {
+fn validate_non_null_aligned_ptr<T>(raw_ptr: *mut T, align_mask: usize) -> LmnkResult<NonNull<T>> {
     if raw_ptr.is_null() {
-        return Err(GCSO_ERROR_NULL_POINTER);
+        return Err(LMNK_ERR_NULL_POINTER);
     }
     if ((raw_ptr as usize) & align_mask) != 0 {
-        return Err(GCSO_ERROR_MISALIGNED_POINTER);
+        return Err(LMNK_ERR_ALIGNMENT);
     }
     // SAFETY: `raw_ptr` was verified non-null and aligned to `align_mask` immediately above.
     Ok(unsafe { NonNull::new_unchecked(raw_ptr) })
@@ -76,10 +76,10 @@ impl<'a, T> FfiHandleRef<'a, T> {
     /// mutated for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if `raw_ptr` is null.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `raw_ptr` violates `align_of::<T>()`.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if `raw_ptr` is null.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` violates `align_of::<T>()`.
     #[inline(always)]
-    pub unsafe fn from_raw(raw_ptr: *const T) -> GcsoResult<Self> {
+    pub unsafe fn from_raw(raw_ptr: *const T) -> LmnkResult<Self> {
         let ptr = validate_non_null_aligned_ptr(raw_ptr.cast_mut(), align_of::<T>() - 1)?;
         Ok(Self {
             ptr,
@@ -94,10 +94,10 @@ impl<'a, T> FfiHandleRef<'a, T> {
     /// Caller must ensure `raw_ptr` points to a valid, initialized instance of `T` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if `raw_ptr` is null.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `raw_ptr` is not `ALIGN`-byte aligned.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if `raw_ptr` is null.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` is not `ALIGN`-byte aligned.
     #[inline(always)]
-    pub unsafe fn from_raw_aligned<const ALIGN: usize>(raw_ptr: *const T) -> GcsoResult<Self> {
+    pub unsafe fn from_raw_aligned<const ALIGN: usize>(raw_ptr: *const T) -> LmnkResult<Self> {
         let () = PtrAlignCheck::<T, ALIGN>::VALID;
         let ptr = validate_non_null_aligned_ptr(raw_ptr.cast_mut(), ALIGN - 1)?;
         Ok(Self {
@@ -113,9 +113,9 @@ impl<'a, T> FfiHandleRef<'a, T> {
     /// If non-null, caller must ensure `raw_ptr` points to a valid instance of `T` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `raw_ptr` is non-null and violates `align_of::<T>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` is non-null and violates `align_of::<T>()`.
     #[inline(always)]
-    pub unsafe fn from_raw_opt(raw_ptr: *const T) -> GcsoResult<Option<Self>> {
+    pub unsafe fn from_raw_opt(raw_ptr: *const T) -> LmnkResult<Option<Self>> {
         if raw_ptr.is_null() {
             Ok(None)
         } else {
@@ -124,27 +124,27 @@ impl<'a, T> FfiHandleRef<'a, T> {
         }
     }
 
-    /// Enforces `GCSO_RESTRICT` non-aliasing invariant against a mutable `FfiHandleMut`.
+    /// Enforces `LMNK_RESTRICT` non-aliasing invariant against a mutable `FfiHandleMut`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if the two handles overlap in memory.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if the two handles overlap in memory.
     #[inline(always)]
-    pub fn ensure_disjoint<U>(&self, other: &FfiHandleMut<'_, U>) -> GcsoResult<()> {
+    pub fn ensure_disjoint<U>(&self, other: &FfiHandleMut<'_, U>) -> LmnkResult<()> {
         other.ensure_disjoint_ref(self)
     }
 
     /// Safely reinterprets `self` as a reference handle to another `Pod` type `U` of equal or smaller size.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `size_of::<U>() == 0` or `size_of::<U>() > size_of::<T>()`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the pointer violates `align_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `size_of::<U>() == 0` or `size_of::<U>() > size_of::<T>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the pointer violates `align_of::<U>()`.
     #[inline(always)]
-    pub fn try_cast<U: Pod>(&self) -> GcsoResult<FfiHandleRef<'a, U>>
+    pub fn try_cast<U: Pod>(&self) -> LmnkResult<FfiHandleRef<'a, U>>
     where
         T: Pod,
     {
         if U::IS_ZST || size_of::<U>() > size_of::<T>() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks `align_of::<U>()`.
         unsafe { FfiHandleRef::<U>::from_raw(self.ptr.as_ptr().cast::<U>()) }
@@ -234,10 +234,10 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// Caller must ensure `raw_ptr` points to a valid, uniquely borrowed instance of `T` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if `raw_ptr` is null.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `raw_ptr` violates `align_of::<T>()`.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if `raw_ptr` is null.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` violates `align_of::<T>()`.
     #[inline(always)]
-    pub unsafe fn from_raw(raw_ptr: *mut T) -> GcsoResult<Self> {
+    pub unsafe fn from_raw(raw_ptr: *mut T) -> LmnkResult<Self> {
         let ptr = validate_non_null_aligned_ptr(raw_ptr, align_of::<T>() - 1)?;
         Ok(Self {
             ptr,
@@ -252,10 +252,10 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// Caller must ensure `raw_ptr` points to a valid, uniquely borrowed instance of `T` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if `raw_ptr` is null.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `raw_ptr` is not `ALIGN`-byte aligned.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if `raw_ptr` is null.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` is not `ALIGN`-byte aligned.
     #[inline(always)]
-    pub unsafe fn from_raw_aligned<const ALIGN: usize>(raw_ptr: *mut T) -> GcsoResult<Self> {
+    pub unsafe fn from_raw_aligned<const ALIGN: usize>(raw_ptr: *mut T) -> LmnkResult<Self> {
         let () = PtrAlignCheck::<T, ALIGN>::VALID;
         let ptr = validate_non_null_aligned_ptr(raw_ptr, ALIGN - 1)?;
         Ok(Self {
@@ -271,9 +271,9 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// If non-null, caller must ensure `raw_ptr` points to a valid, uniquely borrowed instance of `T` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `raw_ptr` is non-null and violates `align_of::<T>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` is non-null and violates `align_of::<T>()`.
     #[inline(always)]
-    pub unsafe fn from_raw_opt(raw_ptr: *mut T) -> GcsoResult<Option<Self>> {
+    pub unsafe fn from_raw_opt(raw_ptr: *mut T) -> LmnkResult<Option<Self>> {
         if raw_ptr.is_null() {
             Ok(None)
         } else {
@@ -282,20 +282,20 @@ impl<'a, T> FfiHandleMut<'a, T> {
         }
     }
 
-    /// Validates two mutable FFI pointers and enforces `GCSO_RESTRICT` non-overlapping memory ranges.
+    /// Validates two mutable FFI pointers and enforces `LMNK_RESTRICT` non-overlapping memory ranges.
     ///
     /// # Safety
     /// Caller must ensure `ptr_a` and `ptr_b` point to valid initialized instances of `T` and `U` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if either pointer is null.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if either pointer is misaligned.
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if their memory footprints overlap.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if either pointer is null.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if either pointer is misaligned.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if their memory footprints overlap.
     #[inline(always)]
     pub unsafe fn from_raw_disjoint_pair<U>(
         ptr_a: *mut T,
         ptr_b: *mut U,
-    ) -> GcsoResult<(Self, FfiHandleMut<'a, U>)> {
+    ) -> LmnkResult<(Self, FfiHandleMut<'a, U>)> {
         // SAFETY: Validated for non-nullness, alignment, and pairwise disjointness before returning.
         let handle_a = unsafe { Self::from_raw(ptr_a)? };
         // SAFETY: Validated for non-nullness and alignment, then checked against `handle_a` below.
@@ -304,21 +304,21 @@ impl<'a, T> FfiHandleMut<'a, T> {
         Ok((handle_a, handle_b))
     }
 
-    /// Validates three mutable FFI pointers and enforces pairwise `GCSO_RESTRICT` non-overlapping memory ranges.
+    /// Validates three mutable FFI pointers and enforces pairwise `LMNK_RESTRICT` non-overlapping memory ranges.
     ///
     /// # Safety
     /// Caller must ensure `ptr_a`, `ptr_b`, and `ptr_c` point to valid initialized instances for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if any pointer is null.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if any pointer is misaligned.
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any two memory footprints overlap.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if any pointer is null.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if any pointer is misaligned.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any two memory footprints overlap.
     #[inline(always)]
     pub unsafe fn from_raw_disjoint_triple<U, V>(
         ptr_a: *mut T,
         ptr_b: *mut U,
         ptr_c: *mut V,
-    ) -> GcsoResult<(Self, FfiHandleMut<'a, U>, FfiHandleMut<'a, V>)> {
+    ) -> LmnkResult<(Self, FfiHandleMut<'a, U>, FfiHandleMut<'a, V>)> {
         // SAFETY: Validated for non-nullness, alignment, and pairwise disjointness before returning.
         let handle_a = unsafe { Self::from_raw(ptr_a)? };
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and `align_of::<U>()` alignment;
@@ -345,32 +345,32 @@ impl<'a, T> FfiHandleMut<'a, T> {
         )
     }
 
-    /// Enforces `GCSO_RESTRICT` non-aliasing invariant against another mutable FFI handle.
+    /// Enforces `LMNK_RESTRICT` non-aliasing invariant against another mutable FFI handle.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if the two handles overlap in memory.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if the two handles overlap in memory.
     #[inline(always)]
-    pub fn ensure_disjoint<U>(&self, other: &FfiHandleMut<'_, U>) -> GcsoResult<()> {
+    pub fn ensure_disjoint<U>(&self, other: &FfiHandleMut<'_, U>) -> LmnkResult<()> {
         if self.overlaps(other) {
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
+            Err(LMNK_ERR_INVALID_ARGUMENT)
         } else {
             Ok(())
         }
     }
 
-    /// Enforces `GCSO_RESTRICT` non-aliasing invariant against an immutable `FfiHandleRef`.
+    /// Enforces `LMNK_RESTRICT` non-aliasing invariant against an immutable `FfiHandleRef`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if the two handles overlap in memory.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if the two handles overlap in memory.
     #[inline(always)]
-    pub fn ensure_disjoint_ref<U>(&self, other: &FfiHandleRef<'_, U>) -> GcsoResult<()> {
+    pub fn ensure_disjoint_ref<U>(&self, other: &FfiHandleRef<'_, U>) -> LmnkResult<()> {
         if raw_regions_overlap_or_same_zst(
             self.ptr.as_ptr() as usize,
             size_of::<T>(),
             other.as_ptr() as usize,
             size_of::<U>(),
         ) {
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
+            Err(LMNK_ERR_INVALID_ARGUMENT)
         } else {
             Ok(())
         }
@@ -379,15 +379,15 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// Safely reinterprets `self` as a mutable handle to another `Pod` type `U` of equal or smaller size.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `size_of::<U>() == 0` or `size_of::<U>() > size_of::<T>()`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the pointer violates `align_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `size_of::<U>() == 0` or `size_of::<U>() > size_of::<T>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the pointer violates `align_of::<U>()`.
     #[inline(always)]
-    pub fn try_cast_mut<U: Pod>(&mut self) -> GcsoResult<FfiHandleMut<'_, U>>
+    pub fn try_cast_mut<U: Pod>(&mut self) -> LmnkResult<FfiHandleMut<'_, U>>
     where
         T: Pod,
     {
         if U::IS_ZST || size_of::<U>() > size_of::<T>() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks `align_of::<U>()`.
         unsafe { FfiHandleMut::<U>::from_raw(self.ptr.as_ptr().cast::<U>()) }
@@ -481,3 +481,53 @@ impl<'a, T> AsMut<T> for FfiHandleMut<'a, T> {
         Self::as_mut(self)
     }
 }
+
+// ===================================================================
+// Strongly-Typed Opaque Handles (v0.2.0 `0x0000_0200`)
+// ===================================================================
+
+macro_rules! define_opaque_handles {
+    ($(($opaque:ident, $handle:ident, $c_alias:ident, $doc:expr)),* $(,)?) => {
+        $(
+            #[doc = $doc]
+            #[repr(C)]
+            pub struct $opaque {
+                _private: [u8; 0],
+            }
+
+            #[doc = $doc]
+            pub type $handle = *mut $opaque;
+
+            #[doc = $doc]
+            #[allow(non_camel_case_types)]
+            pub type $c_alias = $handle;
+        )*
+    };
+}
+
+define_opaque_handles!(
+    (
+        LmnkContextOpaque,
+        LmnkContextHandle,
+        lmnk_context_handle_t,
+        "Opaque LiminiKa runtime context handle (`lmnk_context_handle_t`)."
+    ),
+    (
+        LmnkSubstrateOpaque,
+        LmnkSubstrateHandle,
+        lmnk_substrate_handle_t,
+        "Opaque LiminiKa stigmergic substrate handle (`lmnk_substrate_handle_t`)."
+    ),
+    (
+        LmnkEntropyControllerOpaque,
+        LmnkEntropyControllerHandle,
+        lmnk_entropy_controller_handle_t,
+        "Opaque LiminiKa entropy controller handle (`lmnk_entropy_controller_handle_t`)."
+    ),
+    (
+        LmnkPhaseSteeringOpaque,
+        LmnkPhaseSteeringHandle,
+        lmnk_phase_steering_handle_t,
+        "Opaque LiminiKa RoPE phase-steering engine handle (`lmnk_phase_steering_handle_t`)."
+    ),
+);

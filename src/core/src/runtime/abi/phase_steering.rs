@@ -1,45 +1,46 @@
 // name: src/core/src/runtime/abi/phase_steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Phase Steering (DPSR), QDPS, 2-Origin Gateway, sub-head router routing, and Residual Adapter (Rank-1 residual) FFI.
+//! Phase Steering (PhaseSteering), PhaseStepFilter, 2-Origin Gateway, sub-head router routing, and Residual Adapter (Rank-1 residual) FFI.
 
 use super::*;
+use crate::runtime::gateway::GatewayPhaseSteeringExt;
 
 // ===================================================================
-// 4. DPSR, QDPS, 2-Origin Gateway, sub-head router & Rank-1 residual Interface
+// 4. PhaseSteering, PhaseStepFilter, 2-Origin Gateway, sub-head router & Rank-1 residual Interface
 // ===================================================================
 
-/// Creates a DPSR phase steering kernel instance.
+/// Creates a PhaseSteering phase steering kernel instance.
 ///
 /// # Safety
 /// `kernel_out` must be a non-null, naturally aligned writable handle pointer.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_kernel_create(
+pub unsafe extern "C" fn lmnk_phase_steering_create(
     head_dim: u32,
     num_heads: u32,
-    kernel_out: *mut GcsoDpsrKernelHandle,
-) -> GcsoStatus {
+    kernel_out: *mut LmnkPhaseSteeringHandle,
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let mut out_handle = unsafe { FfiHandleMut::from_raw(kernel_out)? };
         let engine = PhaseSteeringEngine::new(head_dim, num_heads)?;
 
-        *out_handle = Box::into_raw(Box::new(engine)).cast::<GcsoDpsrKernelOpaque>();
-        Ok(GCSO_SUCCESS)
+        *out_handle = Box::into_raw(Box::new(engine)).cast::<LmnkPhaseSteeringOpaque>();
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies inline DPSR phase steering to a Query tensor in zero-allocation mode.
+/// Applies inline PhaseSteering phase steering to a Query tensor in zero-allocation mode.
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
+pub unsafe extern "C" fn lmnk_phase_steering_apply(
     query_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     head_dim: usize,
     num_heads: usize,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
@@ -52,22 +53,22 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering(
         let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_phase_steering(&mut q_aligned, &p_aligned)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies fused inline DPSR phase steering simultaneously to disjoint Query and Key tensors.
+/// Applies fused inline PhaseSteering phase steering simultaneously to disjoint Query and Key tensors.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_fused(
     query_tensor: *mut f32,
     key_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     head_dim: usize,
     num_heads: usize,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(key_tensor, 32)?;
@@ -82,23 +83,23 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused(
         let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_phase_steering_disjoint_pair(&mut qk_pair, &p_aligned)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies RIPA soft-bounded $\tanh$ clamping ($\Delta\theta_{\mathrm{safe}} = \theta_{\max}\tanh(\Delta\theta/\theta_{\max})$)
+/// Applies PhaseClamp soft-bounded $\tanh$ clamping ($\Delta\theta_{\mathrm{safe}} = \theta_{\max}\tanh(\Delta\theta/\theta_{\max})$)
 /// restricted to low-frequency RoPE channels (upper $d_{\mathrm{head}}/4$ dimensions).
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_safe(
     query_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     head_dim: usize,
     num_heads: usize,
     max_rad: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
@@ -111,22 +112,22 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_safe(
         let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_phase_steering_safe(&mut q_aligned, &p_aligned, max_rad)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies RIPA soft-bounded phase steering dispatched by [`gcso_config_t`] RoPE geometry
-/// (`Interleaved` vs `HalfSplit`, partial `rotary_dim`, `head_dim`, `num_heads`, `ripa_clamp_max_rad`).
+/// Applies PhaseClamp soft-bounded phase steering dispatched by [`lmnk_config_t`] RoPE geometry
+/// (`Interleaved` vs `HalfSplit`, partial `rotary_dim`, `head_dim`, `num_heads`, `phase_clamp_max_rad`).
 ///
 /// # Safety
 /// `query_tensor` (32B aligned), `phase_deltas` (16B aligned), and `config` (16B aligned)
 /// must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_with_config_safe(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_with_config_safe(
     query_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
-    config: *const gcso_config_t,
-) -> GcsoStatus {
+    phase_deltas: *const lmnk_q7_t,
+    config: *const lmnk_config_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
@@ -159,29 +160,29 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_with_config_safe(
             &geom,
             &mut q_aligned,
             &p_aligned,
-            cfg.ripa_clamp_max_rad,
+            cfg.phase_clamp_max_rad,
         )?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
 /// Steers `query_tensor` using a 2-Origin [`ManifoldGatewaySignal`]
 /// composite (`(ObjectiveFact, SubjectivePersona)`) so structural hyperparameters are synthesized
-/// autonomously from Gateway physics and dispatched via [`gcso_config_t`] RoPE geometry.
+/// autonomously from Gateway physics and dispatched via [`lmnk_config_t`] RoPE geometry.
 ///
 /// # Safety
 /// `query_tensor` (32B aligned), `fact_phases` (16B aligned), `persona_phases` (16B aligned),
 /// `trail_inout` (128B aligned), and `config` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_steer_with_gateway_and_config_safe(
+pub unsafe extern "C" fn lmnk_phase_steering_steer_with_gateway_and_config_safe(
     query_tensor: *mut f32,
-    fact_phases: *const gcso_q7_t,
+    fact_phases: *const lmnk_q7_t,
     fact_energy: f32,
-    persona_phases: *const gcso_q7_t,
+    persona_phases: *const lmnk_q7_t,
     persona_energy: f32,
-    trail_inout: *mut gcso_pointer_trail_t,
-    config: *const gcso_config_t,
-) -> GcsoStatus {
+    trail_inout: *mut lmnk_pointer_trail_t,
+    config: *const lmnk_config_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(fact_phases)?;
@@ -235,7 +236,7 @@ pub unsafe extern "C" fn gcso_dpsr_steer_with_gateway_and_config_safe(
             None,
             None,
         )?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -245,14 +246,14 @@ pub unsafe extern "C" fn gcso_dpsr_steer_with_gateway_and_config_safe(
 /// `q_before` (32B aligned), `q_after` (32B aligned), and `q7_phase_out` (16B aligned)
 /// must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta_half_split(
+pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_half_split(
     q_before: *const f32,
     q_after: *const f32,
     head_dim: usize,
     rotary_dim: usize,
     num_heads: usize,
-    q7_phase_out: *mut gcso_q7_t,
-) -> GcsoStatus {
+    q7_phase_out: *mut lmnk_q7_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(q_before, 32)?;
         validate_ptr_aligned(q_after, 32)?;
@@ -280,23 +281,23 @@ pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta_half_split(
             &q_aft_aligned,
             &mut p_out_aligned,
         )?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies fused RIPA soft-bounded $\tanh$ clamping simultaneously to disjoint Query and Key tensors.
+/// Applies fused PhaseClamp soft-bounded $\tanh$ clamping simultaneously to disjoint Query and Key tensors.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused_safe(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_fused_safe(
     query_tensor: *mut f32,
     key_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     head_dim: usize,
     num_heads: usize,
     max_rad: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(key_tensor, 32)?;
@@ -316,23 +317,23 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_fused_safe(
             &p_aligned,
             max_rad,
         )?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies $S^1$ geodesic-folded (`[-128, 127] -> [-64, 64]`) RIPA soft-bounded phase steering
+/// Applies $S^1$ geodesic-folded (`[-128, 127] -> [-64, 64]`) PhaseClamp soft-bounded phase steering
 /// to a Query tensor in zero-allocation mode.
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_geodesic_safe(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_geodesic_safe(
     query_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     head_dim: usize,
     num_heads: usize,
     max_rad: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
@@ -345,24 +346,24 @@ pub unsafe extern "C" fn gcso_dpsr_apply_phase_steering_geodesic_safe(
         let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_phase_steering_geodesic_safe(&mut q_aligned, &p_aligned, max_rad)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies RIPA soft-bounded phase steering gated branchlessly by `ACTION_MODE_PHASE_STEER`
+/// Applies PhaseClamp soft-bounded phase steering gated branchlessly by `ACTION_MODE_PHASE_STEER`
 /// and the embedded Q7 phase offset inside `tagged_ptr`.
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_safe(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_safe(
     tagged_ptr: u64,
     query_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     head_dim: usize,
     num_heads: usize,
     max_rad: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr(phase_deltas)?;
@@ -375,30 +376,30 @@ pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_safe(
         let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_pointer_gated_phase_steering_safe(
-            gcso_tagged_ptr_t(tagged_ptr),
+            TaggedPtr(tagged_ptr),
             &mut q_aligned,
             &p_aligned,
             max_rad,
         )?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Applies fused Query + Key RIPA soft-bounded phase steering gated branchlessly by
+/// Applies fused Query + Key PhaseClamp soft-bounded phase steering gated branchlessly by
 /// `ACTION_MODE_PHASE_STEER` and the embedded Q7 phase offset inside `tagged_ptr`.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_fused_safe(
     tagged_ptr: u64,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     head_dim: usize,
     num_heads: usize,
     max_rad: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(key_tensor, 32)?;
@@ -413,13 +414,13 @@ pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe
         let p_aligned = unsafe { AlignedSlice16::from_raw_parts(phase_deltas, num_heads)? };
 
         engine.apply_pointer_gated_phase_steering_fused_safe(
-            gcso_tagged_ptr_t(tagged_ptr),
+            TaggedPtr(tagged_ptr),
             &mut qk_pair.first,
             &mut qk_pair.second,
             &p_aligned,
             max_rad,
         )?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -430,11 +431,11 @@ pub unsafe extern "C" fn gcso_dpsr_apply_pointer_gated_phase_steering_fused_safe
 /// # Safety
 /// Pointers must satisfy non-null, alignment, and bounds invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_gateway_project_bytes_to_q7_64(
+pub unsafe extern "C" fn lmnk_gateway_project_bytes_to_q7_64(
     bytes: *const u8,
     byte_len: usize,
-    phases_out: *mut gcso_q7_t,
-) -> GcsoStatus {
+    phases_out: *mut lmnk_q7_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(phases_out)?;
         let in_slice: &[u8] = if byte_len == 0 {
@@ -445,11 +446,11 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_to_q7_64(
             unsafe { slice::from_raw_parts(bytes, byte_len) }
         };
         // SAFETY: `phases_out` was validated non-null above, and `mut_phase64_from_raw` rechecks
-        // nullness and constructs an exclusive `&mut [gcso_q7_t; 64]` (alignment 1).
+        // nullness and constructs an exclusive `&mut [lmnk_q7_t; 64]` (alignment 1).
         let out_ref = unsafe { mut_phase64_from_raw(phases_out)? };
         let projected_w = project_bytes_swar_to_words_64(in_slice);
         store_q7_words_64(out_ref, &projected_w);
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -461,16 +462,16 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_to_q7_64(
 /// # Safety
 /// Pointers must satisfy non-null, alignment, and bounds invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_gateway_project_f32_to_q7_64(
+pub unsafe extern "C" fn lmnk_gateway_project_f32_to_q7_64(
     values: *const f32,
     num_values: usize,
     gain: f32,
-    phases_out: *mut gcso_q7_t,
-) -> GcsoStatus {
+    phases_out: *mut lmnk_q7_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(phases_out)?;
         if !branchless_is_finite_f32(gain) || gain < 0.0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let in_slice: &[f32] = if num_values == 0 {
             &[]
@@ -480,7 +481,7 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_to_q7_64(
             unsafe { slice::from_raw_parts(values, num_values) }
         };
         // SAFETY: `phases_out` was validated non-null above, and `mut_phase64_from_raw` rechecks
-        // nullness and constructs an exclusive `&mut [gcso_q7_t; 64]` (alignment 1).
+        // nullness and constructs an exclusive `&mut [lmnk_q7_t; 64]` (alignment 1).
         let out_ref = unsafe { mut_phase64_from_raw(phases_out)? };
         if gain > 0.0 {
             *out_ref = branchless_project_f32_slice_to_q7_64(in_slice, gain);
@@ -488,36 +489,36 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_to_q7_64(
             let projected_w = project_f32_slice_to_words_64(in_slice);
             store_q7_words_64(out_ref, &projected_w);
         }
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Synthesizes a 128-byte [`gcso_gateway_frame_t`] (`GatewayFrame`) and optional 16-byte
-/// [`gcso_causal_provenance_report_t`] (`CausalProvenanceReport`) across the C-ABI boundary from
+/// Synthesizes a 128-byte [`lmnk_gateway_frame_t`] (`GatewayFrame`) and optional 16-byte
+/// [`lmnk_causal_report_t`] (`CausalProvenanceReport`) across the C-ABI boundary from
 /// the **2-Origin Supertrait Hierarchy**.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_gateway_synthesize_multi_origin_frame(
+pub unsafe extern "C" fn lmnk_gateway_synthesize_multi_origin_frame(
     vram_pressure: f32,
     gpu_frame_overrun: f32,
     active_swarm_cell_mask: u8,
     recommend_layer_skip: u8,
-    fact_phases: *const gcso_q7_t,
+    fact_phases: *const lmnk_q7_t,
     fact_confidence: f32,
     fact_mapped_offset48: u64,
     fact_anchor_id: u32,
-    persona_phases: *const gcso_q7_t,
+    persona_phases: *const lmnk_q7_t,
     persona_strength: f32,
     persona_mapped_offset48: u64,
     persona_anchor_id: u32,
-    bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
+    bloom_filter_opt: *const lmnk_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-    frame_out: *mut gcso_gateway_frame_t,
-    report_out: *mut gcso_causal_provenance_report_t,
-) -> GcsoStatus {
+    frame_out: *mut lmnk_gateway_frame_t,
+    report_out: *mut lmnk_causal_report_t,
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and alignment.
         let (mut out_frame, out_report_opt) = unsafe {
@@ -551,7 +552,7 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_multi_origin_frame(
             *rep_out = frame.to_causal_report();
         }
         *out_frame = frame;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -559,11 +560,11 @@ pub unsafe extern "C" fn gcso_gateway_synthesize_multi_origin_frame(
 /// in register-resident mode (`0` intermediate `GatewayFrame` copies).
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_steer_gateway_frame_safe(
-    frame: *const gcso_gateway_frame_t,
-    trail_inout: *mut gcso_pointer_trail_t,
+pub unsafe extern "C" fn lmnk_phase_steering_steer_gateway_frame_safe(
+    frame: *const lmnk_gateway_frame_t,
+    trail_inout: *mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
@@ -571,18 +572,18 @@ pub unsafe extern "C" fn gcso_dpsr_steer_gateway_frame_safe(
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-    report_out: *mut gcso_causal_provenance_report_t,
-) -> GcsoStatus {
+    report_out: *mut lmnk_causal_report_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(frame)?;
         validate_ptr(trail_inout)?;
         if raw_byte_ranges_overlap(
             frame as usize,
-            size_of::<gcso_gateway_frame_t>(),
+            size_of::<lmnk_gateway_frame_t>(),
             trail_inout as usize,
-            size_of::<gcso_pointer_trail_t>(),
+            size_of::<lmnk_pointer_trail_t>(),
         ) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Validated for non-nullness and 64B alignment.
         let frame_ref = unsafe { FfiHandleRef::from_raw(frame)? };
@@ -608,18 +609,18 @@ pub unsafe extern "C" fn gcso_dpsr_steer_gateway_frame_safe(
                 ptr::null_mut(),
             )?;
         }
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
 /// Executes a one-shot **Raw-Byte 2-Origin Multi-Blanket Gateway Synthesis + $SO(2)$-Fused
-/// RIPA/sub-head router Steering + Optional Online Toroidal $k$-Means / DP-Means Macro Crystallization**
+/// PhaseClamp/sub-head router Steering + Optional Online Toroidal $k$-Means / DP-Means Macro Crystallization**
 /// across the C-ABI boundary ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_gateway_project_bytes_synthesize_kmeans_and_steer_qk_safe(
+pub unsafe extern "C" fn lmnk_gateway_project_bytes_synthesize_kmeans_and_steer_qk_safe(
     vram_pressure: f32,
     gpu_frame_overrun: f32,
     active_swarm_cell_mask: u8,
@@ -634,10 +635,10 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_synthesize_kmeans_and_steer_
     persona_strength: f32,
     persona_mapped_offset48: u64,
     persona_anchor_id: u32,
-    bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
+    bloom_filter_opt: *const lmnk_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-    trail_inout: *mut gcso_pointer_trail_t,
+    trail_inout: *mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
@@ -645,15 +646,15 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_synthesize_kmeans_and_steer_
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-    centroids_inout: *mut gcso_crystallized_attractor_record_t,
+    centroids_inout: *mut lmnk_phase_anchor_record_t,
     num_centroids: usize,
     split_coherence_threshold: f32,
-    frame_out: *mut gcso_gateway_frame_t,
-    report_out: *mut gcso_causal_provenance_report_t,
+    frame_out: *mut lmnk_gateway_frame_t,
+    report_out: *mut lmnk_causal_report_t,
     assigned_centroid_idx_out: *mut usize,
     assigned_coherence_out: *mut f32,
     updated_gravity_mass_out: *mut f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated by `synthesize_multi_origin_from_raw_bytes_with_words`.
         let (frame, frm_w) = unsafe {
@@ -700,18 +701,18 @@ pub unsafe extern "C" fn gcso_gateway_project_bytes_synthesize_kmeans_and_steer_
                 updated_gravity_mass_out,
             )?;
         }
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
 /// Executes a one-shot **Raw-`f32` Embedding 2-Origin Multi-Blanket Gateway Synthesis +
-/// $SO(2)$-Fused RIPA/sub-head router Steering + Optional Online Toroidal $k$-Means / DP-Means Macro
+/// $SO(2)$-Fused PhaseClamp/sub-head router Steering + Optional Online Toroidal $k$-Means / DP-Means Macro
 /// Crystallization** across the C-ABI boundary ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `GCSO_RESTRICT` invariants.
+/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk_safe(
+pub unsafe extern "C" fn lmnk_gateway_project_f32_synthesize_kmeans_and_steer_qk_safe(
     vram_pressure: f32,
     gpu_frame_overrun: f32,
     active_swarm_cell_mask: u8,
@@ -728,10 +729,10 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk
     persona_strength: f32,
     persona_mapped_offset48: u64,
     persona_anchor_id: u32,
-    bloom_filter_opt: *const gcso_contrastive_bloom_filter_t,
+    bloom_filter_opt: *const lmnk_bloom_filter_t,
     contradiction_threshold: f32,
     bloom_repulsion_threshold: u8,
-    trail_inout: *mut gcso_pointer_trail_t,
+    trail_inout: *mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
     query_tensor: *mut f32,
     key_tensor: *mut f32,
@@ -739,15 +740,15 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-    centroids_inout: *mut gcso_crystallized_attractor_record_t,
+    centroids_inout: *mut lmnk_phase_anchor_record_t,
     num_centroids: usize,
     split_coherence_threshold: f32,
-    frame_out: *mut gcso_gateway_frame_t,
-    report_out: *mut gcso_causal_provenance_report_t,
+    frame_out: *mut lmnk_gateway_frame_t,
+    report_out: *mut lmnk_causal_report_t,
     assigned_centroid_idx_out: *mut usize,
     assigned_coherence_out: *mut f32,
     updated_gravity_mass_out: *mut f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated by `synthesize_multi_origin_from_raw_f32_with_words`.
         let (frame, frm_w) = unsafe {
@@ -796,7 +797,7 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk
                 updated_gravity_mass_out,
             )?;
         }
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -805,12 +806,12 @@ pub unsafe extern "C" fn gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk
 /// # Safety
 /// `query_tensor` must be non-null, 32B aligned, and valid for `head_dim * num_heads` floats.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_apply_soft_phase_damping(
+pub unsafe extern "C" fn lmnk_phase_steering_apply_soft_damping(
     query_tensor: *mut f32,
     head_dim: usize,
     num_heads: usize,
     damping_factor: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         let (engine, total_q_len) = init_phase_engine(head_dim, num_heads)?;
@@ -819,20 +820,20 @@ pub unsafe extern "C" fn gcso_dpsr_apply_soft_phase_damping(
         let mut q_aligned =
             unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, total_q_len)? };
         engine.apply_soft_phase_damping(&mut q_aligned, damping_factor)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// QDPS discrete filter: branchlessly cuts off phase rotation steps falling below `min_step_rad`.
+/// PhaseStepFilter discrete filter: branchlessly cuts off phase rotation steps falling below `min_step_rad`.
 ///
 /// # Safety
 /// `phase_deltas` must be non-null, 16-byte aligned, and valid for `len` elements.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_qdps_filter_step(
-    phase_deltas: *mut gcso_q7_t,
+pub unsafe extern "C" fn lmnk_phase_step_filter(
+    phase_deltas: *mut lmnk_q7_t,
     len: usize,
     min_step_rad: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(phase_deltas)?;
         let (engine, _) = init_phase_engine(128, len)?;
@@ -840,7 +841,7 @@ pub unsafe extern "C" fn gcso_qdps_filter_step(
         let mut p_aligned = unsafe { AlignedSliceMut16::from_raw_parts_mut(phase_deltas, len)? };
 
         engine.phase_step_filter(&mut p_aligned, min_step_rad)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -849,12 +850,12 @@ pub unsafe extern "C" fn gcso_qdps_filter_step(
 /// # Safety
 /// `query_tensor` and `context_accum` must be non-null, 32B aligned, and disjoint.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
+pub unsafe extern "C" fn lmnk_phase_steering_lazy_unwrap_override(
     query_tensor: *mut f32,
     context_accum: *const f32,
     head_dim: usize,
     num_heads: usize,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         validate_ptr_aligned(context_accum, 32)?;
@@ -872,7 +873,7 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
         let (c_aligned, q_aligned) = pair.as_ref_mut();
 
         engine.lazy_unwrap_override(q_aligned, c_aligned)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -881,12 +882,12 @@ pub unsafe extern "C" fn gcso_dpsr_lazy_unwrap_override(
 /// # Safety
 /// `tensor` must be non-null, 32B aligned, and valid for `dim` floats.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
+pub unsafe extern "C" fn lmnk_phase_steering_slerp_norm_guard_stable(
     tensor: *mut f32,
     dim: usize,
     norm_lower: f32,
     norm_upper: f32,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(tensor, 32)?;
         let engine = PhaseSteeringEngine::new(128, 1)?;
@@ -894,7 +895,7 @@ pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
         let mut t_aligned = unsafe { AlignedSliceMut32::from_raw_parts_mut(tensor, dim)? };
 
         engine.slerp_norm_guard_stable(&mut t_aligned, norm_lower, norm_upper)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -903,12 +904,12 @@ pub unsafe extern "C" fn gcso_dpsr_slerp_norm_guard_stable(
 /// # Safety
 /// `logits` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
+pub unsafe extern "C" fn lmnk_phase_steering_fused_logit_shift(
     logits: *mut f32,
     vocab_size: usize,
-    phase_deltas: *const gcso_q7_t,
+    phase_deltas: *const lmnk_q7_t,
     num_heads: usize,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(logits, 32)?;
         validate_ptr(phase_deltas)?;
@@ -922,7 +923,7 @@ pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
         };
 
         engine.fused_logit_shift(&mut l_aligned, &p_aligned)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -932,12 +933,12 @@ pub unsafe extern "C" fn gcso_dpsr_fused_logit_shift(
 /// # Safety
 /// `source` (32B), `target` (32B), and `phase_out` (16B) must be non-null and aligned.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta(
+pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_delta(
     source: *const f32,
     target: *const f32,
     dim: usize,
-    phase_out: *mut gcso_q7_t,
-) -> GcsoStatus {
+    phase_out: *mut lmnk_q7_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(source, 32)?;
         validate_ptr_aligned(target, 32)?;
@@ -957,111 +958,69 @@ pub unsafe extern "C" fn gcso_dpsr_compute_procrustes_phase_delta(
             unsafe { AlignedSliceMut16::from_raw_parts_mut(phase_out, num_heads as usize)? };
 
         engine.compute_procrustes_phase_delta(&src_aligned, &tgt_aligned, &mut out_aligned)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Destroys a DPSR kernel instance and releases its heap allocation.
+/// Destroys a PhaseSteering kernel instance and releases its heap allocation.
 ///
 /// # Safety
-/// `kernel` must be `NULL` or a handle returned by [`gcso_dpsr_kernel_create`].
+/// `kernel` must be `NULL` or a handle returned by [`lmnk_phase_steering_create`].
 #[no_mangle]
-pub unsafe extern "C" fn gcso_dpsr_kernel_destroy(kernel: GcsoDpsrKernelHandle) -> GcsoStatus {
+pub unsafe extern "C" fn lmnk_phase_steering_destroy(
+    kernel: LmnkPhaseSteeringHandle,
+) -> LmnkStatus {
     if kernel.is_null() {
-        return GCSO_SUCCESS;
+        return LMNK_OK;
     }
     if !is_aligned(kernel) {
-        return GCSO_ERROR_MISALIGNED_POINTER;
+        return LMNK_ERR_ALIGNMENT;
     }
     ffi_boundary!({
-        // SAFETY: `kernel` was allocated via `Box::into_raw` in `gcso_dpsr_kernel_create`.
+        // SAFETY: `kernel` was allocated via `Box::into_raw` in `lmnk_phase_steering_create`.
         unsafe {
             let _ = Box::from_raw(kernel.cast::<PhaseSteeringEngine>());
         }
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
-/// Creates a sub-head router sub-head group router instance.
-///
-/// # Safety
-/// `config` and `router_out` must be non-null and naturally aligned.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_subhead_router_create(
-    config: *const gcso_subhead_config_t,
-    router_out: *mut GcsoSubHeadRouterHandle,
-) -> GcsoStatus {
-    ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
-        let (_cfg, mut out_handle) = unsafe {
-            (
-                FfiHandleRef::from_raw(config)?,
-                FfiHandleMut::from_raw(router_out)?,
-            )
-        };
-        *out_handle = core::ptr::NonNull::dangling().as_ptr();
-        Ok(GCSO_SUCCESS)
-    })
-}
-
-/// Dispatches sub-head router sub-head group phase gains (Fact, Logic, Explore) in a single forward pass.
+/// Dispatches sub-head group phase gains (Fact, Logic, Explore) in a single forward pass.
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `subhead_cfg` (16B aligned) must be non-null and valid.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_subhead_dispatch_single_pass(
+pub unsafe extern "C" fn lmnk_subhead_dispatch_single_pass(
     query_tensor: *mut f32,
-    subhead_cfg: *const gcso_subhead_config_t,
+    subhead_cfg: *const lmnk_subhead_config_t,
     head_dim: usize,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(query_tensor, 32)?;
         // SAFETY: Validated for non-nullness and 16B alignment.
         let cfg = unsafe { FfiHandleRef::from_raw(subhead_cfg)? };
         if head_dim == 0 || (head_dim & 1) != 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
         let total_heads = (cfg.num_fact_heads as usize)
             .checked_add(cfg.num_logic_heads as usize)
             .and_then(|v| v.checked_add(cfg.num_explore_heads as usize))
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
 
         if total_heads == 0 {
-            return Ok(GCSO_SUCCESS);
+            return Ok(LMNK_OK);
         }
 
         let expected_len = head_dim
             .checked_mul(total_heads)
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         // SAFETY: Validated for non-nullness, 32B alignment, and bounds.
         let mut q_aligned =
             unsafe { AlignedSliceMut32::from_raw_parts_mut(query_tensor, expected_len)? };
 
         dispatch_single_pass(&mut q_aligned, &cfg, head_dim)?;
-        Ok(GCSO_SUCCESS)
-    })
-}
-
-/// Creates a Sparse Residual Adapter Layer (Rank-1 residual) Rank-1 instance.
-///
-/// # Safety
-/// `descriptor` and `adapter_out` must be non-null and naturally aligned.
-#[no_mangle]
-pub unsafe extern "C" fn gcso_rank1_residual_create(
-    descriptor: *const gcso_rank1_residual_descriptor_t,
-    adapter_out: *mut GcsoRank1ResidualHandle,
-) -> GcsoStatus {
-    ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
-        let (_desc, mut out_handle) = unsafe {
-            (
-                FfiHandleRef::from_raw(descriptor)?,
-                FfiHandleMut::from_raw(adapter_out)?,
-            )
-        };
-        *out_handle = core::ptr::NonNull::dangling().as_ptr();
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -1070,27 +1029,27 @@ pub unsafe extern "C" fn gcso_rank1_residual_create(
 /// # Safety
 /// `y_out` (32B), `x_in` (32B), and `rank1_desc` (32B) must be non-null, aligned, and disjoint.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_rank1_eval(
+pub unsafe extern "C" fn lmnk_rank1_eval(
     y_out: *mut f32,
     x_in: *const f32,
-    rank1_desc: *const gcso_rank1_residual_descriptor_t,
+    rank1_desc: *const lmnk_rank1_descriptor_t,
     dim_in: usize,
     dim_out: usize,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(y_out, 32)?;
         validate_ptr_aligned(x_in, 32)?;
         // SAFETY: Validated for non-nullness and 32B alignment.
         let desc = unsafe { FfiHandleRef::from_raw(rank1_desc)? };
         if dim_in == 0 || dim_out == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness.
         let mut io_guard =
             unsafe { DisjointRefMut::<f32, 32, 32>::from_raw_parts(x_in, dim_in, y_out, dim_out)? };
         let (x_slice, y_slice) = io_guard.as_ref_mut();
         eval_rank1(y_slice, x_slice, &desc)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -1100,20 +1059,20 @@ pub unsafe extern "C" fn gcso_rank1_eval(
 /// # Safety
 /// `y_inout` (32B), `x_in` (32B), and `rank1_desc` (32B) must be non-null, aligned, and disjoint.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_rank1_eval_fused(
+pub unsafe extern "C" fn lmnk_rank1_eval_fused(
     y_inout: *mut f32,
     x_in: *const f32,
-    rank1_desc: *const gcso_rank1_residual_descriptor_t,
+    rank1_desc: *const lmnk_rank1_descriptor_t,
     dim_in: usize,
     dim_out: usize,
-) -> GcsoStatus {
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(y_inout, 32)?;
         validate_ptr_aligned(x_in, 32)?;
         // SAFETY: Validated for non-nullness and 32B alignment.
         let desc = unsafe { FfiHandleRef::from_raw(rank1_desc)? };
         if dim_in == 0 || dim_out == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness.
         let mut io_guard = unsafe {
@@ -1121,7 +1080,7 @@ pub unsafe extern "C" fn gcso_rank1_eval_fused(
         };
         let (x_slice, y_slice) = io_guard.as_ref_mut();
         eval_rank1_fused(y_slice, x_slice, &desc)?;
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }
 
@@ -1131,15 +1090,15 @@ pub unsafe extern "C" fn gcso_rank1_eval_fused(
 /// # Safety
 /// Pointers must satisfy non-null, alignment, and bounds invariants.
 #[no_mangle]
-pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
+pub unsafe extern "C" fn lmnk_lora_project(
     lora_a: *const f32,
     lora_b: *const f32,
     rank: usize,
     dim_in: usize,
     dim_out: usize,
-    rank1_out: *mut gcso_rank1_residual_descriptor_t,
-    phase_profile_out: *mut gcso_q7_t,
-) -> GcsoStatus {
+    rank1_out: *mut lmnk_rank1_descriptor_t,
+    phase_profile_out: *mut lmnk_q7_t,
+) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr(lora_a)?;
         validate_ptr(lora_b)?;
@@ -1147,15 +1106,11 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
         // SAFETY: Validated for non-nullness and 32B alignment.
         let mut rank1_desc = unsafe { FfiHandleMut::from_raw(rank1_out)? };
         if rank == 0 || dim_in == 0 || dim_out == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
-        let a_len = rank
-            .checked_mul(dim_in)
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
-        let b_len = dim_out
-            .checked_mul(rank)
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        let a_len = rank.checked_mul(dim_in).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+        let b_len = dim_out.checked_mul(rank).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
 
         if is_ptr_aligned_to(lora_a, 32)
             && is_ptr_aligned_to(lora_b, 32)
@@ -1185,7 +1140,7 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
                 &mut rank1_desc,
                 &mut p_aligned,
             )?;
-            return Ok(GCSO_SUCCESS);
+            return Ok(LMNK_OK);
         }
 
         // SAFETY: Validated non-null and 4B aligned above.
@@ -1225,6 +1180,6 @@ pub unsafe extern "C" fn gcso_l2p_svd_project_lora(
         };
         // SAFETY: `phase_profile_out` is validated non-null above.
         unsafe { *phase_profile_out = phase_val };
-        Ok(GCSO_SUCCESS)
+        Ok(LMNK_OK)
     })
 }

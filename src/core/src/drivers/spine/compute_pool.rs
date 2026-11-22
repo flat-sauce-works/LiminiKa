@@ -848,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn spine_bypass_veto_blocks_guard_repulsion_pinned_and_ignores_ood_void() {
+    fn spine_bypass_veto_blocks_guard_repulsion_pinned_and_ignores_unobserved_lock() {
         use crate::drivers::spine::state::{
             SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_PINNED_LOCK,
             SPINE_BYPASS_VETO_REPULSION_ACTIVE,
@@ -934,9 +934,9 @@ mod tests {
         assert_eq!(d3.bypass_mask, 0);
         assert_eq!(d3.execute_mask & pin_bits, pin_bits);
 
-        // Case 4: ood_void_locked == 1 alone must NOT trigger bypass veto (Lacuna::Void isolation).
+        // Case 4: unobserved_locked == 1 alone must NOT trigger bypass veto (Lacuna::Unobserved isolation).
         let mut spine4 = SystemSpineState::new();
-        spine4.ood_void_locked = 1;
+        spine4.unobserved_locked = 1;
         assert_eq!(
             spine4.evaluate_whole_token_bypass_veto_branchless(false, false),
             SPINE_BYPASS_VETO_NONE

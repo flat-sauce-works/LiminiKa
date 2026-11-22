@@ -9,7 +9,7 @@ use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::aligned::{AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
 use crate::foundation::phase_ops::circular_r_bar_from_words_64;
-use crate::foundation::pod::{gcso_rank1_residual_descriptor_t, Pod};
+use crate::foundation::pod::{Pod, Rank1Descriptor};
 use crate::foundation::projection::project_bytes_swar_to_words_64;
 use crate::foundation::rank1_kernels::eval_rank1_slices_fused;
 use crate::foundation::rope::{
@@ -21,8 +21,8 @@ use crate::foundation::scalar_math::{
     DEFAULT_PHASE_STEP_MIN_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, gcso_config_t, gcso_q7_t, AbstractDomain, Active, GcsoResult,
-    Indivisible, GCSO_ERROR_INVALID_ARGUMENT, HEADS_PER_STIGMERGIC_GRANULE, MAX_ATTENTION_HEADS,
+    branchless_select_f32, AbstractDomain, Active, Indivisible, LmnkResult, PhaseQ7, RuntimeConfig,
+    HEADS_PER_STIGMERGIC_GRANULE, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES,
 };
 
@@ -38,7 +38,7 @@ impl AbstractDomain for ResidualScale {
 /// Zero-byte domain-tagged 16-byte-aligned Q7 phase-delta slice for RoPE steering (`Active` phase).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
-pub struct PhaseDeltaSlice<'a>(pub AlignedSlice16<'a, gcso_q7_t>);
+pub struct PhaseDeltaSlice<'a>(pub AlignedSlice16<'a, PhaseQ7>);
 
 impl AbstractDomain for PhaseDeltaSlice<'_> {
     const DOMAIN_ID: &'static str = "stigmergy.phase_delta_slice";
@@ -49,11 +49,11 @@ const _: () = {
     assert!(align_of::<Indivisible<Active, ResidualScale>>() == align_of::<f32>());
     assert!(
         size_of::<Indivisible<Active, PhaseDeltaSlice<'static>>>()
-            == size_of::<AlignedSlice16<'static, gcso_q7_t>>()
+            == size_of::<AlignedSlice16<'static, PhaseQ7>>()
     );
     assert!(
         align_of::<Indivisible<Active, PhaseDeltaSlice<'static>>>()
-            == align_of::<AlignedSlice16<'static, gcso_q7_t>>()
+            == align_of::<AlignedSlice16<'static, PhaseQ7>>()
     );
 };
 
@@ -104,19 +104,19 @@ impl PhaseSteeringEngine {
     /// Creates a new [`PhaseSteeringEngine`] instance with validated `(head_dim, num_heads)` configuration.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `num_heads` is zero,
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `num_heads` is zero,
     /// or `head_dim * num_heads` overflows `usize`.
     #[inline(always)]
-    pub const fn new(head_dim: u32, num_heads: u32) -> GcsoResult<Self> {
+    pub const fn new(head_dim: u32, num_heads: u32) -> LmnkResult<Self> {
         let valid = (head_dim != 0) & ((head_dim & 1) == 0) & (num_heads != 0);
         if !valid {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         if (head_dim as usize)
             .checked_mul(num_heads as usize)
             .is_none()
         {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         Ok(Self {
             head_dim,
@@ -126,26 +126,26 @@ impl PhaseSteeringEngine {
         })
     }
 
-    /// Constructs a [`PhaseSteeringEngine`] from a C-ABI [`gcso_config_t`] descriptor.
+    /// Constructs a [`PhaseSteeringEngine`] from a C-ABI [`RuntimeConfig`] descriptor.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `num_heads` is zero,
-    /// `ripa_clamp_max_rad <= 0.0`, `qdps_min_step_rad < 0.0`, or thresholds are non-finite.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `num_heads` is zero,
+    /// `phase_clamp_max_rad <= 0.0`, `phase_step_min_rad < 0.0`, or thresholds are non-finite.
     #[inline(always)]
-    pub const fn from_config(config: &gcso_config_t) -> GcsoResult<Self> {
+    pub const fn from_config(config: &RuntimeConfig) -> LmnkResult<Self> {
         let mut engine = match Self::new(config.head_dim, config.num_heads) {
             Ok(e) => e,
             Err(err) => return Err(err),
         };
-        let valid_ripa =
-            branchless_is_finite_f32(config.ripa_clamp_max_rad) & (config.ripa_clamp_max_rad > 0.0);
-        let valid_qdps =
-            branchless_is_finite_f32(config.qdps_min_step_rad) & (config.qdps_min_step_rad >= 0.0);
-        if !(valid_ripa & valid_qdps) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        let valid_clamp = branchless_is_finite_f32(config.phase_clamp_max_rad)
+            & (config.phase_clamp_max_rad > 0.0);
+        let valid_step = branchless_is_finite_f32(config.phase_step_min_rad)
+            & (config.phase_step_min_rad >= 0.0);
+        if !(valid_clamp & valid_step) {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        engine.phase_clamp_max_rad = config.ripa_clamp_max_rad;
-        engine.phase_step_min_rad = config.qdps_min_step_rad;
+        engine.phase_clamp_max_rad = config.phase_clamp_max_rad;
+        engine.phase_step_min_rad = config.phase_step_min_rad;
         Ok(engine)
     }
 
@@ -161,7 +161,7 @@ impl PhaseSteeringEngine {
         self.phase_step_min_rad
     }
 
-    /// Returns a copy of `self` with an updated `PhaseClamp` soft-clamping limit (`ripa_clamp_max_rad`).
+    /// Returns a copy of `self` with an updated `PhaseClamp` soft-clamping limit (`phase_clamp_max_rad`).
     #[inline(always)]
     pub const fn with_phase_clamp_max_rad(mut self, max_rad: f32) -> Self {
         let valid = branchless_is_finite_f32(max_rad) & (max_rad > 0.0);
@@ -169,7 +169,7 @@ impl PhaseSteeringEngine {
         self
     }
 
-    /// Returns a copy of `self` with an updated `PhaseStepFilter` step cutoff threshold (`qdps_min_step_rad`).
+    /// Returns a copy of `self` with an updated `PhaseStepFilter` step cutoff threshold (`phase_step_min_rad`).
     #[inline(always)]
     pub const fn with_phase_step_min_rad(mut self, min_step_rad: f32) -> Self {
         let valid = branchless_is_finite_f32(min_step_rad) & (min_step_rad >= 0.0);
@@ -191,13 +191,13 @@ impl PhaseSteeringEngine {
     /// unclassified origins at compile time.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths are insufficient.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slice lengths are insufficient.
     #[inline(always)]
     pub fn apply_phase_steering_active(
         &self,
         tensor: &mut AlignedSliceMut32<'_, f32>,
         phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         self.apply_phase_steering(tensor, &phase_deltas.as_ref().0)
     }
 
@@ -205,7 +205,7 @@ impl PhaseSteeringEngine {
     /// [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`].
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if geometry or slice lengths are invalid.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if geometry or slice lengths are invalid.
     #[inline(always)]
     pub fn apply_phase_steering_for_geometry_safe_active<G: RopeSteeringTarget + ?Sized>(
         &self,
@@ -213,7 +213,7 @@ impl PhaseSteeringEngine {
         tensor: &mut AlignedSliceMut32<'_, f32>,
         phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
         max_rad: f32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         self.apply_phase_steering_for_geometry_safe(
             geometry,
             tensor,
@@ -239,7 +239,7 @@ pub trait PhaseSteeringActiveExt: PhaseSteeringGeometryExt {
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
         max_rad: f32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         self.apply_phase_steering_safe(query_tensor, &phase_deltas.as_ref().0, max_rad)
     }
 
@@ -256,7 +256,7 @@ pub trait PhaseSteeringActiveExt: PhaseSteeringGeometryExt {
         key_tensor: &mut AlignedSliceMut32<'_, f32>,
         phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
         max_rad: f32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         self.apply_phase_steering_fused_safe(
             query_tensor,
             key_tensor,
@@ -278,7 +278,7 @@ pub trait PhaseSteeringActiveExt: PhaseSteeringGeometryExt {
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
         max_rad: f32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         self.apply_phase_steering_for_geometry_safe(
             geometry,
             query_tensor,
@@ -312,10 +312,10 @@ impl PhaseSteering for PhaseSteeringEngine {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResidualAdapterEngine {
     /// Embedded 64-byte C-ABI Rank-1 residual descriptor (`offset 0..64`).
-    pub descriptor: gcso_rank1_residual_descriptor_t,
+    pub descriptor: Rank1Descriptor,
 }
 
-// SAFETY: `ResidualAdapterEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `gcso_rank1_residual_descriptor_t`.
+// SAFETY: `ResidualAdapterEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `Rank1Descriptor`.
 unsafe impl Pod for ResidualAdapterEngine {}
 
 impl Default for ResidualAdapterEngine {
@@ -331,7 +331,7 @@ impl ResidualAdapterEngine {
     #[must_use]
     pub const fn new(scale_factor: f32, layer_idx: u32, rank: u32) -> Self {
         Self {
-            descriptor: gcso_rank1_residual_descriptor_t {
+            descriptor: Rank1Descriptor {
                 layer_idx,
                 rank: if rank == 0 { 1 } else { rank },
                 u_vector_ptr: 0,
@@ -344,17 +344,17 @@ impl ResidualAdapterEngine {
         }
     }
 
-    /// Validates the embedded `gcso_rank1_residual_descriptor_t` fields (`rank > 0` and finite positive `scale_factor`).
+    /// Validates the embedded `Rank1Descriptor` fields (`rank > 0` and finite positive `scale_factor`).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `rank == 0` or `scale_factor` is non-positive/non-finite.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `rank == 0` or `scale_factor` is non-positive/non-finite.
     #[inline(always)]
-    pub const fn validate(&self) -> GcsoResult<()> {
+    pub const fn validate(&self) -> LmnkResult<()> {
         if self.descriptor.rank == 0
             || self.descriptor.scale_factor <= 0.0
             || !branchless_is_finite_f32(self.descriptor.scale_factor)
         {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         Ok(())
     }
@@ -377,7 +377,7 @@ impl ResidualAdapterEngine {
         v_vec: &AlignedSlice32<'_, f32>,
         gain_vec: Option<&AlignedSlice32<'_, f32>>,
         scale_factor: Indivisible<Active, ResidualScale>,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         eval_rank1_slices_fused(
             y_inout,
             x_in,
@@ -391,11 +391,11 @@ impl ResidualAdapterEngine {
     /// Applies a binary persona phase modulation patch (`patch_data`) onto this engine's scale factor.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `patch_data` is empty.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `patch_data` is empty.
     #[inline]
-    pub fn apply_patch(&mut self, patch_data: &[u8]) -> GcsoResult<()> {
+    pub fn apply_patch(&mut self, patch_data: &[u8]) -> LmnkResult<()> {
         if patch_data.is_empty() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let words = project_bytes_swar_to_words_64(patch_data);
         let r_bar = circular_r_bar_from_words_64(&words);
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn test_qdps_filter_and_swar_scaling() {
+    fn test_phase_step_filter_and_swar_scaling() {
         let engine = PhaseSteeringEngine::new(128, 16).unwrap();
         let mut raw_buf =
             AlignedBuffer16::new([1i8, 5, -2, 10, -128, 4, -1, 8, 6, -6, 12, -12, 0, 2, -3, 16]);

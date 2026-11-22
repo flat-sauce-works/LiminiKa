@@ -9,7 +9,7 @@ use crate::foundation::{
     eval_gershgorin_lambda_max, evaluate_hodge_obstruction_and_dual_pairing, load_q7_words_64,
     AlignedBuffer32, ACTION_PRESET_EXPRESS_PHASE,
 };
-use crate::liminal::{gcso_config_t, GcsoResult};
+use crate::liminal::{LmnkResult, RuntimeConfig};
 
 #[test]
 fn test_slot_coupling_matrix_primitives() {
@@ -53,17 +53,17 @@ struct DummyLedger;
 impl FastPathLedger for DummyLedger {
     fn evaluate_auto_tune(
         &self,
-        _slot: &gcso_ledger_slot_t,
-        _config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()> {
+        _slot: &LedgerSlot,
+        _config_out: &mut RuntimeConfig,
+    ) -> LmnkResult<()> {
         Ok(())
     }
 }
 
 #[test]
 fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
-    let mut m1 = gcso_paged_bitmask_t::default();
-    let mut m2 = gcso_paged_bitmask_t::default();
+    let mut m1 = PagedBitmask::default();
+    let mut m2 = PagedBitmask::default();
     m1.set_bit_branchless(0);
     m1.set_bit_branchless(65);
     m1.set_bit_branchless(255);
@@ -83,7 +83,7 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
     filter.insert_repulsive_pattern(&pattern);
     assert_eq!(filter.query_repulsive_density(&pattern), 2);
 
-    let init_ptr = gcso_tagged_ptr_t::pack_action(
+    let init_ptr = TaggedPtr::pack_action(
         0x4000,
         ATTRACTOR_SLOT_PERSONA,
         ACTION_PRESET_EXPRESS_PHASE,
@@ -103,7 +103,7 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
         assert!(filter.total_mass() <= DEFAULT_BLOOM_MAX_MASS_THRESHOLD + 32);
     }
 
-    let mut trail = gcso_pointer_trail_t {
+    let mut trail = PointerTrail {
         stigmergic_density: 1.0,
         target_anchor_id: 42,
         ..Default::default()
@@ -135,7 +135,7 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
     assert_eq!(report.evolved_ptr.target_attractor_slot(), 42 & 7);
 
     let mut ledger_ctrl = DummyLedger;
-    let mut ledger_slot = gcso_ledger_slot_t::default();
+    let mut ledger_slot = LedgerSlot::default();
     ledger_ctrl.register_fast_path_shortcut(&mut ledger_slot, init_ptr.raw(), 0x9999);
     let (hit, resolved_ptr) = ledger_ctrl.resolve_or_pass_tagged_ptr(&mut ledger_slot, init_ptr);
     assert!(hit && resolved_ptr.raw() == 0x9999);
@@ -154,7 +154,7 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
 
 #[test]
 fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire() {
-    let mut mem_a = gcso_pointer_trail_t {
+    let mut mem_a = PointerTrail {
         current_ptr: 0x1000,
         step_count: 5,
         target_anchor_id: 42,
@@ -163,7 +163,7 @@ fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire
         ..Default::default()
     };
 
-    let mut mem_b = gcso_pointer_trail_t {
+    let mut mem_b = PointerTrail {
         current_ptr: 0x2000,
         stigmergic_density: 1.0,
         attractor_pull_force: 1.0,
@@ -212,13 +212,13 @@ fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire
         (1, 1)
     );
 
-    let cand_bad = gcso_pointer_trail_t {
+    let cand_bad = PointerTrail {
         stigmergic_density: 5.0,
         accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
         ..Default::default()
     };
 
-    let cand_good = gcso_pointer_trail_t {
+    let cand_good = PointerTrail {
         stigmergic_density: 3.0,
         accumulated_phase_delta: [42i8; MAX_ATTENTION_HEADS],
         ..Default::default()
@@ -248,7 +248,7 @@ fn test_liminal_bridge_order_invariant_unified_field_and_bayesian_pointer_rewire
     assert_eq!(mem_b.linked_trail_id, 1);
     assert!(best_score > 0.5 && mean_coh > -0.1 && scores[1] > scores[0]);
 
-    let mut mem_contradict = gcso_pointer_trail_t {
+    let mut mem_contradict = PointerTrail {
         current_ptr: 0x3000,
         stigmergic_density: 2.0,
         accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
@@ -267,9 +267,9 @@ fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
     let lambda_max = eval_gershgorin_lambda_max(&degrees.as_aligned_slice()).unwrap();
     assert!((lambda_max - 11.0).abs() < 1e-5);
 
-    let mut m0 = gcso_paged_bitmask_t::default();
-    let mut m1 = gcso_paged_bitmask_t::default();
-    let mut m2 = gcso_paged_bitmask_t::default();
+    let mut m0 = PagedBitmask::default();
+    let mut m1 = PagedBitmask::default();
+    let mut m2 = PagedBitmask::default();
     m0.set_bit_branchless(1);
     m0.set_bit_branchless(2);
     m1.set_bit_branchless(1);
@@ -312,7 +312,7 @@ fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
     assert!((mean_obs - 2.25).abs() < 1e-5);
     assert!((dual_pair - 1.0).abs() < 1e-5);
 
-    let base_ptr = gcso_tagged_ptr_t::pack_action(
+    let base_ptr = TaggedPtr::pack_action(
         0x1000,
         ATTRACTOR_SLOT_PERSONA,
         ACTION_PRESET_EXPRESS_PHASE,
@@ -333,15 +333,15 @@ fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
     assert_eq!(cascaded_ptr.unpack_addr(), 0x1100);
     assert_eq!(cascaded_ptr.unpack_phase(), 14);
 
-    let t0 = gcso_pointer_trail_t {
+    let t0 = PointerTrail {
         accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
         ..Default::default()
     };
-    let t1 = gcso_pointer_trail_t {
+    let t1 = PointerTrail {
         accumulated_phase_delta: [28i8; MAX_ATTENTION_HEADS],
         ..Default::default()
     };
-    let t2 = gcso_pointer_trail_t {
+    let t2 = PointerTrail {
         accumulated_phase_delta: [32i8; MAX_ATTENTION_HEADS],
         ..Default::default()
     };

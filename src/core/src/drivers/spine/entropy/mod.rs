@@ -7,7 +7,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(non_camel_case_types)]
 #![allow(clippy::must_use_candidate)]
 
 use core::f32::consts::LN_2;
@@ -15,38 +14,44 @@ use core::f32::consts::LN_2;
 use crate::foundation::{Pod, DEFAULT_MAX_VALID_Z_SCORE};
 use crate::liminal::DEFAULT_ENTROPY_EPS;
 
-/// `EntropyController` state structure (64 bytes, 32-byte aligned, Section 5.4.G).
+/// `EntropyController` state structure (32 bytes, 32-byte aligned, Canonical Little-Endian `Pod`).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct gcso_edbc_state_t {
-    /// Moving Z-score normalized attention entropy ($\tilde{H} \in [0, \ln 2]$).
+pub struct EntropyState {
+    /// Moving Z-score normalized attention entropy ($\tilde{H} \in [0, \ln 2]$, `offset 0..4`).
     pub moving_z_entropy: f32,
-    /// Z-score threshold ($\tau_{\mathrm{bifurcation}}$) triggering pitchfork branch split.
+    /// Z-score threshold ($\tau_{\mathrm{bifurcation}}$) triggering pitchfork branch split (`offset 4..8`).
     pub bifurcation_threshold: f32,
-    /// Numerical safety threshold ($\epsilon_{\mathrm{log}}$) for singularity detection.
+    /// Numerical safety threshold ($\epsilon_{\mathrm{log}}$) for singularity detection (`offset 8..12`).
     pub singularity_eps: f32,
-    /// Sliding-window entropy rate integrator ($\Phi_M(t) = \tilde{H}(t) - \tilde{H}(t-M)$).
+    /// Sliding-window entropy rate integrator ($\Phi_M(t) = \tilde{H}(t) - \tilde{H}(t-M)$, `offset 12..16`).
     pub sliding_entropy_rate: f32,
-    /// Gain factor applied to phase-conjugate repulsion pulses ($-\boldsymbol{\Delta\theta}$).
+    /// Gain factor applied to phase-conjugate repulsion pulses ($-\boldsymbol{\Delta\theta}$, `offset 16..20`).
     pub repulsion_gain: f32,
-    /// Energy-guided dynamic sampling temperature modifier.
+    /// Energy-guided dynamic sampling temperature modifier (`offset 20..24`).
     pub sample_temperature: f32,
-    /// Active execution branch mode (`0` = Normal, `1` = Pitchfork Bifurcation, `2` = Repulsion).
+    /// Active execution branch mode (`0` = Normal, `1` = Pitchfork Bifurcation, `2` = Repulsion, `offset 24..28`).
     pub active_branch_mode: u32,
-    /// Reserved space for 32-byte alignment and future parameters (36 bytes).
-    pub reserved: [u8; 36],
+    /// Control & status bitmask flags (`offset 28..32`).
+    pub flags: u32,
 }
 
-impl Default for gcso_edbc_state_t {
+impl Default for EntropyState {
     #[inline(always)]
     fn default() -> Self {
-        // SAFETY: `gcso_edbc_state_t` is a C-ABI `Pod` struct where all-zero bytes are valid.
+        // SAFETY: `EntropyState` is a Canonical Little-Endian `Pod` struct where all-zero bytes are valid.
         unsafe { core::mem::zeroed() }
     }
 }
 
-// SAFETY: `gcso_edbc_state_t` is `#[repr(C, align(32))]` containing floats and primitive fields with zero traps.
-unsafe impl Pod for gcso_edbc_state_t {}
+// SAFETY: `EntropyState` is `#[repr(C, align(32))]` containing floats and `u32` fields with zero padding.
+unsafe impl Pod for EntropyState {}
+
+const _: () = {
+    assert!(core::mem::size_of::<EntropyState>() == 32);
+    assert!(core::mem::align_of::<EntropyState>() == 32);
+    assert!(core::mem::offset_of!(EntropyState, flags) == 28);
+};
 
 /// Normal entropy convergence mode (`Mode 0`: single stable attractor at origin $x^* = 0$).
 pub const ENTROPY_GATE_MODE_NORMAL_ENTROPY: u32 = 0;
@@ -57,7 +62,7 @@ pub const ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION: u32 = 1;
 /// Phase-conjugate repulsion mode (`Mode 2`: anti-phase $-\boldsymbol{\Delta\theta}$ escape).
 pub const ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION: u32 = 2;
 
-/// Default logarithmic singularity epsilon fallback constant ($10^{-12}$, `c_abi_spec.md`).
+/// Default logarithmic singularity epsilon fallback constant ($10^{-12}$, `LiminiKa C-ABI`).
 pub const DEFAULT_SINGULARITY_EPS: f32 = DEFAULT_ENTROPY_EPS;
 
 /// Default pitchfork bifurcation Z-score threshold constant ($\tau_{\mathrm{bifurcation}} = 1.5$).
@@ -78,7 +83,7 @@ pub const ENTROPY_GATE_SLIDING_WINDOW_HORIZON: usize = 5;
 /// Capacity of the power-of-two ring buffer storing recent $\tilde{H}$ samples (`8`).
 pub const ENTROPY_GATE_WINDOW_RING_CAPACITY: usize = 8;
 
-/// Maximum barrier safety ceiling for numerical stabilization near zero void scores ($10^9$).
+/// Maximum barrier safety ceiling for numerical stabilization near zero lacuna scores ($10^9$).
 pub const MAX_BARRIER_CEILING: f32 = 1.0e9;
 
 /// Exponential moving average smoothing factor for Z-score entropy tracking ($\alpha_{\mathrm{EMA}} = 0.1$).

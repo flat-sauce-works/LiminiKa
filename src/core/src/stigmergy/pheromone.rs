@@ -13,21 +13,20 @@
 
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_min_f32, branchless_relu_f32, gcso_tagged_ptr_t, is_word_array_uniform_64,
-    load_q7_words_64, swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8,
-    swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8,
-    swar_u8_mean_round_x8, swar_words_nonzero_64, Pod, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_PHASE_STEER, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
-    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
-    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    branchless_min_f32, branchless_relu_f32, is_word_array_uniform_64, load_q7_words_64,
+    swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8, swar_q7_circular_add_x8,
+    swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_mean_round_x8,
+    swar_words_nonzero_64, Pod, TaggedPtr, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER,
+    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_q7_t, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::circuit::StigmergicScaleGranularity;
 use crate::stigmergy::ledger::ContrastivePhaseBloomFilter;
-use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref};
+use crate::stigmergy::trail::{trail_phase_words_mut, trail_phase_words_ref, PointerTrail};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
@@ -38,7 +37,7 @@ use crate::stigmergy::{
 // ===================================================================
 
 /// Shared branchless pheromone decay and coherence-weighted reinforcement law implemented by both
-/// hot pointer trails ([`gcso_pointer_trail_t`]) and RAM experience cache slots (`RamPhaseKvEntry`).
+/// hot pointer trails ([`PointerTrail`]) and RAM experience cache slots (`RamPhaseKvEntry`).
 pub trait PheromoneDensityOps {
     /// Returns the raw non-negative pheromone density scalar for this record.
     fn pheromone_density(&self) -> f32;
@@ -81,7 +80,7 @@ pub trait PheromoneDensityOps {
     }
 }
 
-impl PheromoneDensityOps for gcso_pointer_trail_t {
+impl PheromoneDensityOps for PointerTrail {
     #[inline(always)]
     fn pheromone_density(&self) -> f32 {
         self.stigmergic_density
@@ -94,7 +93,7 @@ impl PheromoneDensityOps for gcso_pointer_trail_t {
 }
 
 /// Hoisted-invariant 8-head SWAR Micro-Swarm cell resolver using precomputed `gain_s <= 128`,
-/// `gain_bias = (128 - gain_s) * 0x0101_0101_0101_0101`, `qdps_thresh_x8`, and `qdps_valid_mask`.
+/// `gain_bias = (128 - gain_s) * 0x0101_0101_0101_0101`, `min_step_thresh_x8`, and `min_step_valid_mask`.
 /// Eliminates per-cell 64-bit bias/threshold multiplications and bypasses `swar_q7_add_sat_x8`
 /// when `step_gain_u7 <= 128`.
 #[inline(always)]
@@ -105,23 +104,23 @@ pub(crate) const fn swar_subswarm_resolve_with_bias_x8(
     gain_s: u64,
     gain_bias: u64,
     gain_gt_128: bool,
-    qdps_thresh_x8: u64,
-    qdps_valid_mask: u64,
+    min_step_thresh_x8: u64,
+    min_step_valid_mask: u64,
     tolerance_q7: u8,
 ) -> (u64, u8, bool) {
     if current_word == target_word {
         return (current_word, 0, true);
     }
     let raw_diff = swar_q7_circular_diff_x8(target_word, current_word);
-    let filtered_diff = if qdps_thresh_x8 <= SWAR_SPLAT_BYTE_64 {
-        raw_diff & qdps_valid_mask
+    let filtered_diff = if min_step_thresh_x8 <= SWAR_SPLAT_BYTE_64 {
+        raw_diff & min_step_valid_mask
     } else {
         let abs_lanes = swar_q7_abs_u8_x8(raw_diff);
-        let ge_bit7 = (((abs_lanes | SWAR_SIGN_MASK_64).wrapping_sub(qdps_thresh_x8))
+        let ge_bit7 = (((abs_lanes | SWAR_SIGN_MASK_64).wrapping_sub(min_step_thresh_x8))
             | (abs_lanes & SWAR_SIGN_MASK_64))
             & SWAR_SIGN_MASK_64;
         let keep_mask = (ge_bit7 >> 7).wrapping_mul(0xFF);
-        raw_diff & keep_mask & qdps_valid_mask
+        raw_diff & keep_mask & min_step_valid_mask
     };
 
     let step_word = if (!gain_gt_128) & (gain_s == 128) {
@@ -148,20 +147,20 @@ pub(crate) const fn swar_subswarm_resolve_with_bias_x8(
 #[must_use]
 pub(crate) const fn precompute_swarm_step_params(
     step_gain_u7: u8,
-    qdps_min_step_q7: u8,
+    min_step_q7: u8,
 ) -> (u64, u64, bool, u64, u64) {
     let gain_gt_128 = step_gain_u7 > 128;
     let gain_s =
         branchless_select_u8(gain_gt_128, step_gain_u7.wrapping_sub(128), step_gain_u7) as u64;
     let gain_bias = (128u64.wrapping_sub(gain_s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    let qdps_thresh_x8 = ((qdps_min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
-    let qdps_valid_mask = ((qdps_min_step_q7 <= 127) as u64).wrapping_neg();
+    let min_step_thresh_x8 = ((min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
+    let min_step_valid_mask = ((min_step_q7 <= 127) as u64).wrapping_neg();
     (
         gain_s,
         gain_bias,
         gain_gt_128,
-        qdps_thresh_x8,
-        qdps_valid_mask,
+        min_step_thresh_x8,
+        min_step_valid_mask,
     )
 }
 
@@ -177,7 +176,7 @@ unsafe fn avx2_subswarm_resolve_words_64(
     ptr_phase_splat: u64,
     active_cell_mask: u8,
     step_gain_u7: u8,
-    qdps_min_step_q7: u8,
+    min_step_q7: u8,
     tolerance_q7: u8,
 ) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u32) {
     // SAFETY: Caller guarantees `target_feature = "avx2"`. Resolves all 8 Micro-Swarm cells (64 heads)
@@ -215,12 +214,12 @@ unsafe fn avx2_subswarm_resolve_words_64(
         }
         let zero = _mm256_setzero_si256();
 
-        let (vf0, vf1) = if qdps_min_step_q7 <= 1 {
+        let (vf0, vf1) = if min_step_q7 <= 1 {
             (vd0, vd1)
-        } else if qdps_min_step_q7 > 127 {
+        } else if min_step_q7 > 127 {
             (zero, zero)
         } else {
-            let v_thresh = _mm256_set1_epi8(qdps_min_step_q7 as i8);
+            let v_thresh = _mm256_set1_epi8(min_step_q7 as i8);
             let a0 = _mm256_abs_epi8(vd0);
             let a1 = _mm256_abs_epi8(vd1);
             let k0 = _mm256_cmpeq_epi8(_mm256_max_epu8(a0, v_thresh), a0);
@@ -300,7 +299,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
     ptr_phase_splat: u64,
     active_cell_mask: u8,
     step_gain_u7: u8,
-    qdps_min_step_q7: u8,
+    min_step_q7: u8,
     tolerance_q7: u8,
 ) -> ([u64; NUM_STIGMERGIC_GRANULES], u8, u32) {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -316,7 +315,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
                 ptr_phase_splat,
                 active_cell_mask,
                 step_gain_u7,
-                qdps_min_step_q7,
+                min_step_q7,
                 tolerance_q7,
             )
         };
@@ -325,8 +324,8 @@ pub(super) fn swar_subswarm_resolve_words_64(
     let _ = (cur_is_uniform, tgt_is_uniform);
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
-            precompute_swarm_step_params(step_gain_u7, qdps_min_step_q7);
+        let (gain_s, gain_bias, gain_gt_128, min_step_thresh_x8, min_step_valid_mask) =
+            precompute_swarm_step_params(step_gain_u7, min_step_q7);
         let mut next_words = *cur_w;
         let mut quorum_mask = 0u8;
         let mut residual_sum = 0u32;
@@ -350,8 +349,8 @@ pub(super) fn swar_subswarm_resolve_words_64(
                     gain_s,
                     gain_bias,
                     gain_gt_128,
-                    qdps_thresh_x8,
-                    qdps_valid_mask,
+                    min_step_thresh_x8,
+                    min_step_valid_mask,
                     tolerance_q7,
                 );
                 has_prev = true;
@@ -383,7 +382,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StigmergicReconstitutionReport {
     /// Feedback-evolved 64-bit tagged pointer ready for the Action Hub's next instruction step.
-    pub evolved_ptr: gcso_tagged_ptr_t,
+    pub evolved_ptr: TaggedPtr,
     /// Signed stigmergic density feedback ($\Delta\rho_{\mathrm{stigmergy}}$) applied to the trail.
     pub stigmergic_delta_density: f32,
     /// 8-bit Stigmergic Quorum bitmask (`bit c == 1` iff 8-head granule $c \in 0..8$ converged).
@@ -400,7 +399,7 @@ impl Default for StigmergicReconstitutionReport {
     #[inline(always)]
     fn default() -> Self {
         Self {
-            evolved_ptr: gcso_tagged_ptr_t::NULL,
+            evolved_ptr: TaggedPtr::NULL,
             stigmergic_delta_density: 0.0,
             quorum_mask: 0,
             resolved_cell_count: 0,
@@ -421,26 +420,26 @@ pub const fn swar_subswarm_resolve_x8(
     current_word: u64,
     target_word: u64,
     step_gain_u7: u8,
-    qdps_min_step_q7: u8,
+    min_step_q7: u8,
     tolerance_q7: u8,
 ) -> (u64, u8, bool) {
-    let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
-        precompute_swarm_step_params(step_gain_u7, qdps_min_step_q7);
+    let (gain_s, gain_bias, gain_gt_128, min_step_thresh_x8, min_step_valid_mask) =
+        precompute_swarm_step_params(step_gain_u7, min_step_q7);
     swar_subswarm_resolve_with_bias_x8(
         current_word,
         target_word,
         gain_s,
         gain_bias,
         gain_gt_128,
-        qdps_thresh_x8,
-        qdps_valid_mask,
+        min_step_thresh_x8,
+        min_step_valid_mask,
         tolerance_q7,
     )
 }
 
 /// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
 /// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
-impl gcso_pointer_trail_t {
+impl PointerTrail {
     /// Subdivides the Action Hub's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches),
     /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
@@ -448,11 +447,11 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn try_resolve_action_in_swarm_to_words(
         &mut self,
-        action_ptr: gcso_tagged_ptr_t,
-        target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        action_ptr: TaggedPtr,
+        target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         active_cell_mask: u8,
         step_gain_u7: u8,
-        qdps_min_step_q7: u8,
+        min_step_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
         entropy_h_tilde: f32,
@@ -470,7 +469,7 @@ impl gcso_pointer_trail_t {
             &tgt_w,
             active_cell_mask,
             step_gain_u7,
-            qdps_min_step_q7,
+            min_step_q7,
             tolerance_q7,
             quorum_threshold,
             entropy_h_tilde,
@@ -486,11 +485,11 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn try_resolve_action_in_swarm_masked(
         &mut self,
-        action_ptr: gcso_tagged_ptr_t,
-        target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        action_ptr: TaggedPtr,
+        target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         active_cell_mask: u8,
         step_gain_u7: u8,
-        qdps_min_step_q7: u8,
+        min_step_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
         entropy_h_tilde: f32,
@@ -504,7 +503,7 @@ impl gcso_pointer_trail_t {
             target_phases,
             active_cell_mask,
             step_gain_u7,
-            qdps_min_step_q7,
+            min_step_q7,
             tolerance_q7,
             quorum_threshold,
             entropy_h_tilde,
@@ -520,10 +519,10 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn try_resolve_action_in_swarm(
         &mut self,
-        action_ptr: gcso_tagged_ptr_t,
-        target_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        action_ptr: TaggedPtr,
+        target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
         step_gain_u7: u8,
-        qdps_min_step_q7: u8,
+        min_step_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
         entropy_h_tilde: f32,
@@ -537,7 +536,7 @@ impl gcso_pointer_trail_t {
             target_phases,
             0xFF,
             step_gain_u7,
-            qdps_min_step_q7,
+            min_step_q7,
             tolerance_q7,
             quorum_threshold,
             entropy_h_tilde,
@@ -554,11 +553,11 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn reconstitute_from_stigmergy_words(
         &mut self,
-        action_ptr: gcso_tagged_ptr_t,
+        action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
         active_granule_mask: u8,
         step_gain_u7: u8,
-        qdps_min_step_q7: u8,
+        min_step_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
         entropy_h_tilde: f32,
@@ -575,7 +574,7 @@ impl gcso_pointer_trail_t {
             target_words,
             active_granule_mask,
             step_gain_u7,
-            qdps_min_step_q7,
+            min_step_q7,
             tolerance_q7,
             quorum_threshold,
             entropy_h_tilde,
@@ -589,13 +588,13 @@ impl gcso_pointer_trail_t {
     #[inline]
     pub(crate) fn try_resolve_action_in_swarm_with_cur_words(
         &mut self,
-        action_ptr: gcso_tagged_ptr_t,
+        action_ptr: TaggedPtr,
         cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
         has_active_anchors: bool,
         active_cell_mask: u8,
         step_gain_u7: u8,
-        qdps_min_step_q7: u8,
+        min_step_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
         entropy_h_tilde: f32,
@@ -639,16 +638,16 @@ impl gcso_pointer_trail_t {
                     quorum_mask = 0xFF;
                     residual_sum = 0;
                 } else {
-                    let (gain_s, gain_bias, gain_gt_128, qdps_thresh_x8, qdps_valid_mask) =
-                        precompute_swarm_step_params(step_gain_u7, qdps_min_step_q7);
+                    let (gain_s, gain_bias, gain_gt_128, min_step_thresh_x8, min_step_valid_mask) =
+                        precompute_swarm_step_params(step_gain_u7, min_step_q7);
                     let (stepped_w0, cell_res, cell_ok) = swar_subswarm_resolve_with_bias_x8(
                         cw0,
                         tw0,
                         gain_s,
                         gain_bias,
                         gain_gt_128,
-                        qdps_thresh_x8,
-                        qdps_valid_mask,
+                        min_step_thresh_x8,
+                        min_step_valid_mask,
                         tolerance_q7,
                     );
                     if active_cell_mask == 0xFF {
@@ -679,7 +678,7 @@ impl gcso_pointer_trail_t {
                     ptr_phase_splat,
                     active_cell_mask,
                     step_gain_u7,
-                    qdps_min_step_q7,
+                    min_step_q7,
                     tolerance_q7,
                 );
                 next_words = nw;
@@ -771,7 +770,7 @@ impl gcso_pointer_trail_t {
 
         let base_evolved = action_ptr.with_action_and_slot(next_slot, next_mode);
         let conjugated_evolved = base_evolved.conjugate_phase();
-        let evolved_ptr = gcso_tagged_ptr_t(branchless_select_u64(
+        let evolved_ptr = TaggedPtr(branchless_select_u64(
             repulsion_triggered,
             conjugated_evolved.raw(),
             base_evolved.raw(),
@@ -804,7 +803,7 @@ impl gcso_pointer_trail_t {
     }
 }
 
-impl gcso_pointer_trail_t {
+impl PointerTrail {
     /// Extracts the 8-head Q7 phase word (`u64`) belonging to Micro-Swarm cell `cell_idx` (`0..=7`).
     #[inline(always)]
     #[must_use]
@@ -826,11 +825,11 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn try_resolve_action_in_swarm_from_words(
         &mut self,
-        action_ptr: gcso_tagged_ptr_t,
+        action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
         active_cell_mask: u8,
         step_gain_u7: u8,
-        qdps_min_step_q7: u8,
+        min_step_q7: u8,
         tolerance_q7: u8,
         quorum_threshold: u8,
         entropy_h_tilde: f32,
@@ -850,7 +849,7 @@ impl gcso_pointer_trail_t {
             false,
             active_cell_mask,
             step_gain_u7,
-            qdps_min_step_q7,
+            min_step_q7,
             tolerance_q7,
             quorum_threshold,
             entropy_h_tilde,
@@ -866,7 +865,7 @@ impl gcso_pointer_trail_t {
     #[inline]
     pub fn fuse_with_peer_swarm_trail(
         &mut self,
-        peer_trail: &gcso_pointer_trail_t,
+        peer_trail: &PointerTrail,
         quorum_threshold: u8,
     ) -> u8 {
         let self_quorum = self.swarm_quorum_mask();
@@ -914,7 +913,7 @@ impl gcso_pointer_trail_t {
     #[inline(always)]
     pub fn resolve_swarm_with_scale_layer(
         &mut self,
-        action_ptr: gcso_tagged_ptr_t,
+        action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
         granularity: StigmergicScaleGranularity,
         layer_index: usize,

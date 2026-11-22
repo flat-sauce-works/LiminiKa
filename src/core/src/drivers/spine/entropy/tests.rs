@@ -4,7 +4,7 @@
 //! Unit tests for Layer 3 entropy kernels and stateful controller.
 
 use super::*;
-use crate::liminal::{DEFAULT_ENTROPY_EPS, GCSO_ERROR_EDBC_SINGULARITY};
+use crate::liminal::{DEFAULT_ENTROPY_EPS, LMNK_ERR_ENTROPY_SINGULARITY};
 
 #[test]
 fn test_surrogate_and_moving_z_entropy() {
@@ -46,7 +46,7 @@ fn test_eval_stateful_modes_spike_ceiling_and_dwell_anti_chattering() {
     engine.set_bifurcation_threshold(1.0);
     engine.set_hysteresis_band(0.05);
     engine.set_tau_flux(0.5);
-    let mut out_state = gcso_edbc_state_t::default();
+    let mut out_state = EntropyState::default();
 
     engine.state.moving_z_entropy = 2.0;
     engine.eval_stateful(10.0, &mut out_state).unwrap();
@@ -95,6 +95,6 @@ fn test_eval_stateful_modes_spike_ceiling_and_dwell_anti_chattering() {
 
     assert_eq!(
         engine.eval_stateful(f32::NAN, &mut out_state),
-        Err(GCSO_ERROR_EDBC_SINGULARITY)
+        Err(LMNK_ERR_ENTROPY_SINGULARITY)
     );
 }

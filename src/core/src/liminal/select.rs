@@ -5,7 +5,7 @@
 
 #![forbid(unsafe_code)]
 
-use crate::liminal::constants::gcso_q7_t;
+use crate::liminal::constants::PhaseQ7;
 
 /// Branchless bitwise selection for 8-bit unsigned integers (`cond ? if_true : if_false`).
 #[inline(always)]
@@ -74,11 +74,7 @@ pub const fn branchless_select_i64(cond: bool, if_true: i64, if_false: i64) -> i
 /// Branchless bitwise selection for Q7 fixed-point integers (`cond ? if_true : if_false`).
 #[inline(always)]
 #[must_use]
-pub const fn branchless_select_q7(
-    cond: bool,
-    if_true: gcso_q7_t,
-    if_false: gcso_q7_t,
-) -> gcso_q7_t {
+pub const fn branchless_select_q7(cond: bool, if_true: PhaseQ7, if_false: PhaseQ7) -> PhaseQ7 {
     branchless_select_i8(cond, if_true, if_false)
 }
 

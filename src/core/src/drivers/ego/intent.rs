@@ -15,7 +15,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_i32, branchless_select_i8, branchless_select_u32, branchless_select_u8,
-    gcso_q7_t, MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::stigmergy::{
     ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
@@ -416,7 +416,7 @@ impl EgoIntentAxes {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiminalEgoState {
     /// Sovereign Q7 reference phases per stigmergic granule (`-128..=127`, `offset 0..8`).
-    pub sovereign_granule_phase_q7: [gcso_q7_t; NUM_STIGMERGIC_GRANULES],
+    pub sovereign_granule_phase_q7: [PhaseQ7; NUM_STIGMERGIC_GRANULES],
     /// Signed per-channel bias applied to Slot 0 `threshold_floor_q7` during intervention (`offset 8..16`).
     pub trait_floor_bias_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Signed per-channel bias applied to Slot 0 `aperture_gain_q7` during intervention (`offset 16..24`).

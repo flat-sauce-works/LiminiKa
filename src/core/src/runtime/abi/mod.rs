@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! C-ABI interface definitions, FFI safety barriers, binary layout contracts, pointer-driven
-//! orchestration entry points, and handle management for the Geometric Cellular Sheaf Orchestrator.
+//! orchestration entry points, and opaque handle management for `LiminiKa` `v0.2.0` (`0x0000_0200`).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -40,16 +40,15 @@ use core::arch::x86_64::{
     __m256i, _mm256_castsi256_pd, _mm256_cmpeq_epi64, _mm256_load_si256, _mm256_loadu_si256,
     _mm256_movemask_pd, _mm256_or_si256, _mm256_setzero_si256, _mm256_store_si256,
 };
-use core::ffi::{c_char, CStr};
+use core::ffi::c_char;
 use core::mem::{align_of, offset_of, size_of};
 use core::ptr;
 use core::slice;
 
 #[allow(unused_imports)]
 use crate::drivers::{
-    eval_barrier_pitchfork, DistortionDelta, DistortionTension, EgoDifferentialNet, EgoIntentAxes,
-    EntropyController, LiminalEgoPreset, LiminalEgoState, SystemSpineState,
-    MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
+    eval_barrier_pitchfork, EgoDifferentialNet, LiminalEgoPreset, MAX_DISTORTION_CHAIN_HOPS,
+    MAX_EGO_PFRAME_NODES,
 };
 #[allow(unused_imports)]
 use crate::foundation::{
@@ -71,52 +70,43 @@ use crate::foundation::{
 #[allow(unused_imports)]
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u8,
-    evaluate_epistemic_partition_branchless, EpistemicPartition, GcsoResult, LiminalThresholdState,
-    MAX_ATTENTION_HEADS,
+    evaluate_lacuna_partition_branchless, LmnkResult, MAX_ATTENTION_HEADS,
 };
 #[allow(unused_imports)]
-use crate::runtime::boundary_delta::LiminalBoundaryDelta;
-#[allow(unused_imports)]
 use crate::runtime::context::{
-    init_default_config, query_capability, validate_config_invariants, AutonomousCoreLayerStack,
-    Config, RuntimeContext,
+    init_default_config, query_capability, validate_config_invariants, Config, RuntimeContext,
+    CTX_ALLOC_HEAP_BOXED, CTX_ALLOC_IN_PLACE,
 };
 #[allow(unused_imports)]
 use crate::runtime::gateway::{
     accumulate_trail_and_steer_gateway_words_core,
-    synthesize_multi_origin_gateway_frame_with_words, CausalProvenanceReport,
-    CausalProvenanceSignal, CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal,
-    GatewayFrame, GatewayPhaseSteeringExt, ManifoldGatewaySignal, ObjectiveFact, SubjectivePersona,
-    SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    synthesize_multi_origin_gateway_frame_with_words, CausalProvenanceSignal,
+    CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal, ManifoldGatewaySignal,
+    ObjectiveFact, SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
 };
 #[allow(unused_imports)]
-use crate::runtime::horizon::{evaluate_epistemic_horizon_words_64, EpistemicHorizonReading};
+use crate::runtime::horizon::evaluate_epistemic_horizon_words_64;
 #[allow(unused_imports)]
 use crate::runtime::storage::{
     finalize_snapshot_header_crc32, init_descriptor_header, init_snapshot_header,
     validate_descriptor_header, validate_snapshot_header, verify_snapshot_payload_crc32,
-    GcsoFourSectionView, GCSO_FOUR_SECTION_HEADER_BYTES,
 };
 #[allow(unused_imports)]
-use crate::runtime::telemetry::LiminalTopologyTelemetrySnapshot;
-#[allow(unused_imports)]
 use crate::stigmergy::{
-    evaluate_stigmergic_overlap_and_serendipity_words_64, trail_phase_words_mut,
-    trail_phase_words_ref, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
-    CrystallizedAttractorRecord, FastPathLedger, PhaseSteeringEngine,
-    StigmergicFragmentEnsembleReport, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
-    StigmergicReconstitutionReport, StigmergicSubstrate, StigmergicThresholds, SubstrateStepReport,
+    evaluate_stigmergic_overlap_and_discovery_words_64, trail_phase_words_mut,
+    trail_phase_words_ref, FastPathLedger, PhaseSteeringEngine, StigmergicSubstrate,
     ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES,
     TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
-/// Helper macro to catch unwinding panics and safely bridge execution into C-ABI error status codes.
+/// Helper macro to catch unwinding panics and safely bridge execution into C-ABI status codes.
 #[macro_export]
 macro_rules! ffi_boundary {
     ($body:expr) => {{
         let run_ffi_body =
-            || -> Result<$crate::runtime::abi::GcsoStatus, $crate::runtime::abi::GcsoStatus> {
+            || -> Result<$crate::runtime::abi::LmnkStatus, $crate::runtime::abi::LmnkStatus> {
                 $body
             };
 
@@ -125,7 +115,7 @@ macro_rules! ffi_boundary {
         {
             Ok(Ok(status)) => status,
             Ok(Err(err_status)) => err_status,
-            Err(_) => $crate::runtime::abi::GCSO_ERROR_PANIC_CAUGHT,
+            Err(_) => $crate::runtime::abi::LMNK_ERR_PANIC_CAUGHT,
         };
 
         #[cfg(not(feature = "std"))]
@@ -136,27 +126,6 @@ macro_rules! ffi_boundary {
 
         status
     }};
-}
-
-macro_rules! impl_stateless_handle_destroy {
-    ($(($fn_name:ident, $handle_ty:ty, $doc:expr, $safety_doc:expr)),* $(,)?) => {
-        $(
-            #[doc = $doc]
-            ///
-            /// # Safety
-            #[doc = $safety_doc]
-            #[no_mangle]
-            pub unsafe extern "C" fn $fn_name(handle: $handle_ty) -> GcsoStatus {
-                if handle.is_null() {
-                    return GCSO_SUCCESS;
-                }
-                if !is_aligned(handle) {
-                    return GCSO_ERROR_MISALIGNED_POINTER;
-                }
-                ffi_boundary!(Ok(GCSO_SUCCESS))
-            }
-        )*
-    };
 }
 
 pub mod handles;
@@ -171,17 +140,14 @@ use dispatch::*;
 pub mod runtime;
 pub use runtime::*;
 
-pub mod action_hub;
-pub use action_hub::*;
+pub mod substrate;
+pub use substrate::*;
 
 pub mod phase_steering;
 pub use phase_steering::*;
 
-pub mod entropy_attractor;
-pub use entropy_attractor::*;
-
-pub mod storage;
-pub use storage::*;
+pub mod topology;
+pub use topology::*;
 
 #[cfg(test)]
 mod tests {
@@ -196,36 +162,39 @@ mod tests {
         ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
         DEFAULT_STIGMERGIC_TOLERANCE_Q7, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
     };
+    use core::ffi::CStr;
 
     #[test]
     fn test_version_status_and_config_defaults() {
-        let mut major = 0u32;
-        let mut minor = 0u32;
-        let mut patch = 0u32;
+        let major = lmnk_abi_version_major();
+        let minor = lmnk_abi_version_minor();
+        let patch = lmnk_abi_version_patch();
+        let hex = lmnk_abi_version_hex();
         let mut cap_flags = 0u64;
-        let mut config = gcso_config_t::default();
+        let mut config = lmnk_config_t::default();
 
         // SAFETY: Local stack variables satisfy alignment and bounds invariants.
         unsafe {
-            assert_eq!(
-                gcso_abi_get_version(&mut major, &mut minor, &mut patch),
-                GCSO_SUCCESS
-            );
-            assert_eq!(gcso_abi_query_capability(&mut cap_flags), GCSO_SUCCESS);
-            assert_eq!(gcso_config_init_default(&mut config), GCSO_SUCCESS);
-            assert_eq!(gcso_config_validate(&config), GCSO_SUCCESS);
-            let c_str = CStr::from_ptr(gcso_status_to_string(GCSO_SUCCESS));
-            assert_eq!(c_str.to_str().unwrap(), "GCSO_SUCCESS");
+            assert_eq!(lmnk_abi_query_capability(&mut cap_flags), LMNK_OK);
+            assert_eq!(lmnk_config_init_default(&mut config), LMNK_OK);
+            assert_eq!(lmnk_config_validate(&config), LMNK_OK);
+            let ver_c = CStr::from_ptr(lmnk_abi_version_string());
+            assert_eq!(ver_c.to_str().unwrap(), "0.2.0");
+            let c_str = CStr::from_ptr(lmnk_status_to_string(LMNK_OK));
+            assert_eq!(c_str.to_str().unwrap(), "LMNK_OK");
         }
         assert_eq!(
-            (major, minor, patch),
+            (major, minor, patch, hex),
             (
-                GCSO_ABI_VERSION_MAJOR,
-                GCSO_ABI_VERSION_MINOR,
-                GCSO_ABI_VERSION_PATCH
+                LMNK_ABI_VERSION_MAJOR,
+                LMNK_ABI_VERSION_MINOR,
+                LMNK_ABI_VERSION_PATCH,
+                0x0000_0200,
             )
         );
-        assert_ne!(cap_flags & GCSO_CAP_CPU_BASELINE, 0);
+        assert_ne!(cap_flags & LMNK_CAP_SWAR_BASELINE, 0);
+        assert_ne!(cap_flags & LMNK_CAP_ZERO_ALLOC_CORE, 0);
+        assert_ne!(cap_flags & LMNK_CAP_INPLACE_CONTEXT_INIT, 0);
         assert_eq!(config.head_dim, 128);
         assert_eq!(config.num_heads, 32);
     }
@@ -233,23 +202,23 @@ mod tests {
     #[test]
     fn test_tagged_ptr_and_action_mode_evolution() {
         let raw_addr = 0x0000_1234_5678_9ABCu64;
-        let action_ptr = gcso_tagged_ptr_pack_action(
+        let action_ptr = lmnk_tagged_ptr_pack_action(
             raw_addr,
             ATTRACTOR_SLOT_PERSONA,
             ACTION_PRESET_INERTIAL_SKIP,
             24,
         );
-        assert_eq!(gcso_tagged_ptr_unpack_addr(action_ptr), raw_addr);
+        assert_eq!(lmnk_tagged_ptr_unpack_addr(action_ptr), raw_addr);
         assert_eq!(
-            gcso_tagged_ptr_unpack_attractor_slot(action_ptr),
+            lmnk_tagged_ptr_unpack_attractor_slot(action_ptr),
             ATTRACTOR_SLOT_PERSONA
         );
         assert_eq!(
-            gcso_tagged_ptr_unpack_action_mode(action_ptr),
+            lmnk_tagged_ptr_unpack_action_mode(action_ptr),
             ACTION_PRESET_INERTIAL_SKIP
         );
 
-        let evolved_full = gcso_tagged_ptr_evolve_mode_stigmergically(
+        let evolved_full = lmnk_tagged_ptr_evolve_mode(
             action_ptr,
             2.0,
             0.45,
@@ -259,15 +228,15 @@ mod tests {
             1.50,
         );
         assert_eq!(
-            gcso_tagged_ptr_unpack_attractor_slot(evolved_full),
+            lmnk_tagged_ptr_unpack_attractor_slot(evolved_full),
             ATTRACTOR_SLOT_KNOWLEDGE
         );
         assert_eq!(
-            gcso_tagged_ptr_unpack_action_mode(evolved_full),
+            lmnk_tagged_ptr_unpack_action_mode(evolved_full),
             ACTION_PRESET_FULL_ORCHESTRATION
         );
 
-        let evolved_rep = gcso_tagged_ptr_evolve_mode_stigmergically(
+        let evolved_rep = lmnk_tagged_ptr_evolve_mode(
             evolved_full,
             0.5,
             0.50,
@@ -277,24 +246,24 @@ mod tests {
             1.50,
         );
         assert_eq!(
-            gcso_tagged_ptr_unpack_attractor_slot(evolved_rep),
+            lmnk_tagged_ptr_unpack_attractor_slot(evolved_rep),
             ATTRACTOR_SLOT_REPULSION
         );
         assert_eq!(
-            gcso_tagged_ptr_unpack_action_mode(evolved_rep) & ACTION_PRESET_REPULSION_ESCAPE,
+            lmnk_tagged_ptr_unpack_action_mode(evolved_rep) & ACTION_PRESET_REPULSION_ESCAPE,
             ACTION_PRESET_REPULSION_ESCAPE
         );
-        assert_eq!(gcso_tagged_ptr_unpack_phase(evolved_rep), -24);
+        assert_eq!(lmnk_tagged_ptr_unpack_phase(evolved_rep), -24);
     }
 
     #[test]
-    fn test_srl_pspm_l2p_bitmask_and_pitchfork_abi() {
+    fn test_rank1_lora_bitmask_and_pitchfork_abi() {
         let mut barrier = 0.0f32;
         let x_in = AlignedBuffer32::new([1.0f32, 2.0, 3.0, 4.0]);
         let mut y_out = AlignedBuffer32::new([0.0f32; 4]);
         let u_vec = AlignedBuffer32::new([2.0f32; 4]);
         let v_vec = AlignedBuffer32::new([1.0f32; 4]);
-        let desc = gcso_rank1_residual_descriptor_t {
+        let desc = lmnk_rank1_descriptor_t {
             layer_idx: 0,
             rank: 1,
             u_vector_ptr: u_vec.as_ptr() as u64,
@@ -310,43 +279,43 @@ mod tests {
         kv_words[3] = 42;
         kv_words[15] = 7;
         kv_words[19] = 99;
-        let mut warp_mask = gcso_paged_bitmask_t::default();
+        let mut warp_mask = lmnk_paged_bitmask_t::default();
         let masks_in = [
-            gcso_paged_bitmask_t {
+            lmnk_paged_bitmask_t {
                 bits: [0b0101, 0, 0, 0],
             },
-            gcso_paged_bitmask_t {
+            lmnk_paged_bitmask_t {
                 bits: [0b1010, 1, 0, 0],
             },
         ];
-        let mut reduced_mask = gcso_paged_bitmask_t::default();
+        let mut reduced_mask = lmnk_paged_bitmask_t::default();
 
         // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
         unsafe {
             assert_eq!(
-                gcso_liminal_void_eval_barrier_pitchfork(2.0, 1.0, 1.0, 1.0, 128, &mut barrier),
-                GCSO_SUCCESS
+                lmnk_liminal_eval_barrier_pitchfork(2.0, 1.0, 1.0, 1.0, 128, &mut barrier),
+                LMNK_OK
             );
             assert!((barrier - (1.0 / 512.0)).abs() < 1e-6);
             assert_eq!(
-                gcso_rank1_eval(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
-                GCSO_SUCCESS
+                lmnk_rank1_eval(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
+                LMNK_OK
             );
             assert_eq!(
-                gcso_rank1_eval_fused(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
-                GCSO_SUCCESS
+                lmnk_rank1_eval_fused(y_out.as_mut_ptr(), x_in.as_ptr(), &desc, 4, 4),
+                LMNK_OK
             );
             assert_eq!(
-                gcso_action_hub_paged_block_warp_bitmask(
+                lmnk_substrate_paged_block_warp_bitmask(
                     kv_words.as_ptr(),
                     kv_words.len(),
                     &mut warp_mask,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(
-                gcso_action_hub_reduce_bit_tree(masks_in.as_ptr(), 2, &mut reduced_mask),
-                GCSO_SUCCESS
+                lmnk_substrate_reduce_bit_tree(masks_in.as_ptr(), 2, &mut reduced_mask),
+                LMNK_OK
             );
         }
         assert_eq!(y_out.data, [40.0f32; 4]);
@@ -359,10 +328,10 @@ mod tests {
     }
 
     #[test]
-    fn test_action_hub_swarm_resolution_abi() {
+    fn test_substrate_swarm_resolution_abi() {
         let anchors_flat = [[-96i8; MAX_ATTENTION_HEADS], [32i8; MAX_ATTENTION_HEADS]];
-        let mut src_trail = gcso_pointer_trail_t {
-            current_ptr: gcso_tagged_ptr_pack_action(
+        let mut src_trail = lmnk_pointer_trail_t {
+            current_ptr: lmnk_tagged_ptr_pack_action(
                 0x1000,
                 ATTRACTOR_SLOT_PERSONA,
                 ACTION_PRESET_EXPRESS_PHASE,
@@ -376,7 +345,7 @@ mod tests {
         // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
         unsafe {
             assert_eq!(
-                gcso_action_hub_resolve_trail_in_swarm(
+                lmnk_substrate_resolve_trail_in_swarm(
                     &mut src_trail,
                     src_trail.current_ptr,
                     anchors_flat[1].as_ptr(),
@@ -389,7 +358,7 @@ mod tests {
                     0.15,
                     &mut swarm_rep,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(swarm_rep.hot_path_resolved, 1);
             assert_eq!(swarm_rep.quorum_mask, 0xFF);
@@ -402,33 +371,33 @@ mod tests {
         let mut persona_phases = [0i8; MAX_ATTENTION_HEADS];
         let emb_vals = [1.0f32, 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 0.875];
         let bloom = ContrastivePhaseBloomFilter::new();
-        let mut frame = gcso_gateway_frame_t::default();
-        let mut report = gcso_causal_provenance_report_t::default();
+        let mut frame = lmnk_gateway_frame_t::default();
+        let mut report = lmnk_causal_report_t::default();
 
         // SAFETY: Local stack buffers satisfy alignment and bounds invariants.
         unsafe {
             assert_eq!(
-                gcso_gateway_project_bytes_to_q7_64(
+                lmnk_gateway_project_bytes_to_q7_64(
                     b"LiminiKa Objective RAG Record".as_ptr(),
                     29,
                     fact_phases.as_mut_ptr(),
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(
-                gcso_gateway_project_f32_to_q7_64(
+                lmnk_gateway_project_f32_to_q7_64(
                     emb_vals.as_ptr(),
                     emb_vals.len(),
                     1.0,
                     persona_phases.as_mut_ptr(),
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             fact_phases = [28i8; MAX_ATTENTION_HEADS];
             persona_phases = [32i8; MAX_ATTENTION_HEADS];
 
             assert_eq!(
-                gcso_gateway_synthesize_multi_origin_frame(
+                lmnk_gateway_synthesize_multi_origin_frame(
                     0.15,
                     0.05,
                     0xFF,
@@ -447,21 +416,18 @@ mod tests {
                     &mut frame,
                     &mut report,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
         }
         assert_eq!(frame.mapped_section_offset48, 0x0018_0000);
         assert_eq!(frame.target_anchor_id, 55);
         assert_eq!(report.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
 
-        let mut trail = gcso_pointer_trail_t::default();
+        let mut trail = lmnk_pointer_trail_t::default();
         let mut q_buf = AlignedBuffer32::new([1.0f32; 64]);
         let mut k_buf = AlignedBuffer32::new([0.5f32; 64]);
         let mut logits = AlignedBuffer32::new([1.0f32, -1.0, 2.0, -2.0, 0.5, -0.5, 0.25, -0.25]);
-        let mut centroids = [
-            CrystallizedAttractorRecord::default(),
-            CrystallizedAttractorRecord::default(),
-        ];
+        let mut centroids = [PhaseAnchorRecord::default(), PhaseAnchorRecord::default()];
         let mut assigned_idx = 0usize;
         let mut assigned_coh = 0.0f32;
         let mut updated_mass = 0.0f32;
@@ -473,7 +439,7 @@ mod tests {
         // SAFETY: Local stack buffers satisfy alignment and disjointness invariants.
         unsafe {
             assert_eq!(
-                gcso_dpsr_steer_gateway_frame_safe(
+                lmnk_phase_steering_steer_gateway_frame_safe(
                     &frame,
                     &mut trail,
                     64,
@@ -485,13 +451,13 @@ mod tests {
                     8,
                     &mut report,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(trail.target_anchor_id, 55);
             assert!(logits.data[0] > 1.5);
 
             assert_eq!(
-                gcso_attractor_step_online_toroidal_kmeans(
+                lmnk_anchor_step_online_toroidal_kmeans(
                     centroids.as_mut_ptr(),
                     2,
                     &frame,
@@ -501,7 +467,7 @@ mod tests {
                     &mut assigned_coh,
                     &mut updated_mass,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(assigned_idx, 0);
             assert_eq!(trail.cluster_id, 55);
@@ -509,7 +475,7 @@ mod tests {
 
             let batch_frames = [frame, frame];
             assert_eq!(
-                gcso_attractor_step_online_toroidal_kmeans_batch(
+                lmnk_anchor_step_online_toroidal_kmeans_batch(
                     centroids.as_mut_ptr(),
                     2,
                     batch_frames.as_ptr(),
@@ -521,7 +487,7 @@ mod tests {
                     &mut batch_mean_coh,
                     &mut batch_spawned,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(batch_last_idx, 0);
             assert_eq!(batch_last_id, 55);
@@ -530,13 +496,13 @@ mod tests {
         }
 
         let cand_trails = [
-            gcso_pointer_trail_t {
+            lmnk_pointer_trail_t {
                 stigmergic_density: 1.0,
                 cluster_id: 999,
                 accumulated_phase_delta: [-96i8; MAX_ATTENTION_HEADS],
                 ..Default::default()
             },
-            gcso_pointer_trail_t {
+            lmnk_pointer_trail_t {
                 stigmergic_density: 2.5,
                 target_anchor_id: 55,
                 cluster_id: 55,
@@ -544,26 +510,25 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let ledger = gcso_ledger_slot_t::default();
+        let ledger = lmnk_ledger_slot_t::default();
 
-        // Verify 4-section `.gcso` zero-copy serialization and verification C-ABI
+        // Verify 4-section `.lmnk` zero-copy serialization and verification C-ABI
         let reports_arr = [report];
         let mut container_buf = AlignedBuffer128::<u8, 768>::new([0u8; 768]);
         let mut req_len = 0usize;
-        let mut storage_desc = gcso_mapped_storage_descriptor_t::default();
         let mut nc_out = 0usize;
         let mut nt_out = 0usize;
         let mut nr_out = 0usize;
-        let mut c_ptr: *const gcso_crystallized_attractor_record_t = ptr::null();
-        let mut t_ptr: *const gcso_pointer_trail_t = ptr::null();
-        let mut b_ptr: *const gcso_contrastive_bloom_filter_t = ptr::null();
-        let mut d_ptr: *const gcso_ledger_slot_t = ptr::null();
-        let mut r_ptr: *const gcso_causal_provenance_report_t = ptr::null();
+        let mut c_ptr: *const lmnk_phase_anchor_record_t = ptr::null();
+        let mut t_ptr: *const lmnk_pointer_trail_t = ptr::null();
+        let mut b_ptr: *const lmnk_bloom_filter_t = ptr::null();
+        let mut d_ptr: *const lmnk_ledger_slot_t = ptr::null();
+        let mut r_ptr: *const lmnk_causal_report_t = ptr::null();
 
         // SAFETY: Local stack buffers satisfy 128B alignment and disjointness invariants.
         unsafe {
             assert_eq!(
-                gcso_container_write_four_section_with_reports_zero_copy(
+                lmnk_container_write_four_section_with_reports_zero_copy(
                     centroids.as_ptr(),
                     1,
                     cand_trails.as_ptr(),
@@ -576,11 +541,11 @@ mod tests {
                     ptr::null_mut(),
                     &mut req_len,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert!(req_len <= container_buf.data.len());
             assert_eq!(
-                gcso_container_write_four_section_with_reports_zero_copy(
+                lmnk_container_write_four_section_with_reports_zero_copy(
                     centroids.as_ptr(),
                     1,
                     cand_trails.as_ptr(),
@@ -593,13 +558,12 @@ mod tests {
                     container_buf.data.as_mut_ptr(),
                     &mut req_len,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(
-                gcso_container_verify_four_section_with_reports_zero_copy(
+                lmnk_container_verify_four_section_with_reports_zero_copy(
                     container_buf.data.as_ptr(),
                     req_len,
-                    &mut storage_desc,
                     &mut nc_out,
                     &mut nt_out,
                     &mut nr_out,
@@ -609,10 +573,8 @@ mod tests {
                     &mut d_ptr,
                     &mut r_ptr,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
-            assert_eq!(storage_desc.file_size_bytes, req_len as u64);
-            assert_eq!(storage_desc.flags, 4);
             assert_eq!(nc_out, 1);
             assert_eq!(nt_out, 1);
             assert_eq!(nr_out, 1);
@@ -621,13 +583,13 @@ mod tests {
             assert!(!b_ptr.is_null() && !d_ptr.is_null());
             assert!(!r_ptr.is_null() && (*r_ptr).dominant_slot == ATTRACTOR_SLOT_KNOWLEDGE);
 
-            let mut zc_map_trail = gcso_pointer_trail_t::default();
+            let mut zc_map_trail = lmnk_pointer_trail_t::default();
             let mut zc_num_c = 0usize;
             let mut zc_pull = 0.0f32;
             let mut zc_dom_id = 0u32;
             let mut zc_ripa = 0.0f32;
             assert_eq!(
-                gcso_container_map_and_steer_four_section_zero_copy_safe(
+                lmnk_container_map_and_steer_four_section_zero_copy_safe(
                     container_buf.data.as_ptr(),
                     req_len,
                     &mut zc_map_trail,
@@ -641,22 +603,22 @@ mod tests {
                     &mut zc_dom_id,
                     &mut zc_ripa,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(zc_num_c, 1);
             assert_eq!(zc_dom_id, 55);
             assert!(zc_pull > 0.0 && zc_ripa > 0.05);
             assert_eq!(zc_map_trail.cluster_id, 55);
 
-            let mut raw_bytes_centroids = [CrystallizedAttractorRecord::default(); 2];
-            let mut raw_bytes_trail = gcso_pointer_trail_t::default();
-            let mut raw_bytes_frame = gcso_gateway_frame_t::default();
-            let mut raw_bytes_report = gcso_causal_provenance_report_t::default();
+            let mut raw_bytes_centroids = [PhaseAnchorRecord::default(); 2];
+            let mut raw_bytes_trail = lmnk_pointer_trail_t::default();
+            let mut raw_bytes_frame = lmnk_gateway_frame_t::default();
+            let mut raw_bytes_report = lmnk_causal_report_t::default();
             let mut raw_bytes_idx = 99usize;
             let mut raw_bytes_coh = 0.0f32;
             let mut raw_bytes_mass = 0.0f32;
             assert_eq!(
-                gcso_gateway_project_bytes_synthesize_kmeans_and_steer_qk_safe(
+                lmnk_gateway_project_bytes_synthesize_kmeans_and_steer_qk_safe(
                     0.10,
                     0.05,
                     0xFF,
@@ -691,22 +653,22 @@ mod tests {
                     &mut raw_bytes_coh,
                     &mut raw_bytes_mass,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(raw_bytes_idx, 0);
             assert_eq!(raw_bytes_trail.cluster_id, 77);
             assert_eq!(raw_bytes_frame.target_anchor_id, 77);
             assert!(raw_bytes_mass > 0.0 && raw_bytes_centroids[0].verify_integrity());
 
-            let mut raw_f32_centroids = [CrystallizedAttractorRecord::default(); 2];
-            let mut raw_f32_trail = gcso_pointer_trail_t::default();
-            let mut raw_f32_frame = gcso_gateway_frame_t::default();
-            let mut raw_f32_report = gcso_causal_provenance_report_t::default();
+            let mut raw_f32_centroids = [PhaseAnchorRecord::default(); 2];
+            let mut raw_f32_trail = lmnk_pointer_trail_t::default();
+            let mut raw_f32_frame = lmnk_gateway_frame_t::default();
+            let mut raw_f32_report = lmnk_causal_report_t::default();
             let mut raw_f32_idx = 99usize;
             let mut raw_f32_coh = 0.0f32;
             let mut raw_f32_mass = 0.0f32;
             assert_eq!(
-                gcso_gateway_project_f32_synthesize_kmeans_and_steer_qk_safe(
+                lmnk_gateway_project_f32_synthesize_kmeans_and_steer_qk_safe(
                     0.10,
                     0.05,
                     0xFF,
@@ -743,30 +705,24 @@ mod tests {
                     &mut raw_f32_coh,
                     &mut raw_f32_mass,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(raw_f32_idx, 0);
             assert_eq!(raw_f32_trail.cluster_id, 88);
             assert_eq!(raw_f32_frame.target_anchor_id, 88);
             assert!(raw_f32_mass > 0.0 && raw_f32_centroids[0].verify_integrity());
-
-            assert_eq!(
-                gcso_mapped_storage_close_mmap(&mut storage_desc),
-                GCSO_SUCCESS
-            );
-            assert_eq!(storage_desc.fd_handle, -1);
         }
     }
 
     #[test]
-    fn test_pointer_dpsr_and_snapshot_crc32() {
-        let passive_ptr = gcso_tagged_ptr_pack_action(
+    fn test_pointer_steering_in_place_and_snapshot_crc32() {
+        let passive_ptr = lmnk_tagged_ptr_pack_action(
             0x1000,
             ATTRACTOR_SLOT_PERSONA,
             ACTION_PRESET_PASSIVE_SIDECAR,
             32,
         );
-        let active_ptr = gcso_tagged_ptr_pack_action(
+        let active_ptr = lmnk_tagged_ptr_pack_action(
             0x1000,
             ATTRACTOR_SLOT_PERSONA,
             ACTION_PRESET_EXPRESS_PHASE,
@@ -776,19 +732,19 @@ mod tests {
         let mut q_passive = AlignedBuffer32::new([1.0f32, 0.0, 1.0, 0.0]);
         let mut q_active = AlignedBuffer32::new([1.0f32, 0.0, 1.0, 0.0]);
 
-        let mut ctx_cfg = gcso_config_t::default();
-        let mut ctx: GcsoContextHandle = ptr::null_mut();
+        let mut ctx_cfg = lmnk_config_t::default();
+        let mut ctx: LmnkContextHandle = ptr::null_mut();
         let mut req_size = 0usize;
         let mut buf = [0u8; 320];
-        let mut restored_ctx: GcsoContextHandle = ptr::null_mut();
+        let mut restored_ctx: LmnkContextHandle = ptr::null_mut();
 
         // SAFETY: Local stack buffers satisfy alignment and bounds invariants.
         unsafe {
-            assert_eq!(gcso_config_init_default(&mut ctx_cfg), GCSO_SUCCESS);
-            assert_eq!(gcso_context_create(&ctx_cfg, &mut ctx), GCSO_SUCCESS);
+            assert_eq!(lmnk_config_init_default(&mut ctx_cfg), LMNK_OK);
+            assert_eq!(lmnk_context_create(&ctx_cfg, &mut ctx), LMNK_OK);
             assert!(!ctx.is_null());
             assert_eq!(
-                gcso_dpsr_apply_pointer_gated_phase_steering_safe(
+                lmnk_phase_steering_apply_pointer_gated_safe(
                     passive_ptr,
                     q_passive.as_mut_ptr(),
                     deltas.as_ptr(),
@@ -796,10 +752,10 @@ mod tests {
                     1,
                     DEFAULT_PHASE_CLAMP_MAX_RAD,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(
-                gcso_dpsr_apply_pointer_gated_phase_steering_safe(
+                lmnk_phase_steering_apply_pointer_gated_safe(
                     active_ptr,
                     q_active.as_mut_ptr(),
                     deltas.as_ptr(),
@@ -807,38 +763,38 @@ mod tests {
                     1,
                     DEFAULT_PHASE_CLAMP_MAX_RAD,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(
-                gcso_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
-                GCSO_ERROR_BUFFER_TOO_SMALL
+                lmnk_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
+                LMNK_ERR_BUFFER_TOO_SMALL
             );
             assert_eq!(
-                gcso_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
-                GCSO_SUCCESS
+                lmnk_context_serialize(ctx, buf.as_mut_ptr(), &mut req_size),
+                LMNK_OK
             );
             assert_eq!(
-                gcso_context_deserialize(buf.as_ptr(), buf.len(), &mut restored_ctx),
-                GCSO_SUCCESS
+                lmnk_context_deserialize(buf.as_ptr(), buf.len(), &mut restored_ctx),
+                LMNK_OK
             );
             assert!(!restored_ctx.is_null());
-            assert_eq!(gcso_context_destroy(restored_ctx), GCSO_SUCCESS);
+            assert_eq!(lmnk_context_destroy(restored_ctx), LMNK_OK);
             buf[200] ^= 0xFF;
-            let mut failed_restore: GcsoContextHandle = ptr::null_mut();
+            let mut failed_restore: LmnkContextHandle = ptr::null_mut();
             assert_eq!(
-                gcso_context_deserialize(buf.as_ptr(), buf.len(), &mut failed_restore),
-                GCSO_ERROR_CONTAINER_CORRUPTED
+                lmnk_context_deserialize(buf.as_ptr(), buf.len(), &mut failed_restore),
+                LMNK_ERR_CONTAINER_CORRUPTED
             );
             assert!(failed_restore.is_null());
-            assert_eq!(gcso_context_destroy(ctx), GCSO_SUCCESS);
+            assert_eq!(lmnk_context_destroy(ctx), LMNK_OK);
         }
         assert_eq!(q_passive.data, [1.0f32, 0.0, 1.0, 0.0]);
         assert!(q_active.data[3] > 0.0);
 
-        let mut hub_handle: GcsoActionHubHandle = ptr::null_mut();
-        let mut thresh = gcso_stigmergic_thresholds_t::default();
-        let mut orch_report = gcso_action_orchestration_report_t::default();
-        let mut orch_trail = gcso_pointer_trail_t {
+        let mut hub_handle: LmnkSubstrateHandle = ptr::null_mut();
+        let mut thresh = lmnk_stigmergic_thresholds_t::default();
+        let mut orch_report = lmnk_substrate_step_report_t::default();
+        let mut orch_trail = lmnk_pointer_trail_t {
             stigmergic_density: 1.60,
             target_anchor_id: 99,
             accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
@@ -848,13 +804,10 @@ mod tests {
         let mut k_orch = AlignedBuffer32::new([1.0f32; 16]);
         // SAFETY: Local stack variables satisfy alignment and disjointness invariants.
         unsafe {
-            assert_eq!(gcso_action_hub_create(16, &mut hub_handle), GCSO_SUCCESS);
+            assert_eq!(lmnk_substrate_create(16, &mut hub_handle), LMNK_OK);
+            assert_eq!(lmnk_substrate_init_default_thresholds(&mut thresh), LMNK_OK);
             assert_eq!(
-                gcso_action_hub_init_default_thresholds(&mut thresh),
-                GCSO_SUCCESS
-            );
-            assert_eq!(
-                gcso_action_hub_evaluate_stigmergic_thresholds(
+                lmnk_substrate_evaluate_thresholds(
                     &thresh,
                     &orch_trail,
                     0.30,
@@ -865,14 +818,14 @@ mod tests {
                     ATTRACTOR_SLOT_PERSONA,
                     &mut orch_report,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(
                 orch_report.decision,
                 StigmergicActionDecision::FullOrchestration as u8
             );
             assert_eq!(
-                gcso_action_hub_orchestrate_stigmergic_step_safe(
+                lmnk_substrate_step_safe(
                     hub_handle,
                     &thresh,
                     active_ptr,
@@ -889,20 +842,20 @@ mod tests {
                     0,
                     &mut orch_report,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_eq!(orch_report.dominant_anchor_id, 99);
             assert!(orch_report.updated_density >= 1.50);
-            assert_eq!(gcso_action_hub_destroy(hub_handle), GCSO_SUCCESS);
+            assert_eq!(lmnk_substrate_destroy(hub_handle), LMNK_OK);
         }
     }
 
     #[test]
-    fn test_epistemic_venn_core_layers_and_mermaid_abi() {
+    fn test_epistemic_overlap_core_stack_and_mermaid_abi() {
         let mut crystals = [
-            CrystallizedAttractorRecord::new_empty(11, ATTRACTOR_SLOT_KNOWLEDGE, 0),
-            CrystallizedAttractorRecord::new_empty(12, ATTRACTOR_SLOT_KNOWLEDGE, 0),
-            CrystallizedAttractorRecord::default(),
+            PhaseAnchorRecord::new_empty(11, ATTRACTOR_SLOT_KNOWLEDGE, 0),
+            PhaseAnchorRecord::new_empty(12, ATTRACTOR_SLOT_KNOWLEDGE, 0),
+            PhaseAnchorRecord::default(),
         ];
         let f0 = GatewayFrame {
             target_anchor_id: 11,
@@ -931,30 +884,30 @@ mod tests {
             drifted_phases[h] = 100;
         }
 
-        let mut horizon = gcso_epistemic_horizon_reading_t::default();
-        let mut venn_report = gcso_stigmergic_venn_serendipity_report_t::default();
+        let mut horizon = lmnk_epistemic_horizon_t::default();
+        let mut overlap_report = lmnk_overlap_discovery_report_t::default();
         let mut did_nucleate = 0u8;
-        let mut stack = gcso_autonomous_core_layer_stack_t::default();
-        let ledger = gcso_cognitive_trajectory_ledger_t::default();
+        let mut stack = lmnk_core_state_stack_t::default();
+        let ledger = lmnk_cognitive_ledger_t::default();
         let mut mermaid_buf = [0u8; 2048];
         let mut written = 0usize;
 
         // SAFETY: Local stack buffers satisfy all alignment and disjointness invariants.
         unsafe {
             assert_eq!(
-                gcso_epistemic_evaluate_horizon(
+                lmnk_epistemic_evaluate_horizon(
                     crystals.as_ptr(),
                     crystals.len(),
                     query_phases.as_ptr(),
                     0.35,
                     &mut horizon,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
             assert_ne!(horizon.horizon_gate, 0.0);
 
             assert_eq!(
-                gcso_stigmergic_evaluate_venn_and_serendipity(
+                lmnk_stigmergic_evaluate_overlap_and_discovery(
                     crystals.as_mut_ptr(),
                     crystals.len(),
                     query_phases.as_ptr(),
@@ -963,46 +916,62 @@ mod tests {
                     16,
                     1,
                     701,
-                    &mut venn_report,
+                    &mut overlap_report,
                     &mut did_nucleate,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
-            assert_eq!(venn_report.serendipity_triggered, 1);
+            assert_eq!(overlap_report.discovery_triggered, 1);
             assert_eq!(did_nucleate, 1);
             assert!(crystals[2].verify_integrity());
 
-            assert_eq!(gcso_core_layer_stack_init_default(&mut stack), GCSO_SUCCESS);
+            assert_eq!(lmnk_core_stack_init_default(&mut stack), LMNK_OK);
             assert_eq!(
-                gcso_core_layer_stack_adapt(&mut stack, &ledger, &horizon, &venn_report),
-                GCSO_SUCCESS
+                lmnk_core_stack_adapt(&mut stack, &ledger, &horizon, &overlap_report),
+                LMNK_OK
             );
-            assert_eq!(stack.stigmergic_layer.adaptation_epochs, 1);
+            assert_eq!(stack.stigmergy.adaptation_epochs, 1);
 
+            let mut needed = 0usize;
             assert_eq!(
-                gcso_liminal_topology_format_mermaid(
+                lmnk_topology_format_mermaid(
                     &stack,
                     &horizon,
-                    &venn_report,
+                    &overlap_report,
+                    3,
+                    1,
+                    ptr::null_mut(),
+                    0,
+                    &mut needed,
+                ),
+                LMNK_OK
+            );
+            assert!(needed > 0 && needed <= mermaid_buf.len());
+            assert_eq!(
+                lmnk_topology_format_mermaid(
+                    &stack,
+                    &horizon,
+                    &overlap_report,
                     3,
                     1,
                     mermaid_buf.as_mut_ptr(),
                     mermaid_buf.len(),
                     &mut written,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
+            assert_eq!(written, needed);
         }
         let s = core::str::from_utf8(&mermaid_buf[..written]).expect("valid utf8");
-        assert!(s.contains("Core Layer 0: Liminal"));
-        assert!(s.contains("Core Layer 1: StigmergicGranuleState"));
-        assert!(s.contains("Core Layer 2: LiminalEgoState"));
+        assert!(s.contains("Liminal"));
+        assert!(s.contains("StigmergicGranuleState"));
+        assert!(s.contains("LiminalEgoState"));
 
-        let mut ego_preset = gcso_liminal_ego_field_t::default();
-        let mut ego_text = gcso_liminal_ego_field_t::default();
+        let mut ego_preset = lmnk_liminal_ego_state_t::default();
+        let mut ego_text = lmnk_liminal_ego_state_t::default();
         let desc = b"Independent rebel explorer stepping beyond limits";
-        let delta = gcso_liminal_boundary_delta_t::default();
-        let mut frame = gcso_gateway_frame_t {
+        let delta = lmnk_boundary_delta_t::default();
+        let mut frame = lmnk_gateway_frame_t {
             effective_energy: 8.0,
             ..Default::default()
         };
@@ -1011,24 +980,24 @@ mod tests {
 
         // SAFETY: Stack-allocated buffers satisfy 64B/16B alignment and disjointness invariants.
         unsafe {
-            assert_eq!(gcso_ego_field_init_preset(3, &mut ego_preset), GCSO_SUCCESS);
+            assert_eq!(lmnk_ego_state_init_preset(3, &mut ego_preset), LMNK_OK);
             assert!(ego_preset.counter_basin_thrust_q7 >= 90);
             assert_eq!(
-                gcso_ego_field_derive_from_text(desc.as_ptr(), desc.len(), &mut ego_text),
-                GCSO_SUCCESS
+                lmnk_ego_state_derive_from_text(desc.as_ptr(), desc.len(), &mut ego_text),
+                LMNK_OK
             );
             assert!(ego_text.is_active());
             assert_ne!(ego_text.ego_signature_hash, 0);
             assert_eq!(
-                gcso_ego_field_intervene_frame(
+                lmnk_ego_state_intervene_frame(
                     &mut ego_text,
                     &mut stack,
                     &delta,
                     &horizon,
-                    &venn_report,
+                    &overlap_report,
                     &mut frame,
                 ),
-                GCSO_SUCCESS
+                LMNK_OK
             );
         }
         assert!(ego_text.intervention_epochs >= 1);
@@ -1036,24 +1005,71 @@ mod tests {
     }
 
     #[test]
+    fn test_context_in_place_lifecycle_and_cross_guards() {
+        #[repr(C, align(64))]
+        struct AlignedCtxBuf([u8; 8192]);
+
+        let sz = lmnk_context_size();
+        let al = lmnk_context_align();
+        assert_eq!(al, 64);
+        assert!(sz > 0 && sz <= 8192 && (sz % 64) == 0);
+
+        let mut cfg = lmnk_config_t::default();
+        let mut backing = AlignedCtxBuf([0u8; 8192]);
+        let mut boxed_ctx: LmnkContextHandle = ptr::null_mut();
+
+        // SAFETY: Buffers and stack locals satisfy alignment, size, and disjointness.
+        unsafe {
+            assert_eq!(lmnk_config_init_default(&mut cfg), LMNK_OK);
+            assert_eq!(
+                lmnk_context_init_in_place(&cfg, backing.0.as_mut_ptr(), sz - 1),
+                LMNK_ERR_BUFFER_TOO_SMALL
+            );
+            assert_eq!(
+                lmnk_context_init_in_place(&cfg, backing.0.as_mut_ptr(), sz),
+                LMNK_OK
+            );
+            let in_place_handle = backing.0.as_mut_ptr().cast::<LmnkContextOpaque>();
+            // Cross-guard: boxed destroy must reject in_place handle
+            assert_eq!(
+                lmnk_context_destroy(in_place_handle),
+                LMNK_ERR_INVALID_STATE
+            );
+            assert_eq!(lmnk_context_reset(in_place_handle), LMNK_OK);
+            assert_eq!(lmnk_context_deinit_in_place(in_place_handle), LMNK_OK);
+            // Second deinit must reject scrubbed buffer
+            assert_eq!(
+                lmnk_context_deinit_in_place(in_place_handle),
+                LMNK_ERR_INVALID_STATE
+            );
+
+            // Reverse cross-guard: in_place deinit must reject heap-boxed handle
+            assert_eq!(lmnk_context_create(&cfg, &mut boxed_ctx), LMNK_OK);
+            assert_eq!(
+                lmnk_context_deinit_in_place(boxed_ctx),
+                LMNK_ERR_INVALID_STATE
+            );
+            assert_eq!(lmnk_context_destroy(boxed_ctx), LMNK_OK);
+        }
+    }
+
+    #[test]
     fn test_opaque_handles_type_safety() {
-        assert_eq!(size_of::<GcsoContextHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoContainerHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoActionHubHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoLedgerSlotHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoAttractorFieldHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoEdbcControllerHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoDpsrKernelHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoSubHeadRouterHandle>(), size_of::<*mut ()>());
-        assert_eq!(size_of::<GcsoRank1ResidualHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<LmnkContextHandle>(), size_of::<*mut ()>());
+        assert_eq!(size_of::<LmnkSubstrateHandle>(), size_of::<*mut ()>());
+        assert_eq!(
+            size_of::<LmnkEntropyControllerHandle>(),
+            size_of::<*mut ()>()
+        );
+        assert_eq!(size_of::<LmnkPhaseSteeringHandle>(), size_of::<*mut ()>());
     }
 
     #[test]
     fn test_ffi_handle_ref_mut_cast_and_disjoint_validation() {
-        let mut config = gcso_config_t::default();
-        let raw_ptr: *mut gcso_config_t = &mut config;
+        let mut config = lmnk_config_t::default();
+        let raw_ptr: *mut lmnk_config_t = &mut config;
 
-        // SAFETY: `raw_ptr` points to a valid stack-allocated `gcso_config_t`.
+        // SAFETY: `raw_ptr` points to a valid stack-allocated `lmnk_config_t`.
         let handle_ref = unsafe { FfiHandleRef::from_raw(raw_ptr) }.unwrap();
         let cloned_ref = handle_ref;
         assert_eq!(cloned_ref.read_copy().head_dim, 0);
@@ -1081,31 +1097,28 @@ mod tests {
         }
         assert_eq!((a, b, c), (10, 20, 30));
 
-        let null_ptr: *const gcso_config_t = core::ptr::null();
+        let null_ptr: *const lmnk_config_t = core::ptr::null();
         // SAFETY: Testing null pointer rejection and optional null handling.
         unsafe {
-            assert_eq!(
-                FfiHandleRef::from_raw(null_ptr),
-                Err(GCSO_ERROR_NULL_POINTER)
-            );
+            assert_eq!(FfiHandleRef::from_raw(null_ptr), Err(LMNK_ERR_NULL_POINTER));
             assert!(FfiHandleRef::from_raw_opt(null_ptr).unwrap().is_none());
         }
     }
 
     #[test]
     fn test_pod_unaligned_bulk_io_and_incremental_crc32() {
-        let hdr = init_descriptor_header::<gcso_config_t>();
-        assert_eq!(validate_descriptor_header::<gcso_config_t>(&hdr), Ok(()));
+        let hdr = init_descriptor_header::<lmnk_config_t>();
+        assert_eq!(validate_descriptor_header::<lmnk_config_t>(&hdr), Ok(()));
 
         let mut buf = [0u8; 32];
         let src_arr = [hdr, hdr];
         assert_eq!(
-            gcso_descriptor_header_t::write_unaligned_slice_to(&src_arr, &mut buf, 3),
+            lmnk_descriptor_header_t::write_unaligned_slice_to(&src_arr, &mut buf, 3),
             Ok(())
         );
-        let mut dst_arr = [gcso_descriptor_header_t::default(); 2];
+        let mut dst_arr = [lmnk_descriptor_header_t::default(); 2];
         assert_eq!(
-            gcso_descriptor_header_t::read_unaligned_slice_from(&buf, 3, &mut dst_arr),
+            lmnk_descriptor_header_t::read_unaligned_slice_from(&buf, 3, &mut dst_arr),
             Ok(())
         );
         assert_eq!(dst_arr, src_arr);
@@ -1126,7 +1139,7 @@ mod tests {
         container[128] ^= 0xFF;
         assert_eq!(
             verify_snapshot_payload_crc32(&snap, &container),
-            Err(GCSO_ERROR_CONTAINER_CORRUPTED)
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
         );
     }
 }

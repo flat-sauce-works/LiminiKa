@@ -1,8 +1,8 @@
-// name: src/core/src/stigmergy/crystal/routing.rs
+// name: src/core/src/stigmergy/anchor/routing.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Coarse-to-fine hierarchical routing, Top-2 liminal bifurcation routing, and ensemble
-//! folding for [`CrystallizedAttractorRecord`].
+//! folding for [`PhaseAnchorRecord`].
 
 use crate::foundation::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
@@ -10,25 +10,24 @@ use crate::foundation::{
     branchless_q7_default_gravity_from_diff_u8, branchless_relu_f32, branchless_rsqrt_f32,
     coherence_above_floor_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
-    fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, gcso_tagged_ptr_t, is_word_array_uniform_64,
-    load_q7_words_64, pack_action_slot_tag, store_q7_words_64,
-    swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_slerp_words_with_uniform_flag_64,
-    swar_words_equal_64, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF,
-    SWAR_SPLAT_BYTE_64,
+    fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
+    pack_action_slot_tag, store_q7_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, TaggedPtr,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, gcso_q7_t, DEFAULT_ENTROPY_EPS,
+    branchless_select_f32, branchless_select_u32, PhaseQ7, DEFAULT_ENTROPY_EPS,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
-use crate::stigmergy::trail::{gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref};
+use crate::stigmergy::trail::{trail_phase_words_mut, trail_phase_words_ref, PointerTrail};
 use crate::stigmergy::{
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
-use super::CrystallizedAttractorRecord;
+use super::PhaseAnchorRecord;
 
-impl CrystallizedAttractorRecord {
+impl PhaseAnchorRecord {
     /// Evaluates macro distribution diagnostics across `centroids` in $\mathcal{O}(K^2)$ SWAR:
     /// returns `(active_clusters, total_samples, mean_resultant_r_bar, mean_von_mises_kappa, max_pairwise_coherence)`.
     #[inline]
@@ -94,7 +93,7 @@ impl CrystallizedAttractorRecord {
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn apply_macro_centroid_pull_to_trail_64(
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         trail_w: &[u64; NUM_STIGMERGIC_GRANULES],
         trail_is_uniform: bool,
         target_w: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -134,7 +133,7 @@ impl CrystallizedAttractorRecord {
             let packed_tag = pack_action_slot_tag(winner.dominant_slot, winner.action_mode_flags);
             trail.prev_ptr = trail.current_ptr;
             trail.current_ptr =
-                gcso_tagged_ptr_t::pack(winner.mapped_section_offset48, packed_tag, tag_q7).raw();
+                TaggedPtr::pack(winner.mapped_section_offset48, packed_tag, tag_q7).raw();
         }
         trail.flags |=
             TRAIL_FLAG_SYNERGY_RESONANCE | TRAIL_FLAG_CRYSTALLIZED_CANDIDATE | extra_flags;
@@ -142,7 +141,7 @@ impl CrystallizedAttractorRecord {
     }
     pub(crate) fn route_coarse_to_fine_trail_from_preloaded_words_64(
         centroids: &[Self],
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         trail_w: [u64; NUM_STIGMERGIC_GRANULES],
         pull_step_u7: u8,
     ) -> (
@@ -211,7 +210,7 @@ impl CrystallizedAttractorRecord {
     #[inline(always)]
     pub(crate) fn route_coarse_to_fine_trail_with_words_64(
         centroids: &[Self],
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         pull_step_u7: u8,
     ) -> (
         usize,
@@ -235,7 +234,7 @@ impl CrystallizedAttractorRecord {
     #[inline]
     pub fn route_coarse_to_fine_trail_64(
         centroids: &[Self],
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         pull_step_u7: u8,
     ) -> (usize, u32, f32, f32) {
         let (best_idx, anchor_id, best_coh, best_grav, _bridged_w, _win_w) =
@@ -246,7 +245,7 @@ impl CrystallizedAttractorRecord {
     #[inline]
     pub(crate) fn route_top2_liminal_centroids_from_preloaded_words_64(
         centroids: &[Self],
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         trail_w: [u64; NUM_STIGMERGIC_GRANULES],
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
@@ -464,7 +463,7 @@ impl CrystallizedAttractorRecord {
     }
     pub(crate) fn route_top2_liminal_centroids_with_words_64(
         centroids: &[Self],
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
     ) -> (
@@ -500,7 +499,7 @@ impl CrystallizedAttractorRecord {
     #[inline]
     pub fn route_top2_liminal_centroids_64(
         centroids: &[Self],
-        trail: &mut gcso_pointer_trail_t,
+        trail: &mut PointerTrail,
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
     ) -> (usize, usize, u32, u32, f32, f32, bool) {
@@ -524,8 +523,8 @@ impl CrystallizedAttractorRecord {
     #[inline]
     pub fn route_coarse_to_fine_candidates_64(
         centroids: &[Self],
-        src_trail: &mut gcso_pointer_trail_t,
-        candidate_trails: &[gcso_pointer_trail_t],
+        src_trail: &mut PointerTrail,
+        candidate_trails: &[PointerTrail],
         head_dim: u32,
         phase_interference_gain: f32,
         stigmergic_prior_gain: f32,
@@ -712,14 +711,14 @@ impl CrystallizedAttractorRecord {
         let out_score = branchless_select_f32(found_valid, best_score, 0.0);
         (win_k, best_id, out_score, best_coh, found_valid)
     }
-    /// Folds a slice of `.gcso` [`CrystallizedAttractorRecord`]s onto `trail_phases_inout`
+    /// Folds a slice of `.lmnk` [`PhaseAnchorRecord`]s onto `trail_phases_inout`
     /// weighted by **Phase-Proximity Gravity** in 8 register-resident `u64` SWAR words,
-    /// returning `(folded_words, total_pull, dominant_anchor_id, dominant_ripa_clamp_rad, mean_coherence)`
+    /// returning `(folded_words, total_pull, dominant_anchor_id, dominant_phase_clamp_rad, mean_coherence)`
     /// in a single pass (`0` duplicate coherence scans).
     #[inline]
     pub fn fold_crystallized_ensemble_words_and_coherence_64(
         records: &[Self],
-        trail_phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+        trail_phases_inout: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
         init_pull_weight: f32,
     ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32, f32, f32) {
         let init_w = load_q7_words_64(trail_phases_inout);
@@ -745,7 +744,7 @@ impl CrystallizedAttractorRecord {
                     DEFAULT_PHASE_GRAVITY_EPS,
                 );
                 store_q7_words_64(trail_phases_inout, &rec_w);
-                return (rec_w, grav, rec.anchor_id, rec.ripa_clamp_rad, 1.0);
+                return (rec_w, grav, rec.anchor_id, rec.phase_clamp_rad, 1.0);
             }
             return (init_w, 0.0, 0, DEFAULT_PHASE_CLAMP_MAX_RAD, 0.0);
         }
@@ -833,7 +832,7 @@ impl CrystallizedAttractorRecord {
                 let is_dom = grav > best_grav;
                 best_grav = branchless_select_f32(is_dom, grav, best_grav);
                 dom_id = branchless_select_u32(is_dom, rec.anchor_id, dom_id);
-                dom_clamp = branchless_select_f32(is_dom, rec.ripa_clamp_rad, dom_clamp);
+                dom_clamp = branchless_select_f32(is_dom, rec.phase_clamp_rad, dom_clamp);
                 tot_pull = new_tot;
             }
             i += 1;
@@ -847,14 +846,14 @@ impl CrystallizedAttractorRecord {
         (acc_w, tot_pull, dom_id, dom_clamp, mean_coh)
     }
 
-    /// Folds a slice of `.gcso` [`CrystallizedAttractorRecord`]s onto `trail_phases_inout`
+    /// Folds a slice of `.lmnk` [`PhaseAnchorRecord`]s onto `trail_phases_inout`
     /// weighted by **Phase-Proximity Gravity** in 8 register-resident `u64` SWAR words,
     /// evaluating proximity coherence against the initial query profile (`init_w`) and
     /// fast-pathing uninitialized/zero query trails and the first active attractor (`tot_pull <= 1.0e-12`).
     #[inline(always)]
     pub fn fold_crystallized_ensemble_words_with_init_pull_64(
         records: &[Self],
-        trail_phases_inout: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+        trail_phases_inout: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
         init_pull_weight: f32,
     ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32, f32) {
         let (acc_w, tot_pull, dom_id, dom_clamp, _mean_coh) =

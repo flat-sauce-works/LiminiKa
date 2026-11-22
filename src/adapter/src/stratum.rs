@@ -13,9 +13,9 @@ use crate::{
     AttractorVoidPerspective, CoherenceGuardGate, RecallBoundaryGate, RecallBoundaryMetrics,
     RecallGateDecision, RecallPolicy, TextAttractorCorpus, TextAttractorEntry, VoidBoundaryState,
 };
-use liminika_core::abi::{gcso_pointer_trail_t, gcso_tagged_ptr_t};
+use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_tagged_ptr_t};
 use liminika_core::foundation::load_q7_words_64;
-use liminika_core::liminal::{GcsoResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use liminika_core::liminal::{LmnkResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
 use liminika_core::runtime::{
     AdaptiveThresholdPolicy, CausalProvenanceReport, CognitiveCircuitThresholdPolicy, GatewayFrame,
     GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, ScaleLayerNode, ScaleLayerOrchestrator,
@@ -67,8 +67,8 @@ impl StigmergicReceptor for TrailEmergenceReceptor {
         &mut self,
         _frame: &GatewayFrame,
         report: &SubstrateStepReport,
-        trail: &gcso_pointer_trail_t,
-    ) -> GcsoResult<()> {
+        trail: &lmnk_pointer_trail_t,
+    ) -> LmnkResult<()> {
         self.last_report = Some(*report);
         if report.dominant_anchor_id != 0
             && !self
@@ -756,9 +756,9 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
             .telemetry
             .cognitive_trajectory
             .write_to_ledger_slot(&mut ledger_slot);
-        let mut boundary_trail = gcso_pointer_trail_t::default();
+        let mut boundary_trail = lmnk_pointer_trail_t::default();
         boundary_trail
-            .copy_from_with_words_fast(&gcso_pointer_trail_t::default(), frame.phase_words_ref());
+            .copy_from_with_words_fast(&lmnk_pointer_trail_t::default(), frame.phase_words_ref());
         let scale_stack = [
             ScaleLayerNode::new(frame, StigmergicScaleGranularity::TypeGateway),
             ScaleLayerNode::new(
@@ -772,7 +772,7 @@ impl SocietyStratum for SubstrateBoundaryStratum<'_> {
         if let Ok((proj, mut ledger, _rep)) = boundary_substrate.orchestrate_adaptive_depth_n(
             &scale_stack,
             scale_stack.len(),
-            gcso_tagged_ptr_t(frame.tagged_ptr),
+            liminika_core::foundation::TaggedPtr(frame.tagged_ptr),
             frame.phase_words_ref(),
             &mut ledger_slot,
             &mut boundary_trail,
@@ -945,7 +945,7 @@ pub trait StigmergicCoalitionDecomposer: Send + Sync {
         signal: &mut StratumSignal,
         substrate: &mut StigmergicSubstrate,
         selected_indices: &[usize],
-        trail_states: &[gcso_pointer_trail_t],
+        trail_states: &[lmnk_pointer_trail_t],
         last_layer: usize,
     );
 }
@@ -1036,8 +1036,8 @@ impl LocalTokenResonanceStratum {
             .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
         let g_words = load_q7_words_64(&g_q7);
         let l_words = load_q7_words_64(&l_q7);
-        let mut swarm_trail = gcso_pointer_trail_t::default();
-        swarm_trail.copy_from_with_words_fast(&gcso_pointer_trail_t::default(), &g_words);
+        let mut swarm_trail = lmnk_pointer_trail_t::default();
+        swarm_trail.copy_from_with_words_fast(&lmnk_pointer_trail_t::default(), &g_words);
         let (swarm_report, _) = swarm_trail.try_resolve_action_in_swarm_from_words(
             Default::default(),
             &l_words,
@@ -1062,7 +1062,7 @@ impl LocalTokenResonanceStratum {
         entries: &[TextAttractorEntry],
         signal: &mut StratumSignal,
         last_layer: usize,
-    ) -> (StigmergicSubstrate, Vec<usize>, Vec<gcso_pointer_trail_t>) {
+    ) -> (StigmergicSubstrate, Vec<usize>, Vec<lmnk_pointer_trail_t>) {
         let n_entries = entries.len();
         let mut substrate = StigmergicSubstrate::new();
         for entry in entries {
@@ -1095,7 +1095,7 @@ impl LocalTokenResonanceStratum {
         ranked.truncate(SUBSTRATE_INLINE_TRAILS);
 
         let selected_indices: Vec<usize> = ranked.iter().map(|&(i, _)| i).collect();
-        let mut trail_states: Vec<gcso_pointer_trail_t> = selected_indices
+        let mut trail_states: Vec<lmnk_pointer_trail_t> = selected_indices
             .iter()
             .map(|&entry_idx| {
                 let q7 = entries[entry_idx]
@@ -1104,8 +1104,8 @@ impl LocalTokenResonanceStratum {
                     .copied()
                     .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
                 let words = load_q7_words_64(&q7);
-                let mut trail = gcso_pointer_trail_t::default();
-                trail.copy_from_with_words_fast(&gcso_pointer_trail_t::default(), &words);
+                let mut trail = lmnk_pointer_trail_t::default();
+                trail.copy_from_with_words_fast(&lmnk_pointer_trail_t::default(), &words);
                 trail.target_anchor_id = entries[entry_idx].anchor_id;
                 trail.user_data = entry_idx as u64;
                 trail.stigmergic_density = signal
@@ -1142,7 +1142,7 @@ impl LocalTokenResonanceStratum {
                     continue;
                 }
                 let (rep, _swarm_w) = trail_states[slot].try_resolve_action_in_swarm_from_words(
-                    gcso_tagged_ptr_t::default(),
+                    lmnk_tagged_ptr_t::default(),
                     &dep.token_phase_words,
                     0xFF,
                     64,
@@ -1338,7 +1338,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         signal: &mut StratumSignal,
         substrate: &mut StigmergicSubstrate,
         selected_indices: &[usize],
-        trail_states: &[gcso_pointer_trail_t],
+        trail_states: &[lmnk_pointer_trail_t],
         last_layer: usize,
     ) {
         let n_entries = ctx.entries.len();
@@ -1511,7 +1511,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
 
         // Wire the decomposed coalition onto `StigmergicSubstrate` inline trails as a closed pointer
         // ring and notify the `StigmergicReceptor`.
-        let make_trail_for = |entry_idx: usize| -> gcso_pointer_trail_t {
+        let make_trail_for = |entry_idx: usize| -> lmnk_pointer_trail_t {
             if let Some(pos) = selected_indices.iter().position(|&idx| idx == entry_idx) {
                 trail_states[pos]
             } else {
@@ -1521,8 +1521,8 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                     .copied()
                     .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
                 let words = load_q7_words_64(&q7);
-                let mut t = gcso_pointer_trail_t::default();
-                t.copy_from_with_words_fast(&gcso_pointer_trail_t::default(), &words);
+                let mut t = lmnk_pointer_trail_t::default();
+                t.copy_from_with_words_fast(&lmnk_pointer_trail_t::default(), &words);
                 t.target_anchor_id = ctx.entries[entry_idx].anchor_id;
                 t.user_data = entry_idx as u64;
                 t
@@ -1538,7 +1538,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         }
         substrate.active_count = substrate.active_count.max(chain_len as u32);
 
-        let mut chain_trail = gcso_pointer_trail_t::default();
+        let mut chain_trail = lmnk_pointer_trail_t::default();
         chain_trail.copy_from_fast(&substrate.trails[0]);
         let mut receptor = TrailEmergenceReceptor::default();
         if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = substrate

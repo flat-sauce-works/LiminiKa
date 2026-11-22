@@ -3,8 +3,8 @@
 
 //! Distributed `impl` blocks integrating Lv.1-Lv.3 types (`ResidualAdapterEngine`,
 //! `SystemSpineState`, `EgoDifferentialNet`, `LiminalEgoState`, `StigmergicSubstrate`,
-//! `CrystallizedAttractorRecord`, `CognitiveTrajectoryLedger`, `CognitiveCircuitBank`,
-//! `gcso_pointer_trail_t`, and `EntropyController`) with Lv.4 Gateway/Signal contracts.
+//! `PhaseAnchorRecord`, `CognitiveTrajectoryLedger`, `CognitiveCircuitBank`,
+//! `PointerTrail`, and `EntropyController`) with Lv.4 Gateway/Signal contracts.
 
 use super::*;
 use crate::drivers::{
@@ -19,39 +19,38 @@ use crate::foundation::{
     branchless_lerp_f32, branchless_max_f32, branchless_min_f32, branchless_rad_to_phase_step_u8,
     branchless_relu_f32, coherence_from_word_arrays_with_both_uniform_flags_64,
     fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, fast_mean_q7_tag_from_words_64,
-    gcso_tagged_ptr_t, is_word_array_uniform_64, load_q7_words_64, pack_action_slot_tag,
-    store_q7_words_64, swar_q7_avg_round_x8, swar_q7_circular_diff_x8,
-    swar_q7_mean_i8_from_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
-    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
-    words_to_q7_array_64, AlignedSlice32, AlignedSliceMut32, PhaseSteering, Pod,
-    RawPhaseProjectable, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK,
+    is_word_array_uniform_64, load_q7_words_64, pack_action_slot_tag, store_q7_words_64,
+    swar_q7_avg_round_x8, swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
+    swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_slerp_words_with_uniform_flag_64,
+    swar_words_equal_64, swar_words_nonzero_64, words_to_q7_array_64, AlignedSlice32,
+    AlignedSliceMut32, Pod, RawPhaseProjectable, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
+    ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    TAG_ACTION_MODE_MASK,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t, BitCut8,
-    EpistemicPartition, GcsoResult, Grounded, Indivisible, Lacuna, LiminalThresholdState, Scoped,
-    ScopedCut, DEFAULT_ENTROPY_EPS, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    branchless_select_u64, branchless_select_u8, branchless_select_usize, BitCut8, Grounded,
+    Indivisible, Lacuna, LacunaPartition8, LiminalThresholdState, LmnkResult, PhaseQ7, Scoped,
+    ScopedCut, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
-use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::runtime::telemetry::{CoreTelemetryBank, LayerDistortionKind};
 use crate::stigmergy::{
-    gcso_anchor_type_t, gcso_pointer_trail_t, trail_phase_words_mut, trail_phase_words_ref,
-    CognitiveCircuitActivation, CognitiveCircuitBank, CognitiveCircuitBankOps, CognitiveOpKind,
-    CognitiveTrajectoryLedger, CrystallizedAttractorRecord, DissipativeOverflowReport,
-    EpisodicPhaseSample, PhaseWordsRef64, RelativeAttractorNode, ResidualAdapterEngine,
-    SandboxLifecycleEvent, StigmergicActionDecision, StigmergicGranuleState,
-    StigmergicOverlapSerendipityReport, StigmergicScaleGranularity, StigmergicSubstrate,
+    trail_phase_words_mut, trail_phase_words_ref, CognitiveCircuitActivation, CognitiveCircuitBank,
+    CognitiveCircuitBankOps, CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport,
+    EpisodicPhaseSample, OverlapDiscoveryReport, PhaseAnchorRecord, PhaseWordsRef64, PointerTrail,
+    RelativeAttractorNode, ResidualAdapterEngine, SandboxLifecycleEvent, StigmergicActionDecision,
+    StigmergicGranuleState, StigmergicScaleGranularity, StigmergicSubstrate,
     StigmergicSubstrateOps, SubstrateStepReport, WorkbenchSlotSpec, ATTRACTOR_SLOT_CRYSTALLIZED,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, GCSO_ANCHOR_TYPE_CRYSTALLIZED,
-    MAX_ATTRACTOR_PULL_FORCE, SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
-    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
+    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, MAX_ATTRACTOR_PULL_FORCE, SUBSTRATE_INLINE_TRAILS,
+    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_SWARM_QUORUM_MASK,
+    TRAIL_SWARM_QUORUM_SHIFT,
 };
 
 impl ResidualAdapterEngine {
@@ -67,7 +66,7 @@ impl ResidualAdapterEngine {
         x_in: &AlignedSlice32<'_, f32>,
         u_vec: &AlignedSlice32<'_, f32>,
         v_vec: &AlignedSlice32<'_, f32>,
-    ) -> GcsoResult<f32> {
+    ) -> LmnkResult<f32> {
         apply_gateway_frame_rank1_hidden_fused(frame, y_out, x_in, u_vec, v_vec)
     }
 }
@@ -75,7 +74,7 @@ impl ResidualAdapterEngine {
 impl SystemSpineState {
     /// Physical `pinned` isolation barrier executed without branching after Ego modulates `ego_frame`.
     ///
-    /// - Under `ood_void_locked != 0` or `irreversible_step_lock != 0`, returns `*baseline_frame`.
+    /// - Under `unobserved_locked != 0` or `irreversible_step_lock != 0`, returns `*baseline_frame`.
     /// - Always preserves every `pinned_action_mode_mask` bit from `baseline_frame` and blocks
     ///   slot overrides away from any `pinned_slot_mask` slot.
     #[inline]
@@ -103,7 +102,7 @@ impl SystemSpineState {
             ego_frame.action_mode_flags,
         );
         ego_frame.frame_flags = u16::from(ptr_tag);
-        ego_frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+        ego_frame.tagged_ptr = TaggedPtr::pack(
             ego_frame.mapped_section_offset48,
             ptr_tag,
             ego_frame.mean_phase_tag_q7,
@@ -113,26 +112,25 @@ impl SystemSpineState {
 }
 
 #[inline(always)]
-fn pframe_transition_allowed(spine: &SystemSpineState, venn: &EpistemicPartition) -> bool {
-    let lacuna_code = if (venn.shared_core_mask | venn.self_exclusive_mask) != 0 {
-        Lacuna::SelfRef.code()
-    } else if venn.known_unknown_mask != 0 {
-        Lacuna::Exterior.code()
-    } else if venn.true_void_mask != 0 {
-        Lacuna::Unobserved.code()
-    } else {
-        Lacuna::SelfRef.code()
-    };
-    let (directive, _) = spine.evaluate_frame_transition_branchless(SpineFrameTransitionInput {
-        lacuna_code,
-        phase_delta_q7: 0,
-        reanchor_delta_thresh_q7: 0,
-        steps_since_keyframe: 0,
-        max_gop_steps: 0,
-        candidate_granule_mask: 0xFF,
-        flags: 0,
-        reserved: 0,
-    });
+fn pframe_transition_allowed(spine: &SystemSpineState, partition: &LacunaPartition8) -> bool {
+    let all_zero = (partition.self_ref_mask
+        | partition.interior_mask
+        | partition.exterior_mask
+        | partition.unobserved_mask
+        | partition.undefined_mask)
+        == 0;
+    let mut input = SpineFrameTransitionInput::from_lacuna_partition(partition, 0, 0, 0, 0, 0);
+    if all_zero
+        || (partition.interior_mask != 0
+            && partition.exterior_mask == 0
+            && partition.undefined_mask == 0)
+    {
+        input.lacuna_code = Lacuna::SelfRef.code();
+        input.candidate_granule_mask = 0xFF;
+    } else if input.candidate_granule_mask == 0 {
+        input.candidate_granule_mask = 0xFF;
+    }
+    let (directive, _) = spine.evaluate_frame_transition_branchless(input);
     matches!(
         directive,
         FrameDirective::EmitDelta | FrameDirective::ReAnchorKeyframe
@@ -144,20 +142,20 @@ impl EgoDifferentialNet {
     /// (1-hop parallel perspective ensemble when `max_hops == 1`, or sequential chain up to 4 hops
     /// when `max_hops >= 2`; `0` heap alloc, `0 fdiv`) and returns `(delta_norm_q7, hops_traversed)`.
     ///
-    /// When Ego is inactive, tension scale is 0, or `spine` enforces `ood_void_locked` /
+    /// When Ego is inactive, tension scale is 0, or `spine` enforces `unobserved_locked` /
     /// `irreversible_step_lock`, leaves `frame` untouched and returns `(0, 0)` (zero-copy bypass).
     #[inline]
     pub fn evaluate_pframe_chain_branchless(
         &self,
         ego: &LiminalEgoState,
         spine: &SystemSpineState,
-        venn: &EpistemicPartition,
+        partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         frame: &mut GatewayFrame,
     ) -> (u8, u8) {
         let (norm, hops, _mask) = self.evaluate_pframe_chain_with_mask_branchless(
-            ego, spine, venn, stigmergy, tension, frame,
+            ego, spine, partition, stigmergy, tension, frame,
         );
         (norm, hops)
     }
@@ -170,18 +168,18 @@ impl EgoDifferentialNet {
         &self,
         ego: &LiminalEgoState,
         spine: &SystemSpineState,
-        venn: &EpistemicPartition,
+        partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         frame: &mut GatewayFrame,
     ) -> (u8, u8, u8) {
-        if !pframe_transition_allowed(spine, venn) {
+        if !pframe_transition_allowed(spine, partition) {
             return (0, 0, 0);
         }
         let (acc_words, avg_delta, hops_traversed, entry_idx, matched_mask) = self
             .evaluate_pframe_words_branchless(
                 ego,
-                venn,
+                partition,
                 stigmergy,
                 tension.effective_ego_scale_q7,
                 frame.phase_words_ref(),
@@ -207,7 +205,7 @@ impl EgoDifferentialNet {
             frame.action_mode_flags,
         );
         frame.frame_flags = u16::from(ptr_tag);
-        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+        frame.tagged_ptr = TaggedPtr::pack(
             frame.mapped_section_offset48,
             ptr_tag,
             frame.mean_phase_tag_q7,
@@ -224,18 +222,18 @@ impl EgoDifferentialNet {
         &self,
         ego: &LiminalEgoState,
         spine: &SystemSpineState,
-        venn: &EpistemicPartition,
+        partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         frame: &mut GatewayFrame,
     ) -> (u8, u8, u8) {
-        if !pframe_transition_allowed(spine, venn) {
+        if !pframe_transition_allowed(spine, partition) {
             return (0, 0, 0);
         }
         let (acc_words, avg_delta, hops_traversed, _entry_idx, matched_mask) = self
             .evaluate_pframe_words_branchless(
                 ego,
-                venn,
+                partition,
                 stigmergy,
                 tension.effective_ego_scale_q7,
                 frame.phase_words_ref(),
@@ -261,7 +259,7 @@ impl EgoDifferentialNet {
             frame.action_mode_flags,
         );
         frame.frame_flags = u16::from(ptr_tag);
-        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+        frame.tagged_ptr = TaggedPtr::pack(
             frame.mapped_section_offset48,
             ptr_tag,
             frame.mean_phase_tag_q7,
@@ -273,19 +271,19 @@ impl EgoDifferentialNet {
 
 impl LiminalEgoState {
     /// Purely computes the Ego trigger mask (`fired_mask`) and modulates `frame` in-place without
-    /// mutating `self`, `liminal_layer`, or `stigmergic_layer`. Used directly by read-only per-layer
+    /// mutating `self`, `liminal`, or `stigmergy`. Used directly by read-only per-layer
     /// Hot-Path RoPE modulation so multi-layer passes never accumulate repeated sub-layer shifts.
     #[inline]
     pub fn modulate_frame_pure(
         &self,
-        liminal_layer: &LiminalThresholdState,
-        stigmergic_layer: &StigmergicGranuleState,
+        liminal: &LiminalThresholdState,
+        stigmergy: &StigmergicGranuleState,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn: &StigmergicOverlapSerendipityReport,
+        overlap: &OverlapDiscoveryReport,
         frame: &mut GatewayFrame,
     ) -> u8 {
-        let _ = (liminal_layer, stigmergic_layer);
+        let _ = (liminal, stigmergy);
         let pull_q7 = branchless_clamp_f32(
             branchless_relu_f32(frame.effective_energy) * 16.0,
             0.0,
@@ -298,7 +296,7 @@ impl LiminalEgoState {
             & horizon.is_internal_conflict()
             & (horizon.conflict_severity > 0.35);
         let t_liminal = ((self.trigger_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0)
-            & (horizon.is_liminal() | (venn.void_exterior_mask != 0));
+            & (horizon.is_liminal() | (overlap.lacuna_exterior_mask != 0));
         let t_chatter = ((self.trigger_mask & EGO_TRIGGER_BOUNDARY_CHATTER) != 0)
             & (delta.chattering_channel_mask != 0);
         let t_stagnate = ((self.trigger_mask & EGO_TRIGGER_BOUNDARY_STAGNATION) != 0)
@@ -314,7 +312,7 @@ impl LiminalEgoState {
         let any_fired = fired_mask != 0;
 
         // Modulate GatewayFrame phases with counter-basin orbital thrust / transgressive leap
-        let scale_to_word = |q7: gcso_q7_t, w_u8: u8| -> u64 {
+        let scale_to_word = |q7: PhaseQ7, w_u8: u8| -> u64 {
             let scaled_i32 = (i32::from(q7) * i32::from(w_u8.min(128))) >> 7;
             let clamped_i8 = scaled_i32.clamp(-128, 127) as i8;
             (clamped_i8 as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64)
@@ -400,7 +398,7 @@ impl LiminalEgoState {
             frame.action_mode_flags,
         );
         frame.frame_flags = ptr_tag as u16;
-        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+        frame.tagged_ptr = TaggedPtr::pack(
             frame.mapped_section_offset48,
             ptr_tag,
             frame.mean_phase_tag_q7,
@@ -410,22 +408,21 @@ impl LiminalEgoState {
         fired_mask
     }
 
-    /// Branchlessly evaluates active Ego triggers directly across Core Layer 0 (`liminal_layer`),
-    /// Core Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, updating both
+    /// Branchlessly evaluates active Ego triggers directly across Liminal (`liminal`), Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, updating both
     /// sub-layers and injecting counter-basin orbital thrust or transgressive phase steering into `frame`
     /// in-place.
     #[inline]
     pub fn intervene_on_sublayers_and_frame_branchless(
         &mut self,
-        liminal_layer: &mut LiminalThresholdState,
-        stigmergic_layer: &mut StigmergicGranuleState,
+        liminal: &mut LiminalThresholdState,
+        stigmergy: &mut StigmergicGranuleState,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn: &StigmergicOverlapSerendipityReport,
+        overlap: &OverlapDiscoveryReport,
         frame: &mut GatewayFrame,
     ) {
         let fired_mask =
-            self.modulate_frame_pure(liminal_layer, stigmergic_layer, delta, horizon, venn, frame);
+            self.modulate_frame_pure(liminal, stigmergy, delta, horizon, overlap, frame);
         let any_fired = fired_mask != 0;
         let t_liminal = (fired_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0;
         let t_chatter = (fired_mask & EGO_TRIGGER_BOUNDARY_CHATTER) != 0;
@@ -437,66 +434,64 @@ impl LiminalEgoState {
             let nudge_g = i32::from(self.trait_gain_bias_q7[ch]) / 2;
             let ch_chatter = t_chatter & (((delta.chattering_channel_mask >> ch) & 1) != 0);
             let chatter_stabilize = branchless_select_i32(ch_chatter, 4, 0);
-            let new_f =
-                (i32::from(liminal_layer.threshold_floor_q7[ch]) + nudge_f + chatter_stabilize)
-                    .clamp(8, 120) as u8;
-            let new_g =
-                (i32::from(liminal_layer.aperture_gain_q7[ch]) + nudge_g).clamp(16, 127) as u8;
-            liminal_layer.threshold_floor_q7[ch] =
-                branchless_select_u8(any_fired, new_f, liminal_layer.threshold_floor_q7[ch]);
-            liminal_layer.aperture_gain_q7[ch] =
-                branchless_select_u8(any_fired, new_g, liminal_layer.aperture_gain_q7[ch]);
+            let new_f = (i32::from(liminal.threshold_floor_q7[ch]) + nudge_f + chatter_stabilize)
+                .clamp(8, 120) as u8;
+            let new_g = (i32::from(liminal.aperture_gain_q7[ch]) + nudge_g).clamp(16, 127) as u8;
+            liminal.threshold_floor_q7[ch] =
+                branchless_select_u8(any_fired, new_f, liminal.threshold_floor_q7[ch]);
+            liminal.aperture_gain_q7[ch] =
+                branchless_select_u8(any_fired, new_g, liminal.aperture_gain_q7[ch]);
             ch += 1;
         }
 
-        // 2. Shift Layer 1 (StigmergicGranuleState) autonomy & serendipity threshold
+        // 2. Shift StigmergicGranuleState autonomy & discovery threshold
         let mut g = 0usize;
         while g < NUM_STIGMERGIC_GRANULES {
             let boost = self.granule_autonomy_q7[g] >> 4;
-            let next_sg = stigmergic_layer.granule_step_gain_q7[g]
+            let next_sg = stigmergy.granule_step_gain_q7[g]
                 .saturating_add(boost)
                 .min(127);
-            stigmergic_layer.granule_step_gain_q7[g] =
-                branchless_select_u8(any_fired, next_sg, stigmergic_layer.granule_step_gain_q7[g]);
+            stigmergy.granule_step_gain_q7[g] =
+                branchless_select_u8(any_fired, next_sg, stigmergy.granule_step_gain_q7[g]);
             g += 1;
         }
         let trans_pos = self.transgression_bias_q7 > 0;
         let trans_abs = self.transgression_bias_q7.unsigned_abs();
         let trans_step = trans_abs >> 3;
-        stigmergic_layer.serendipity_floor_q7 = branchless_select_u8(
+        stigmergy.discovery_floor_q7 = branchless_select_u8(
             t_liminal & trans_pos,
-            stigmergic_layer
-                .serendipity_floor_q7
+            stigmergy
+                .discovery_floor_q7
                 .saturating_sub(trans_step)
                 .max(8),
-            stigmergic_layer.serendipity_floor_q7,
+            stigmergy.discovery_floor_q7,
         );
 
         self.last_intervened_mask = fired_mask;
         self.intervention_epochs = self.intervention_epochs.wrapping_add(u32::from(any_fired));
     }
 
-    /// Branchlessly evaluates active Ego triggers across `stack`'s Layer 0 (`liminal_layer`),
-    /// Layer 1 (`stigmergic_layer`), temporal velocity (`delta`), and `venn`, modulating `frame`
-    /// in-place and synchronizing `self` onto `stack.ego_layer` after intervention.
+    /// Branchlessly evaluates active Ego triggers across `stack`'s Layer 0 (`liminal`),
+    /// Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, modulating `frame`
+    /// in-place and synchronizing `self` onto `stack.ego` after intervention.
     #[inline]
     pub fn intervene_on_layers_and_frame_branchless(
         &mut self,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn: &StigmergicOverlapSerendipityReport,
+        overlap: &OverlapDiscoveryReport,
         frame: &mut GatewayFrame,
     ) {
         self.intervene_on_sublayers_and_frame_branchless(
-            &mut stack.liminal_layer,
-            &mut stack.stigmergic_layer,
+            &mut stack.liminal,
+            &mut stack.stigmergy,
             delta,
             horizon,
-            venn,
+            overlap,
             frame,
         );
-        stack.ego_layer = *self;
+        stack.ego = *self;
     }
 }
 
@@ -513,13 +508,13 @@ pub trait StigmergicReceptor {
     /// non-passive [`StigmergicActionDecision`].
     ///
     /// # Errors
-    /// Returns a [`GcsoResult`] if the downstream receptor encounters an execution or capacity error.
+    /// Returns a [`LmnkResult`] if the downstream receptor encounters an execution or capacity error.
     fn on_stigmergic_emergence(
         &mut self,
         frame: &GatewayFrame,
         report: &SubstrateStepReport,
-        trail: &gcso_pointer_trail_t,
-    ) -> GcsoResult<()>;
+        trail: &PointerTrail,
+    ) -> LmnkResult<()>;
 }
 
 impl StigmergicReceptor for () {
@@ -528,8 +523,8 @@ impl StigmergicReceptor for () {
         &mut self,
         _frame: &GatewayFrame,
         _report: &SubstrateStepReport,
-        _trail: &gcso_pointer_trail_t,
-    ) -> GcsoResult<()> {
+        _trail: &PointerTrail,
+    ) -> LmnkResult<()> {
         Ok(())
     }
 }
@@ -540,8 +535,8 @@ impl<A: StigmergicReceptor, B: StigmergicReceptor> StigmergicReceptor for (A, B)
         &mut self,
         frame: &GatewayFrame,
         report: &SubstrateStepReport,
-        trail: &gcso_pointer_trail_t,
-    ) -> GcsoResult<()> {
+        trail: &PointerTrail,
+    ) -> LmnkResult<()> {
         self.0.on_stigmergic_emergence(frame, report, trail)?;
         self.1.on_stigmergic_emergence(frame, report, trail)
     }
@@ -558,7 +553,7 @@ impl StigmergicSubstrate {
     /// 2. Settles an active sandbox lane via [`Self::settle_sandbox_lane`] once consecutive
     ///    coherence improvement reaches `settle_dwell_threshold`.
     /// 3. On sustained assimilation drift (`drift_dwell >= drift_dwell_threshold`), when `ego_active`
-    ///    and `exterior_granule_mask != 0` (`(void_exterior_mask | serendipity_excursion_mask) & !venn_core_mask`),
+    ///    and `exterior_granule_mask != 0` (`(lacuna_exterior_mask | discovery_excursion_mask) & !overlap_core_mask`),
     ///    leases a free lane via [`WorkbenchSlotSpec::auto_sandbox`] masked strictly to `exterior_granule_mask`.
     #[inline]
     #[allow(clippy::too_many_arguments)]
@@ -637,7 +632,7 @@ impl StigmergicSubstrate {
                 *dst = src & active_mask;
             }
             if swar_words_nonzero_64(&masked_words) {
-                let mut phases = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
+                let mut phases = [0 as PhaseQ7; MAX_ATTENTION_HEADS];
                 store_q7_words_64(&mut phases, &masked_words);
                 let weight =
                     branchless_clamp_f32(branchless_relu_f32(candidate_weight), 0.125, 1.0);
@@ -661,7 +656,7 @@ impl StigmergicSubstrate {
     /// Returns `(GatewayFrame, SubstrateStepReport, assigned_centroid_idx, assigned_anchor_id, assigned_coherence, spawned_new_cluster)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
     /// is non-finite, or tensor slices are invalid.
     #[inline]
     #[allow(clippy::too_many_arguments)]
@@ -670,14 +665,14 @@ impl StigmergicSubstrate {
         frame: &GatewayFrame,
         input_words: &[u64; NUM_STIGMERGIC_GRANULES],
         entropy_h_tilde: f32,
-        centroids: &mut [CrystallizedAttractorRecord],
+        centroids: &mut [PhaseAnchorRecord],
         split_coherence_thresh: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(SubstrateStepReport, usize, u32, f32, bool)> {
+    ) -> LmnkResult<(SubstrateStepReport, usize, u32, f32, bool)> {
         if frame.target_anchor_id != 0 {
             trail_inout.target_anchor_id = frame.target_anchor_id;
         }
@@ -687,7 +682,7 @@ impl StigmergicSubstrate {
         );
 
         let (assigned_idx, assigned_anchor_id, assigned_coh, _updated_mass, spawned_new) =
-            CrystallizedAttractorRecord::step_online_toroidal_kmeans_frame_with_words_64(
+            PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
                 centroids,
                 frame,
                 input_words,
@@ -697,7 +692,7 @@ impl StigmergicSubstrate {
 
         let win_w = *centroids[assigned_idx].phase_words_ref();
         let report = self.orchestrate_next_action_step_core(
-            gcso_tagged_ptr_t(frame.tagged_ptr),
+            TaggedPtr(frame.tagged_ptr),
             entropy_h_tilde,
             frame.dominant_slot,
             trail_inout,
@@ -707,6 +702,8 @@ impl StigmergicSubstrate {
             logits_opt,
             false,
             Some(&win_w),
+            frame.phase_step_min_rad,
+            frame.phase_clamp_rad,
         )?;
 
         Ok((
@@ -722,23 +719,23 @@ impl StigmergicSubstrate {
     /// Stigmergic action selection in a single `#![no_std]` zero-allocation pass.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
     /// is non-finite, or tensor slices are invalid.
     #[inline]
     pub fn orchestrate_gateway_kmeans_and_select_action<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
         entropy_h_tilde: f32,
-        centroids: &mut [CrystallizedAttractorRecord],
+        centroids: &mut [PhaseAnchorRecord],
         split_coherence_thresh: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, SubstrateStepReport, usize, u32, f32, bool)> {
+    ) -> LmnkResult<(GatewayFrame, SubstrateStepReport, usize, u32, f32, bool)> {
         if centroids.is_empty() || !branchless_is_finite_f32(split_coherence_thresh) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
         if swar_words_nonzero_64(&frm_w) {
@@ -781,34 +778,34 @@ impl StigmergicSubstrate {
     ///    a non-passive [`StigmergicActionDecision`] emerges from the trail's accumulated density.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `centroids` is empty or tensor slices are invalid.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `centroids` is empty or tensor slices are invalid.
     #[inline]
     pub fn orchestrate_gateway_attractor_swarm_step<S, R>(
         &mut self,
         signal: &S,
         entropy_h_tilde: f32,
-        centroids: &mut [CrystallizedAttractorRecord],
-        trail_inout: &mut gcso_pointer_trail_t,
+        centroids: &mut [PhaseAnchorRecord],
+        trail_inout: &mut PointerTrail,
         receptor: &mut R,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, SubstrateStepReport, usize, u32, f32, bool)>
+    ) -> LmnkResult<(GatewayFrame, SubstrateStepReport, usize, u32, f32, bool)>
     where
         S: ManifoldGatewaySignal + ?Sized,
         R: StigmergicReceptor + ?Sized,
     {
         if centroids.is_empty() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let (frame, init_w) = signal.synthesize_gateway_frame_with_words();
         let (_swarm_rep, swarm_w) = trail_inout.try_resolve_action_in_swarm_from_words(
-            gcso_tagged_ptr_t(frame.tagged_ptr),
+            TaggedPtr(frame.tagged_ptr),
             &init_w,
             frame.active_swarm_cell_mask,
             frame.autonomous_swarm_step_gain_u7(),
-            frame.qdps_min_step_q7,
+            frame.phase_step_min_q7,
             frame.autonomous_swarm_tolerance_q7(),
             frame.autonomous_swarm_quorum_threshold(),
             entropy_h_tilde,
@@ -896,8 +893,8 @@ impl SystemConstraintSignal for StigmergicSubstrate {
     }
 
     #[inline(always)]
-    fn qdps_min_step_rad_override(&self) -> f32 {
-        self.phase_steering.phase_step_min_rad()
+    fn phase_step_min_rad_override(&self) -> f32 {
+        DEFAULT_PHASE_STEP_MIN_RAD
     }
 }
 
@@ -918,7 +915,7 @@ impl ManifoldGatewaySignal for StigmergicSubstrate {
         let words = *trail_phase_words_ref(active_trail);
         let dec = StigmergicActionDecision::from_u8(self.last_decision);
         let mode_flags = dec.action_mode_flags();
-        let cur_tp = gcso_tagged_ptr_t(active_trail.current_ptr);
+        let cur_tp = TaggedPtr(active_trail.current_ptr);
         let dom_slot = branchless_select_u8(
             dec == StigmergicActionDecision::RepulsionEscape,
             ATTRACTOR_SLOT_REPULSION,
@@ -933,11 +930,8 @@ impl ManifoldGatewaySignal for StigmergicSubstrate {
                 ROOT_CAUSE_NOMINAL,
             ),
         );
-        let qdps_min_rad = self.phase_steering.phase_step_min_rad();
-        let num_heads_u8 = (self
-            .phase_steering
-            .num_heads()
-            .min(MAX_ATTENTION_HEADS as u32)) as u8;
+        let phase_step_min_rad = DEFAULT_PHASE_STEP_MIN_RAD;
+        let num_heads_u8 = (u32::from(self.num_heads).min(MAX_ATTENTION_HEADS as u32)) as u8;
         let fact_h = num_heads_u8 >> 1;
         let logic_h = num_heads_u8 >> 2;
         let explore_h = num_heads_u8.saturating_sub(fact_h + logic_h);
@@ -949,17 +943,17 @@ impl ManifoldGatewaySignal for StigmergicSubstrate {
                 active_trail.stigmergic_density,
                 active_trail.attractor_pull_force,
             ),
-            ripa_clamp_rad: self.phase_steering.phase_clamp_max_rad(),
-            qdps_min_step_rad: qdps_min_rad,
+            phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+            phase_step_min_rad,
             effective_inv_temp: 1.0,
             fact_persona_coherence: 1.0 - 2.0 * self.last_anomaly_severity,
             repulsion_severity: self.last_anomaly_severity,
-            provenance_bits: self.causal_provenance_bits(),
-            dominant_cause_code: cause_code,
+            lineage_flags: self.causal_provenance_bits(),
+            attribution_tag: cause_code,
             dominant_slot: dom_slot,
             action_mode_flags: mode_flags,
             active_swarm_cell_mask: self.slot_enabled_mask,
-            qdps_min_step_q7: branchless_rad_to_phase_step_u8(qdps_min_rad),
+            phase_step_min_q7: branchless_rad_to_phase_step_u8(phase_step_min_rad),
             subhead_fact_heads: fact_h,
             subhead_logic_heads: logic_h,
             subhead_explore_heads: explore_h,
@@ -985,7 +979,6 @@ const _: () = {
     const fn assert_substrate_bounds<
         T: StigmergicSubstrateOps
             + SubstrateGatewayExt
-            + GatewayPhaseSteeringExt
             + CausalProvenanceSignal
             + SystemConstraintSignal
             + ManifoldGatewaySignal
@@ -995,7 +988,7 @@ const _: () = {
     assert_substrate_bounds::<StigmergicSubstrate>();
 };
 
-impl CrystallizedAttractorRecord {
+impl PhaseAnchorRecord {
     #[inline(always)]
     fn absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
         &mut self,
@@ -1017,12 +1010,12 @@ impl CrystallizedAttractorRecord {
                 self.mapped_section_offset48 = frame.mapped_section_offset48;
             }
             self.dominant_slot = frame.dominant_slot;
-            self.ripa_clamp_rad = frame.ripa_clamp_rad;
+            self.phase_clamp_rad = frame.phase_clamp_rad;
             self.effective_inv_temp = frame.effective_inv_temp;
         } else {
-            if self.ripa_clamp_rad.to_bits() != frame.ripa_clamp_rad.to_bits() {
-                self.ripa_clamp_rad =
-                    branchless_lerp_f32(self.ripa_clamp_rad, frame.ripa_clamp_rad, 0.25);
+            if self.phase_clamp_rad.to_bits() != frame.phase_clamp_rad.to_bits() {
+                self.phase_clamp_rad =
+                    branchless_lerp_f32(self.phase_clamp_rad, frame.phase_clamp_rad, 0.25);
             }
             if self.effective_inv_temp.to_bits() != frame.effective_inv_temp.to_bits() {
                 self.effective_inv_temp =
@@ -1031,7 +1024,7 @@ impl CrystallizedAttractorRecord {
         }
         self.action_mode_flags = frame.action_mode_flags;
         self.active_swarm_mask = frame.active_swarm_cell_mask;
-        self.provenance_bits |= frame.provenance_bits;
+        self.lineage_flags |= frame.lineage_flags;
 
         let (next_w, mass, words_changed) = self
             .absorb_sample_words_with_cur_coh_and_uni_unstamped(
@@ -1045,7 +1038,7 @@ impl CrystallizedAttractorRecord {
         (next_w, mass, true, words_changed)
     }
 
-    /// Absorbs a [`GatewayFrame`] into this [`CrystallizedAttractorRecord`] and returns `phase_gravity_mass`.
+    /// Absorbs a [`GatewayFrame`] into this [`PhaseAnchorRecord`] and returns `phase_gravity_mass`.
     #[inline]
     pub fn absorb_gateway_frame(&mut self, frame: &GatewayFrame) -> f32 {
         let grounded_w = match Scoped::from_boundary(PhaseWordsRef64(frame.phase_words_ref()))
@@ -1062,9 +1055,9 @@ impl CrystallizedAttractorRecord {
         let prev_rb_bits = self.resultant_r_bar.to_bits();
         let prev_kp_bits = self.von_mises_kappa.to_bits();
         let prev_gm_bits = self.phase_gravity_mass.to_bits();
-        let prev_clamp_bits = self.ripa_clamp_rad.to_bits();
+        let prev_clamp_bits = self.phase_clamp_rad.to_bits();
         let prev_temp_bits = self.effective_inv_temp.to_bits();
-        let prev_prov = self.provenance_bits;
+        let prev_prov = self.lineage_flags;
         let prev_w7_lo = self.pack_w7_lo();
         let cur_w = *self.phase_words_ref();
         let (next_w, mass, touched, words_changed) = self
@@ -1149,7 +1142,7 @@ impl CrystallizedAttractorRecord {
         cur_target_w: &[u64; NUM_STIGMERGIC_GRANULES],
         frame: &GatewayFrame,
         sample_w: Indivisible<Grounded, PhaseWordsRef64<'_>>,
-        trail_opt: Option<&mut gcso_pointer_trail_t>,
+        trail_opt: Option<&mut PointerTrail>,
     ) -> (u32, f32, f32) {
         let pre_coh = Some(branchless_select_f32(spawned_new, 1.0, best_coh));
         let eff_best_uni = spawned_new | best_is_uniform;
@@ -1162,10 +1155,10 @@ impl CrystallizedAttractorRecord {
         let prev_zoff = branchless_select_u64(spawned_new, 0, target.mapped_section_offset48);
         let prev_be_bits = target.base_energy.to_bits();
         let prev_gm_bits = target.phase_gravity_mass.to_bits();
-        let prev_prov = target.provenance_bits;
+        let prev_prov = target.lineage_flags;
         let prev_rb_bits = target.resultant_r_bar.to_bits();
         let prev_kp_bits = target.von_mises_kappa.to_bits();
-        let prev_clamp_bits = target.ripa_clamp_rad.to_bits();
+        let prev_clamp_bits = target.phase_clamp_rad.to_bits();
         let prev_temp_bits = target.effective_inv_temp.to_bits();
         let prev_w7_lo = target.pack_w7_lo();
         let (next_w, updated_mass, _modified, words_changed) = target
@@ -1213,7 +1206,7 @@ impl CrystallizedAttractorRecord {
         frame: &GatewayFrame,
         sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
         split_coherence_thresh: f32,
-        trail_opt: Option<&mut gcso_pointer_trail_t>,
+        trail_opt: Option<&mut PointerTrail>,
     ) -> (usize, u32, f32, f32, bool) {
         let k_len = centroids.len();
         if k_len == 0 {
@@ -1284,7 +1277,7 @@ impl CrystallizedAttractorRecord {
     }
 }
 
-impl CrystallizedAttractorRecord {
+impl PhaseAnchorRecord {
     /// Branchless 3-stage **Dissipative Overflow -> Residual Scatter -> Autonomous Daughter Birth** step:
     /// 1. Evaluates saturation & dispersion pressure (`1 - resultant_r_bar`, `sample_count`) on the nearest attractor $A_1$.
     /// 2. If $A_1$ overflows (`effective_coh < split_coherence_thresh`), peels $A_1$'s phase from `sample_w` via SWAR circular subtraction and scans remaining active slots for a secondary basin $A_2$ without branches.
@@ -1295,7 +1288,7 @@ impl CrystallizedAttractorRecord {
         frame: &GatewayFrame,
         sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
         split_coherence_thresh: f32,
-        trail_opt: Option<&mut gcso_pointer_trail_t>,
+        trail_opt: Option<&mut PointerTrail>,
     ) -> DissipativeOverflowReport {
         let k_len = centroids.len();
         if k_len == 0 {
@@ -1304,8 +1297,8 @@ impl CrystallizedAttractorRecord {
 
         let is_repulsed = (frame.repulsion_severity > 0.50)
             | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
-            | (frame.dominant_cause_code == ROOT_CAUSE_COHOMOLOGY_REPULSION)
-            | ((frame.provenance_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0);
+            | (frame.attribution_tag == ROOT_CAUSE_COHOMOLOGY_REPULSION)
+            | ((frame.lineage_flags & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0);
         let (idx_1, coh_1, _grav_1, empty_opt, weakest_idx, w_1, sample_uni, best_1_uni, _) =
             Self::find_nearest_toroidal_centroid_with_cache_64(centroids, sample_w, None);
         let primary_aid = centroids[idx_1].anchor_id;
@@ -1533,7 +1526,7 @@ impl CrystallizedAttractorRecord {
         centroids: &mut [Self],
         signal: &S,
         split_coherence_thresh: f32,
-        trail_opt: Option<&mut gcso_pointer_trail_t>,
+        trail_opt: Option<&mut PointerTrail>,
     ) -> (GatewayFrame, DissipativeOverflowReport) {
         let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
         let report = Self::step_dissipative_overflow_scatter_or_spawn_64(
@@ -1547,20 +1540,20 @@ impl CrystallizedAttractorRecord {
     }
 
     /// Autonomously nucleates a new attractor inside `centroids` when approximation noise in
-    /// [`StigmergicOverlapSerendipityReport`] pushes a fragmented granule outside all existing
-    /// attractors' Venn apertures into `Liminal` (`serendipity_triggered != 0`).
+    /// [`OverlapDiscoveryReport`] pushes a fragmented granule outside all existing
+    /// anchors' lacuna apertures into `Liminal` (`discovery_triggered != 0`).
     ///
     /// Returns `(spawned_slot_idx, spawned_anchor_id, did_nucleate)` in branchless constant time
     /// relative to centroid slot contents.
     #[inline]
-    pub fn nucleate_serendipitous_attractor_from_void_64(
+    pub fn nucleate_discovered_anchor_from_lacuna_64(
         centroids: &mut [Self],
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
         drifted_words: &[u64; NUM_STIGMERGIC_GRANULES],
         new_anchor_id: u32,
-        trail_opt: Option<&mut gcso_pointer_trail_t>,
+        trail_opt: Option<&mut PointerTrail>,
     ) -> (usize, u32, bool) {
-        if (venn_report.serendipity_triggered == 0) || centroids.is_empty() {
+        if (overlap_report.discovery_triggered == 0) || centroids.is_empty() {
             return (0, 0, false);
         }
         let mut empty_idx = 0usize;
@@ -1581,18 +1574,18 @@ impl CrystallizedAttractorRecord {
             i += 1;
         }
 
-        let seed_energy = branchless_max_f32(venn_report.void_excursion_energy, 0.25);
+        let seed_energy = branchless_max_f32(overlap_report.lacuna_excursion_energy, 0.25);
         let can_evict = (!has_empty) & (seed_energy > weakest_mass);
         if !(has_empty | can_evict) {
             return (0, 0, false);
         }
         let grounded_w = match Scoped::from_delta(PhaseWordsRef64(drifted_words)).cut_by_lacuna_q7(
-            venn_report.serendipity_triggered != 0,
+            overlap_report.discovery_triggered != 0,
             127,
             0,
         ) {
             ScopedCut::Exterior(spec) => {
-                match spec.bridge_to_shared(venn_report.serendipity_excursion_mask | 1) {
+                match spec.bridge_to_shared(overlap_report.discovery_excursion_mask | 1) {
                     Ok(bridged) => bridged.into_grounded(),
                     Err(_) => return (0, 0, false),
                 }
@@ -1606,13 +1599,13 @@ impl CrystallizedAttractorRecord {
         let mut seed_frame = GatewayFrame {
             target_anchor_id: eff_anchor_id,
             effective_energy: seed_energy,
-            ripa_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-            qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+            phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+            phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
             effective_inv_temp: 1.0,
-            provenance_bits: CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
+            lineage_flags: CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
             dominant_slot: ATTRACTOR_SLOT_CRYSTALLIZED,
             action_mode_flags: ACTION_PRESET_EXPRESS_PHASE,
-            active_swarm_cell_mask: venn_report.serendipity_excursion_mask | 0x01,
+            active_swarm_cell_mask: overlap_report.discovery_excursion_mask | 0x01,
             ..GatewayFrame::default()
         };
         *seed_frame.phase_words_mut() = *drifted_words;
@@ -1647,7 +1640,7 @@ impl CrystallizedAttractorRecord {
         centroids: &mut [Self],
         frame: &GatewayFrame,
         split_coherence_thresh: f32,
-        trail_opt: Option<&mut gcso_pointer_trail_t>,
+        trail_opt: Option<&mut PointerTrail>,
     ) -> (usize, u32, f32, f32, bool) {
         Self::step_online_toroidal_kmeans_frame_with_words_64(
             centroids,
@@ -1665,7 +1658,7 @@ impl CrystallizedAttractorRecord {
         centroids: &mut [Self],
         frames: &[GatewayFrame],
         split_coherence_thresh: f32,
-        mut trail_opt: Option<&mut gcso_pointer_trail_t>,
+        mut trail_opt: Option<&mut PointerTrail>,
     ) -> (usize, u32, f32, u32) {
         if centroids.is_empty() || frames.is_empty() {
             return (0, 0, 0.0, 0);
@@ -1714,7 +1707,7 @@ impl CrystallizedAttractorRecord {
         centroids: &mut [Self],
         signal: &S,
         split_coherence_thresh: f32,
-        trail_opt: Option<&mut gcso_pointer_trail_t>,
+        trail_opt: Option<&mut PointerTrail>,
     ) -> (GatewayFrame, usize, u32, f32, f32, bool) {
         let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
         let (cluster_idx, anchor_id, coh, mass, spawned) =
@@ -1729,22 +1722,22 @@ impl CrystallizedAttractorRecord {
     }
 }
 
-impl CausalProvenanceSignal for CrystallizedAttractorRecord {
+impl CausalProvenanceSignal for PhaseAnchorRecord {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let is_mature = (self.sample_count >= 2) & (self.resultant_r_bar >= 0.45);
-        self.provenance_bits
+        self.lineage_flags
             | branchless_select_u32(is_mature, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, 0)
     }
 }
 
-impl CognitiveGroundingSignal for CrystallizedAttractorRecord {
+impl CognitiveGroundingSignal for PhaseAnchorRecord {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.phase_profile
     }
     #[inline(always)]
-    fn grounding_phases_ref_64(&self) -> Option<&[gcso_q7_t; MAX_ATTENTION_HEADS]> {
+    fn grounding_phases_ref_64(&self) -> Option<&[PhaseQ7; MAX_ATTENTION_HEADS]> {
         Some(&self.phase_profile)
     }
     #[inline(always)]
@@ -1765,21 +1758,21 @@ impl CognitiveGroundingSignal for CrystallizedAttractorRecord {
     }
 }
 
-impl ObjectiveFactSignal for CrystallizedAttractorRecord {
+impl ObjectiveFactSignal for PhaseAnchorRecord {
     #[inline(always)]
-    fn fact_ripa_clamp_rad(&self) -> f32 {
-        self.ripa_clamp_rad
+    fn fact_phase_clamp_rad(&self) -> f32 {
+        self.phase_clamp_rad
     }
 }
 
-impl SubjectivePersonaSignal for CrystallizedAttractorRecord {
+impl SubjectivePersonaSignal for PhaseAnchorRecord {
     #[inline(always)]
-    fn persona_ripa_clamp_rad(&self) -> f32 {
-        self.ripa_clamp_rad
+    fn persona_phase_clamp_rad(&self) -> f32 {
+        self.phase_clamp_rad
     }
 }
 
-impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
+impl ManifoldGatewaySignal for PhaseAnchorRecord {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -1790,18 +1783,13 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                 pack_action_slot_tag(self.dominant_slot, ACTION_PRESET_PASSIVE_SIDECAR);
             return (
                 GatewayFrame {
-                    tagged_ptr: gcso_tagged_ptr_t::pack(
-                        self.mapped_section_offset48,
-                        packed_tag,
-                        0,
-                    )
-                    .raw(),
+                    tagged_ptr: TaggedPtr::pack(self.mapped_section_offset48, packed_tag, 0).raw(),
                     mapped_section_offset48: self.mapped_section_offset48,
                     target_anchor_id: self.anchor_id,
                     dominant_slot: self.dominant_slot,
                     action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
                     active_swarm_cell_mask: self.active_swarm_mask,
-                    dominant_cause_code: self.dominant_cause_code,
+                    attribution_tag: self.attribution_tag,
                     frame_flags: packed_tag as u16,
                     ..GatewayFrame::default()
                 },
@@ -1813,9 +1801,8 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let tag_q7 = fast_mean_q7_tag_from_words_64(&w);
         let eff_action = self.action_mode_flags;
         let packed_tag = pack_action_slot_tag(self.dominant_slot, eff_action);
-        let tagged_ptr =
-            gcso_tagged_ptr_t::pack(self.mapped_section_offset48, packed_tag, tag_q7).raw();
-        let prov_bits = self.provenance_bits
+        let tagged_ptr = TaggedPtr::pack(self.mapped_section_offset48, packed_tag, tag_q7).raw();
+        let prov_bits = self.lineage_flags
             | branchless_select_u32(is_mature, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, 0);
 
         let is_fact_slot = self.dominant_slot == ATTRACTOR_SLOT_KNOWLEDGE;
@@ -1844,17 +1831,17 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     self.phase_gravity_mass,
                     MAX_ATTRACTOR_PULL_FORCE,
                 ),
-                ripa_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-                qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+                phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+                phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
                 effective_inv_temp: self.effective_inv_temp,
                 fact_persona_coherence: self.resultant_r_bar,
                 repulsion_severity: 0.0,
-                provenance_bits: prov_bits,
-                dominant_cause_code: self.dominant_cause_code,
+                lineage_flags: prov_bits,
+                attribution_tag: self.attribution_tag,
                 dominant_slot: self.dominant_slot,
                 action_mode_flags: eff_action,
                 active_swarm_cell_mask: self.active_swarm_mask,
-                qdps_min_step_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
+                phase_step_min_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
                 subhead_fact_heads: subhead_fact,
                 subhead_logic_heads: subhead_logic,
                 subhead_explore_heads: subhead_explore,
@@ -1881,7 +1868,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     dominant_slot: self.dominant_slot,
                     action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
                     active_swarm_cell_mask: self.active_swarm_mask,
-                    dominant_cause_code: self.dominant_cause_code,
+                    attribution_tag: self.attribution_tag,
                     ..GatewayFrame::default()
                 },
                 [0u64; NUM_STIGMERGIC_GRANULES],
@@ -1889,7 +1876,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         }
         let is_mature = (self.sample_count >= 2) & (self.resultant_r_bar >= 0.45);
         let w = *self.phase_words_ref();
-        let prov_bits = self.provenance_bits
+        let prov_bits = self.lineage_flags
             | branchless_select_u32(is_mature, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, 0);
         let is_fact_slot = self.dominant_slot == ATTRACTOR_SLOT_KNOWLEDGE;
         let is_persona_slot = self.dominant_slot == ATTRACTOR_SLOT_PERSONA;
@@ -1917,17 +1904,17 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     self.phase_gravity_mass,
                     MAX_ATTRACTOR_PULL_FORCE,
                 ),
-                ripa_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-                qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+                phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+                phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
                 effective_inv_temp: self.effective_inv_temp,
                 fact_persona_coherence: self.resultant_r_bar,
                 repulsion_severity: 0.0,
-                provenance_bits: prov_bits,
-                dominant_cause_code: self.dominant_cause_code,
+                lineage_flags: prov_bits,
+                attribution_tag: self.attribution_tag,
                 dominant_slot: self.dominant_slot,
                 action_mode_flags: self.action_mode_flags,
                 active_swarm_cell_mask: self.active_swarm_mask,
-                qdps_min_step_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
+                phase_step_min_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
                 subhead_fact_heads: subhead_fact,
                 subhead_logic_heads: subhead_logic,
                 subhead_explore_heads: subhead_explore,
@@ -1989,7 +1976,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     MAX_ATTRACTOR_PULL_FORCE,
                 );
                 let is_mature = (rec.sample_count >= 2) & (rec.resultant_r_bar >= 0.45);
-                let rec_prov = rec.provenance_bits
+                let rec_prov = rec.lineage_flags
                     | branchless_select_u32(is_mature, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, 0);
 
                 if !has_active {
@@ -2004,7 +1991,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     action_flags = rec.action_mode_flags;
                     swarm_mask = rec.active_swarm_mask;
                     prov_bits = rec_prov;
-                    dom_cause = rec.dominant_cause_code;
+                    dom_cause = rec.attribution_tag;
                     has_active = true;
                 } else if f_e > DEFAULT_ENTROPY_EPS {
                     let new_tot = tot_e + f_e;
@@ -2046,8 +2033,8 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                     swarm_mask &= rec.active_swarm_mask;
                     prov_bits |= rec_prov;
                     dom_cause = branchless_select_u8(
-                        rec.dominant_cause_code > dom_cause,
-                        rec.dominant_cause_code,
+                        rec.attribution_tag > dom_cause,
+                        rec.attribution_tag,
                         dom_cause,
                     );
                     tot_e = new_tot;
@@ -2090,7 +2077,7 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
         let phase_deltas = words_to_q7_array_64(&acc_w);
         let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
         let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
-        let tagged_ptr = gcso_tagged_ptr_t::pack(dom_storage_addr, packed_tag, tag_q7).raw();
+        let tagged_ptr = TaggedPtr::pack(dom_storage_addr, packed_tag, tag_q7).raw();
 
         (
             GatewayFrame {
@@ -2098,17 +2085,17 @@ impl ManifoldGatewaySignal for CrystallizedAttractorRecord {
                 mapped_section_offset48: dom_storage_addr,
                 target_anchor_id: dom.anchor_id,
                 effective_energy: branchless_min_f32(tot_e, MAX_ATTRACTOR_PULL_FORCE),
-                ripa_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-                qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+                phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+                phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
                 effective_inv_temp: eff_inv_temp,
                 fact_persona_coherence: fp_coh,
                 repulsion_severity: 0.0,
-                provenance_bits: prov_bits,
-                dominant_cause_code: dom_cause,
+                lineage_flags: prov_bits,
+                attribution_tag: dom_cause,
                 dominant_slot: dom_slot,
                 action_mode_flags: action_flags,
                 active_swarm_cell_mask: swarm_mask,
-                qdps_min_step_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
+                phase_step_min_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
                 subhead_fact_heads: subhead_fact,
                 subhead_logic_heads: subhead_logic,
                 subhead_explore_heads: subhead_explore,
@@ -2198,7 +2185,7 @@ impl CognitiveTrajectoryLedger {
                     frame.repulsion_severity =
                         branchless_max_f32(frame.repulsion_severity, sev_floor);
                     frame.action_mode_flags |= ACTION_MODE_PHASE_REPULSE;
-                    frame.provenance_bits |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
+                    frame.lineage_flags |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
                     frame.subhead_explore_gain_q7 = frame
                         .subhead_explore_gain_q7
                         .saturating_add(act.repulse_sensitivity_q7 >> 3);
@@ -2232,7 +2219,7 @@ impl CausalProvenanceSignal for CognitiveTrajectoryLedger {
 
 impl CognitiveGroundingSignal for CognitiveTrajectoryLedger {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.project_to_q7_64()
     }
 
@@ -2275,9 +2262,9 @@ impl ManifoldGatewaySignal for CognitiveTrajectoryLedger {
         let prov = self.causal_provenance_bits();
         (
             GatewayFrame {
-                tagged_ptr: gcso_tagged_ptr_t::pack(0, packed_tag, tag_q7).raw(),
+                tagged_ptr: TaggedPtr::pack(0, packed_tag, tag_q7).raw(),
                 effective_energy: (depth as f32) * 0.25,
-                provenance_bits: prov,
+                lineage_flags: prov,
                 dominant_slot: ATTRACTOR_SLOT_PERSONA,
                 action_mode_flags: action_mode,
                 active_swarm_cell_mask: 0xFF,
@@ -2309,7 +2296,7 @@ impl<const N: usize> CausalProvenanceSignal for CognitiveCircuitBank<N> {
 
 impl<const N: usize> CognitiveGroundingSignal for CognitiveCircuitBank<N> {
     #[inline]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.project_to_q7_64()
     }
 
@@ -2328,7 +2315,7 @@ impl<const N: usize> ManifoldGatewaySignal for CognitiveCircuitBank<N> {
     }
 }
 
-impl CausalProvenanceSignal for gcso_pointer_trail_t {
+impl CausalProvenanceSignal for PointerTrail {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
         let rep = (self.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0;
@@ -2342,14 +2329,14 @@ impl CausalProvenanceSignal for gcso_pointer_trail_t {
     }
 }
 
-impl ManifoldGatewaySignal for gcso_pointer_trail_t {
+impl ManifoldGatewaySignal for PointerTrail {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let w = *trail_phase_words_ref(self);
         let tag_q7 = fast_mean_q7_tag_from_words_64(&w);
-        let ptr = gcso_tagged_ptr_t(self.current_ptr);
+        let ptr = TaggedPtr(self.current_ptr);
         let rep = (self.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0;
         let dom_slot = ptr.unpack_tag() & ATTRACTOR_SLOT_ID_MASK;
         let action_flags = branchless_select_u8(
@@ -2368,8 +2355,8 @@ impl ManifoldGatewaySignal for gcso_pointer_trail_t {
                     MAX_ATTRACTOR_PULL_FORCE,
                 ),
                 repulsion_severity: branchless_select_f32(rep, 0.85, 0.0),
-                provenance_bits: self.causal_provenance_bits(),
-                dominant_cause_code: branchless_select_u8(
+                lineage_flags: self.causal_provenance_bits(),
+                attribution_tag: branchless_select_u8(
                     rep,
                     ROOT_CAUSE_COHOMOLOGY_REPULSION,
                     ROOT_CAUSE_NOMINAL,
@@ -2394,7 +2381,7 @@ impl ManifoldGatewaySignal for gcso_pointer_trail_t {
     }
 }
 
-impl StigmergicScaleLayer for gcso_pointer_trail_t {
+impl StigmergicScaleLayer for PointerTrail {
     #[inline(always)]
     fn scale_granularity(&self) -> StigmergicScaleGranularity {
         if self.linked_trail_id != 0 {
@@ -2407,7 +2394,7 @@ impl StigmergicScaleLayer for gcso_pointer_trail_t {
 
 impl EpisodicPhaseSample for GatewayFrame {
     #[inline(always)]
-    fn sample_phase_coords(&self, _domain_salt: u32) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn sample_phase_coords(&self, _domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.phase_deltas
     }
 
@@ -2428,11 +2415,6 @@ impl EpisodicPhaseSample for GatewayFrame {
     #[inline(always)]
     fn preferred_working_lane(&self) -> u32 {
         u32::from(self.dominant_slot) & ((MAX_ATTRACTOR_DOMAINS as u32) - 1)
-    }
-
-    #[inline(always)]
-    fn sample_anchor_type(&self) -> gcso_anchor_type_t {
-        GCSO_ANCHOR_TYPE_CRYSTALLIZED
     }
 }
 

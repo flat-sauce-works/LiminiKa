@@ -7,7 +7,9 @@
 //! unified, zero-external-dependency bridge for external LLM runtimes (Candle, `llama.cpp`,
 //! and CLI evaluation harnesses).
 
-use liminika_core::abi::{gcso_edbc_state_t, gcso_ledger_slot_t, gcso_pointer_trail_t, gcso_q7_t};
+use liminika_core::abi::{
+    lmnk_entropy_state_t, lmnk_ledger_slot_t, lmnk_pointer_trail_t, lmnk_q7_t,
+};
 use liminika_core::drivers::{
     EntropyController, LiminalEgoPreset, LiminalEgoState, DISTORTION_DELTA_FLAG_ACTIVE,
     DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, EGO_TRIGGER_BASIN_CAPTURE,
@@ -19,27 +21,27 @@ use liminika_core::foundation::{
     RopeSteeringTarget, ACTION_MODE_PHASE_REPULSE, SWAR_SPLAT_BYTE_64,
 };
 use liminika_core::liminal::{
-    BitCut8, EpistemicRegime, GcsoResult, LiminalThresholdState, MAX_ATTENTION_HEADS,
+    BitCut8, EpistemicRegime, LiminalThresholdState, LmnkResult, MAX_ATTENTION_HEADS,
     NUM_STIGMERGIC_GRANULES,
 };
 use liminika_core::runtime::{
-    apply_latent_horizon_slots, AdaptiveThresholdPolicy, AutonomousCoreLayerStack,
-    CausalProvenanceReport, CausalProvenanceSignal, CoreLayerEvalContext, CoreTelemetryBank,
+    apply_latent_horizon_slots, AdaptiveThresholdPolicy, CausalProvenanceReport,
+    CausalProvenanceSignal, CoreLayerEvalContext, CoreStateStack, CoreTelemetryBank,
     CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, EpistemicHorizonReading, GatewayFrame,
-    GatewayPhaseSteeringExt, GcsoFourSectionView, GuardPhaseAnchor, HorizonDwellState,
-    HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
-    LayerDistortionReport, LiminalBoundaryDelta, LiminalTopologyTelemetrySnapshot,
+    GatewayPhaseSteeringExt, GuardPhaseAnchor, HorizonDwellState, HorizonEscalationProvider,
+    HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot, LayerDistortionReport,
+    LiminalBoundaryDelta, LiminalTopologyTelemetrySnapshot, LmnkFourSectionView,
     ManifoldGatewaySignal, ManifoldProbeBaseline, ObjectiveFact, SlowLoopTelemetryAdjustment,
     StigmergicThresholdPolicy, SubjectivePersona, SubstrateGatewayExt, SystemConstraint,
     TelemetryCapturePolicy, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
     CAUSAL_AXIS_SUBJECTIVE_PERSONA, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use liminika_core::stigmergy::{
-    evaluate_stigmergic_overlap_and_serendipity_words_64, CognitiveCircuitActivation,
-    CognitiveCircuitBankOps, CognitiveTrajectoryLedger, CrystallizedAttractorRecord,
-    DissipativeOverflowReport, PhaseDeltaSlice, PhaseSteeringEngine, RelativeAttractorNode,
-    ResidualAdapterEngine, ResidualScale, SandboxLifecycleEvent, StigmergicActionDecision,
-    StigmergicFragmentEnsembleReport, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
+    evaluate_stigmergic_overlap_and_discovery_words_64, CognitiveCircuitActivation,
+    CognitiveCircuitBankOps, CognitiveTrajectoryLedger, DissipativeOverflowReport,
+    OverlapDiscoveryReport, PhaseAnchorRecord, PhaseDeltaSlice, PhaseSteeringEngine,
+    RelativeAttractorNode, ResidualAdapterEngine, ResidualScale, SandboxLifecycleEvent,
+    StigmergicActionDecision, StigmergicFragmentEnsembleReport, StigmergicGranuleState,
     StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
     StigmergicThresholds, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
     ATTRACTOR_SLOT_REPULSION, LEDGER_FLAG_COGNITIVE_TRAJECTORY, WORKBENCH_LANE_FLAG_REPULSION,
@@ -57,9 +59,8 @@ pub use liminika_core::drivers::{
     SPINE_BYPASS_VETO_REPULSION_ACTIVE,
 };
 pub use liminika_core::liminal::{
-    evaluate_epistemic_partition_branchless, AttributionTag, DriverKind, EpistemicPartition,
-    PrimitiveKind, SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE,
-    SCOPE_REGION_SHARED_CORE,
+    evaluate_lacuna_partition_branchless, AttributionTag, DriverKind, LacunaPartition8,
+    PrimitiveKind, SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR, SCOPE_REGION_SELF_REF,
 };
 pub use liminika_core::stigmergy::{
     CorePrimitiveState, WorkbenchLanePlacement, WorkbenchPreset, WorkbenchSlotSpec,

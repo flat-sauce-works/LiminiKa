@@ -20,13 +20,13 @@ use crate::foundation::scalar_math::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_select_usize, gcso_q7_t,
+    branchless_select_u64, branchless_select_u8, branchless_select_usize, PhaseQ7,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 
-/// Packs 8 `gcso_q7_t` lanes into a single 64-bit little-endian SWAR word.
+/// Packs 8 `PhaseQ7` lanes into a single 64-bit little-endian SWAR word.
 #[inline(always)]
-pub const fn swar_q7_pack_x8(lanes: &[gcso_q7_t; 8]) -> u64 {
+pub const fn swar_q7_pack_x8(lanes: &[PhaseQ7; 8]) -> u64 {
     u64::from_le_bytes([
         lanes[0] as u8,
         lanes[1] as u8,
@@ -39,19 +39,19 @@ pub const fn swar_q7_pack_x8(lanes: &[gcso_q7_t; 8]) -> u64 {
     ])
 }
 
-/// Unpacks a 64-bit little-endian SWAR word into 8 `gcso_q7_t` lanes.
+/// Unpacks a 64-bit little-endian SWAR word into 8 `PhaseQ7` lanes.
 #[inline(always)]
-pub const fn swar_q7_unpack_x8(packed: u64) -> [gcso_q7_t; 8] {
+pub const fn swar_q7_unpack_x8(packed: u64) -> [PhaseQ7; 8] {
     let b = packed.to_le_bytes();
     [
-        b[0] as gcso_q7_t,
-        b[1] as gcso_q7_t,
-        b[2] as gcso_q7_t,
-        b[3] as gcso_q7_t,
-        b[4] as gcso_q7_t,
-        b[5] as gcso_q7_t,
-        b[6] as gcso_q7_t,
-        b[7] as gcso_q7_t,
+        b[0] as PhaseQ7,
+        b[1] as PhaseQ7,
+        b[2] as PhaseQ7,
+        b[3] as PhaseQ7,
+        b[4] as PhaseQ7,
+        b[5] as PhaseQ7,
+        b[6] as PhaseQ7,
+        b[7] as PhaseQ7,
     ]
 }
 
@@ -373,7 +373,7 @@ pub const fn swar_q7_phase_step_filter_words_64(w: &[u64; 8], min_step_q7: u8) -
 }
 
 #[inline(always)]
-pub(crate) const fn load_q7_word_at(arr: &[gcso_q7_t; MAX_ATTENTION_HEADS], base: usize) -> u64 {
+pub(crate) const fn load_q7_word_at(arr: &[PhaseQ7; MAX_ATTENTION_HEADS], base: usize) -> u64 {
     u64::from_le_bytes([
         arr[base] as u8,
         arr[base + 1] as u8,
@@ -388,26 +388,26 @@ pub(crate) const fn load_q7_word_at(arr: &[gcso_q7_t; MAX_ATTENTION_HEADS], base
 
 #[inline(always)]
 pub(crate) const fn store_q7_word_at(
-    arr: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    arr: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
     base: usize,
     word: u64,
 ) {
     let b = word.to_le_bytes();
-    arr[base] = b[0] as gcso_q7_t;
-    arr[base + 1] = b[1] as gcso_q7_t;
-    arr[base + 2] = b[2] as gcso_q7_t;
-    arr[base + 3] = b[3] as gcso_q7_t;
-    arr[base + 4] = b[4] as gcso_q7_t;
-    arr[base + 5] = b[5] as gcso_q7_t;
-    arr[base + 6] = b[6] as gcso_q7_t;
-    arr[base + 7] = b[7] as gcso_q7_t;
+    arr[base] = b[0] as PhaseQ7;
+    arr[base + 1] = b[1] as PhaseQ7;
+    arr[base + 2] = b[2] as PhaseQ7;
+    arr[base + 3] = b[3] as PhaseQ7;
+    arr[base + 4] = b[4] as PhaseQ7;
+    arr[base + 5] = b[5] as PhaseQ7;
+    arr[base + 6] = b[6] as PhaseQ7;
+    arr[base + 7] = b[7] as PhaseQ7;
 }
 
 /// Loads all 64 Q7 head phases into 8 `u64` SWAR registers using 8 direct 64-bit GPR word loads
 /// (`mov r64, qword ptr [arr + 8*c]`), avoiding 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF)
 /// stalls and 64-byte cache-line split penalties when reading `trail.accumulated_phase_delta` (offset 56).
 #[inline(always)]
-pub const fn load_q7_words_64(arr: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> [u64; 8] {
+pub const fn load_q7_words_64(arr: &[PhaseQ7; MAX_ATTENTION_HEADS]) -> [u64; 8] {
     [
         load_q7_word_at(arr, 0),
         load_q7_word_at(arr, 8),
@@ -424,7 +424,7 @@ pub const fn load_q7_words_64(arr: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> [u64; 8
 /// (`mov qword ptr [arr + 8*c], r64`), eliminating narrow-GPR-store-to-wide-YMM-load Store-to-Load
 /// Forwarding (STLF) stalls (`~15-20 cycles`) and 64-byte cache-line split stores on `trail.accumulated_phase_delta`.
 #[inline(always)]
-pub const fn store_q7_words_64(arr: &mut [gcso_q7_t; MAX_ATTENTION_HEADS], w: &[u64; 8]) {
+pub const fn store_q7_words_64(arr: &mut [PhaseQ7; MAX_ATTENTION_HEADS], w: &[u64; 8]) {
     store_q7_word_at(arr, 0, w[0]);
     store_q7_word_at(arr, 8, w[1]);
     store_q7_word_at(arr, 16, w[2]);
@@ -459,7 +459,7 @@ pub(crate) const fn swar_u8_pair_sum16(packed_u8: u64) -> u64 {
 pub(crate) unsafe fn avx2_q7_mean_i8_from_vec64(
     v0: core::arch::x86_64::__m256i,
     v1: core::arch::x86_64::__m256i,
-) -> gcso_q7_t {
+) -> PhaseQ7 {
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
@@ -484,7 +484,7 @@ pub(crate) unsafe fn avx2_q7_mean_i8_from_vec64(
             rounded < -128,
             -128,
             branchless_select_i32(rounded > 127, 127, rounded),
-        ) as gcso_q7_t
+        ) as PhaseQ7
     }
 }
 
@@ -494,11 +494,11 @@ pub(crate) unsafe fn avx2_q7_mean_i8_from_vec64(
 pub const fn swar_q7_mean_i8_from_words_with_uniform_flag_64(
     words: &[u64; 8],
     words_is_uniform: bool,
-) -> gcso_q7_t {
+) -> PhaseQ7 {
     if words_is_uniform {
         let w0 = words[0];
         if w0 == w0.rotate_right(8) {
-            return (w0 & 0xFF) as u8 as gcso_q7_t;
+            return (w0 & 0xFF) as u8 as PhaseQ7;
         }
         let signed_sum8 = (swar_u8_sum_x8(w0 ^ SWAR_SIGN_MASK_64) as i32) - (8 * 128);
         let rounded8 = (signed_sum8 + branchless_select_i32(signed_sum8 >= 0, 4, -4)) / 8;
@@ -506,7 +506,7 @@ pub const fn swar_q7_mean_i8_from_words_with_uniform_flag_64(
             rounded8 < -128,
             -128,
             branchless_select_i32(rounded8 > 127, 127, rounded8),
-        ) as gcso_q7_t;
+        ) as PhaseQ7;
     }
     let p01 = swar_u8_pair_sum16(words[0] ^ SWAR_SIGN_MASK_64)
         .wrapping_add(swar_u8_pair_sum16(words[1] ^ SWAR_SIGN_MASK_64));
@@ -524,19 +524,19 @@ pub const fn swar_q7_mean_i8_from_words_with_uniform_flag_64(
         rounded < -128,
         -128,
         branchless_select_i32(rounded > 127, 127, rounded),
-    ) as gcso_q7_t
+    ) as PhaseQ7
 }
 
 /// Computes the rounded arithmetic mean Q7 phase across all 8 packed `u64` SWAR words (64 heads)
 /// in strictly constant time (`0` data-dependent branches).
 #[inline(always)]
-pub const fn swar_q7_mean_i8_from_words_64(words: &[u64; 8]) -> gcso_q7_t {
+pub const fn swar_q7_mean_i8_from_words_64(words: &[u64; 8]) -> PhaseQ7 {
     swar_q7_mean_i8_from_words_with_uniform_flag_64(words, is_word_array_uniform_64(words))
 }
 
 /// Returns `true` if any of the 64 Q7 head phases in `phases` is non-zero (`0` branches).
 #[inline(always)]
-pub const fn is_phase_profile_nonzero_64(phases: &[gcso_q7_t; MAX_ATTENTION_HEADS]) -> bool {
+pub const fn is_phase_profile_nonzero_64(phases: &[PhaseQ7; MAX_ATTENTION_HEADS]) -> bool {
     let w = load_q7_words_64(phases);
     (((w[0] | w[1]) | (w[2] | w[3])) | ((w[4] | w[5]) | (w[6] | w[7]))) != 0
 }
@@ -544,8 +544,8 @@ pub const fn is_phase_profile_nonzero_64(phases: &[gcso_q7_t; MAX_ATTENTION_HEAD
 /// Accumulates `deltas` into `acc` across all 64 attention heads using 8-word SWAR saturating addition.
 #[inline(always)]
 pub const fn branchless_q7_accumulate_64(
-    acc: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
-    deltas: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    acc: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
+    deltas: &[PhaseQ7; MAX_ATTENTION_HEADS],
 ) {
     let a = load_q7_words_64(acc);
     let d = load_q7_words_64(deltas);
@@ -567,9 +567,9 @@ pub const fn branchless_q7_accumulate_64(
 /// Subtracts `b` from `a` across all 64 attention heads using 8-word SWAR saturating subtraction.
 #[inline(always)]
 pub const fn branchless_q7_sub_64(
-    a: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    b: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    a: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    b: &[PhaseQ7; MAX_ATTENTION_HEADS],
+) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     let wa = load_q7_words_64(a);
     let wb = load_q7_words_64(b);
     let mut out = [0i8; MAX_ATTENTION_HEADS];
@@ -592,8 +592,8 @@ pub const fn branchless_q7_sub_64(
 /// Conjugates all 64 Q7 head phases ($-\boldsymbol{\Delta\theta}$) using 8-word SWAR saturating negation.
 #[inline(always)]
 pub const fn branchless_q7_conjugate_64(
-    phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     let w = load_q7_words_64(phases);
     let mut out = [0i8; MAX_ATTENTION_HEADS];
     store_q7_words_64(
@@ -614,7 +614,7 @@ pub const fn branchless_q7_conjugate_64(
 
 /// Scales all 64 Q7 head phases in-place by `scale_u7 / 128` using 8-word SWAR arithmetic.
 #[inline(always)]
-pub const fn branchless_q7_scale_64(phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS], scale_u7: u8) {
+pub const fn branchless_q7_scale_64(phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS], scale_u7: u8) {
     let gt_128 = scale_u7 > 128;
     let s = branchless_select_u8(gt_128, scale_u7.wrapping_sub(128), scale_u7) as u64;
     let bias_restore = (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
@@ -647,7 +647,7 @@ pub const fn branchless_q7_scale_64(phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS
 /// in strictly constant time (`0` data-dependent branches) via [`swar_q7_phase_step_filter_words_64`].
 #[inline(always)]
 pub const fn branchless_q7_phase_step_filter_64(
-    phases: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
     min_step_q7: u8,
 ) {
     if min_step_q7 <= 1 {
@@ -664,12 +664,12 @@ pub const fn branchless_q7_phase_step_filter_64(
 
 /// Branchless discrete phase-step filter (`PhaseStepFilter`) in the Q7 integer domain (Section 2.3).
 #[inline(always)]
-pub const fn branchless_phase_step_filter_q7(delta: gcso_q7_t, min_step_q7: i32) -> gcso_q7_t {
+pub const fn branchless_phase_step_filter_q7(delta: PhaseQ7, min_step_q7: i32) -> PhaseQ7 {
     let val = delta as i32;
     let sign_mask = val >> 31;
     let abs_val = (val ^ sign_mask) - sign_mask;
     let keep_mask = (((abs_val >= min_step_q7) & (min_step_q7 <= 127)) as i32).wrapping_neg();
-    (val & keep_mask) as gcso_q7_t
+    (val & keep_mask) as PhaseQ7
 }
 
 /// Branchless $\mathcal{O}(1)$ SplitMix64 bijective hash mixer for pointer trails and bitmasks.
@@ -708,7 +708,7 @@ pub const fn branchless_hysteresis_quantize_depth(
 }
 
 #[inline(always)]
-pub(crate) fn load_q7_x8_slice(slice: &[gcso_q7_t], offset: usize) -> u64 {
+pub(crate) fn load_q7_x8_slice(slice: &[PhaseQ7], offset: usize) -> u64 {
     debug_assert!(offset + 8 <= slice.len());
     // SAFETY: Caller guarantees `offset + 8 <= slice.len()`.
     let raw = unsafe { core::ptr::read_unaligned(slice.as_ptr().add(offset).cast::<u64>()) };
@@ -716,7 +716,7 @@ pub(crate) fn load_q7_x8_slice(slice: &[gcso_q7_t], offset: usize) -> u64 {
 }
 
 #[inline(always)]
-pub(crate) fn store_q7_x8_slice(slice: &mut [gcso_q7_t], offset: usize, word: u64) {
+pub(crate) fn store_q7_x8_slice(slice: &mut [PhaseQ7], offset: usize, word: u64) {
     debug_assert!(offset + 8 <= slice.len());
     // SAFETY: Caller guarantees `offset + 8 <= slice.len()`.
     unsafe {
@@ -726,7 +726,7 @@ pub(crate) fn store_q7_x8_slice(slice: &mut [gcso_q7_t], offset: usize, word: u6
 
 #[inline(always)]
 pub(crate) fn swar_phase_step_filter_q7_slice_in_place(
-    phases: &mut [gcso_q7_t],
+    phases: &mut [PhaseQ7],
     limit: usize,
     min_step_q7: i32,
 ) {
@@ -735,7 +735,7 @@ pub(crate) fn swar_phase_step_filter_q7_slice_in_place(
         128,
         branchless_select_i32(min_step_q7 < 0, 0, min_step_q7),
     ) as u8;
-    // Since `|x| >= 1` for every non-zero `gcso_q7_t` lane (`|0| = 0`), `clamped_step <= 1` is an exact identity.
+    // Since `|x| >= 1` for every non-zero `PhaseQ7` lane (`|0| = 0`), `clamped_step <= 1` is an exact identity.
     if clamped_step <= 1 {
         return;
     }
@@ -785,12 +785,8 @@ pub(crate) fn swar_phase_step_filter_q7_slice_in_place(
     }
     let thresh_x8 = ((clamped_step & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
     if i == 0 && end == MAX_ATTENTION_HEADS {
-        // SAFETY: `end == MAX_ATTENTION_HEADS <= phases.len()` and `align_of::<gcso_q7_t>() == 1`.
-        let arr = unsafe {
-            &mut *phases
-                .as_mut_ptr()
-                .cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
-        };
+        // SAFETY: `end == MAX_ATTENTION_HEADS <= phases.len()` and `align_of::<PhaseQ7>() == 1`.
+        let arr = unsafe { &mut *phases.as_mut_ptr().cast::<[PhaseQ7; MAX_ATTENTION_HEADS]>() };
         let w = load_q7_words_64(arr);
         store_q7_words_64(
             arr,
@@ -850,7 +846,7 @@ pub(crate) const fn sanitize_inplace_gain_f32(raw_gain: f32) -> f32 {
 
 #[inline(always)]
 pub(crate) const fn eval_phase_clamp_sincos_q7_fast(
-    phase_q7: gcso_q7_t,
+    phase_q7: PhaseQ7,
     is_default: bool,
     eff_max: f32,
     q7_to_norm_scale: f32,
@@ -864,7 +860,7 @@ pub(crate) const fn eval_phase_clamp_sincos_q7_fast(
 
 #[inline(always)]
 pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
-    phase_q7: gcso_q7_t,
+    phase_q7: PhaseQ7,
     is_default: bool,
     eff_max: f32,
     q7_to_norm_scale: f32,
@@ -883,12 +879,12 @@ pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
 /// `sincos_phase_clamp_poly` **once** instead of twice when custom `PhaseClamp` limits are active.
 #[inline(always)]
 pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
-    base_q7: gcso_q7_t,
+    base_q7: PhaseQ7,
     geodesic_base: bool,
     is_default_base: bool,
     eff_base_max: f32,
     base_norm_scale: f32,
-    subhead_q7: gcso_q7_t,
+    subhead_q7: PhaseQ7,
     geodesic_subhead: bool,
     is_default_subhead: bool,
     eff_subhead_max: f32,
@@ -951,10 +947,10 @@ pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
 #[must_use]
 pub(crate) const fn words_to_q7_array_64(
     words: &[u64; NUM_STIGMERGIC_GRANULES],
-) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
     // SAFETY: `[u64; 8]` and `[i8; 64]` have identical size (64 bytes) and Pod bit validity.
     unsafe {
-        core::mem::transmute::<[u64; NUM_STIGMERGIC_GRANULES], [gcso_q7_t; MAX_ATTENTION_HEADS]>(
+        core::mem::transmute::<[u64; NUM_STIGMERGIC_GRANULES], [PhaseQ7; MAX_ATTENTION_HEADS]>(
             *words,
         )
     }
@@ -1035,7 +1031,7 @@ pub const INV_PARALLEL_COUNT_Q7: [i32; 9] = [0, 128, 64, 43, 32, 26, 21, 18, 16]
 
 #[inline(always)]
 fn branchless_q7_weighted_ensemble_core<'a>(
-    get_profile: impl Fn(usize) -> &'a [gcso_q7_t; MAX_ATTENTION_HEADS],
+    get_profile: impl Fn(usize) -> &'a [PhaseQ7; MAX_ATTENTION_HEADS],
     weights_q7: &[u8; 8],
     eligible_mask: u8,
     base_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -1060,11 +1056,11 @@ fn branchless_q7_weighted_ensemble_core<'a>(
     }
 
     let inv = INV_PARALLEL_COUNT_Q7[(eligible_mask.count_ones() as usize).min(8)];
-    let mut ensemble_q7 = [0 as gcso_q7_t; MAX_ATTENTION_HEADS];
+    let mut ensemble_q7 = [0 as PhaseQ7; MAX_ATTENTION_HEADS];
     for (out, &sum) in ensemble_q7.iter_mut().zip(head_sum.iter()) {
         let prod = sum * inv;
         let bias = if prod >= 0 { 64 } else { -64 };
-        *out = ((prod + bias) / 128).clamp(-127, 127) as gcso_q7_t;
+        *out = ((prod + bias) / 128).clamp(-127, 127) as PhaseQ7;
     }
 
     let ensemble_words = load_q7_words_64(&ensemble_q7);
@@ -1092,7 +1088,7 @@ fn branchless_q7_weighted_ensemble_core<'a>(
 #[inline]
 #[must_use]
 pub fn branchless_q7_weighted_ensemble_words_64(
-    profiles: [&[gcso_q7_t; MAX_ATTENTION_HEADS]; 8],
+    profiles: [&[PhaseQ7; MAX_ATTENTION_HEADS]; 8],
     weights_q7: &[u8; 8],
     eligible_mask: u8,
     base_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -1106,12 +1102,12 @@ pub fn branchless_q7_weighted_ensemble_words_64(
 }
 
 /// Zero-copy contiguous-matrix counterpart to [`branchless_q7_weighted_ensemble_words_64`],
-/// reading directly from `&[[gcso_q7_t; MAX_ATTENTION_HEADS]; 8]` without constructing a stack
+/// reading directly from `&[[PhaseQ7; MAX_ATTENTION_HEADS]; 8]` without constructing a stack
 /// pointer array.
 #[inline]
 #[must_use]
 pub fn branchless_q7_weighted_ensemble_contiguous_words_64(
-    profiles: &[[gcso_q7_t; MAX_ATTENTION_HEADS]; 8],
+    profiles: &[[PhaseQ7; MAX_ATTENTION_HEADS]; 8],
     weights_q7: &[u8; 8],
     eligible_mask: u8,
     base_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -1123,7 +1119,7 @@ pub fn branchless_q7_weighted_ensemble_contiguous_words_64(
 #[must_use]
 pub(crate) const fn fast_mean_q7_tag_from_words_64(
     words: &[u64; NUM_STIGMERGIC_GRANULES],
-) -> gcso_q7_t {
+) -> PhaseQ7 {
     let raw = swar_q7_mean_i8_from_words_64(words);
     branchless_select_i8(raw == -128, -127, raw)
 }

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Lv.0 Foundation 2: Const-generic zero-copy hardware-aligned slice wrappers, type-level
-//! non-aliasing (`GCSO_RESTRICT`) guards, $\mathcal{O}(1)$ Attractor Slot / 2D Slot Bank /
+//! non-aliasing (`LMNK_RESTRICT`) guards, $\mathcal{O}(1)$ Attractor Slot / 2D Slot Bank /
 //! Micro-Swarm cell accessors, and stack-allocated hardware-aligned buffers (`16..512`B)
-//! for the Geometric Cellular Sheaf Orchestrator (GCSO).
+//! for the LiminiKa.
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -19,8 +19,7 @@ use core::slice::{self, SliceIndex};
 
 use crate::foundation::pod::{raw_byte_ranges_overlap, Pod};
 use crate::liminal::{
-    GcsoResult, GcsoStatus, GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_MISALIGNED_POINTER,
-    GCSO_ERROR_NULL_POINTER,
+    LmnkResult, LmnkStatus, LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER,
 };
 
 /// Compile-time helper verifying that `ALIGN` is a non-zero power of two and at least `align_of::<T>()`.
@@ -52,16 +51,16 @@ impl<const SLOTS: usize, const SLOT_LEN: usize> SlotBankCheck<SLOTS, SLOT_LEN> {
 }
 
 #[inline(always)]
-const fn validate_cast_layout<T, U>(len: usize) -> GcsoResult<usize> {
+const fn validate_cast_layout<T, U>(len: usize) -> LmnkResult<usize> {
     let u_size = size_of::<U>();
     if u_size == 0 {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let Some(total_bytes) = len.checked_mul(size_of::<T>()) else {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     };
     if (total_bytes % u_size) != 0 {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     Ok(total_bytes / u_size)
 }
@@ -71,23 +70,23 @@ const fn validate_slot_offset<T, const ALIGN: usize, const SLOT_LEN: usize>(
     base_addr: usize,
     len: usize,
     slot_idx: usize,
-) -> GcsoResult<usize> {
+) -> LmnkResult<usize> {
     let () = TypeAlignCheck::<T, ALIGN>::VALID;
     let () = ChunkCheck::<SLOT_LEN>::VALID;
     let Some(offset) = slot_idx.checked_mul(SLOT_LEN) else {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     };
     let Some(end) = offset.checked_add(SLOT_LEN) else {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     };
     if end > len {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let Some(byte_off) = offset.checked_mul(size_of::<T>()) else {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     };
     if ((base_addr.wrapping_add(byte_off)) & (ALIGN - 1)) != 0 {
-        return Err(GCSO_ERROR_MISALIGNED_POINTER);
+        return Err(LMNK_ERR_ALIGNMENT);
     }
     Ok(offset)
 }
@@ -127,16 +126,16 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// Creates a new aligned slice wrapper after validating pointer memory alignment.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `slice` is non-empty and its base address
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `slice` is non-empty and its base address
     /// is not a multiple of `ALIGN`.
     #[inline(always)]
-    pub fn new(slice: &'a [T]) -> GcsoResult<Self> {
+    pub fn new(slice: &'a [T]) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         let is_valid = slice.is_empty() | (((slice.as_ptr() as usize) & (ALIGN - 1)) == 0);
         if is_valid {
             Ok(Self { slice })
         } else {
-            Err(GCSO_ERROR_MISALIGNED_POINTER)
+            Err(LMNK_ERR_ALIGNMENT)
         }
     }
 
@@ -154,9 +153,9 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// Creates a new aligned slice wrapper from a single reference after validating memory alignment.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the reference address is not `ALIGN`-byte aligned.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the reference address is not `ALIGN`-byte aligned.
     #[inline(always)]
-    pub fn from_ref(value: &'a T) -> GcsoResult<Self> {
+    pub fn from_ref(value: &'a T) -> LmnkResult<Self> {
         Self::new(slice::from_ref(value))
     }
 
@@ -167,19 +166,19 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// that the total byte size does not exceed `isize::MAX`, and that the memory is not mutated for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if `ptr` is null when `len > 0`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `ptr` violates the `ALIGN` byte boundary.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if `ptr` is null when `len > 0`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `ptr` violates the `ALIGN` byte boundary.
     #[inline(always)]
-    pub unsafe fn from_raw_parts(ptr: *const T, len: usize) -> GcsoResult<Self> {
+    pub unsafe fn from_raw_parts(ptr: *const T, len: usize) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         if len == 0 {
             return Ok(Self::empty());
         }
         if ptr.is_null() {
-            return Err(GCSO_ERROR_NULL_POINTER);
+            return Err(LMNK_ERR_NULL_POINTER);
         }
         if ((ptr as usize) & (ALIGN - 1)) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Pointer non-nullness and alignment (>= align_of::<T>()) verified above;
         // caller guarantees `len` initialized elements for lifetime `'a`.
@@ -190,10 +189,10 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// Safely reinterprets the aligned slice as a slice of another `Pod` type `U` with the same `ALIGN`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `U` is zero-sized or the total byte length of `self`
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or the total byte length of `self`
     /// is not an exact multiple of `size_of::<U>()`.
     #[inline(always)]
-    pub fn try_cast<U: Pod>(&self) -> GcsoResult<AlignedSlice<'a, U, ALIGN>>
+    pub fn try_cast<U: Pod>(&self) -> LmnkResult<AlignedSlice<'a, U, ALIGN>>
     where
         T: Pod,
     {
@@ -227,15 +226,15 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// Views the prefix of the slice as a 2D slot bank `&'a [[T; SLOT_LEN]; SLOTS]` in $\mathcal{O}(1)$ zero-copy mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
     #[inline(always)]
     pub const fn as_slot_bank<const SLOTS: usize, const SLOT_LEN: usize>(
         &self,
-    ) -> GcsoResult<&'a [[T; SLOT_LEN]; SLOTS]> {
+    ) -> LmnkResult<&'a [[T; SLOT_LEN]; SLOTS]> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         let () = SlotBankCheck::<SLOTS, SLOT_LEN>::VALID;
         if self.slice.len() < SLOTS * SLOT_LEN {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: `self.slice.len() >= SLOTS * SLOT_LEN` and aligned to `ALIGN >= align_of::<T>()`.
         Ok(unsafe { &*self.slice.as_ptr().cast::<[[T; SLOT_LEN]; SLOTS]>() })
@@ -286,17 +285,17 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
         )
     }
 
-    /// Enforces `GCSO_RESTRICT` non-aliasing invariant against another slice.
+    /// Enforces `LMNK_RESTRICT` non-aliasing invariant against another slice.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if the two slices overlap in memory.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if the two slices overlap in memory.
     #[inline(always)]
     pub fn ensure_disjoint<const OTHER_ALIGN: usize>(
         &self,
         other: &AlignedSlice<'_, T, OTHER_ALIGN>,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         if self.overlaps(other) {
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
+            Err(LMNK_ERR_INVALID_ARGUMENT)
         } else {
             Ok(())
         }
@@ -386,13 +385,13 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     /// in $\mathcal{O}(1)$ zero-copy mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN` exceeds slice length.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the slot start address violates `ALIGN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN` exceeds slice length.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the slot start address violates `ALIGN`.
     #[inline(always)]
     pub fn slot_exact<const SLOT_LEN: usize>(
         &self,
         slot_idx: usize,
-    ) -> GcsoResult<&'a [T; SLOT_LEN]> {
+    ) -> LmnkResult<&'a [T; SLOT_LEN]> {
         let offset = validate_slot_offset::<T, ALIGN, SLOT_LEN>(
             self.slice.as_ptr() as usize,
             self.slice.len(),
@@ -452,7 +451,7 @@ impl<'a, 'b, T, const ALIGN: usize> IntoIterator for &'b AlignedSlice<'a, T, ALI
 }
 
 impl<'a, T, const ALIGN: usize> TryFrom<&'a [T]> for AlignedSlice<'a, T, ALIGN> {
-    type Error = GcsoStatus;
+    type Error = LmnkStatus;
     #[inline(always)]
     fn try_from(slice: &'a [T]) -> Result<Self, Self::Error> {
         Self::new(slice)
@@ -485,16 +484,16 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// Creates a new mutable aligned slice wrapper after validating memory alignment.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `slice` is non-empty and its base address
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `slice` is non-empty and its base address
     /// is not a multiple of `ALIGN`.
     #[inline(always)]
-    pub fn new(slice: &'a mut [T]) -> GcsoResult<Self> {
+    pub fn new(slice: &'a mut [T]) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         let is_valid = slice.is_empty() | (((slice.as_ptr() as usize) & (ALIGN - 1)) == 0);
         if is_valid {
             Ok(Self { slice })
         } else {
-            Err(GCSO_ERROR_MISALIGNED_POINTER)
+            Err(LMNK_ERR_ALIGNMENT)
         }
     }
 
@@ -517,19 +516,19 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// memory for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if `ptr` is null when `len > 0`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `ptr` violates the `ALIGN` byte boundary.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if `ptr` is null when `len > 0`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `ptr` violates the `ALIGN` byte boundary.
     #[inline(always)]
-    pub unsafe fn from_raw_parts_mut(ptr: *mut T, len: usize) -> GcsoResult<Self> {
+    pub unsafe fn from_raw_parts_mut(ptr: *mut T, len: usize) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         if len == 0 {
             return Ok(Self::empty());
         }
         if ptr.is_null() {
-            return Err(GCSO_ERROR_NULL_POINTER);
+            return Err(LMNK_ERR_NULL_POINTER);
         }
         if ((ptr as usize) & (ALIGN - 1)) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Pointer non-nullness and alignment (>= align_of::<T>()) verified above;
         // caller guarantees exclusive access to `len` initialized elements for lifetime `'a`.
@@ -544,9 +543,9 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if `ptr` is non-null and misaligned when `len > 0`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if `ptr` is non-null and misaligned when `len > 0`.
     #[inline(always)]
-    pub unsafe fn from_raw_parts_mut_opt(ptr: *mut T, len: usize) -> GcsoResult<Option<Self>> {
+    pub unsafe fn from_raw_parts_mut_opt(ptr: *mut T, len: usize) -> LmnkResult<Option<Self>> {
         if ptr.is_null() {
             Ok(None)
         } else {
@@ -559,9 +558,9 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// while maintaining `ALIGN` invariants.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
     #[inline(always)]
-    pub fn try_cast_mut<U: Pod>(&mut self) -> GcsoResult<AlignedSliceMut<'_, U, ALIGN>>
+    pub fn try_cast_mut<U: Pod>(&mut self) -> LmnkResult<AlignedSliceMut<'_, U, ALIGN>>
     where
         T: Pod,
     {
@@ -603,15 +602,15 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// Views the prefix of the slice as a 2D slot bank `&[[T; SLOT_LEN]; SLOTS]` in $\mathcal{O}(1)$ zero-copy mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
     #[inline(always)]
     pub const fn as_slot_bank<const SLOTS: usize, const SLOT_LEN: usize>(
         &self,
-    ) -> GcsoResult<&[[T; SLOT_LEN]; SLOTS]> {
+    ) -> LmnkResult<&[[T; SLOT_LEN]; SLOTS]> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         let () = SlotBankCheck::<SLOTS, SLOT_LEN>::VALID;
         if self.slice.len() < SLOTS * SLOT_LEN {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: `self.slice.len() >= SLOTS * SLOT_LEN` and aligned to `ALIGN >= align_of::<T>()`.
         Ok(unsafe { &*self.slice.as_ptr().cast::<[[T; SLOT_LEN]; SLOTS]>() })
@@ -621,15 +620,15 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// `&'a mut [[T; SLOT_LEN]; SLOTS]` with lifetime `'a` in $\mathcal{O}(1)$ zero-copy mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
     #[inline(always)]
     pub fn into_slot_bank_mut<const SLOTS: usize, const SLOT_LEN: usize>(
         self,
-    ) -> GcsoResult<&'a mut [[T; SLOT_LEN]; SLOTS]> {
+    ) -> LmnkResult<&'a mut [[T; SLOT_LEN]; SLOTS]> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         let () = SlotBankCheck::<SLOTS, SLOT_LEN>::VALID;
         if self.slice.len() < SLOTS * SLOT_LEN {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: `self.slice.len() >= SLOTS * SLOT_LEN`, uniquely borrowed for `'a`, and aligned to `ALIGN >= align_of::<T>()`.
         Ok(unsafe { &mut *self.slice.as_mut_ptr().cast::<[[T; SLOT_LEN]; SLOTS]>() })
@@ -639,11 +638,11 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// in $\mathcal{O}(1)$ zero-copy mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `self.len() < SLOTS * SLOT_LEN`.
     #[inline(always)]
     pub fn as_slot_bank_mut<const SLOTS: usize, const SLOT_LEN: usize>(
         &mut self,
-    ) -> GcsoResult<&mut [[T; SLOT_LEN]; SLOTS]> {
+    ) -> LmnkResult<&mut [[T; SLOT_LEN]; SLOTS]> {
         self.reborrow().into_slot_bank_mut::<SLOTS, SLOT_LEN>()
     }
 
@@ -665,27 +664,27 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         }
     }
 
-    /// Enforces `GCSO_RESTRICT` non-aliasing invariant against another immutable aligned slice.
+    /// Enforces `LMNK_RESTRICT` non-aliasing invariant against another immutable aligned slice.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if memory ranges overlap.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if memory ranges overlap.
     #[inline(always)]
     pub fn ensure_disjoint<const OTHER_ALIGN: usize>(
         &self,
         other: &AlignedSlice<'_, T, OTHER_ALIGN>,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         self.as_aligned_slice().ensure_disjoint(other)
     }
 
-    /// Enforces `GCSO_RESTRICT` non-aliasing invariant against another mutable aligned slice.
+    /// Enforces `LMNK_RESTRICT` non-aliasing invariant against another mutable aligned slice.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if memory ranges overlap.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if memory ranges overlap.
     #[inline(always)]
     pub fn ensure_disjoint_mut<const OTHER_ALIGN: usize>(
         &self,
         other: &AlignedSliceMut<'_, T, OTHER_ALIGN>,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         self.as_aligned_slice()
             .ensure_disjoint(&other.as_aligned_slice())
     }
@@ -801,13 +800,13 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// in $\mathcal{O}(1)$ zero-copy mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN` exceeds slice length.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the slot start address violates `ALIGN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN` exceeds slice length.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the slot start address violates `ALIGN`.
     #[inline(always)]
     pub fn slot_exact_mut<const SLOT_LEN: usize>(
         &mut self,
         slot_idx: usize,
-    ) -> GcsoResult<&mut [T; SLOT_LEN]> {
+    ) -> LmnkResult<&mut [T; SLOT_LEN]> {
         let offset = validate_slot_offset::<T, ALIGN, SLOT_LEN>(
             self.slice.as_ptr() as usize,
             self.slice.len(),
@@ -820,15 +819,15 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// Consumes `self` and splits the mutable slice at `mid`, preserving the original lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `mid` exceeds slice length.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the right subslice start address violates `ALIGN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `mid` exceeds slice length.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the right subslice start address violates `ALIGN`.
     #[inline(always)]
     pub fn into_split_at_mut(
         self,
         mid: usize,
-    ) -> GcsoResult<(AlignedSliceMut<'a, T, ALIGN>, AlignedSliceMut<'a, T, ALIGN>)> {
+    ) -> LmnkResult<(AlignedSliceMut<'a, T, ALIGN>, AlignedSliceMut<'a, T, ALIGN>)> {
         if mid > self.slice.len() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let (left, right) = self.slice.split_at_mut(mid);
         // SAFETY: `left` starts at the base address of `self.slice` which is already aligned to `ALIGN`.
@@ -842,27 +841,27 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     /// satisfies `ALIGN` constraints.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `mid` exceeds slice length.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the right subslice start address violates `ALIGN`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `mid` exceeds slice length.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the right subslice start address violates `ALIGN`.
     #[inline(always)]
     pub fn split_at_mut(
         &mut self,
         mid: usize,
-    ) -> GcsoResult<(AlignedSliceMut<'_, T, ALIGN>, AlignedSliceMut<'_, T, ALIGN>)> {
+    ) -> LmnkResult<(AlignedSliceMut<'_, T, ALIGN>, AlignedSliceMut<'_, T, ALIGN>)> {
         self.reborrow().into_split_at_mut(mid)
     }
 
     /// Copies elements from an unaligned slice into `self` in zero-allocation mode.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths do not match.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slice lengths do not match.
     #[inline(always)]
-    pub fn copy_from_slice(&mut self, src: &[T]) -> GcsoResult<()>
+    pub fn copy_from_slice(&mut self, src: &[T]) -> LmnkResult<()>
     where
         T: Copy,
     {
         if self.slice.len() != src.len() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         self.slice.copy_from_slice(src);
         Ok(())
@@ -939,7 +938,7 @@ impl<'a, 'b, T, const ALIGN: usize> IntoIterator for &'b mut AlignedSliceMut<'a,
 }
 
 impl<'a, T, const ALIGN: usize> TryFrom<&'a mut [T]> for AlignedSliceMut<'a, T, ALIGN> {
-    type Error = GcsoStatus;
+    type Error = LmnkStatus;
     #[inline(always)]
     fn try_from(slice: &'a mut [T]) -> Result<Self, Self::Error> {
         Self::new(slice)
@@ -947,10 +946,10 @@ impl<'a, T, const ALIGN: usize> TryFrom<&'a mut [T]> for AlignedSliceMut<'a, T, 
 }
 
 // ===================================================================
-// 3. Type-Level GCSO_RESTRICT Non-Aliasing Guards (Disjoint*)
+// 3. Type-Level LMNK_RESTRICT Non-Aliasing Guards (Disjoint*)
 // ===================================================================
 
-/// Type-level `GCSO_RESTRICT` guard holding an immutable input [`AlignedSlice`] and a mutually
+/// Type-level `LMNK_RESTRICT` guard holding an immutable input [`AlignedSlice`] and a mutually
 /// non-overlapping mutable output [`AlignedSliceMut`].
 #[derive(Debug, PartialEq, Eq)]
 pub struct DisjointRefMut<'a, T, const ALIGN_IN: usize = 32, const ALIGN_OUT: usize = 32> {
@@ -964,12 +963,12 @@ impl<'a, T, const ALIGN_IN: usize, const ALIGN_OUT: usize>
     /// Validates that `input` and `output` are mutually non-overlapping in memory.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if the two memory ranges overlap.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if the two memory ranges overlap.
     #[inline(always)]
     pub fn new(
         input: AlignedSlice<'a, T, ALIGN_IN>,
         output: AlignedSliceMut<'a, T, ALIGN_OUT>,
-    ) -> GcsoResult<Self> {
+    ) -> LmnkResult<Self> {
         output.ensure_disjoint(&input)?;
         Ok(Self { input, output })
     }
@@ -981,27 +980,27 @@ impl<'a, T, const ALIGN_IN: usize, const ALIGN_OUT: usize>
     /// to `len_out` valid writable elements of `T` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`] if a non-empty pointer is null.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if either pointer violates its alignment requirement.
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if the two memory regions overlap.
+    /// Returns [`LMNK_ERR_NULL_POINTER`] if a non-empty pointer is null.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if either pointer violates its alignment requirement.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if the two memory regions overlap.
     #[inline(always)]
     pub unsafe fn from_raw_parts(
         ptr_in: *const T,
         len_in: usize,
         ptr_out: *mut T,
         len_out: usize,
-    ) -> GcsoResult<Self> {
+    ) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN_IN>::VALID;
         let () = TypeAlignCheck::<T, ALIGN_OUT>::VALID;
         let in_bytes = len_in
             .checked_mul(size_of::<T>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         let out_bytes = len_out
             .checked_mul(size_of::<T>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
 
         if raw_byte_ranges_overlap(ptr_in as usize, in_bytes, ptr_out as usize, out_bytes) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Disjointness is verified above; `from_raw_parts` and `from_raw_parts_mut` verify non-nullness and alignment.
         let input = unsafe { AlignedSlice::from_raw_parts(ptr_in, len_in)? };
@@ -1047,7 +1046,7 @@ impl<'a, T, const ALIGN_IN: usize, const ALIGN_OUT: usize>
     }
 }
 
-/// Type-level `GCSO_RESTRICT` guard holding two aligned, mutually non-overlapping mutable tensor slices.
+/// Type-level `LMNK_RESTRICT` guard holding two aligned, mutually non-overlapping mutable tensor slices.
 #[derive(Debug, PartialEq, Eq)]
 pub struct DisjointMutPair<'a, T, const ALIGN: usize = 32> {
     /// First non-overlapping aligned mutable slice.
@@ -1060,12 +1059,12 @@ impl<'a, T, const ALIGN: usize> DisjointMutPair<'a, T, ALIGN> {
     /// Validates that `first` and `second` are both `ALIGN`-byte aligned and do not overlap in memory.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if the two memory ranges overlap.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if the two memory ranges overlap.
     #[inline(always)]
     pub fn new(
         first: AlignedSliceMut<'a, T, ALIGN>,
         second: AlignedSliceMut<'a, T, ALIGN>,
-    ) -> GcsoResult<Self> {
+    ) -> LmnkResult<Self> {
         first.ensure_disjoint_mut(&second)?;
         Ok(Self { first, second })
     }
@@ -1076,10 +1075,10 @@ impl<'a, T, const ALIGN: usize> DisjointMutPair<'a, T, ALIGN> {
     /// Caller must ensure `ptr_a` and `ptr_b` point to valid mutable memory of length `len` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`], [`GCSO_ERROR_MISALIGNED_POINTER`], or
-    /// [`GCSO_ERROR_INVALID_ARGUMENT`] if overlapping.
+    /// Returns [`LMNK_ERR_NULL_POINTER`], [`LMNK_ERR_ALIGNMENT`], or
+    /// [`LMNK_ERR_INVALID_ARGUMENT`] if overlapping.
     #[inline(always)]
-    pub unsafe fn from_raw_parts_mut(ptr_a: *mut T, ptr_b: *mut T, len: usize) -> GcsoResult<Self> {
+    pub unsafe fn from_raw_parts_mut(ptr_a: *mut T, ptr_b: *mut T, len: usize) -> LmnkResult<Self> {
         // SAFETY: Delegated to `from_raw_parts_mut_hetero` with equal lengths.
         unsafe { Self::from_raw_parts_mut_hetero(ptr_a, len, ptr_b, len) }
     }
@@ -1091,25 +1090,25 @@ impl<'a, T, const ALIGN: usize> DisjointMutPair<'a, T, ALIGN> {
     /// valid elements for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`], [`GCSO_ERROR_MISALIGNED_POINTER`], or
-    /// [`GCSO_ERROR_INVALID_ARGUMENT`] if overlapping.
+    /// Returns [`LMNK_ERR_NULL_POINTER`], [`LMNK_ERR_ALIGNMENT`], or
+    /// [`LMNK_ERR_INVALID_ARGUMENT`] if overlapping.
     #[inline(always)]
     pub unsafe fn from_raw_parts_mut_hetero(
         ptr_a: *mut T,
         len_a: usize,
         ptr_b: *mut T,
         len_b: usize,
-    ) -> GcsoResult<Self> {
+    ) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         let bytes_a = len_a
             .checked_mul(size_of::<T>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         let bytes_b = len_b
             .checked_mul(size_of::<T>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
 
         if raw_byte_ranges_overlap(ptr_a as usize, bytes_a, ptr_b as usize, bytes_b) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Pointers are verified non-overlapping above; `from_raw_parts_mut` checks non-null & alignment.
         let first = unsafe { AlignedSliceMut::from_raw_parts_mut(ptr_a, len_a)? };
@@ -1155,7 +1154,7 @@ impl<'a, T, const ALIGN: usize> DisjointMutPair<'a, T, ALIGN> {
     }
 }
 
-/// Type-level `GCSO_RESTRICT` guard holding three aligned, mutually non-overlapping mutable tensor slices
+/// Type-level `LMNK_RESTRICT` guard holding three aligned, mutually non-overlapping mutable tensor slices
 /// (e.g., Q/K/V fused steering or 3-term Chebyshev polynomial recurrence buffers).
 #[derive(Debug, PartialEq, Eq)]
 pub struct DisjointMutTriple<'a, T, const ALIGN: usize = 32> {
@@ -1171,13 +1170,13 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
     /// Validates that `first`, `second`, and `third` are all `ALIGN`-byte aligned and pairwise non-overlapping.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any two memory ranges overlap.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any two memory ranges overlap.
     #[inline(always)]
     pub fn new(
         first: AlignedSliceMut<'a, T, ALIGN>,
         second: AlignedSliceMut<'a, T, ALIGN>,
         third: AlignedSliceMut<'a, T, ALIGN>,
-    ) -> GcsoResult<Self> {
+    ) -> LmnkResult<Self> {
         first.ensure_disjoint_mut(&second)?;
         first.ensure_disjoint_mut(&third)?;
         second.ensure_disjoint_mut(&third)?;
@@ -1194,15 +1193,15 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
     /// Caller must ensure `ptr_a`, `ptr_b`, and `ptr_c` point to valid mutable memory of length `len` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`], [`GCSO_ERROR_MISALIGNED_POINTER`], or
-    /// [`GCSO_ERROR_INVALID_ARGUMENT`] if any two regions overlap.
+    /// Returns [`LMNK_ERR_NULL_POINTER`], [`LMNK_ERR_ALIGNMENT`], or
+    /// [`LMNK_ERR_INVALID_ARGUMENT`] if any two regions overlap.
     #[inline(always)]
     pub unsafe fn from_raw_parts_mut(
         ptr_a: *mut T,
         ptr_b: *mut T,
         ptr_c: *mut T,
         len: usize,
-    ) -> GcsoResult<Self> {
+    ) -> LmnkResult<Self> {
         // SAFETY: Delegated to `from_raw_parts_mut_hetero` with equal lengths.
         unsafe { Self::from_raw_parts_mut_hetero(ptr_a, len, ptr_b, len, ptr_c, len) }
     }
@@ -1214,8 +1213,8 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
     /// `len_a`, `len_b`, and `len_c` for lifetime `'a`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_NULL_POINTER`], [`GCSO_ERROR_MISALIGNED_POINTER`], or
-    /// [`GCSO_ERROR_INVALID_ARGUMENT`] if any two regions overlap.
+    /// Returns [`LMNK_ERR_NULL_POINTER`], [`LMNK_ERR_ALIGNMENT`], or
+    /// [`LMNK_ERR_INVALID_ARGUMENT`] if any two regions overlap.
     #[inline(always)]
     pub unsafe fn from_raw_parts_mut_hetero(
         ptr_a: *mut T,
@@ -1224,17 +1223,17 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
         len_b: usize,
         ptr_c: *mut T,
         len_c: usize,
-    ) -> GcsoResult<Self> {
+    ) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
         let bytes_a = len_a
             .checked_mul(size_of::<T>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         let bytes_b = len_b
             .checked_mul(size_of::<T>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         let bytes_c = len_c
             .checked_mul(size_of::<T>())
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
 
         let addr_a = ptr_a as usize;
         let addr_b = ptr_b as usize;
@@ -1244,7 +1243,7 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
             | raw_byte_ranges_overlap(addr_a, bytes_a, addr_c, bytes_c)
             | raw_byte_ranges_overlap(addr_b, bytes_b, addr_c, bytes_c)
         {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
         // SAFETY: Pairwise disjointness verified above; `from_raw_parts_mut` checks non-null & alignment.
@@ -1433,15 +1432,15 @@ macro_rules! define_aligned_buffer {
             /// Views the prefix of the buffer as an immutable 2D slot bank `&[[T; SLOT_LEN]; SLOTS]`.
             ///
             /// # Errors
-            /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `N < SLOTS * SLOT_LEN`.
+            /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `N < SLOTS * SLOT_LEN`.
             #[inline(always)]
             pub const fn as_slot_bank<const SLOTS: usize, const SLOT_LEN: usize>(
                 &self,
-            ) -> GcsoResult<&[[T; SLOT_LEN]; SLOTS]> {
+            ) -> LmnkResult<&[[T; SLOT_LEN]; SLOTS]> {
                 let () = TypeAlignCheck::<T, $align>::VALID;
                 let () = SlotBankCheck::<SLOTS, SLOT_LEN>::VALID;
                 if N < SLOTS * SLOT_LEN {
-                    return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
                 }
                 // SAFETY: `N >= SLOTS * SLOT_LEN` and `self.data` is contiguous and aligned to `$align >= align_of::<T>()`.
                 Ok(unsafe { &*self.data.as_ptr().cast::<[[T; SLOT_LEN]; SLOTS]>() })
@@ -1450,15 +1449,15 @@ macro_rules! define_aligned_buffer {
             /// Views the prefix of the buffer as a mutable 2D slot bank `&mut [[T; SLOT_LEN]; SLOTS]`.
             ///
             /// # Errors
-            /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `N < SLOTS * SLOT_LEN`.
+            /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `N < SLOTS * SLOT_LEN`.
             #[inline(always)]
             pub fn as_slot_bank_mut<const SLOTS: usize, const SLOT_LEN: usize>(
                 &mut self,
-            ) -> GcsoResult<&mut [[T; SLOT_LEN]; SLOTS]> {
+            ) -> LmnkResult<&mut [[T; SLOT_LEN]; SLOTS]> {
                 let () = TypeAlignCheck::<T, $align>::VALID;
                 let () = SlotBankCheck::<SLOTS, SLOT_LEN>::VALID;
                 if N < SLOTS * SLOT_LEN {
-                    return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
                 }
                 // SAFETY: `N >= SLOTS * SLOT_LEN`, `self.data` is uniquely borrowed, and aligned to `$align >= align_of::<T>()`.
                 Ok(unsafe { &mut *self.data.as_mut_ptr().cast::<[[T; SLOT_LEN]; SLOTS]>() })
@@ -1467,26 +1466,26 @@ macro_rules! define_aligned_buffer {
             /// Extracts an aligned fixed-capacity slot `&[T; SLOT_LEN]` at `slot_idx`.
             ///
             /// # Errors
-            /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN > N`.
-            /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the slot start address violates `$align`.
+            /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN > N`.
+            /// Returns [`LMNK_ERR_ALIGNMENT`] if the slot start address violates `$align`.
             #[inline(always)]
             pub fn slot_exact<const SLOT_LEN: usize>(
                 &self,
                 slot_idx: usize,
-            ) -> GcsoResult<&[T; SLOT_LEN]> {
+            ) -> LmnkResult<&[T; SLOT_LEN]> {
                 self.as_aligned_slice().slot_exact::<SLOT_LEN>(slot_idx)
             }
 
             /// Extracts an aligned mutable fixed-capacity slot `&mut [T; SLOT_LEN]` at `slot_idx`.
             ///
             /// # Errors
-            /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN > N`.
-            /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the slot start address violates `$align`.
+            /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `(slot_idx + 1) * SLOT_LEN > N`.
+            /// Returns [`LMNK_ERR_ALIGNMENT`] if the slot start address violates `$align`.
             #[inline(always)]
             pub fn slot_exact_mut<const SLOT_LEN: usize>(
                 &mut self,
                 slot_idx: usize,
-            ) -> GcsoResult<&mut [T; SLOT_LEN]> {
+            ) -> LmnkResult<&mut [T; SLOT_LEN]> {
                 let offset = validate_slot_offset::<T, $align, SLOT_LEN>(
                     self.data.as_ptr() as usize,
                     N,
@@ -1653,7 +1652,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::liminal::{gcso_q7_t, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS};
+    use crate::liminal::{PhaseQ7, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS};
 
     #[test]
     fn test_infallible_aligned_buffers_range_indexing_and_upgrade() {
@@ -1721,7 +1720,7 @@ mod tests {
     #[test]
     fn test_attractor_slot_bank_triple_and_micro_swarm_chunks() {
         let mut multi_slot_bank =
-            AlignedBuffer64::<gcso_q7_t, { MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS }>::zeroed();
+            AlignedBuffer64::<PhaseQ7, { MAX_ATTRACTOR_DOMAINS * MAX_ATTENTION_HEADS }>::zeroed();
 
         {
             let bank_2d_mut = multi_slot_bank

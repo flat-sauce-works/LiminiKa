@@ -1,7 +1,7 @@
 // name: src/core/src/lib.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Core execution engine library for the Geometric Cellular Sheaf Orchestrator (GCSO).
+//! Core execution engine library for `LiminiKa` (`v0.2.0`, `0x0000_0200`).
 //!
 //! This crate serves as the primary `#![no_std]` runtime engine for `LiminiKa`, implementing
 //! non-invasive LLM steering and low-VRAM (2-4 GB) orchestration across a Y-shaped 5-layer
@@ -9,21 +9,25 @@
 //!
 //! # Architecture: `2 Primitives x 2 Drivers` over the 5-Layer DAG
 //! - **Level 0 — `liminal` ([`crate::liminal`])**: Boundary axiom (`liminal::axiom`),
-//!   4-state `Lacuna` measurement, `BitCut<T>` (`BitCut8`/`BitCut32`/`BitCut64`), and
+//!   4-state `Lacuna` classification (`LacunaPartition8`), `BitCut<T>`, and
 //!   `LiminalThresholdState` gating out-of-horizon steering cleanly to zero without data-dependent branches.
-//! - **Level 1 — `foundation` ([`crate::foundation`])**: Zero-allocation pure geometry, POD,
-//!   aligned-slice, SWAR/AVX2 SIMD, CRC32/trig lookup tables, RoPE phase steering, Rank-1
-//!   residual injection, LoRA phase projection, and matrix-free sheaf cohomology kernels.
+//! - **Level 1 — `foundation` ([`crate::foundation`])**: Environment-agnostic pure geometry,
+//!   Portable Little-Endian POD layouts (`0` implicit padding, `16 B..=128 B`, `u32x16`/`u64x8`
+//!   device-ready phase profiles), aligned-slice wrappers, SWAR baseline and AVX2 leaf kernels,
+//!   CRC32/trig lookup tables, RoPE phase steering, Rank-1 residual injection, LoRA phase
+//!   projection, and matrix-free sheaf cohomology kernels.
 //! - **Level 2 — `stigmergy` ([`crate::stigmergy`])**: Passive carrier medium (`StigmergicSubstrate`)
-//!   with 8-lane working bank, 8-granule quorum, contrastive Bloom filters, `.gcso` crystallization,
-//!   concrete `PhaseSteeringEngine`/`ResidualAdapterEngine`, and [`crate::stigmergy::StigmergicSubstrateOps`]
-//!   operating across the widest threshold mask (`THRESHOLD_STIGMERGY_WIDE`).
+//!   with 8-lane working bank, 8-granule quorum, contrastive Bloom filters, `.lmnk` phase anchor
+//!   crystallization (`stigmergy::anchor`, `"LNKR"`), concrete `PhaseSteeringEngine` /
+//!   `ResidualAdapterEngine`, and [`crate::stigmergy::StigmergicSubstrateOps`] spanning the
+//!   widest threshold mask (`THRESHOLD_STIGMERGY_WIDE`).
 //! - **Level 3 — `drivers` ([`crate::drivers`])**: Orthogonal `spine` (`SystemSpineState`,
 //!   `EntropyController`, `AnonymousComputePool`) and `ego` (`EgoDifferentialNet`, `LiminalEgoState`)
 //!   forces isolated behind dual `DistortionTension` / `DistortionDelta`.
-//! - **Level 4 — `runtime` ([`crate::runtime`])**: Single orchestrator facade (`RuntimeContext`),
-//!   Manifold Gateway (`ManifoldGatewaySignal`, `GatewayFrame`), Latent Horizon (`LatentHorizonSlot`),
-//!   `.gcso` storage, telemetry, and the C-ABI `v0.1.3` boundary (`abi`).
+//! - **Level 4 — `runtime` ([`crate::runtime`])**: Single orchestrator facade (`RuntimeContext`,
+//!   `#[repr(C, align(64))]`, caller-owned `in_place` initialization), Manifold Gateway
+//!   (`ManifoldGatewaySignal`, `GatewayFrame`), Latent Horizon (`LatentHorizonSlot`),
+//!   `.lmnk` snapshot storage, telemetry, and the C11/C++20 `v0.2.0` (`lmnk_*`) C-ABI firewall (`abi`).
 //!
 //! # Core Mathematical & Systems Design Principles
 //! 1. **Sequential Conditional Transition Probability x Attention Phase Interference**:
@@ -31,8 +35,8 @@
 //!    is factored into local conditional transitions modulated in $\mathcal{O}(1)$ via RoPE phase
 //!    steering without modifying host model weights $W_Q, W_K$.
 //! 2. **Fractal Self-Similarity & Indirect Pointer-Chain Routing on `StigmergicSubstrate`**:
-//!    From 128-byte pointer trails (`gcso_pointer_trail_t`), 128-byte `GatewayFrame` /
-//!    `CrystallizedAttractorRecord` basins, up to nested composites `[Node; K]` and `(A, B)`,
+//!    From 128-byte pointer trails (`PointerTrail`), 128-byte `GatewayFrame` /
+//!    `PhaseAnchorRecord` basins, up to nested composites `[Node; K]` and `(A, B)`,
 //!    every node implements [`crate::stigmergy::RelativeAttractorNode`] with recursive
 //!    $SO(2)^{64}$ resultant folding (`fold_fractal_nodes_words_64`), dissipative overflow scatter /
 //!    autonomous daughter crystallization (`DissipativeOverflowReport`), and perspective-flipped signed
@@ -92,17 +96,17 @@ pub mod foundation;
 
 /// Level 2 (`Stigmergy`): 8-granule SWAR stigmergic trails, pheromone density laws, bitmasks,
 /// contrastive Bloom filters, fast-path ledgers, 8-lane [`StigmergicSubstrate`], cognitive circuits,
-/// `.gcso` crystallization, and macro attractor fields.
+/// `.lmnk` phase anchor records, and manifold attraction.
 pub mod stigmergy;
 
 /// Level 3 (`Drivers`): Dual execution axes (`spine` vs. `ego`) isolated behind `distortion`.
 pub mod drivers;
 
 /// Level 4 (`Runtime`): Stateful orchestration (`RuntimeContext`), telemetry, Manifold Gateway,
-/// Latent Horizon, `.gcso` storage, and C-ABI translation firewall (`abi`).
+/// Latent Horizon, `.lmnk` storage, and C-ABI translation firewall (`abi`).
 pub mod runtime;
 
-/// C-ABI `v0.1.3` bindings, FFI safety barriers, binary layout contracts, and status codes.
+/// C-ABI `v0.2.0` (`0x0000_0200`) bindings, FFI safety barriers, binary layout contracts, and status codes.
 pub use crate::runtime::abi;
 
 // ===================================================================
@@ -112,19 +116,22 @@ pub use crate::runtime::abi;
 pub use crate::liminal::{
     branchless_select_f32, branchless_select_i32, branchless_select_i64, branchless_select_i8,
     branchless_select_q7, branchless_select_u16, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, branchless_select_usize, evaluate_epistemic_partition_branchless,
+    branchless_select_u8, branchless_select_usize, evaluate_lacuna_partition_branchless,
     pack_attribution_tag, sensitivity_4p1mp_f32, sensitivity_4p1mp_q7, AbstractDomain, Activatable,
     Active, AttributionTag, BitCut, BitCut32, BitCut64, BitCut8, Bottom, BoundaryViolation,
-    BridgedDiscovery, Cuttable, Definite, DriverKind, EpistemicPartition, EpistemicRegime,
-    Exterior, FromBoundary, FromDelta, GcsoResult, GcsoStatus, Groundable, Grounded,
-    GroundedOrigin, Indivisible, IndivisiblePhase, Interior, Lacuna, LiminalThresholdState,
-    PrimitiveKind, Refine, Scoped, ScopedCut, Shared, SpeculativeDiscovery, Unmarked,
-    VerifiedAligned, DEFAULT_ENTROPY_EPS, GCSO_SUCCESS, HEADS_PER_STIGMERGIC_GRANULE,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, MAX_SURROGATE_ENTROPY_LN2,
-    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, Q7_PHASE_INV_SCALE_RAD,
-    Q7_PHASE_SCALE_RAD, SCOPE_REGION_KNOWN_UNKNOWN, SCOPE_REGION_SELF_EXCLUSIVE,
-    SCOPE_REGION_SHARED_CORE, THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_COGNITIVE_CIRCUIT,
-    THRESHOLD_COHOMOLOGY_ENTROPY, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_DISSIPATIVE_CRYSTAL,
+    BridgedDiscovery, Cuttable, Definite, DriverKind, EpistemicRegime, Exterior, FromBoundary,
+    FromDelta, Groundable, Grounded, GroundedOrigin, Indivisible, IndivisiblePhase, Interior,
+    Lacuna, LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus, PhaseQ7,
+    PrimitiveKind, Refine, RuntimeConfig, Scoped, ScopedCut, Shared, SpeculativeDiscovery,
+    Unmarked, VerifiedAligned, DEFAULT_ENTROPY_EPS, HEADS_PER_STIGMERGIC_GRANULE,
+    LMNK_ABI_VERSION_CSTR, LMNK_ABI_VERSION_HEX, LMNK_ABI_VERSION_MAJOR, LMNK_ABI_VERSION_MINOR,
+    LMNK_ABI_VERSION_PATCH, LMNK_ABI_VERSION_STRING, LMNK_CAP_INPLACE_CONTEXT_INIT,
+    LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON, LMNK_CAP_SIMD_WASM128, LMNK_CAP_SWAR_BASELINE,
+    LMNK_CAP_ZERO_ALLOC_CORE, LMNK_OK, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    MAX_SURROGATE_ENTROPY_LN2, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+    Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD, SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR,
+    SCOPE_REGION_SELF_REF, THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_COGNITIVE_CIRCUIT,
+    THRESHOLD_COHOMOLOGY_ENTROPY, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_DISSIPATIVE_ANCHOR,
     THRESHOLD_FAST_PATH_LEDGER, THRESHOLD_KV_PHASE_CACHE, THRESHOLD_MANIFOLD_GATEWAY,
     THRESHOLD_MAPPED_STORAGE, THRESHOLD_OBJECTIVE_FACT, THRESHOLD_PHASE_STEERING,
     THRESHOLD_POINTER_TRAIL, THRESHOLD_RANK1_RESIDUAL, THRESHOLD_RELATIVE_COUPLING,
@@ -194,43 +201,45 @@ pub use crate::foundation::{
     AlignedSlice, AlignedSlice128, AlignedSlice16, AlignedSlice256, AlignedSlice32,
     AlignedSlice512, AlignedSlice64, AlignedSliceMut, AlignedSliceMut128, AlignedSliceMut16,
     AlignedSliceMut256, AlignedSliceMut32, AlignedSliceMut512, AlignedSliceMut64, DisjointMutPair,
-    DisjointMutTriple, DisjointRefMut, KvMotionDeltaPacket, PhaseSteering, Pod,
-    RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER,
-    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
-    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, CHEBYSHEV_COEFF_LEN,
-    CHEBYSHEV_FILTER_DEGREE, DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_PHASE_STEP_MIN_RAD,
-    F32_MIN_POSITIVE_NORMAL, INV_PARALLEL_COUNT_Q7, MAX_PHASE_INTERFERENCE_INV_TEMP,
-    MIN_PHASE_INTERFERENCE_INV_TEMP, PAGED_BITMASK_BITS, PAGED_BITMASK_WORDS, SWAR_EVEN_BYTES_64,
-    SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
-    TAG_ACTION_MODE_MASK, TAG_ATTRACTOR_SLOT_SHIFT,
+    DisjointMutTriple, DisjointRefMut, KvMotionDeltaPacket, PagedBitmask, PhaseSteering, Pod,
+    Rank1Descriptor, RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout,
+    RopeSteeringTarget, SubheadConfig, TaggedPtr, ACTION_MODE_LAYER_SKIP,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
+    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_ID_MASK, CHEBYSHEV_COEFF_LEN, CHEBYSHEV_FILTER_DEGREE,
+    DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE,
+    DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_PHASE_STEER_HEAD_DIM, DEFAULT_PHASE_STEER_NUM_HEADS,
+    DEFAULT_PHASE_STEP_MIN_RAD, F32_MIN_POSITIVE_NORMAL, INV_PARALLEL_COUNT_Q7,
+    MAX_PHASE_INTERFERENCE_INV_TEMP, MIN_PHASE_INTERFERENCE_INV_TEMP, PAGED_BITMASK_BITS,
+    PAGED_BITMASK_WORDS, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, TAG_ACTION_MODE_MASK,
+    TAG_ATTRACTOR_SLOT_SHIFT,
 };
 
 pub use crate::stigmergy::{
     bridge_and_filter_liminal_trail_chain, coupled_slot_count, coupled_slot_row_mask,
     detect_and_record_obstruction_repulsion, eval_stigmergic_block_degrees,
-    evaluate_stigmergic_overlap_and_serendipity_words_64,
+    evaluate_stigmergic_overlap_and_discovery_words_64,
     evaluate_trail_chain_cohomology_and_joint_log_prob, fold_fractal_nodes_words_64,
     is_slot_pair_coupled, quantize_persistent_topological_mode,
     resolve_dyadic_qdpt_and_cascade_ptr, slot_coupling_bit_index, trail_phase_words_mut,
     trail_phase_words_ref, with_slot_pair_coupled, with_slot_pair_coupled_symmetric,
     AttractorGrowthReport, CognitiveCircuitActivation, CognitiveCircuitBank,
     CognitiveCircuitBankOps, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
-    ContrastivePhaseBloomFilter, CorePrimitiveState, CrystallizedAttractorRecord,
-    DissipativeOverflowReport, EpisodicPhaseSample, EpisodicSampleSteering, FastPathLedger,
-    HighCapCognitiveBank, LowSpecCognitiveBank, PhaseDeltaSlice, PhaseProfile64, PhaseProfileRef64,
-    PhaseSteeringActiveExt, PhaseSteeringEngine, PhaseWordsRef64, PheromoneDensityOps,
-    PointerSubstrate, RelativeAttractorNode, RelativeCouplingMatrix, ResidualAdapterEngine,
-    ResidualScale, StandardCognitiveBank, StigmergicFragmentEnsembleReport,
-    StigmergicGranuleEngine, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
+    ContrastivePhaseBloomFilter, CorePrimitiveState, DissipativeOverflowReport,
+    EpisodicPhaseSample, EpisodicSampleSteering, FastPathLedger, HighCapCognitiveBank, LedgerSlot,
+    LowSpecCognitiveBank, OverlapDiscoveryReport, PhaseAnchorRecord, PhaseDeltaSlice,
+    PhaseProfile64, PhaseProfileRef64, PhaseSteeringActiveExt, PhaseSteeringEngine,
+    PhaseWordsRef64, PheromoneDensityOps, PointerSubstrate, PointerTrail, RelativeAttractorNode,
+    RelativeCouplingMatrix, ResidualAdapterEngine, ResidualScale, StandardCognitiveBank,
+    StigmergicFragmentEnsembleReport, StigmergicGranuleEngine, StigmergicGranuleState,
     StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
     StigmergicSubstrateOps, StigmergicThresholds, SubstrateStepReport, WorkbenchLanePlacement,
-    WorkbenchPreset, WorkbenchSlotSpec, ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE,
-    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    ATTRACTOR_SLOT_TEMPORAL, ATTRACTOR_SLOT_USER_CONTEXT, ATTRACTOR_SLOT_USER_INTENT,
-    CRYSTAL_CAUSE_CODE_NOMINAL, CRYSTAL_PROVENANCE_MATURE_BIT, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    WorkbenchPreset, WorkbenchSlotSpec, ANCHOR_ATTRIBUTION_NOMINAL, ANCHOR_LINEAGE_MATURE_BIT,
+    ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_TEMPORAL,
+    ATTRACTOR_SLOT_USER_CONTEXT, ATTRACTOR_SLOT_USER_INTENT, DEFAULT_FACT_PHASE_CLAMP_RAD,
     DEFAULT_LIMINAL_BIFURCATION_GRAVITY_RATIO, DEFAULT_PERSONA_PHASE_CLAMP_RAD,
     DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
     DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH, DEFAULT_STIGMERGIC_EVAPORATION_RETAIN,
@@ -239,10 +248,9 @@ pub use crate::stigmergy::{
     DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN, DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH,
     DEFAULT_STIGMERGIC_TOLERANCE_Q7, DEFAULT_SUBSTRATE_CAPACITY,
     DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
-    FAST_PATH_SHORTCUT_SLOTS, GCSO_CRYSTAL_RECORD_MAGIC, GCSO_CRYSTAL_RECORD_VERSION,
-    GCSO_SNAPSHOT_MAGIC_U32, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_HISTORY_LEN,
-    MAX_ANCHORS_PER_FIELD, MAX_EMBEDDING_DIM, SUBSTRATE_INLINE_TRAILS,
-    TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    FAST_PATH_SHORTCUT_SLOTS, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_HISTORY_LEN,
+    LMNK_PHASE_ANCHOR_MAGIC, LMNK_PHASE_ANCHOR_VERSION, MAX_EMBEDDING_DIM, MAX_PHASE_ANCHORS,
+    SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
     TRAIL_FLAG_SWARM_ESCALATED, TRAIL_FLAG_SWARM_RESOLVED, TRAIL_FLAG_SYNERGY_RESONANCE,
     WORKBENCH_LANE_AUTO, WORKBENCH_LANE_COUNT, WORKBENCH_LANE_FLAG_PINNED,
@@ -252,68 +260,74 @@ pub use crate::stigmergy::{
 pub use crate::drivers::{
     AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
     DistortionDelta, DistortionTension, DistortionTensionStateCode, EgoDifferentialNet,
-    EgoIntentAxes, EntropyController, FrameDirective, FrameKind, LiminalEgoPreset, LiminalEgoState,
-    PFrameColdMeta, PFrameRoutingMeta, SpineFrameTransitionInput, SystemPressureReading,
-    SystemSpineState, TokenBypassObservation, EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE,
-    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
-    EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR, SPINE_BYPASS_VETO_GUARD_ACTIVE,
-    SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
-    SPINE_TRANSITION_FLAG_GUARD_REPULSION, SPINE_TRANSITION_FLAG_IRREVERSIBLE,
-    SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED, SPINE_TRANSITION_FLAG_STATIONARY_BYPASS_READY,
+    EgoIntentAxes, EntropyController, EntropyState, FrameDirective, FrameKind, LiminalEgoPreset,
+    LiminalEgoState, PFrameColdMeta, PFrameRoutingMeta, SpineFrameTransitionInput,
+    SystemPressureReading, SystemSpineState, TokenBypassObservation, EGO_TRIGGER_ALL_DEFAULT,
+    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
+    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR,
+    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_TRANSITION_FLAG_GUARD_REPULSION,
+    SPINE_TRANSITION_FLAG_IRREVERSIBLE, SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED,
+    SPINE_TRANSITION_FLAG_STATIONARY_BYPASS_READY,
 };
 
 pub use crate::runtime::{
     abi_version_string, apply_gateway_frame_rank1_hidden_fused, apply_latent_horizon_slots,
-    decode_and_apply_dnp_packet_to_trail, decode_and_verify_dnp_packet,
-    decode_and_verify_dnp_words, dispatch_dnp_packet, encode_dnp_phase_packet,
+    decode_and_apply_phase_packet_to_trail, decode_and_verify_phase_packet,
+    decode_and_verify_phase_packet_words, dispatch_phase_packet, encode_phase_packet,
     evaluate_epistemic_horizon_words_64, finalize_snapshot_header_crc32, init_default_config,
     init_descriptor_header, init_snapshot_header, project_gateway_signal_at_scale,
     query_capability, synthesize_multi_origin_gateway_frame,
     synthesize_multi_origin_gateway_frame_with_words,
     synthesize_relative_gateway_from_perspective_words_64, validate_config_invariants,
     validate_descriptor_header, validate_snapshot_header, verify_snapshot_payload_crc32,
-    AdaptiveThresholdPolicy, AutonomousCoreLayerStack, CausalProvenanceReport,
-    CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, CognitiveGroundingSignal, Config,
-    ContradictionGuard, ContradictionGuardSignal, CoreLayerEvalContext, CoreTelemetryBank,
-    CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, DetailedLayerTelemetry, EgoLayerTelemetry,
-    EpistemicHorizonReading, EpistemicManifoldOps, GatewayFrame, GatewayPhaseSteeringExt,
-    GcsoFourSectionView, GuardPhaseAnchor, HighCapPhaseKvCache, HighCapPhaseKvGopCache,
+    AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
+    CognitiveCircuitThresholdPolicy, CognitiveGroundingSignal, Config, ContradictionGuard,
+    ContradictionGuardSignal, CoreLayerEvalContext, CoreStateStack, CoreTelemetryBank,
+    CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, DescriptorHeader, DetailedLayerTelemetry,
+    EgoTelemetry, EpistemicHorizonReading, EpistemicManifoldOps, GatewayFrame,
+    GatewayPhaseSteeringExt, GuardPhaseAnchor, HighCapPhaseKvCache, HighCapPhaseKvGopCache,
     HorizonDwellState, HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput,
-    HybridScaleCircuit, KvKeyframeCache, KvKeyframePacket, LatentHorizonSlot, LayerDistortionKind,
-    LayerDistortionReport, LiminalBoundaryDelta, LiminalHorizonNodeDescriptor,
-    LiminalLayerTelemetry, LiminalTopologyTelemetrySnapshot, LowSpecPhaseKvCache,
-    LowSpecPhaseKvGopCache, ManifoldGatewaySignal, ManifoldProbeBaseline, MappedStorage,
-    MappedStorageEngine, ObjectiveFact, ObjectiveFactSignal, OrchestratorStatusSnapshot,
-    RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry, RamPhaseKvGopCache,
-    RamPhaseKvStepOutcome, ResidualSpilloverHorizonSlot, ResonantSignalSlice, Result,
-    RuntimeContext, ScaleLayerNode, ScaleLayerOrchestrator, ScaleLayerProjection,
-    SlowLoopTelemetryAdjustment, StandardPhaseKvCache, StandardPhaseKvGopCache,
-    StigmergicLayerTelemetry, StigmergicReceptor, StigmergicScaleLayer, StigmergicThresholdPolicy,
-    SubjectivePersona, SubjectivePersonaSignal, SubstrateGatewayExt, SystemConstraint,
-    SystemConstraintSignal, SystemSpineTelemetry, TelemetryCapturePolicy, TelemetryVerbosityMode,
+    HybridScaleCircuit, KvKeyframeCache, KvKeyframeHeader, KvKeyframePacket, LatentHorizonSlot,
+    LayerDistortionKind, LayerDistortionReport, LiminalBoundaryDelta, LiminalHorizonNodeDescriptor,
+    LiminalTelemetry, LiminalTopologyTelemetrySnapshot, LmnkFourSectionView, LmnkSnapshotHeader,
+    LowSpecPhaseKvCache, LowSpecPhaseKvGopCache, ManifoldGatewaySignal, ManifoldProbeBaseline,
+    MappedStorage, MappedStorageEngine, ObjectiveFact, ObjectiveFactSignal,
+    OrchestratorStatusSnapshot, RamPhaseKvCache, RamPhaseKvCacheOps, RamPhaseKvEntry,
+    RamPhaseKvGopCache, RamPhaseKvStepOutcome, ResidualSpilloverHorizonSlot, ResonantSignalSlice,
+    Result, RuntimeContext, ScaleLayerNode, ScaleLayerOrchestrator, ScaleLayerProjection,
+    SlowLoopTelemetryAdjustment, StandardPhaseKvCache, StandardPhaseKvGopCache, StigmergicReceptor,
+    StigmergicScaleLayer, StigmergicTelemetry, StigmergicThresholdPolicy, SubjectivePersona,
+    SubjectivePersonaSignal, SubstrateGatewayExt, SystemConstraint, SystemConstraintSignal,
+    SystemSpineTelemetry, TelemetryCapturePolicy, TelemetryVerbosityMode,
     CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA,
     CAUSAL_AXIS_SYSTEM_CONSTRAINT, CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED,
     CAUSAL_CAUSE_COHOMOLOGY_REPULSION, CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
     CAUSAL_CAUSE_PERSONA_FACT_COLLISION, CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE,
-    CHATTER_FIRE_THRESHOLD_U8, CORE_LAYER_EGO, CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC,
-    DEFAULT_BLOOM_REPULSION_SCALE_U7, DEFAULT_BLOOM_REPULSION_THRESHOLD,
+    CHATTER_FIRE_THRESHOLD_U8, DEFAULT_BLOOM_REPULSION_SCALE_U7, DEFAULT_BLOOM_REPULSION_THRESHOLD,
     DEFAULT_ENTROPY_GATE_BIFURCATION_THRESHOLD, DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND,
     DEFAULT_ENTROPY_GATE_TAU_FLUX, DEFAULT_PAGED_BLOCK_SIZE, DEFAULT_PERSONA_FACT_COLLISION_THRESH,
-    DEFAULT_SLOT_WEIGHTS, GCSO_FOUR_SECTION_HEADER_BYTES, GCSO_LIMINAL_HORIZON_TOPOLOGY,
-    GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET, NUM_CORE_AUTONOMOUS_LAYERS,
-    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
-    ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE, SLOT_PHASE_BANK_LEN,
+    DEFAULT_SLOT_WEIGHTS, LMNK_FOUR_SECTION_HEADER_BYTES, LMNK_LIMINAL_HORIZON_TOPOLOGY,
+    LMNK_SNAPSHOT_MAGIC_U32, LMNK_STORAGE_PREAMBLE_OFFSET, ROOT_CAUSE_COHOMOLOGY_REPULSION,
+    ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
+    ROOT_CAUSE_SYSTEM_QOS_THROTTLE, SLOT_PHASE_BANK_LEN,
 };
 
 pub use crate::runtime::abi::{
-    gcso_anchor_type_t, gcso_attribution_tag_t, gcso_capability_flags_t,
-    gcso_cognitive_substrate_t, gcso_config_t, gcso_descriptor_header_t, gcso_distortion_delta_t,
-    gcso_distortion_tension_t, gcso_edbc_state_t, gcso_kv_keyframe_header_t, gcso_ledger_slot_t,
-    gcso_liminal_venn_partition_t, gcso_mapped_storage_descriptor_t, gcso_paged_bitmask_t,
-    gcso_pointer_trail_t, gcso_q7_t, gcso_rank1_residual_descriptor_t, gcso_snapshot_header_t,
-    gcso_status_t, gcso_subhead_config_t, gcso_system_spine_state_t, gcso_tagged_ptr_t,
-    FfiHandleMut, FfiHandleRef, GcsoAnchorType, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND,
-    GCSO_CAP_METAL_BACKEND, GCSO_CAP_VULKAN_BACKEND,
+    lmnk_action_decision_t, lmnk_attribution_tag_t, lmnk_bloom_filter_t, lmnk_boundary_delta_t,
+    lmnk_capability_flags_t, lmnk_causal_report_t, lmnk_cognitive_ledger_t, lmnk_config_t,
+    lmnk_core_primitive_state_t, lmnk_core_state_stack_t, lmnk_descriptor_header_t,
+    lmnk_distortion_delta_t, lmnk_distortion_tension_t, lmnk_ego_intent_axes_t,
+    lmnk_entropy_state_t, lmnk_epistemic_horizon_t, lmnk_fragment_ensemble_report_t,
+    lmnk_gateway_frame_t, lmnk_kv_keyframe_header_t, lmnk_lacuna_partition_t, lmnk_ledger_slot_t,
+    lmnk_liminal_ego_state_t, lmnk_liminal_threshold_state_t, lmnk_overlap_discovery_report_t,
+    lmnk_paged_bitmask_t, lmnk_phase_anchor_record_t, lmnk_pointer_trail_t, lmnk_q7_t,
+    lmnk_rank1_descriptor_t, lmnk_reconstitution_report_t, lmnk_snapshot_header_t,
+    lmnk_spine_state_t, lmnk_status_t, lmnk_stigmergic_granule_state_t,
+    lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t, lmnk_substrate_step_report_t,
+    lmnk_tagged_ptr_t, lmnk_topology_snapshot_t, FfiHandleMut, FfiHandleRef, LmnkContextHandle,
+    LmnkContextOpaque, LmnkEntropyControllerHandle, LmnkEntropyControllerOpaque,
+    LmnkPhaseSteeringHandle, LmnkPhaseSteeringOpaque, LmnkSubstrateHandle, LmnkSubstrateOpaque,
 };
 
 // ===================================================================
@@ -368,10 +382,11 @@ pub mod prelude {
         AlignedSlice32, AlignedSlice512, AlignedSlice64, AlignedSliceMut, AlignedSliceMut128,
         AlignedSliceMut16, AlignedSliceMut256, AlignedSliceMut32, AlignedSliceMut512,
         AlignedSliceMut64, DisjointMutPair, DisjointMutTriple, DisjointRefMut, KvMotionDeltaPacket,
-        PhaseSteering, Pod, RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout,
-        RopeSteeringTarget, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE,
-        ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
-        ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
+        PagedBitmask, PhaseSteering, Pod, Rank1Descriptor, RawPhaseProjectable,
+        RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget, SubheadConfig, TaggedPtr,
+        ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER,
+        ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+        ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
         ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
         CHEBYSHEV_COEFF_LEN, DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_CLAMP_MAX_RAD,
         DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, DEFAULT_PHASE_GRAVITY_EPS,
@@ -381,54 +396,60 @@ pub mod prelude {
     };
     pub use crate::liminal::*;
     pub use crate::runtime::abi::{
-        gcso_anchor_type_t, gcso_capability_flags_t, gcso_config_t, gcso_descriptor_header_t,
-        gcso_edbc_state_t, gcso_kv_keyframe_header_t, gcso_ledger_slot_t,
-        gcso_mapped_storage_descriptor_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, gcso_q7_t,
-        gcso_rank1_residual_descriptor_t, gcso_snapshot_header_t, gcso_status_t,
-        gcso_subhead_config_t, gcso_tagged_ptr_t, FfiHandleMut, FfiHandleRef, GcsoAnchorType,
-        GCSO_ABI_VERSION_HEX, GCSO_ABI_VERSION_STRING,
+        lmnk_action_decision_t, lmnk_attribution_tag_t, lmnk_bloom_filter_t, lmnk_boundary_delta_t,
+        lmnk_capability_flags_t, lmnk_causal_report_t, lmnk_cognitive_ledger_t, lmnk_config_t,
+        lmnk_core_primitive_state_t, lmnk_core_state_stack_t, lmnk_descriptor_header_t,
+        lmnk_distortion_delta_t, lmnk_distortion_tension_t, lmnk_ego_intent_axes_t,
+        lmnk_entropy_state_t, lmnk_epistemic_horizon_t, lmnk_fragment_ensemble_report_t,
+        lmnk_gateway_frame_t, lmnk_kv_keyframe_header_t, lmnk_lacuna_partition_t,
+        lmnk_ledger_slot_t, lmnk_liminal_ego_state_t, lmnk_liminal_threshold_state_t,
+        lmnk_overlap_discovery_report_t, lmnk_paged_bitmask_t, lmnk_phase_anchor_record_t,
+        lmnk_pointer_trail_t, lmnk_q7_t, lmnk_rank1_descriptor_t, lmnk_reconstitution_report_t,
+        lmnk_snapshot_header_t, lmnk_spine_state_t, lmnk_status_t, lmnk_stigmergic_granule_state_t,
+        lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t, lmnk_substrate_step_report_t,
+        lmnk_tagged_ptr_t, lmnk_topology_snapshot_t, FfiHandleMut, FfiHandleRef, LmnkContextHandle,
+        LmnkContextOpaque, LmnkEntropyControllerHandle, LmnkEntropyControllerOpaque,
+        LmnkPhaseSteeringHandle, LmnkPhaseSteeringOpaque, LmnkSubstrateHandle, LmnkSubstrateOpaque,
     };
     pub use crate::runtime::{
         abi_version_string, apply_gateway_frame_rank1_hidden_fused, apply_latent_horizon_slots,
-        decode_and_apply_dnp_packet_to_trail, decode_and_verify_dnp_packet,
-        decode_and_verify_dnp_words, dispatch_dnp_packet, encode_dnp_phase_packet,
+        decode_and_apply_phase_packet_to_trail, decode_and_verify_phase_packet,
+        decode_and_verify_phase_packet_words, dispatch_phase_packet, encode_phase_packet,
         evaluate_epistemic_horizon_words_64, finalize_snapshot_header_crc32, init_default_config,
         init_descriptor_header, init_snapshot_header, project_gateway_signal_at_scale,
         query_capability, synthesize_multi_origin_gateway_frame,
         synthesize_multi_origin_gateway_frame_with_words,
         synthesize_relative_gateway_from_perspective_words_64, validate_config_invariants,
         validate_descriptor_header, validate_snapshot_header, verify_snapshot_payload_crc32,
-        AdaptiveThresholdPolicy, AutonomousCoreLayerStack, CausalProvenanceReport,
-        CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, CognitiveGroundingSignal, Config,
-        ContradictionGuard, ContradictionGuardSignal, CoreLayerEvalContext, CoreTelemetryBank,
-        CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, DetailedLayerTelemetry,
-        EgoLayerTelemetry, EpistemicHorizonReading, EpistemicManifoldOps, GatewayFrame,
-        GatewayPhaseSteeringExt, GcsoFourSectionView, GuardPhaseAnchor, HighCapPhaseKvCache,
+        AdaptiveThresholdPolicy, CausalProvenanceReport, CausalProvenanceSignal,
+        CognitiveCircuitThresholdPolicy, CognitiveGroundingSignal, Config, ContradictionGuard,
+        ContradictionGuardSignal, CoreLayerEvalContext, CoreStateStack, CoreTelemetryBank,
+        CoreTelemetrySnapshot, DefaultResidualSpilloverSlot, DescriptorHeader,
+        DetailedLayerTelemetry, EgoTelemetry, EpistemicHorizonReading, EpistemicManifoldOps,
+        GatewayFrame, GatewayPhaseSteeringExt, GuardPhaseAnchor, HighCapPhaseKvCache,
         HighCapPhaseKvGopCache, HorizonDwellState, HorizonEscalationProvider,
         HorizonEscalationRequest, HorizonTriggerInput, HybridScaleCircuit, KvKeyframeCache,
-        KvKeyframePacket, LatentHorizonSlot, LayerDistortionKind, LayerDistortionReport,
-        LiminalBoundaryDelta, LiminalHorizonNodeDescriptor, LiminalLayerTelemetry,
-        LiminalTopologyTelemetrySnapshot, LowSpecPhaseKvCache, LowSpecPhaseKvGopCache,
-        ManifoldGatewaySignal, ManifoldProbeBaseline, MappedStorage, MappedStorageEngine,
-        ObjectiveFact, ObjectiveFactSignal, OrchestratorStatusSnapshot, RamPhaseKvCache,
-        RamPhaseKvCacheOps, RamPhaseKvEntry, RamPhaseKvGopCache, RamPhaseKvStepOutcome,
-        ResidualSpilloverHorizonSlot, ResonantSignalSlice, Result, RuntimeContext, ScaleLayerNode,
-        ScaleLayerOrchestrator, ScaleLayerProjection, SlowLoopTelemetryAdjustment,
-        StandardPhaseKvCache, StandardPhaseKvGopCache, StigmergicLayerTelemetry,
-        StigmergicReceptor, StigmergicScaleLayer, StigmergicThresholdPolicy, SubjectivePersona,
-        SubjectivePersonaSignal, SubstrateGatewayExt, SystemConstraint, SystemConstraintSignal,
-        SystemSpineTelemetry, TelemetryCapturePolicy, TelemetryVerbosityMode,
-        CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+        KvKeyframeHeader, KvKeyframePacket, LatentHorizonSlot, LayerDistortionKind,
+        LayerDistortionReport, LiminalBoundaryDelta, LiminalHorizonNodeDescriptor,
+        LiminalTelemetry, LiminalTopologyTelemetrySnapshot, LmnkFourSectionView,
+        LmnkSnapshotHeader, LowSpecPhaseKvCache, LowSpecPhaseKvGopCache, ManifoldGatewaySignal,
+        ManifoldProbeBaseline, MappedStorage, MappedStorageEngine, ObjectiveFact,
+        ObjectiveFactSignal, OrchestratorStatusSnapshot, RamPhaseKvCache, RamPhaseKvCacheOps,
+        RamPhaseKvEntry, RamPhaseKvGopCache, RamPhaseKvStepOutcome, ResidualSpilloverHorizonSlot,
+        ResonantSignalSlice, Result, RuntimeContext, ScaleLayerNode, ScaleLayerOrchestrator,
+        ScaleLayerProjection, SlowLoopTelemetryAdjustment, StandardPhaseKvCache,
+        StandardPhaseKvGopCache, StigmergicReceptor, StigmergicScaleLayer, StigmergicTelemetry,
+        StigmergicThresholdPolicy, SubjectivePersona, SubjectivePersonaSignal, SubstrateGatewayExt,
+        SystemConstraint, SystemConstraintSignal, SystemSpineTelemetry, TelemetryCapturePolicy,
+        TelemetryVerbosityMode, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
         CAUSAL_AXIS_SUBJECTIVE_PERSONA, CAUSAL_AXIS_SYSTEM_CONSTRAINT,
         CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
         CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CAUSAL_CAUSE_PERSONA_FACT_COLLISION,
-        CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CHATTER_FIRE_THRESHOLD_U8, CORE_LAYER_EGO,
-        CORE_LAYER_LIMINAL, CORE_LAYER_STIGMERGIC, DEFAULT_PAGED_BLOCK_SIZE,
-        DEFAULT_PERSONA_FACT_COLLISION_THRESH, GCSO_FOUR_SECTION_HEADER_BYTES,
-        GCSO_LIMINAL_HORIZON_TOPOLOGY, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET,
-        NUM_CORE_AUTONOMOUS_LAYERS, ROOT_CAUSE_COHOMOLOGY_REPULSION,
-        ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL, ROOT_CAUSE_PERSONA_FACT_COLLISION,
-        ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
+        CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE, CHATTER_FIRE_THRESHOLD_U8, DEFAULT_PAGED_BLOCK_SIZE,
+        DEFAULT_PERSONA_FACT_COLLISION_THRESH, LMNK_FOUR_SECTION_HEADER_BYTES,
+        LMNK_LIMINAL_HORIZON_TOPOLOGY, LMNK_SNAPSHOT_MAGIC_U32, LMNK_STORAGE_PREAMBLE_OFFSET,
+        ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+        ROOT_CAUSE_PERSONA_FACT_COLLISION, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
     };
     pub use crate::stigmergy::*;
 }
@@ -448,15 +469,15 @@ pub const fn version() -> &'static str {
 #[must_use]
 pub const fn abi_version() -> (u32, u32, u32) {
     (
-        crate::runtime::abi::GCSO_ABI_VERSION_MAJOR,
-        crate::runtime::abi::GCSO_ABI_VERSION_MINOR,
-        crate::runtime::abi::GCSO_ABI_VERSION_PATCH,
+        LMNK_ABI_VERSION_MAJOR,
+        LMNK_ABI_VERSION_MINOR,
+        LMNK_ABI_VERSION_PATCH,
     )
 }
 
-/// Returns the hexadecimal ABI version identifier ([`crate::runtime::abi::GCSO_ABI_VERSION_HEX`]).
+/// Returns the hexadecimal ABI version identifier ([`LMNK_ABI_VERSION_HEX`]).
 #[inline(always)]
 #[must_use]
 pub const fn abi_version_hex() -> u32 {
-    crate::runtime::abi::GCSO_ABI_VERSION_HEX
+    LMNK_ABI_VERSION_HEX
 }

@@ -8,11 +8,11 @@ use crate::foundation::{
     branchless_clamp_f32, branchless_inv_pos_f32, branchless_max_f32, branchless_min_f32,
     branchless_q7_inhibit_words_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     branchless_sincos_q7, coherence_from_word_arrays_with_both_uniform_flags_64,
-    fast_mean_q7_tag_from_words_64, gcso_tagged_ptr_t, is_word_array_uniform_64,
-    pack_action_slot_tag, swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64,
-    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
-    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
-    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    fast_mean_q7_tag_from_words_64, is_word_array_uniform_64, pack_action_slot_tag,
+    swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
+    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_STEP_MIN_RAD,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
@@ -27,9 +27,9 @@ use crate::runtime::gateway::{
     ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
 };
 use crate::stigmergy::{
-    evaluate_stigmergic_overlap_and_serendipity_words_64, fold_fractal_nodes_words_64,
+    evaluate_stigmergic_overlap_and_discovery_words_64, fold_fractal_nodes_words_64,
     fold_sincos64_to_words, CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport,
-    RelativeAttractorNode, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
+    OverlapDiscoveryReport, RelativeAttractorNode, StigmergicGranuleState,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, DEFAULT_FACT_PHASE_CLAMP_RAD,
     MAX_ATTRACTOR_PULL_FORCE,
 };
@@ -85,13 +85,14 @@ impl EpistemicHorizonReading {
     /// flags in [`EpistemicRegime::InternalConflict`].
     #[inline(always)]
     pub fn apply_to_frame_branchless(&self, frame: &mut GatewayFrame) {
-        let is_void = self.is_liminal();
+        let is_unobserved = self.is_liminal();
         let is_conflict = self.is_internal_conflict();
         let gate = branchless_clamp_f32(branchless_relu_f32(self.horizon_gate), 0.0, 1.0);
 
-        frame.effective_energy = branchless_select_f32(is_void, 0.0, frame.effective_energy * gate);
+        frame.effective_energy =
+            branchless_select_f32(is_unobserved, 0.0, frame.effective_energy * gate);
         frame.repulsion_severity = branchless_select_f32(
-            is_void,
+            is_unobserved,
             0.0,
             branchless_select_f32(
                 is_conflict,
@@ -100,9 +101,9 @@ impl EpistemicHorizonReading {
             ),
         );
 
-        let high_repulse = (!is_void) & is_conflict & (self.conflict_severity > 0.50);
+        let high_repulse = (!is_unobserved) & is_conflict & (self.conflict_severity > 0.50);
         frame.action_mode_flags = branchless_select_u8(
-            is_void,
+            is_unobserved,
             ACTION_PRESET_PASSIVE_SIDECAR,
             branchless_select_u8(
                 high_repulse,
@@ -110,28 +111,28 @@ impl EpistemicHorizonReading {
                 frame.action_mode_flags,
             ),
         );
-        frame.dominant_cause_code = branchless_select_u8(
-            is_void,
+        frame.attribution_tag = branchless_select_u8(
+            is_unobserved,
             ROOT_CAUSE_FACT_RETRIEVAL_MISS,
             branchless_select_u8(
                 high_repulse,
                 ROOT_CAUSE_COHOMOLOGY_REPULSION,
-                frame.dominant_cause_code,
+                frame.attribution_tag,
             ),
         );
-        frame.provenance_bits = branchless_select_u32(
-            is_void,
-            BitCut32::split(frame.provenance_bits, CAUSAL_CAUSE_COHOMOLOGY_REPULSION).outside
+        frame.lineage_flags = branchless_select_u32(
+            is_unobserved,
+            BitCut32::split(frame.lineage_flags, CAUSAL_CAUSE_COHOMOLOGY_REPULSION).outside
                 | CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
             branchless_select_u32(
                 high_repulse,
-                frame.provenance_bits | CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-                frame.provenance_bits,
+                frame.lineage_flags | CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+                frame.lineage_flags,
             ),
         );
 
         // Zero phase words branchlessly when outside the carved memory horizon.
-        let keep_mask = branchless_select_u64(is_void, 0, u64::MAX);
+        let keep_mask = branchless_select_u64(is_unobserved, 0, u64::MAX);
         {
             let pw = frame.phase_words_mut();
             let mut w = 0usize;
@@ -140,11 +141,11 @@ impl EpistemicHorizonReading {
                 w += 1;
             }
         }
-        frame.mean_phase_tag_q7 = branchless_select_i8(is_void, 0, frame.mean_phase_tag_q7);
+        frame.mean_phase_tag_q7 = branchless_select_i8(is_unobserved, 0, frame.mean_phase_tag_q7);
         let eff_slot = frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
         let ptr_tag = pack_action_slot_tag(eff_slot, frame.action_mode_flags);
         frame.frame_flags = ptr_tag as u16;
-        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+        frame.tagged_ptr = TaggedPtr::pack(
             frame.mapped_section_offset48,
             ptr_tag,
             frame.mean_phase_tag_q7,
@@ -156,11 +157,11 @@ impl EpistemicHorizonReading {
 impl CausalProvenanceSignal for EpistemicHorizonReading {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        let is_void = self.is_liminal();
+        let is_unobserved = self.is_liminal();
         let is_conflict = self.is_internal_conflict();
         let high_repulse = is_conflict & (self.conflict_severity > 0.50);
         branchless_select_u32(
-            is_void,
+            is_unobserved,
             CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK,
             CAUSAL_AXIS_OBJECTIVE_FACT
                 | branchless_select_u32(
@@ -450,19 +451,19 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
     );
 
     let packed_tag = pack_action_slot_tag(dom_slot, mode_flags);
-    let qdps_step_u8 = branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD);
+    let min_step_q7 = branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD);
 
     let mut frame = GatewayFrame {
-        tagged_ptr: gcso_tagged_ptr_t::pack(0, packed_tag, mean_tag).raw(),
+        tagged_ptr: TaggedPtr::pack(0, packed_tag, mean_tag).raw(),
         target_anchor_id: target_id,
         effective_energy: eff_energy,
-        ripa_clamp_rad: DEFAULT_FACT_PHASE_CLAMP_RAD,
-        qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+        phase_clamp_rad: DEFAULT_FACT_PHASE_CLAMP_RAD,
+        phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
         effective_inv_temp: 1.0 + branchless_clamp_f32(eff_energy * 0.25, 0.0, 1.0),
         fact_persona_coherence: base_coh,
         repulsion_severity: norm_rep_sev,
-        provenance_bits: horizon.causal_provenance_bits(),
-        dominant_cause_code: branchless_select_u8(
+        lineage_flags: horizon.causal_provenance_bits(),
+        attribution_tag: branchless_select_u8(
             rep_dominates,
             ROOT_CAUSE_COHOMOLOGY_REPULSION,
             ROOT_CAUSE_NOMINAL,
@@ -470,7 +471,7 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
         dominant_slot: dom_slot,
         action_mode_flags: mode_flags,
         active_swarm_cell_mask: 0xFF,
-        qdps_min_step_q7: qdps_step_u8,
+        phase_step_min_q7: min_step_q7,
         mean_phase_tag_q7: mean_tag,
         frame_flags: packed_tag as u16,
         ..GatewayFrame::default()
@@ -541,25 +542,25 @@ pub trait EpistemicManifoldOps: RelativeAttractorNode {
         pos * e
     }
 
-    /// Evaluates Venn-diagram multi-attractor aperture overlap and noise-driven serendipity in
+    /// Evaluates stigmergic multi-attractor overlap and excursion discovery in
     /// `Liminal` across a slice of `Self` (`0` allocations, `0` branches).
     #[inline(always)]
-    fn evaluate_slice_venn_and_serendipity(
+    fn evaluate_slice_overlap_and_discovery(
         slice: &[Self],
         query_words: &[u64; NUM_STIGMERGIC_GRANULES],
         noisy_drifted_words: &[u64; NUM_STIGMERGIC_GRANULES],
         aperture_floor: f32,
-        serendipity_floor_q7: u8,
-    ) -> StigmergicOverlapSerendipityReport
+        discovery_floor_q7: u8,
+    ) -> OverlapDiscoveryReport
     where
         Self: Sized,
     {
-        evaluate_stigmergic_overlap_and_serendipity_words_64(
+        evaluate_stigmergic_overlap_and_discovery_words_64(
             slice,
             query_words,
             noisy_drifted_words,
             aperture_floor,
-            serendipity_floor_q7,
+            discovery_floor_q7,
         )
     }
 }
@@ -598,21 +599,21 @@ impl LiminalThresholdState {
         };
         let fuse_dom = (fuse_n > peel_n) | scattered;
         let only_fuse = fuse_dom & !peel_dom;
-        let void_active = horizon.is_liminal();
+        let liminal_active = horizon.is_liminal();
 
-        // Channel 1 (ObjectiveFact) & Channel 3 (ContradictionGuard): narrow void under peel/conflict.
+        // Channel 1 (ObjectiveFact) & Channel 3 (ContradictionGuard): narrow aperture under peel/conflict.
         let next_f1 = branchless_select_u8(
             peel_dom,
             self.threshold_floor_q7[1].saturating_sub(4).max(8),
             self.threshold_floor_q7[1],
         );
         self.threshold_floor_q7[1] =
-            branchless_select_u8(void_active, next_f1.saturating_add(4).min(120), next_f1);
+            branchless_select_u8(liminal_active, next_f1.saturating_add(4).min(120), next_f1);
         self.aperture_gain_q7[1] = branchless_select_u8(
             peel_dom,
             self.aperture_gain_q7[1].saturating_add(8).min(127),
             branchless_select_u8(
-                void_active,
+                liminal_active,
                 self.aperture_gain_q7[1].saturating_sub(6).max(16),
                 self.aperture_gain_q7[1],
             ),
@@ -624,12 +625,12 @@ impl LiminalThresholdState {
             self.threshold_floor_q7[3],
         );
         self.threshold_floor_q7[3] =
-            branchless_select_u8(void_active, next_f3.saturating_add(4).min(120), next_f3);
+            branchless_select_u8(liminal_active, next_f3.saturating_add(4).min(120), next_f3);
         self.aperture_gain_q7[3] = branchless_select_u8(
             peel_dom,
             self.aperture_gain_q7[3].saturating_add(8).min(127),
             branchless_select_u8(
-                void_active,
+                liminal_active,
                 self.aperture_gain_q7[3].saturating_sub(6).max(16),
                 self.aperture_gain_q7[3],
             ),
@@ -647,7 +648,7 @@ impl LiminalThresholdState {
             p2_floor_peel,
         );
         self.threshold_floor_q7[2] = branchless_select_u8(
-            void_active,
+            liminal_active,
             p2_floor_fuse.saturating_add(4).min(120),
             p2_floor_fuse,
         );
@@ -662,7 +663,7 @@ impl LiminalThresholdState {
             p2_gain_peel,
         );
         self.aperture_gain_q7[2] = branchless_select_u8(
-            void_active,
+            liminal_active,
             p2_gain_fuse.saturating_sub(6).max(16),
             p2_gain_fuse,
         );
@@ -701,7 +702,7 @@ impl LiminalThresholdState {
         let mut ch = 0usize;
         while ch < NUM_LIMINAL_THRESHOLD_CHANNELS {
             let is_open =
-                (self.threshold_floor_q7[ch] < 96) & (!void_active | (ch == 0) | (ch == 7));
+                (self.threshold_floor_q7[ch] < 96) & (!liminal_active | (ch == 0) | (ch == 7));
             mask |= branchless_select_u32(is_open, 1u32 << ch, 0);
             ch += 1;
         }
@@ -720,9 +721,9 @@ impl LiminalThresholdState {
     ) {
         horizon.apply_to_frame_branchless(frame);
         let below_fact_floor = horizon.total_memory_support < self.channel_threshold_floor_f32(1);
-        let is_void = horizon.is_liminal() | below_fact_floor;
+        let is_unobserved = horizon.is_liminal() | below_fact_floor;
 
-        frame.effective_energy = branchless_select_f32(is_void, 0.0, frame.effective_energy);
+        frame.effective_energy = branchless_select_f32(is_unobserved, 0.0, frame.effective_energy);
 
         let scale_gain = |base_q7: u8, ap_q7: u8| -> u8 {
             let scaled = (u16::from(base_q7) * (u16::from(ap_q7) + 32)) >> 7;
@@ -737,7 +738,7 @@ impl LiminalThresholdState {
 
         let shift_byte = self.phase_shift_q7[7] as u8 as u64;
         let shift_word = shift_byte.wrapping_mul(SWAR_SPLAT_BYTE_64);
-        let keep_mask = branchless_select_u64(is_void, 0, u64::MAX);
+        let keep_mask = branchless_select_u64(is_unobserved, 0, u64::MAX);
         {
             let pw = frame.phase_words_mut();
             let mut c = 0usize;
@@ -751,7 +752,7 @@ impl LiminalThresholdState {
         let eff_slot = frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK;
         let ptr_tag = pack_action_slot_tag(eff_slot, frame.action_mode_flags);
         frame.frame_flags = ptr_tag as u16;
-        frame.tagged_ptr = gcso_tagged_ptr_t::pack(
+        frame.tagged_ptr = TaggedPtr::pack(
             frame.mapped_section_offset48,
             ptr_tag,
             frame.mean_phase_tag_q7,
@@ -762,12 +763,12 @@ impl LiminalThresholdState {
 
 impl StigmergicGranuleState {
     /// Branchlessly adapts per-granule pheromone gains, tolerated approximation noise, and
-    /// serendipity discovery floors from `horizon`, `overlap_report`, and `ledger`.
+    /// excursion discovery floors from `horizon`, `overlap_report`, and `ledger`.
     #[inline]
     pub fn adapt_from_horizon_and_overlap_branchless(
         &mut self,
         horizon: &EpistemicHorizonReading,
-        overlap_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
         ledger: &CognitiveTrajectoryLedger,
     ) {
         self.adapt_from_conflict_and_overlap_branchless(

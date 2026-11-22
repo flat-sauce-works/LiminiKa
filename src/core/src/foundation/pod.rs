@@ -1,9 +1,19 @@
 // name: src/core/src/foundation/pod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Plain Old Data (`Pod`) zero-copy safety contracts, raw range overlap checks, and Layer 1
-//! C-ABI binary data structures (`gcso_tagged_ptr_t`, `gcso_paged_bitmask_t`,
-//! `gcso_subhead_config_t`, `gcso_rank1_residual_descriptor_t`, `KvMotionDeltaPacket`).
+//! Plain Old Data (`Pod`) zero-copy safety contracts, raw range overlap checks, and Level 1
+//! canonical Little-Endian binary structures (`TaggedPtr`, `PagedBitmask`, `SubheadConfig`,
+//! `Rank1Descriptor`, `KvMotionDeltaPacket`).
+//!
+//! # Portable Device-Ready POD vs. Host FFI Descriptor Contract
+//! - **Portable Device-Ready PODs** (`TaggedPtr`, `PagedBitmask`, `SubheadConfig`,
+//!   `KvMotionDeltaPacket`): Canonical Little-Endian byte order, fixed-width primitives only (zero
+//!   `usize` / native pointers), 0 bytes implicit compiler padding, power-of-two `align`/`size`,
+//!   and 64 B-aligned `[PhaseQ7; 64]` vectors directly readable as `u32x16` / `u64x8` (WGSL,
+//!   Vulkan `std430`, Metal, CUDA, x86_64 64 B cache line, ARM64 / Apple Silicon 128 B cache line).
+//! - **Host FFI Descriptors** (`Rank1Descriptor`): Carry raw host buffer addresses (`u64` virtual
+//!   pointers `u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`) scoped to host CPU/FFI boundaries
+//!   rather than cross-device shader buffers.
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val};
@@ -12,15 +22,15 @@ use core::slice;
 
 use crate::foundation::scalar_math::{branchless_q7_add_sat, branchless_q7_neg_sat};
 use crate::liminal::{
-    gcso_config_t, gcso_q7_t, gcso_status_t, AttributionTag, EpistemicPartition, GcsoResult,
-    LiminalThresholdState, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_INVALID_ARGUMENT,
-    GCSO_ERROR_MISALIGNED_POINTER, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    AttributionTag, LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus, PhaseQ7,
+    RuntimeConfig, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
 };
 
-/// Number of 64-bit words in a 256-bit [`gcso_paged_bitmask_t`] (`4`).
+/// Number of 64-bit words in a 256-bit [`PagedBitmask`] (`4`).
 pub const PAGED_BITMASK_WORDS: usize = 4;
 
-/// Total number of discrete bits in a [`gcso_paged_bitmask_t`] (`256`).
+/// Total number of discrete bits in a [`PagedBitmask`] (`256`).
 pub const PAGED_BITMASK_BITS: u32 = 256;
 
 /// Bitmask isolating a valid 3-bit Semantic Provenance / Attractor Slot ID (`0..=7`).
@@ -58,14 +68,14 @@ pub const ACTION_PRESET_REPULSION_ESCAPE: u8 =
 pub const ACTION_PRESET_FULL_ORCHESTRATION: u8 =
     ACTION_MODE_PHASE_STEER | ACTION_MODE_SUBHEAD_ROUTE | ACTION_MODE_RANK1_INJECT;
 
-/// Bitmask extracting the 5-bit Action Mode flags from an 8-bit [`gcso_tagged_ptr_t`] tag (`bits 0..=4`).
+/// Bitmask extracting the 5-bit Action Mode flags from an 8-bit [`TaggedPtr`] tag (`bits 0..=4`).
 pub const TAG_ACTION_MODE_MASK: u8 = 0x1F;
 
 /// Bit shift offset for encoding/extracting the 3-bit Target Attractor Slot ID (`0..=7`) in an 8-bit tag (`bits 5..=7`).
 pub const TAG_ATTRACTOR_SLOT_SHIFT: u32 = 5;
 
 /// Packs a 3-bit Target Attractor Slot ID (`0..=7`) and a 5-bit Action Mode mask (`0x00..=0x1F`)
-/// into a single 8-bit tag byte for [`gcso_tagged_ptr_t`].
+/// into a single 8-bit tag byte for [`TaggedPtr`].
 #[inline(always)]
 #[must_use]
 pub const fn pack_action_slot_tag(attractor_slot_id: u8, action_mode_flags: u8) -> u8 {
@@ -73,14 +83,14 @@ pub const fn pack_action_slot_tag(attractor_slot_id: u8, action_mode_flags: u8) 
         | (action_mode_flags & TAG_ACTION_MODE_MASK)
 }
 
-/// Extracts the 5-bit Action Mode bitmask (`ACTION_MODE_*`) from an 8-bit [`gcso_tagged_ptr_t`] tag byte.
+/// Extracts the 5-bit Action Mode bitmask (`ACTION_MODE_*`) from an 8-bit [`TaggedPtr`] tag byte.
 #[inline(always)]
 #[must_use]
 pub const fn unpack_action_mode_from_tag(tag: u8) -> u8 {
     tag & TAG_ACTION_MODE_MASK
 }
 
-/// Extracts the 3-bit Target Attractor Slot ID (`0..=7`) from an 8-bit [`gcso_tagged_ptr_t`] tag byte.
+/// Extracts the 3-bit Target Attractor Slot ID (`0..=7`) from an 8-bit [`TaggedPtr`] tag byte.
 #[inline(always)]
 #[must_use]
 pub const fn unpack_attractor_slot_from_tag(tag: u8) -> u8 {
@@ -194,20 +204,20 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Zero-copy casts an aligned byte slice at `offset` into an immutable reference `&Self`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the byte address at `offset` violates `align_of::<Self>()`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the byte address at `offset` violates `align_of::<Self>()`.
     #[inline(always)]
-    fn from_bytes_at(bytes: &[u8], offset: usize) -> GcsoResult<&Self> {
+    fn from_bytes_at(bytes: &[u8], offset: usize) -> LmnkResult<&Self> {
         let end = offset
             .checked_add(size_of::<Self>())
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         // SAFETY: `offset <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_ptr().add(offset) };
         if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds and alignment for `Self: Pod` are verified above.
         Ok(unsafe { &*ptr.cast::<Self>() })
@@ -216,20 +226,20 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Zero-copy casts an aligned mutable byte slice at `offset` into a mutable reference `&mut Self`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the byte address at `offset` violates `align_of::<Self>()`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the byte address at `offset` violates `align_of::<Self>()`.
     #[inline(always)]
-    fn from_bytes_mut_at(bytes: &mut [u8], offset: usize) -> GcsoResult<&mut Self> {
+    fn from_bytes_mut_at(bytes: &mut [u8], offset: usize) -> LmnkResult<&mut Self> {
         let end = offset
             .checked_add(size_of::<Self>())
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         // SAFETY: `offset <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_mut_ptr().add(offset) };
         if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds, unique borrow, and alignment for `Self: Pod` are verified above.
         Ok(unsafe { &mut *ptr.cast::<Self>() })
@@ -238,22 +248,22 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Zero-copy casts an aligned byte region starting at `offset` into a slice `&[Self]` of `count` elements.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `Self` is zero-sized.
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes` cannot hold `count * size_of::<Self>()` bytes from `offset`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the starting address violates `align_of::<Self>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `Self` is zero-sized.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes` cannot hold `count * size_of::<Self>()` bytes from `offset`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the starting address violates `align_of::<Self>()`.
     #[inline(always)]
-    fn slice_from_bytes_at(bytes: &[u8], offset: usize, count: usize) -> GcsoResult<&[Self]> {
+    fn slice_from_bytes_at(bytes: &[u8], offset: usize, count: usize) -> LmnkResult<&[Self]> {
         if Self::IS_ZST {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let byte_len = count
             .checked_mul(size_of::<Self>())
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         let end = offset
             .checked_add(byte_len)
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if count == 0 {
             return Ok(&[]);
@@ -261,7 +271,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         // SAFETY: `offset + byte_len <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_ptr().add(offset) };
         if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds and alignment for `count` elements of `Self: Pod` are verified above.
         Ok(unsafe { slice::from_raw_parts(ptr.cast::<Self>(), count) })
@@ -270,26 +280,26 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Zero-copy casts an aligned mutable byte region starting at `offset` into `&mut [Self]` of `count` elements.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `Self` is zero-sized.
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes` cannot hold `count * size_of::<Self>()` bytes from `offset`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the starting address violates `align_of::<Self>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `Self` is zero-sized.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes` cannot hold `count * size_of::<Self>()` bytes from `offset`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the starting address violates `align_of::<Self>()`.
     #[inline(always)]
     fn slice_from_bytes_mut_at(
         bytes: &mut [u8],
         offset: usize,
         count: usize,
-    ) -> GcsoResult<&mut [Self]> {
+    ) -> LmnkResult<&mut [Self]> {
         if Self::IS_ZST {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let byte_len = count
             .checked_mul(size_of::<Self>())
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         let end = offset
             .checked_add(byte_len)
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if count == 0 {
             return Ok(&mut []);
@@ -297,7 +307,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         // SAFETY: `offset + byte_len <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_mut_ptr().add(offset) };
         if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds, unique borrow, and alignment for `count` elements of `Self: Pod` verified above.
         Ok(unsafe { slice::from_raw_parts_mut(ptr.cast::<Self>(), count) })
@@ -306,14 +316,14 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely reads an instance of `Self` from a potentially unaligned byte slice at `offset`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
     #[inline(always)]
-    fn read_unaligned_from(bytes: &[u8], offset: usize) -> GcsoResult<Self> {
+    fn read_unaligned_from(bytes: &[u8], offset: usize) -> LmnkResult<Self> {
         let end = offset
             .checked_add(size_of::<Self>())
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         // SAFETY: Bounds checked above; `Self` is `Pod` so any bit pattern is valid via `read_unaligned`.
         Ok(unsafe { ptr::read_unaligned(bytes.as_ptr().add(offset).cast::<Self>()) })
@@ -322,14 +332,14 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely writes `self` into a potentially unaligned byte slice at `offset`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes.len() < offset + size_of::<Self>()`.
     #[inline(always)]
-    fn write_unaligned_to(&self, bytes: &mut [u8], offset: usize) -> GcsoResult<()> {
+    fn write_unaligned_to(&self, bytes: &mut [u8], offset: usize) -> LmnkResult<()> {
         let end = offset
             .checked_add(size_of::<Self>())
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         // SAFETY: Bounds checked above; `Self` is `Pod` with no padding traps.
         unsafe {
@@ -342,15 +352,15 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// using a single `ptr::copy_nonoverlapping` (`memcpy`) operation.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes` has fewer than `offset + size_of_val(dst)` bytes.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes` has fewer than `offset + size_of_val(dst)` bytes.
     #[inline(always)]
-    fn read_unaligned_slice_from(bytes: &[u8], offset: usize, dst: &mut [Self]) -> GcsoResult<()> {
+    fn read_unaligned_slice_from(bytes: &[u8], offset: usize, dst: &mut [Self]) -> LmnkResult<()> {
         let byte_len = size_of_val(dst);
         let end = offset
             .checked_add(byte_len)
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if byte_len > 0 {
             // SAFETY: `bytes[offset..end]` and `dst` are valid, non-overlapping regions of `byte_len` bytes,
@@ -370,15 +380,15 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// `ptr::copy_nonoverlapping` (`memcpy`) operation.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `bytes` has fewer than `offset + size_of_val(src)` bytes.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `bytes` has fewer than `offset + size_of_val(src)` bytes.
     #[inline(always)]
-    fn write_unaligned_slice_to(src: &[Self], bytes: &mut [u8], offset: usize) -> GcsoResult<()> {
+    fn write_unaligned_slice_to(src: &[Self], bytes: &mut [u8], offset: usize) -> LmnkResult<()> {
         let byte_len = size_of_val(src);
         let end = offset
             .checked_add(byte_len)
-            .ok_or(GCSO_ERROR_BUFFER_TOO_SMALL)?;
+            .ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
         if bytes.len() < end {
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if byte_len > 0 {
             // SAFETY: `src` and `bytes[offset..end]` are valid, non-overlapping regions of `byte_len` bytes,
@@ -397,19 +407,19 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely reinterprets a slice of `Self` as a slice of another `Pod` type `U`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the slice base pointer violates `align_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the slice base pointer violates `align_of::<U>()`.
     #[inline(always)]
-    fn try_cast_slice<U: Pod>(slice: &[Self]) -> GcsoResult<&[U]> {
+    fn try_cast_slice<U: Pod>(slice: &[Self]) -> LmnkResult<&[U]> {
         let total_bytes = size_of_val(slice);
         let target_size = size_of::<U>();
         if (target_size == 0) | ((total_bytes % target_size) != 0) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let is_aligned =
             slice.is_empty() | (((slice.as_ptr() as usize) & (align_of::<U>() - 1)) == 0);
         if !is_aligned {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Both `Self` and `U` are `Pod`, and alignment/byte-size invariants are verified above.
         Ok(unsafe { slice::from_raw_parts(slice.as_ptr().cast::<U>(), total_bytes / target_size) })
@@ -418,19 +428,19 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely reinterprets a mutable slice of `Self` as a mutable slice of another `Pod` type `U`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
-    /// Returns [`GCSO_ERROR_MISALIGNED_POINTER`] if the slice base pointer violates `align_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
+    /// Returns [`LMNK_ERR_ALIGNMENT`] if the slice base pointer violates `align_of::<U>()`.
     #[inline(always)]
-    fn try_cast_slice_mut<U: Pod>(slice: &mut [Self]) -> GcsoResult<&mut [U]> {
+    fn try_cast_slice_mut<U: Pod>(slice: &mut [Self]) -> LmnkResult<&mut [U]> {
         let total_bytes = size_of_val(slice);
         let target_size = size_of::<U>();
         if (target_size == 0) | ((total_bytes % target_size) != 0) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let is_aligned =
             slice.is_empty() | (((slice.as_ptr() as usize) & (align_of::<U>() - 1)) == 0);
         if !is_aligned {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Both `Self` and `U` are `Pod`, and alignment/byte-size invariants are verified above.
         Ok(unsafe {
@@ -447,16 +457,15 @@ macro_rules! impl_pod_for_primitives {
     )*};
 }
 
-/// 64-bit tagged memory pointer descriptor matching GCSO specification (Section 5.4.A).
+/// 64-bit tagged memory pointer descriptor matching the LiminiKa specification (8 bytes).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[allow(non_camel_case_types)]
-pub struct gcso_tagged_ptr_t(
+pub struct TaggedPtr(
     /// Raw 64-bit packed tagged pointer word.
     pub u64,
 );
 
-impl gcso_tagged_ptr_t {
+impl TaggedPtr {
     /// Bitmask for extracting the lower 48-bit canonical raw address.
     pub const ADDR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
     /// Bitmask for extracting the 8-bit domain/action tag (`bits 48..=55`).
@@ -473,7 +482,7 @@ impl gcso_tagged_ptr_t {
     /// Packs a raw 48-bit address, 8-bit domain tag, and Q7 phase value into a 64-bit tagged pointer.
     #[inline(always)]
     #[must_use]
-    pub const fn pack(raw_addr: u64, tag: u8, phase: gcso_q7_t) -> Self {
+    pub const fn pack(raw_addr: u64, tag: u8, phase: PhaseQ7) -> Self {
         let addr = raw_addr & Self::ADDR_MASK;
         let tag_bits = (tag as u64) << Self::TAG_SHIFT;
         let phase_bits = ((phase as u8) as u64) << Self::PHASE_SHIFT;
@@ -511,8 +520,8 @@ impl gcso_tagged_ptr_t {
     /// Unpacks the Q7 quantized phase state.
     #[inline(always)]
     #[must_use]
-    pub const fn unpack_phase(self) -> gcso_q7_t {
-        ((self.0 >> Self::PHASE_SHIFT) as u8) as gcso_q7_t
+    pub const fn unpack_phase(self) -> PhaseQ7 {
+        ((self.0 >> Self::PHASE_SHIFT) as u8) as PhaseQ7
     }
 
     /// Returns a new tagged pointer with an updated 48-bit canonical address, preserving tag and phase.
@@ -532,14 +541,14 @@ impl gcso_tagged_ptr_t {
     /// Returns a new tagged pointer with an updated Q7 phase value, preserving address and tag.
     #[inline(always)]
     #[must_use]
-    pub const fn with_phase(self, new_phase: gcso_q7_t) -> Self {
+    pub const fn with_phase(self, new_phase: PhaseQ7) -> Self {
         Self((self.0 & !Self::PHASE_MASK) | (((new_phase as u8) as u64) << Self::PHASE_SHIFT))
     }
 
     /// Branchlessly accumulates `delta_q7` into the embedded Q7 phase using saturating addition.
     #[inline(always)]
     #[must_use]
-    pub const fn add_phase_sat(self, delta_q7: gcso_q7_t) -> Self {
+    pub const fn add_phase_sat(self, delta_q7: PhaseQ7) -> Self {
         self.with_phase(branchless_q7_add_sat(self.unpack_phase(), delta_q7))
     }
 
@@ -551,20 +560,18 @@ impl gcso_tagged_ptr_t {
     }
 }
 
-/// 256-bit PagedBlock bitmask layout aligned to 32 bytes for Warp/SIMD reductions (Section 5.4.B).
+/// 256-bit PagedBlock bitmask layout aligned to 32 bytes for SIMD reductions (32 bytes).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(non_camel_case_types)]
-pub struct gcso_paged_bitmask_t {
+pub struct PagedBitmask {
     /// Four 64-bit unsigned words storing 256 discrete token/block execution flags.
     pub bits: [u64; 4],
 }
 
-/// Phase-Steered Parallel Multi-head (sub-head router) router configuration descriptor (32 bytes, 16-byte aligned, Section 5.4.G).
+/// Parallel multi-head sub-head router configuration descriptor (32 bytes, 16-byte aligned).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-#[allow(non_camel_case_types)]
-pub struct gcso_subhead_config_t {
+pub struct SubheadConfig {
     /// Number of attention heads allocated to the Fact sub-group.
     pub num_fact_heads: u16,
     /// Number of attention heads allocated to the Logic sub-group.
@@ -579,15 +586,17 @@ pub struct gcso_subhead_config_t {
     pub logic_phase_gain: f32,
     /// Phase/amplitude steering gain applied to the Explore head group.
     pub explore_phase_gain: f32,
-    /// Reserved padding for 16-byte alignment (12 bytes).
+    /// Explicit reserved padding for 16-byte alignment (12 bytes).
     pub reserved: [u8; 12],
 }
 
-/// Sparse Residual Adapter Layer (Rank-1 residual) Dynamic Rank-1 descriptor (64 bytes, 32-byte aligned, Section 5.4.G).
+/// Host FFI descriptor for Sparse Dynamic Rank-1 residual injection (64 bytes, 32-byte aligned).
+///
+/// Classified as a **Host FFI Descriptor** (not a cross-device buffer) because it carries raw
+/// 64-bit host pointer addresses (`u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`).
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-#[allow(non_camel_case_types)]
-pub struct gcso_rank1_residual_descriptor_t {
+pub struct Rank1Descriptor {
     /// Index of target Transformer layer for Rank-1 residual injection.
     pub layer_idx: u32,
     /// Rank of low-rank adapter (fixed to `1` for Rank-1 residual).
@@ -614,7 +623,7 @@ pub struct gcso_rank1_residual_descriptor_t {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KvMotionDeltaPacket {
     /// 64-head Q7 predictive phase motion delta vector $\boldsymbol{\Delta\theta}_t$ (`offset 0..64`).
-    pub motion_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub motion_deltas: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
 
 impl Default for KvMotionDeltaPacket {
@@ -628,7 +637,7 @@ impl KvMotionDeltaPacket {
     /// Constructs a 64-byte aligned [`KvMotionDeltaPacket`] from `motion_deltas`.
     #[inline(always)]
     #[must_use]
-    pub const fn new(motion_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+    pub const fn new(motion_deltas: [PhaseQ7; MAX_ATTENTION_HEADS]) -> Self {
         Self { motion_deltas }
     }
 }
@@ -648,15 +657,15 @@ impl_pod_for_primitives!(
     isize,
     f32,
     f64,
-    gcso_status_t,
-    gcso_config_t,
+    LmnkStatus,
+    RuntimeConfig,
     AttributionTag,
-    EpistemicPartition,
+    LacunaPartition8,
     LiminalThresholdState,
-    gcso_tagged_ptr_t,
-    gcso_paged_bitmask_t,
-    gcso_subhead_config_t,
-    gcso_rank1_residual_descriptor_t,
+    TaggedPtr,
+    PagedBitmask,
+    SubheadConfig,
+    Rank1Descriptor,
     KvMotionDeltaPacket,
 );
 
@@ -667,17 +676,21 @@ unsafe impl<T: Pod, const N: usize> Pod for [T; N] {}
 #[inline(always)]
 #[must_use]
 pub fn cascade_tagged_ptr(
-    parent_ptr: gcso_tagged_ptr_t,
+    parent_ptr: TaggedPtr,
     child_addr_offset: u64,
-    child_phase_delta: gcso_q7_t,
-) -> gcso_tagged_ptr_t {
-    let new_addr =
-        parent_ptr.unpack_addr().wrapping_add(child_addr_offset) & gcso_tagged_ptr_t::ADDR_MASK;
+    child_phase_delta: PhaseQ7,
+) -> TaggedPtr {
+    let new_addr = parent_ptr.unpack_addr().wrapping_add(child_addr_offset) & TaggedPtr::ADDR_MASK;
     let combined_phase = branchless_q7_add_sat(parent_ptr.unpack_phase(), child_phase_delta);
-    gcso_tagged_ptr_t::pack(new_addr, parent_ptr.unpack_tag(), combined_phase)
+    TaggedPtr::pack(new_addr, parent_ptr.unpack_tag(), combined_phase)
 }
 
 const _: () = {
+    assert!(size_of::<TaggedPtr>() == 8 && align_of::<TaggedPtr>() == 8);
+    assert!(size_of::<PagedBitmask>() == 32 && align_of::<PagedBitmask>() == 32);
+    assert!(size_of::<SubheadConfig>() == 32 && align_of::<SubheadConfig>() == 16);
+    assert!(size_of::<Rank1Descriptor>() == 64 && align_of::<Rank1Descriptor>() == 32);
+    assert!(size_of::<KvMotionDeltaPacket>() == 64 && align_of::<KvMotionDeltaPacket>() == 64);
     assert!((ATTRACTOR_SLOT_ID_MASK as usize) == (MAX_ATTRACTOR_DOMAINS - 1));
     assert!(pack_action_slot_tag(7, 0x1F) == 0xFF);
     assert!(unpack_attractor_slot_from_tag(pack_action_slot_tag(5, 0x13)) == 5);

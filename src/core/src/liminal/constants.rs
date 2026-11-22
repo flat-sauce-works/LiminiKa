@@ -8,28 +8,29 @@
 
 use core::f32::consts::{LN_2, PI};
 use core::fmt;
+use core::mem::{align_of, offset_of, size_of};
 
 // ===================================================================
-// 1. Unified C-ABI Version & Status Primitives
+// 1. Unified C-ABI Version, Capability & Status Primitives
 // ===================================================================
 
-/// Unified GCSO C-ABI Major Version Component.
-pub const GCSO_ABI_VERSION_MAJOR: u32 = 0;
-/// Unified GCSO C-ABI Minor Version Component.
-pub const GCSO_ABI_VERSION_MINOR: u32 = 1;
-/// Unified GCSO C-ABI Patch Version Component.
-pub const GCSO_ABI_VERSION_PATCH: u32 = 3;
-/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0103`).
-pub const GCSO_ABI_VERSION_HEX: u32 =
-    (GCSO_ABI_VERSION_MAJOR << 16) | (GCSO_ABI_VERSION_MINOR << 8) | GCSO_ABI_VERSION_PATCH;
+/// Unified LiminiKa C-ABI Major Version Component.
+pub const LMNK_ABI_VERSION_MAJOR: u32 = 0;
+/// Unified LiminiKa C-ABI Minor Version Component.
+pub const LMNK_ABI_VERSION_MINOR: u32 = 2;
+/// Unified LiminiKa C-ABI Patch Version Component.
+pub const LMNK_ABI_VERSION_PATCH: u32 = 0;
+/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0200`).
+pub const LMNK_ABI_VERSION_HEX: u32 =
+    (LMNK_ABI_VERSION_MAJOR << 16) | (LMNK_ABI_VERSION_MINOR << 8) | LMNK_ABI_VERSION_PATCH;
 /// String Representation of the active Unified ABI Version (derived from `Cargo.toml`).
-pub const GCSO_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
+pub const LMNK_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
 /// NUL-terminated C string representation of the active Unified ABI Version.
-pub const GCSO_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.1.3";
+pub const LMNK_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.2.0";
 
 const _: () = {
-    let c_bytes = GCSO_ABI_VERSION_CSTR.to_bytes();
-    let pkg_bytes = GCSO_ABI_VERSION_STRING.as_bytes();
+    let c_bytes = LMNK_ABI_VERSION_CSTR.to_bytes();
+    let pkg_bytes = LMNK_ABI_VERSION_STRING.as_bytes();
     assert!(c_bytes.len() == pkg_bytes.len());
     let mut i = 0;
     while i < c_bytes.len() {
@@ -38,26 +39,36 @@ const _: () = {
     }
 };
 
-/// Validates a C-ABI snapshot or descriptor version against [`GCSO_ABI_VERSION_HEX`].
+/// Capability bitmask flag indicating portable Little-Endian SWAR baseline execution support.
+pub const LMNK_CAP_SWAR_BASELINE: u64 = 1 << 0;
+/// Capability bitmask flag indicating x86_64 AVX2 vector acceleration support.
+pub const LMNK_CAP_SIMD_AVX2: u64 = 1 << 1;
+/// Capability bitmask flag indicating AArch64 NEON vector acceleration support.
+pub const LMNK_CAP_SIMD_NEON: u64 = 1 << 2;
+/// Capability bitmask flag indicating WebAssembly 128-bit SIMD acceleration support.
+pub const LMNK_CAP_SIMD_WASM128: u64 = 1 << 3;
+/// Capability bitmask flag indicating strict zero-allocation `#![no_std]` core execution.
+pub const LMNK_CAP_ZERO_ALLOC_CORE: u64 = 1 << 4;
+/// Capability bitmask flag indicating zero-heap caller-buffered `in_place` context lifecycle.
+pub const LMNK_CAP_INPLACE_CONTEXT_INIT: u64 = 1 << 5;
+
+/// Validates a C-ABI snapshot or descriptor version against [`LMNK_ABI_VERSION_HEX`].
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_VERSION_MISMATCH`] if `version_hex != GCSO_ABI_VERSION_HEX`.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version_hex != LMNK_ABI_VERSION_HEX`.
 #[inline(always)]
-pub const fn validate_abi_version(version_hex: u32) -> Result<(), GcsoStatus> {
-    if version_hex == GCSO_ABI_VERSION_HEX {
+pub const fn validate_abi_version(version_hex: u32) -> Result<(), LmnkStatus> {
+    if version_hex == LMNK_ABI_VERSION_HEX {
         Ok(())
     } else {
-        Err(GCSO_ERROR_VERSION_MISMATCH)
+        Err(LMNK_ERR_VERSION_MISMATCH)
     }
 }
 
 /// Standardized 32-bit signed status code returned across the C-ABI FFI boundary.
-///
-/// Intentionally retained under the `0.1.3` C-ABI firewall; scheduled for plain-English
-/// renaming (`lmnk_*`) at `v0.2.0`.
 #[repr(transparent)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Default)]
-pub struct GcsoStatus(
+pub struct LmnkStatus(
     /// Inner signed 32-bit integer status code.
     pub i32,
 );
@@ -66,11 +77,11 @@ macro_rules! define_status_codes {
     ($(($name:ident, $code:expr, $c_bytes:literal, $str_val:literal, $doc:expr)),* $(,)?) => {
         $(
             #[doc = $doc]
-            pub const $name: GcsoStatus = GcsoStatus($code);
+            pub const $name: LmnkStatus = LmnkStatus($code);
         )*
 
-        impl GcsoStatus {
-            /// Returns `true` if the status equals [`GCSO_SUCCESS`] (`0`).
+        impl LmnkStatus {
+            /// Returns `true` if the status equals [`LMNK_OK`] (`0`).
             #[inline(always)]
             #[must_use]
             pub const fn is_ok(self) -> bool {
@@ -97,7 +108,7 @@ macro_rules! define_status_codes {
             pub const fn as_c_bytes(self) -> &'static [u8] {
                 match self {
                     $($name => $c_bytes,)*
-                    _ => b"GCSO_ERROR_UNKNOWN\0",
+                    _ => b"LMNK_ERR_UNKNOWN\0",
                 }
             }
 
@@ -107,7 +118,7 @@ macro_rules! define_status_codes {
             pub const fn as_str(self) -> &'static str {
                 match self {
                     $($name => $str_val,)*
-                    _ => "GCSO_ERROR_UNKNOWN",
+                    _ => "LMNK_ERR_UNKNOWN",
                 }
             }
         }
@@ -116,186 +127,186 @@ macro_rules! define_status_codes {
 
 define_status_codes!(
     (
-        GCSO_SUCCESS,
+        LMNK_OK,
         0,
-        b"GCSO_SUCCESS\0",
-        "GCSO_SUCCESS",
+        b"LMNK_OK\0",
+        "LMNK_OK",
         "Operation completed successfully."
     ),
     (
-        GCSO_ERROR_INVALID_ARGUMENT,
+        LMNK_ERR_INVALID_ARGUMENT,
         -1,
-        b"GCSO_ERROR_INVALID_ARGUMENT\0",
-        "GCSO_ERROR_INVALID_ARGUMENT",
+        b"LMNK_ERR_INVALID_ARGUMENT\0",
+        "LMNK_ERR_INVALID_ARGUMENT",
         "Invalid argument or out-of-bounds parameter passed to C-ABI function."
     ),
     (
-        GCSO_ERROR_OUT_OF_MEMORY,
+        LMNK_ERR_OUT_OF_MEMORY,
         -2,
-        b"GCSO_ERROR_OUT_OF_MEMORY\0",
-        "GCSO_ERROR_OUT_OF_MEMORY",
+        b"LMNK_ERR_OUT_OF_MEMORY\0",
+        "LMNK_ERR_OUT_OF_MEMORY",
         "Memory allocation failure or capacity limit reached during Cold Path creation."
     ),
     (
-        GCSO_ERROR_BUFFER_TOO_SMALL,
+        LMNK_ERR_BUFFER_TOO_SMALL,
         -3,
-        b"GCSO_ERROR_BUFFER_TOO_SMALL\0",
-        "GCSO_ERROR_BUFFER_TOO_SMALL",
+        b"LMNK_ERR_BUFFER_TOO_SMALL\0",
+        "LMNK_ERR_BUFFER_TOO_SMALL",
         "Destination buffer capacity is insufficient for requested payload."
     ),
     (
-        GCSO_ERROR_PANIC_CAUGHT,
+        LMNK_ERR_PANIC_CAUGHT,
         -4,
-        b"GCSO_ERROR_PANIC_CAUGHT\0",
-        "GCSO_ERROR_PANIC_CAUGHT",
-        "Unhandled internal Rust panic or C++ exception caught at FFI boundary."
+        b"LMNK_ERR_PANIC_CAUGHT\0",
+        "LMNK_ERR_PANIC_CAUGHT",
+        "Unhandled internal Rust panic caught at FFI boundary."
     ),
     (
-        GCSO_ERROR_NULL_POINTER,
+        LMNK_ERR_NULL_POINTER,
         -5,
-        b"GCSO_ERROR_NULL_POINTER\0",
-        "GCSO_ERROR_NULL_POINTER",
+        b"LMNK_ERR_NULL_POINTER\0",
+        "LMNK_ERR_NULL_POINTER",
         "Unexpected `NULL` pointer supplied for a mandatory parameter."
     ),
     (
-        GCSO_ERROR_INVALID_STATE,
+        LMNK_ERR_INVALID_STATE,
         -6,
-        b"GCSO_ERROR_INVALID_STATE\0",
-        "GCSO_ERROR_INVALID_STATE",
+        b"LMNK_ERR_INVALID_STATE\0",
+        "LMNK_ERR_INVALID_STATE",
         "Context or component is in an invalid lifecycle state for requested operation."
     ),
     (
-        GCSO_ERROR_VERSION_MISMATCH,
+        LMNK_ERR_VERSION_MISMATCH,
         -7,
-        b"GCSO_ERROR_VERSION_MISMATCH\0",
-        "GCSO_ERROR_VERSION_MISMATCH",
+        b"LMNK_ERR_VERSION_MISMATCH\0",
+        "LMNK_ERR_VERSION_MISMATCH",
         "Binary snapshot or descriptor ABI version mismatch detected."
     ),
     (
-        GCSO_ERROR_MISALIGNED_POINTER,
+        LMNK_ERR_ALIGNMENT,
         -8,
-        b"GCSO_ERROR_MISALIGNED_POINTER\0",
-        "GCSO_ERROR_MISALIGNED_POINTER",
+        b"LMNK_ERR_ALIGNMENT\0",
+        "LMNK_ERR_ALIGNMENT",
         "Pointer passed across FFI boundary violates required SIMD or cacheline alignment."
     ),
     (
-        GCSO_ERROR_IO_FAILURE,
+        LMNK_ERR_IO_FAILURE,
         -9,
-        b"GCSO_ERROR_IO_FAILURE\0",
-        "GCSO_ERROR_IO_FAILURE",
+        b"LMNK_ERR_IO_FAILURE\0",
+        "LMNK_ERR_IO_FAILURE",
         "Input/output or storage persistence operation failure."
     ),
     (
-        GCSO_ERROR_ACTION_HUB_FULL,
+        LMNK_ERR_SUBSTRATE_FULL,
         -10,
-        b"GCSO_ERROR_ACTION_HUB_FULL\0",
-        "GCSO_ERROR_ACTION_HUB_FULL",
-        "Frozen `0.1.3` C-ABI compatibility status code: substrate pointer table capacity saturated."
+        b"LMNK_ERR_SUBSTRATE_FULL\0",
+        "LMNK_ERR_SUBSTRATE_FULL",
+        "Substrate working-lane table or slot capacity saturated."
     ),
     (
-        GCSO_ERROR_NOT_IMPLEMENTED,
+        LMNK_ERR_NOT_IMPLEMENTED,
         -11,
-        b"GCSO_ERROR_NOT_IMPLEMENTED\0",
-        "GCSO_ERROR_NOT_IMPLEMENTED",
-        "Feature or compute backend functionality not implemented in current build."
+        b"LMNK_ERR_NOT_IMPLEMENTED\0",
+        "LMNK_ERR_NOT_IMPLEMENTED",
+        "Feature or capability not implemented in current build."
     ),
     (
-        GCSO_ERROR_ATTRACTOR_NOT_FOUND,
+        LMNK_ERR_ANCHOR_NOT_FOUND,
         -20,
-        b"GCSO_ERROR_ATTRACTOR_NOT_FOUND\0",
-        "GCSO_ERROR_ATTRACTOR_NOT_FOUND",
-        "Target attractor anchor ID not found in topological field."
+        b"LMNK_ERR_ANCHOR_NOT_FOUND\0",
+        "LMNK_ERR_ANCHOR_NOT_FOUND",
+        "Target phase anchor ID not found."
     ),
     (
-        GCSO_ERROR_DPSR_PHASE_OVERFLOW,
+        LMNK_ERR_PHASE_OVERFLOW,
         -30,
-        b"GCSO_ERROR_DPSR_PHASE_OVERFLOW\0",
-        "GCSO_ERROR_DPSR_PHASE_OVERFLOW",
+        b"LMNK_ERR_PHASE_OVERFLOW\0",
+        "LMNK_ERR_PHASE_OVERFLOW",
         "Phase steering angle accumulation exceeded safety bound."
     ),
     (
-        GCSO_ERROR_QDPS_UNDERFLOW,
+        LMNK_ERR_PHASE_STEP_UNDERFLOW,
         -31,
-        b"GCSO_ERROR_QDPS_UNDERFLOW\0",
-        "GCSO_ERROR_QDPS_UNDERFLOW",
+        b"LMNK_ERR_PHASE_STEP_UNDERFLOW\0",
+        "LMNK_ERR_PHASE_STEP_UNDERFLOW",
         "Phase step filter fell below minimal threshold $\\Delta\\theta_{\\mathrm{min\\_step}}$."
     ),
     (
-        GCSO_ERROR_EDBC_SINGULARITY,
+        LMNK_ERR_ENTROPY_SINGULARITY,
         -40,
-        b"GCSO_ERROR_EDBC_SINGULARITY\0",
-        "GCSO_ERROR_EDBC_SINGULARITY",
+        b"LMNK_ERR_ENTROPY_SINGULARITY\0",
+        "LMNK_ERR_ENTROPY_SINGULARITY",
         "Entropy controller encountered numerical or logarithmic singularity."
     ),
     (
-        GCSO_ERROR_CONTAINER_CORRUPTED,
+        LMNK_ERR_CONTAINER_CORRUPTED,
         -50,
-        b"GCSO_ERROR_CONTAINER_CORRUPTED\0",
-        "GCSO_ERROR_CONTAINER_CORRUPTED",
-        "Binary `.gcso` snapshot container header or payload checksum corrupted."
+        b"LMNK_ERR_CONTAINER_CORRUPTED\0",
+        "LMNK_ERR_CONTAINER_CORRUPTED",
+        "Binary snapshot or container header or payload checksum corrupted."
     ),
     (
-        GCSO_ERROR_MAPPED_STORAGE_FAILED,
+        LMNK_ERR_STORAGE_MAP_FAILED,
         -51,
-        b"GCSO_ERROR_MAPPED_STORAGE_FAILED\0",
-        "GCSO_ERROR_MAPPED_STORAGE_FAILED",
-        "Mapped-storage zero-copy memory mapping or Direct-DMA buffer mapping failed."
+        b"LMNK_ERR_STORAGE_MAP_FAILED\0",
+        "LMNK_ERR_STORAGE_MAP_FAILED",
+        "Zero-copy memory mapping or storage buffer mapping failed."
     ),
     (
-        GCSO_ERROR_SUBHEAD_ROUTING_FAILED,
+        LMNK_ERR_SUBHEAD_ROUTING_FAILED,
         -60,
-        b"GCSO_ERROR_SUBHEAD_ROUTING_FAILED\0",
-        "GCSO_ERROR_SUBHEAD_ROUTING_FAILED",
+        b"LMNK_ERR_SUBHEAD_ROUTING_FAILED\0",
+        "LMNK_ERR_SUBHEAD_ROUTING_FAILED",
         "Sub-head group phase routing evaluation failed."
     ),
     (
-        GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED,
+        LMNK_ERR_KV_KEYFRAME_SEEK_FAILED,
         -70,
-        b"GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED\0",
-        "GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED",
+        b"LMNK_ERR_KV_KEYFRAME_SEEK_FAILED\0",
+        "LMNK_ERR_KV_KEYFRAME_SEEK_FAILED",
         "KV-keyframe index lookup or token seek operation failed."
     ),
     (
-        GCSO_ERROR_OBSTRUCTION_UNRESOLVED,
+        LMNK_ERR_OBSTRUCTION_UNRESOLVED,
         -80,
-        b"GCSO_ERROR_OBSTRUCTION_UNRESOLVED\0",
-        "GCSO_ERROR_OBSTRUCTION_UNRESOLVED",
+        b"LMNK_ERR_OBSTRUCTION_UNRESOLVED\0",
+        "LMNK_ERR_OBSTRUCTION_UNRESOLVED",
         "Unresolved cohomological obstruction class $H^1(K; \\mathcal{F})$ encountered."
     ),
     (
-        GCSO_ERROR_EXTENSION_NOT_LOADED,
+        LMNK_ERR_EXTENSION_NOT_LOADED,
         -90,
-        b"GCSO_ERROR_EXTENSION_NOT_LOADED\0",
-        "GCSO_ERROR_EXTENSION_NOT_LOADED",
+        b"LMNK_ERR_EXTENSION_NOT_LOADED\0",
+        "LMNK_ERR_EXTENSION_NOT_LOADED",
         "Dynamic extension module not loaded or inactive in ledger slot."
     ),
     (
-        GCSO_ERROR_LEDGER_FULL,
+        LMNK_ERR_LEDGER_FULL,
         -91,
-        b"GCSO_ERROR_LEDGER_FULL\0",
-        "GCSO_ERROR_LEDGER_FULL",
+        b"LMNK_ERR_LEDGER_FULL\0",
+        "LMNK_ERR_LEDGER_FULL",
         "Fast-path ledger table or ring buffer fully occupied."
     ),
     (
-        GCSO_ERROR_UNKNOWN,
+        LMNK_ERR_UNKNOWN,
         -0x7FFF_FFFF,
-        b"GCSO_ERROR_UNKNOWN\0",
-        "GCSO_ERROR_UNKNOWN",
+        b"LMNK_ERR_UNKNOWN\0",
+        "LMNK_ERR_UNKNOWN",
         "Unknown internal system error."
     ),
 );
 
-impl fmt::Display for GcsoStatus {
+impl fmt::Display for LmnkStatus {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
 
-impl From<GcsoStatus> for Result<(), GcsoStatus> {
+impl From<LmnkStatus> for Result<(), LmnkStatus> {
     #[inline(always)]
-    fn from(status: GcsoStatus) -> Self {
-        if status == GCSO_SUCCESS {
+    fn from(status: LmnkStatus) -> Self {
+        if status == LMNK_OK {
             Ok(())
         } else {
             Err(status)
@@ -303,68 +314,77 @@ impl From<GcsoStatus> for Result<(), GcsoStatus> {
     }
 }
 
-impl From<Result<(), GcsoStatus>> for GcsoStatus {
+impl From<Result<(), LmnkStatus>> for LmnkStatus {
     #[inline(always)]
-    fn from(res: Result<(), GcsoStatus>) -> Self {
+    fn from(res: Result<(), LmnkStatus>) -> Self {
         match res {
-            Ok(()) => GCSO_SUCCESS,
+            Ok(()) => LMNK_OK,
             Err(status) => status,
         }
     }
 }
 
-/// C-ABI type alias for status codes matching C headers (`gcso_status_t`).
-#[allow(non_camel_case_types)]
-pub type gcso_status_t = GcsoStatus;
-
-/// Type alias for GCSO core result responses mapping to [`GcsoStatus`].
-///
-/// Intentionally retained under the `0.1.3` C-ABI firewall; scheduled for plain-English
-/// renaming (`lmnk_*`) at `v0.2.0`.
-pub type GcsoResult<T> = Result<T, GcsoStatus>;
+/// Core result response mapping to [`LmnkStatus`].
+pub type LmnkResult<T> = Result<T, LmnkStatus>;
 
 /// Quantized 7-bit signed fixed-point integer (phase scale $\beta_{\mathrm{Q7}} = \pi / 128$).
-#[allow(non_camel_case_types)]
-pub type gcso_q7_t = i8;
+pub type PhaseQ7 = i8;
 
-/// Global runtime configuration descriptor structure aligned to 16 bytes (64 bytes total).
-#[repr(C, align(16))]
+/// Portable environment-agnostic runtime configuration descriptor (64 bytes, `#[repr(C, align(64))]`).
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-#[allow(non_camel_case_types)]
-pub struct gcso_config_t {
-    /// Dimension per attention head ($d_{\mathrm{head}}$, must be positive and even).
+pub struct RuntimeConfig {
+    /// Dimension per attention head ($d_{\mathrm{head}}$, must be positive and even, `offset 0..4`).
     pub head_dim: u32,
-    /// Total number of attention heads ($H \le 64$).
+    /// Total number of attention heads ($1 \le H \le 64$, `offset 4..8`).
     pub num_heads: u32,
-    /// Tokens per paged KV cache block (typically 16 or 32).
+    /// Tokens per paged KV cache block (`16` or `32`, `offset 8..12`).
     pub paged_block_size: u32,
-    /// Floating-point scale factor for Q7 phase values ($\beta_{\mathrm{Q7}} = \pi / 128$).
+    /// Floating-point scale factor for Q7 phase values ($\beta_{\mathrm{Q7}} = \pi / 128$, `offset 12..16`).
     pub q7_phase_scale: f32,
-    /// Maximum allowed rotation angle for soft phase clamping in radians ($\theta_{\max}$).
-    pub ripa_clamp_max_rad: f32,
-    /// Minimum rotation angle threshold for phase step filtering in radians ($\Delta\theta_{\mathrm{min\_step}}$).
-    pub qdps_min_step_rad: f32,
-    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$).
+    /// Maximum allowed rotation angle for soft phase clamping in radians ($\theta_{\max}$, `offset 16..20`).
+    pub phase_clamp_max_rad: f32,
+    /// Minimum rotation angle threshold for phase step filtering in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 20..24`).
+    pub phase_step_min_rad: f32,
+    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$, `offset 24..28`).
     pub entropy_singularity_eps: f32,
-    /// Maximum supported prompt anchor points in attractor field.
+    /// Maximum supported prompt anchor points (`offset 28..32`).
     pub max_prompt_anchors: u32,
-    /// Maximum slot capacity of the Action Hub pointer table.
-    pub action_hub_capacity: u32,
-    /// Enable GPU warp shuffle inline evaluations (`1` = enabled, `0` = disabled).
-    pub enable_cuda_warp_shuffle: u8,
-    /// Strict enforcement of zero dynamic allocations on Hot Path (`1` = strict).
-    pub enable_zero_alloc_strict: u8,
-    /// Initial operational mode for `FastPathLedger` (`0`, `1`, or `2`).
-    pub ledger_mode: u8,
-    /// Reserved alignment and configuration flags.
-    pub reserved_flags: u8,
-    /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE).
+    /// Maximum logical trail capacity of the stigmergic substrate (`offset 32..36`).
+    pub substrate_capacity: u32,
+    /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE, `offset 36..40`).
     pub rotary_dim: u32,
-    /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit).
+    /// Vendor-neutral execution policy bitflags (`offset 40`).
+    pub execution_flags: u8,
+    /// Strict enforcement of zero dynamic allocations on Hot Path (`1` = strict, `offset 41`).
+    pub enable_zero_alloc_strict: u8,
+    /// Initial operational mode for `FastPathLedger` (`0`, `1`, or `2`, `offset 42`).
+    pub ledger_mode: u8,
+    /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit, `offset 43`).
     pub rope_layout: u8,
-    /// Reserved space for future ABI core extensions (19 bytes).
-    pub reserved: [u8; 19],
+    /// Explicit zero-padded space for future ABI extensions (`offset 44..64`).
+    pub reserved: [u8; 20],
 }
+
+const _: () = {
+    assert!(size_of::<RuntimeConfig>() == 64);
+    assert!(align_of::<RuntimeConfig>() == 64);
+    assert!(offset_of!(RuntimeConfig, head_dim) == 0);
+    assert!(offset_of!(RuntimeConfig, num_heads) == 4);
+    assert!(offset_of!(RuntimeConfig, paged_block_size) == 8);
+    assert!(offset_of!(RuntimeConfig, q7_phase_scale) == 12);
+    assert!(offset_of!(RuntimeConfig, phase_clamp_max_rad) == 16);
+    assert!(offset_of!(RuntimeConfig, phase_step_min_rad) == 20);
+    assert!(offset_of!(RuntimeConfig, entropy_singularity_eps) == 24);
+    assert!(offset_of!(RuntimeConfig, max_prompt_anchors) == 28);
+    assert!(offset_of!(RuntimeConfig, substrate_capacity) == 32);
+    assert!(offset_of!(RuntimeConfig, rotary_dim) == 36);
+    assert!(offset_of!(RuntimeConfig, execution_flags) == 40);
+    assert!(offset_of!(RuntimeConfig, enable_zero_alloc_strict) == 41);
+    assert!(offset_of!(RuntimeConfig, ledger_mode) == 42);
+    assert!(offset_of!(RuntimeConfig, rope_layout) == 43);
+    assert!(offset_of!(RuntimeConfig, reserved) == 44);
+};
 
 // ===================================================================
 // 2. Layer 0 Mathematical & Capacity Constants
@@ -380,13 +400,13 @@ pub const Q7_PHASE_INV_SCALE_RAD: f32 = 128.0 / PI;
 pub const Q7_UNIT_SCALE: f32 = 1.0 / 128.0;
 
 /// Minimum representable Q7 fixed-point value ($-128 \leftrightarrow -\pi\text{ rad}$).
-pub const Q7_MIN: gcso_q7_t = -128;
+pub const Q7_MIN: PhaseQ7 = -128;
 
 /// Maximum representable Q7 fixed-point value ($+127 \leftrightarrow +\frac{127}{128}\pi\text{ rad}$).
-pub const Q7_MAX: gcso_q7_t = 127;
+pub const Q7_MAX: PhaseQ7 = 127;
 
 /// Neutral zero phase in Q7 fixed-point format.
-pub const Q7_ZERO: gcso_q7_t = 0;
+pub const Q7_ZERO: PhaseQ7 = 0;
 
 /// Default logarithmic singularity prevention epsilon ($\epsilon_{\mathrm{log}} = 10^{-12}$).
 pub const DEFAULT_ENTROPY_EPS: f32 = 1.0e-12;
@@ -403,7 +423,7 @@ pub const NUM_STIGMERGIC_GRANULES: usize = 8;
 /// Number of attention heads per SWAR Stigmergic Granule (`8` heads = 1 `u64` SWAR register).
 pub const HEADS_PER_STIGMERGIC_GRANULE: usize = MAX_ATTENTION_HEADS / NUM_STIGMERGIC_GRANULES;
 
-/// Maximum number of parallel domain accumulator slots in a `MultiDomainAttractorSpace` (`8`).
+/// Maximum number of parallel physical working lanes (`8`).
 pub const MAX_ATTRACTOR_DOMAINS: usize = 8;
 
 // ===================================================================
@@ -431,11 +451,11 @@ pub const THRESHOLD_COGNITIVE_CIRCUIT: u32 = 1 << 4;
 /// Cognitive threshold bit for phase KV context memory (`RamPhaseKvCacheOps`).
 pub const THRESHOLD_KV_PHASE_CACHE: u32 = 1 << 5;
 
-/// Cognitive threshold bit for perspective-relative attractor coupling (`RelativeCouplingMatrix`).
+/// Cognitive threshold bit for perspective-relative coupling (`RelativeCouplingMatrix`).
 pub const THRESHOLD_RELATIVE_COUPLING: u32 = 1 << 6;
 
-/// Cognitive threshold bit for dissipative overflow crystallization (`CrystallizedAttractorRecord`).
-pub const THRESHOLD_DISSIPATIVE_CRYSTAL: u32 = 1 << 7;
+/// Cognitive threshold bit for dissipative overflow anchor crystallization (`PhaseAnchorRecord`).
+pub const THRESHOLD_DISSIPATIVE_ANCHOR: u32 = 1 << 7;
 
 /// Wide composite cognitive threshold spanned by `ManifoldGatewaySignal` (`0x0000_00FF`).
 pub const THRESHOLD_MANIFOLD_GATEWAY: u32 = 0x0000_00FF;
@@ -461,7 +481,7 @@ pub const THRESHOLD_STIGMERGIC_CONSENSUS: u32 = 1 << 13;
 /// Cognitive threshold bit for sheaf cohomology & entropy gate control.
 pub const THRESHOLD_COHOMOLOGY_ENTROPY: u32 = 1 << 14;
 
-/// Cognitive threshold bit for zero-copy `.gcso` mapped storage I/O.
+/// Cognitive threshold bit for zero-copy `.lmnk` mapped storage I/O.
 pub const THRESHOLD_MAPPED_STORAGE: u32 = 1 << 15;
 
 /// Broadest operational cognitive threshold spanned by `StigmergicSubstrateOps` (`0x0000_FFFF`).
@@ -523,7 +543,7 @@ impl DriverKind {
 }
 
 /// Packed 2-bit structural attribution tag (`[Driver(1b) | Primitive(1b)]`) inside a 1-byte
-/// `Pod` wrapper for zero-cost telemetry and bypass provenance without marker-trait bloat.
+/// wrapper for zero-cost telemetry and bypass provenance without marker-trait bloat.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AttributionTag(pub u8);

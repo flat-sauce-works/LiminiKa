@@ -3,7 +3,7 @@
 
 //! Level 2 (`Stigmergy`): 8-granule SWAR stigmergic trails, pheromone density laws,
 //! 256-bit paged bitmasks, contrastive Bloom filters, fast-path ledgers, 8-lane
-//! [`StigmergicSubstrate`], multi-scale cognitive circuits, `.gcso` crystallization, and macro
+//! [`StigmergicSubstrate`], multi-scale cognitive circuits, `.lmnk` crystallization, and macro
 //! attractor fields.
 //!
 //! Depends strictly on `core`, [`crate::liminal`], and [`crate::foundation`].
@@ -17,8 +17,8 @@
 use core::mem::{align_of, size_of};
 
 pub use crate::foundation::swar_q7_circular_add_x8;
-use crate::liminal::MAX_ATTENTION_HEADS;
 pub use crate::liminal::{HEADS_PER_STIGMERGIC_GRANULE, NUM_STIGMERGIC_GRANULES};
+use crate::liminal::{MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS};
 
 // ===================================================================
 // 1. Semantic Attractor Provenance IDs, Workbench Pool & 8x8 Coupling
@@ -27,10 +27,10 @@ pub use crate::liminal::{HEADS_PER_STIGMERGIC_GRANULE, NUM_STIGMERGIC_GRANULES};
 /// Default logical trail slot capacity of [`StigmergicSubstrate`] (`256`).
 pub const DEFAULT_SUBSTRATE_CAPACITY: u32 = 256;
 
-/// Number of fast-path shortcut slots in a `gcso_ledger_slot_t` (`4`).
+/// Number of fast-path shortcut slots in a `LedgerSlot` (`4`).
 pub const FAST_PATH_SHORTCUT_SLOTS: usize = 4;
 
-/// Byte length of the circular mini telemetry ledger in a `gcso_ledger_slot_t` (`8`).
+/// Byte length of the circular mini telemetry ledger in a `LedgerSlot` (`8`).
 pub const LEDGER_HISTORY_LEN: usize = 8;
 
 /// Semantic Provenance Label 0: Primary System Baseline & Core Identity Anchor (`0`).
@@ -85,7 +85,7 @@ pub const WORKBENCH_LANE_FLAG_PINNED: u8 = 1 << 0;
 /// Workbench lane attribute bit: lane holds a phase-conjugate anti-hallucination repulsion profile (`bit 1`).
 pub const WORKBENCH_LANE_FLAG_REPULSION: u8 = 1 << 1;
 
-/// Workbench lane attribute bit: lane holds an isolated hypothesis acting only on exterior/serendipity granules (`bit 2`).
+/// Workbench lane attribute bit: lane holds an isolated hypothesis acting only on exterior/discovery granules (`bit 2`).
 pub const WORKBENCH_LANE_FLAG_SANDBOX: u8 = 1 << 2;
 
 /// Default $8 \times 8$ Attractor Slot coupling bitmatrix (`u64`) enabling symmetric cross-slot
@@ -183,14 +183,14 @@ pub const TRAIL_FLAG_INERTIAL_SKIP_ACTIVE: u32 = 1 << 5;
 pub const TRAIL_FLAG_SWARM_RESOLVED: u32 = 1 << 6;
 /// Trail flag bit (`0x80`): Micro-Swarm encountered quorum collapse and escalated the trail.
 pub const TRAIL_FLAG_SWARM_ESCALATED: u32 = 1 << 7;
-/// Bit shift offset (`8`) embedding the 8-bit Micro-Swarm Quorum bitmask (`bits 8..=15`) inside `gcso_pointer_trail_t::flags`.
+/// Bit shift offset (`8`) embedding the 8-bit Micro-Swarm Quorum bitmask (`bits 8..=15`) inside `PointerTrail::flags`.
 pub const TRAIL_SWARM_QUORUM_SHIFT: u32 = 8;
-/// Bitmask (`0x0000_FF00`) isolating the 8-bit Micro-Swarm Quorum bitmask inside `gcso_pointer_trail_t::flags`.
+/// Bitmask (`0x0000_FF00`) isolating the 8-bit Micro-Swarm Quorum bitmask inside `PointerTrail::flags`.
 pub const TRAIL_SWARM_QUORUM_MASK: u32 = 0x0000_FF00;
 /// Trail flag bit (`0x0001_0000`): Previous step observed a positive pheromone rise above the granule noise deadband.
 pub const TRAIL_FLAG_PHEROMONE_RISING: u32 = 1 << 16;
 
-/// FastPathLedger telemetry metric bit (`0x01`): Fast-path bypass shortcut hit in `gcso_ledger_slot_t`.
+/// FastPathLedger telemetry metric bit (`0x01`): Fast-path bypass shortcut hit in `LedgerSlot`.
 pub const LEDGER_METRIC_FAST_PATH_HIT: u8 = 1 << 0;
 /// FastPathLedger telemetry metric bit (`0x02`): Inline `PhaseSteering`/`PhaseClamp` phase steering applied.
 pub const LEDGER_METRIC_PHASE_STEERED: u8 = 1 << 1;
@@ -206,13 +206,12 @@ pub const LEDGER_METRIC_RANK1_INJECTED: u8 = 1 << 5;
 pub const LEDGER_METRIC_LAZY_UNWRAP_APPLIED: u8 = 1 << 6;
 /// FastPathLedger telemetry metric bit (`0x80`): Unified-field or cross-slot attractor synergy / mutual inhibition active.
 pub const LEDGER_METRIC_SLOT_SYNERGY_ACTIVE: u8 = 1 << 7;
-/// `gcso_ledger_slot_t::auto_tune_flags` bit (`0x01`): `telemetry_mini_ledger` stores chronological
+/// `LedgerSlot::auto_tune_flags` bit (`0x01`): `telemetry_mini_ledger` stores chronological
 /// [`CognitiveStepOp`] records (`[Scale | Op | Intensity]`) rather than legacy metric masks.
 pub const LEDGER_FLAG_COGNITIVE_TRAJECTORY: u32 = 1 << 0;
 
-pub mod attractor;
+pub mod anchor;
 pub mod circuit;
-pub mod crystal;
 pub mod gate;
 pub mod granule;
 pub mod ledger;
@@ -220,9 +219,8 @@ pub mod pheromone;
 pub mod substrate;
 pub mod trail;
 
-pub use self::attractor::*;
+pub use self::anchor::*;
 pub use self::circuit::*;
-pub use self::crystal::*;
 pub use self::gate::*;
 pub use self::granule::*;
 pub use self::ledger::*;
@@ -231,12 +229,16 @@ pub use self::substrate::*;
 pub use self::trail::*;
 
 const _: () = {
-    assert!(size_of::<gcso_paged_bitmask_t>() == 32);
-    assert!(align_of::<gcso_paged_bitmask_t>() == 32);
+    assert!(size_of::<PagedBitmask>() == 32);
+    assert!(align_of::<PagedBitmask>() == 32);
     assert!(size_of::<ContrastivePhaseBloomFilter>() == 64);
     assert!(align_of::<ContrastivePhaseBloomFilter>() == 64);
-    assert!(size_of::<gcso_pointer_trail_t>() == 128);
-    assert!(align_of::<gcso_pointer_trail_t>() == 128);
+    assert!(size_of::<PointerTrail>() == 128);
+    assert!(align_of::<PointerTrail>() == 64);
+    assert!(size_of::<OverlapDiscoveryReport>() == 32);
+    assert!(align_of::<OverlapDiscoveryReport>() == 16);
+    assert!(size_of::<StigmergicSubstrate>() == 2816);
+    assert!(align_of::<StigmergicSubstrate>() == 64);
     assert!(size_of::<StigmergicReconstitutionReport>() == 16);
     assert!(align_of::<StigmergicReconstitutionReport>() == 16);
     assert!(NUM_STIGMERGIC_GRANULES * HEADS_PER_STIGMERGIC_GRANULE == MAX_ATTENTION_HEADS);

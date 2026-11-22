@@ -5,7 +5,7 @@
 //! multi-origin synthesis, and ensemble folding.
 
 use super::*;
-use crate::drivers::gcso_edbc_state_t;
+use crate::drivers::EntropyState;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::branchless_rotate_so2_pair;
 use crate::foundation::{
@@ -14,31 +14,32 @@ use crate::foundation::{
     branchless_phase_coherence_inv_temp_scale, branchless_rad_to_phase_step_u8,
     branchless_relu_f32, branchless_sincos_q7_phase_clamp, coherence_from_uniform_words_x8,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
-    gcso_subhead_config_t, gcso_tagged_ptr_t, is_word_array_uniform_64, load_q7_words_64,
-    pack_action_slot_tag, resolve_autonomous_swarm_rot_dim, swar_q7_avg_round_x8,
-    swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
+    is_word_array_uniform_64, load_q7_words_64, pack_action_slot_tag,
+    resolve_autonomous_swarm_rot_dim, swar_q7_avg_round_x8, swar_q7_circular_add_x8,
+    swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
     swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_neg_sat_x8,
     swar_q7_phase_step_filter_words_with_uniform_flag_64, swar_q7_scale_le128_with_bias_x8,
     swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
-    words_to_q7_array_64, Pod, RawPhaseProjectable, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_INERTIAL_SKIP,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK,
+    words_to_q7_array_64, Pod, RawPhaseProjectable, SubheadConfig, TaggedPtr,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER,
+    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
+    TAG_ACTION_MODE_MASK,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_config_t, gcso_q7_t, BitCut32, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
+    BitCut32, PhaseQ7, RuntimeConfig, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, THRESHOLD_MANIFOLD_GATEWAY,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
-use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
-    gcso_pointer_trail_t, trail_phase_words_ref, StigmergicFragmentEnsembleReport,
-    StigmergicOverlapSerendipityReport, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_FACT_PHASE_CLAMP_RAD,
-    DEFAULT_PERSONA_PHASE_CLAMP_RAD, MAX_ATTRACTOR_PULL_FORCE,
+    trail_phase_words_ref, OverlapDiscoveryReport, PointerTrail, StigmergicFragmentEnsembleReport,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_FACT_PHASE_CLAMP_RAD, DEFAULT_PERSONA_PHASE_CLAMP_RAD,
+    MAX_ATTRACTOR_PULL_FORCE,
 };
 
 // ===================================================================
@@ -52,16 +53,16 @@ use crate::stigmergy::{
 pub struct GatewayFrame {
     /// Synthesized 64-bit tagged pointer (`[Phase(8b) | Slot(3b) | ActionMode(5b) | ZimmsAddr(48b)]`, `offset 0..8`).
     pub tagged_ptr: u64,
-    /// Direct 48-bit `.gcso` (mapped-storage) section offset (`bits 0..=47`, `offset 8..16`).
+    /// Direct 48-bit `.lmnk` (mapped-storage) section offset (`bits 0..=47`, `offset 8..16`).
     pub mapped_section_offset48: u64,
     /// Full 32-bit macro attractor anchor ID on the Single Unified Attractor Manifold (`offset 16..20`).
     pub target_anchor_id: u32,
     /// Combined gravitational pull energy $E_{\mathrm{eff}} \ge 0$ (`offset 20..24`).
     pub effective_energy: f32,
     /// Normalized `PhaseClamp` soft-clamping limit in radians ($\theta_{\max}$, `offset 24..28`).
-    pub ripa_clamp_rad: f32,
+    pub phase_clamp_rad: f32,
     /// `PhaseStepFilter` minimum step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 28..32`).
-    pub qdps_min_step_rad: f32,
+    pub phase_step_min_rad: f32,
     /// Multiplicative inverse-temperature logit scale $\beta_{\mathrm{eff}} \in [0.25, 4.0]$ (`offset 32..36`).
     pub effective_inv_temp: f32,
     /// Cosine phase coherence $\mathcal{C}_{\mathrm{FP}} \in [-1, 1]$ between Objective Fact and Subjective Persona (`offset 36..40`).
@@ -69,9 +70,9 @@ pub struct GatewayFrame {
     /// Repulsive anomaly severity in $[0.0, 1.0]$ (`> 0.5` indicates anti-phase repulsion, `offset 40..44`).
     pub repulsion_severity: f32,
     /// Bitwise OR of active origin axes (`CAUSAL_AXIS_*`) and diagnostic causes (`CAUSAL_CAUSE_*`, `offset 44..48`).
-    pub provenance_bits: u32,
+    pub lineage_flags: u32,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`, `offset 48`).
-    pub dominant_cause_code: u8,
+    pub attribution_tag: u8,
     /// Dominant 3-bit working lane ID (`ATTRACTOR_SLOT_*`, `0..=7`, `offset 49`).
     pub dominant_slot: u8,
     /// Resolved 5-bit `ACTION_MODE_*` execution flags (`offset 50`).
@@ -79,7 +80,7 @@ pub struct GatewayFrame {
     /// Active 8-cell Micro-Swarm mask (`0x00..=0xFF`, `offset 51`).
     pub active_swarm_cell_mask: u8,
     /// Ceiling-rounded Q7 integer step filter cutoff (`0..=128`, `offset 52`).
-    pub qdps_min_step_q7: u8,
+    pub phase_step_min_q7: u8,
     /// Recommended sub-head router `Fact` sub-head count (`offset 53`).
     pub subhead_fact_heads: u8,
     /// Recommended sub-head router `Logic` sub-head count (`offset 54`).
@@ -93,13 +94,13 @@ pub struct GatewayFrame {
     /// Quantized sub-head router `Explore` sub-head phase gain in Q7 (`128` = `1.0x`, `offset 58`).
     pub subhead_explore_gain_q7: u8,
     /// Fast 64-head SWAR arithmetic mean Q7 phase tag $\bar{\theta}_{Q7} \in [-127, 127]$ (`offset 59`).
-    pub mean_phase_tag_q7: gcso_q7_t,
+    pub mean_phase_tag_q7: PhaseQ7,
     /// Active attention head count for this frame (`1..=64`, defaults to `64`, `offset 60..62`).
     pub active_head_count: u16,
     /// Frame status and routing telemetry flags (`offset 62..64`).
     pub frame_flags: u16,
     /// Synthesized 64-head Q7 phase delta profile on $SO(2)^{64}$ (`64` bytes at `offset 64..128`).
-    pub phase_deltas: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub phase_deltas: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
 
 // SAFETY: `GatewayFrame` is `#[repr(C, align(64))]` of exact size 128 bytes with zero uninitialized padding.
@@ -109,7 +110,7 @@ impl Default for GatewayFrame {
     #[inline(always)]
     fn default() -> Self {
         Self {
-            tagged_ptr: gcso_tagged_ptr_t::pack(
+            tagged_ptr: TaggedPtr::pack(
                 0,
                 pack_action_slot_tag(ATTRACTOR_SLOT_SYSTEM_BASELINE, ACTION_PRESET_EXPRESS_PHASE),
                 0,
@@ -118,17 +119,17 @@ impl Default for GatewayFrame {
             mapped_section_offset48: 0,
             target_anchor_id: 0,
             effective_energy: 0.0,
-            ripa_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-            qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+            phase_clamp_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+            phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
             effective_inv_temp: 1.0,
             fact_persona_coherence: 1.0,
             repulsion_severity: 0.0,
-            provenance_bits: 0,
-            dominant_cause_code: ROOT_CAUSE_NOMINAL,
+            lineage_flags: 0,
+            attribution_tag: ROOT_CAUSE_NOMINAL,
             dominant_slot: ATTRACTOR_SLOT_SYSTEM_BASELINE,
             action_mode_flags: ACTION_PRESET_EXPRESS_PHASE,
             active_swarm_cell_mask: 0xFF,
-            qdps_min_step_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
+            phase_step_min_q7: branchless_rad_to_phase_step_u8(DEFAULT_PHASE_STEP_MIN_RAD),
             subhead_fact_heads: 24,
             subhead_logic_heads: 24,
             subhead_explore_heads: 16,
@@ -165,18 +166,18 @@ impl GatewayFrame {
     }
 
     /// Returns `true` when this [`GatewayFrame`] carries an active cohomology or Bloom repulsion guard
-    /// that must be rejected before mutating a [`crate::stigmergy::CrystallizedAttractorRecord`] centroid.
+    /// that must be rejected before mutating a [`crate::stigmergy::PhaseAnchorRecord`] centroid.
     #[inline(always)]
     #[must_use]
     pub const fn is_repulsed(&self) -> bool {
         (self.repulsion_severity > 0.50)
             | ((self.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
-            | (self.dominant_cause_code == ROOT_CAUSE_COHOMOLOGY_REPULSION)
-            | ((self.provenance_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0)
+            | (self.attribution_tag == ROOT_CAUSE_COHOMOLOGY_REPULSION)
+            | ((self.lineage_flags & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0)
     }
 
     /// Resolves the **Swarm- & Blanket-Driven Autonomous Frequency Aperture** (`rot_dim`, even
-    /// integer in `2..=head_dim`) directly from this [`GatewayFrame`]'s `provenance_bits` and
+    /// integer in `2..=head_dim`) directly from this [`GatewayFrame`]'s `lineage_flags` and
     /// `active_swarm_cell_mask` combined with `moving_z_entropy` and `von_mises_kappa`.
     #[inline(always)]
     #[must_use]
@@ -188,7 +189,7 @@ impl GatewayFrame {
     ) -> usize {
         resolve_autonomous_swarm_rot_dim(
             head_dim,
-            self.provenance_bits,
+            self.lineage_flags,
             self.active_swarm_cell_mask,
             moving_z_entropy,
             von_mises_kappa,
@@ -200,28 +201,28 @@ impl GatewayFrame {
     #[must_use]
     pub const fn to_causal_report(&self) -> CausalProvenanceReport {
         CausalProvenanceReport {
-            provenance_bits: self.provenance_bits,
+            lineage_flags: self.lineage_flags,
             fact_persona_coherence: self.fact_persona_coherence,
             anomaly_severity: self.repulsion_severity,
-            dominant_cause_code: self.dominant_cause_code,
+            attribution_tag: self.attribution_tag,
             dominant_slot: self.dominant_slot,
             action_mode_flags: self.action_mode_flags,
             active_swarm_mask: self.active_swarm_cell_mask,
         }
     }
 
-    /// Converts the Gateway's recommended Fact/Logic/Explore head split into a [`gcso_subhead_config_t`]
+    /// Converts the Gateway's recommended Fact/Logic/Explore head split into a [`SubheadConfig`]
     /// scaled proportionally to `total_heads`.
     #[inline(always)]
     #[must_use]
-    pub const fn to_subhead_config_for_heads(&self, total_heads: usize) -> gcso_subhead_config_t {
+    pub const fn to_subhead_config_for_heads(&self, total_heads: usize) -> SubheadConfig {
         let h = if total_heads > MAX_ATTENTION_HEADS {
             MAX_ATTENTION_HEADS
         } else {
             total_heads
         };
         if h == 0 {
-            return gcso_subhead_config_t {
+            return SubheadConfig {
                 num_fact_heads: 0,
                 num_logic_heads: 0,
                 num_explore_heads: 0,
@@ -238,7 +239,7 @@ impl GatewayFrame {
         let rem = h - f_cnt;
         let l_cnt = if l_raw > rem { rem } else { l_raw };
         let e_cnt = h - f_cnt - l_cnt;
-        gcso_subhead_config_t {
+        SubheadConfig {
             num_fact_heads: f_cnt as u16,
             num_logic_heads: l_cnt as u16,
             num_explore_heads: e_cnt as u16,
@@ -273,12 +274,12 @@ impl GatewayFrame {
     }
 
     /// Autonomously derives the Micro-Swarm phase convergence tolerance in Q0.7 (`8..=20`) from
-    /// this [`GatewayFrame`]'s active causal origins (`provenance_bits`).
+    /// this [`GatewayFrame`]'s active causal origins (`lineage_flags`).
     #[inline(always)]
     #[must_use]
     pub const fn autonomous_swarm_tolerance_q7(&self) -> u8 {
-        let has_fact = (self.provenance_bits & CAUSAL_AXIS_OBJECTIVE_FACT) != 0;
-        let has_persona = (self.provenance_bits & CAUSAL_AXIS_SUBJECTIVE_PERSONA) != 0;
+        let has_fact = (self.lineage_flags & CAUSAL_AXIS_OBJECTIVE_FACT) != 0;
+        let has_persona = (self.lineage_flags & CAUSAL_AXIS_SUBJECTIVE_PERSONA) != 0;
         let base = branchless_select_u8(has_persona, 16, 12);
         branchless_select_u8(has_fact, 10, base)
     }
@@ -288,7 +289,7 @@ impl GatewayFrame {
     #[inline(always)]
     #[must_use]
     pub const fn autonomous_swarm_quorum_threshold(&self) -> u8 {
-        let strict = ((self.provenance_bits
+        let strict = ((self.lineage_flags
             & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_CONTRADICTION_GUARD))
             != 0)
             | (self.repulsion_severity > 0.25);
@@ -324,7 +325,7 @@ impl GatewayFrame {
         head_idx: usize,
     ) {
         let phase_q7 = self.phase_deltas[head_idx & (MAX_ATTENTION_HEADS - 1)];
-        let (sin_t, cos_t) = branchless_sincos_q7_phase_clamp(phase_q7, self.ripa_clamp_rad);
+        let (sin_t, cos_t) = branchless_sincos_q7_phase_clamp(phase_q7, self.phase_clamp_rad);
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         {
             // SAFETY: `target_feature = "avx2"` is enabled and `q_block32`, `k_block32`, `v_block32` are disjoint 32-float arrays.
@@ -368,10 +369,10 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     const GATEWAY_APERTURE_MASK: u32 = THRESHOLD_MANIFOLD_GATEWAY;
 
     /// Complement bitmask outside the Gateway horizon (`!THRESHOLD_MANIFOLD_GATEWAY`).
-    const GATEWAY_UNKNOWABLE_VOID_MASK: u32 = !Self::GATEWAY_APERTURE_MASK;
+    const GATEWAY_UNOBSERVED_LACUNA_MASK: u32 = !Self::GATEWAY_APERTURE_MASK;
 
     /// Branchlessly partitions `self.causal_provenance_bits()` into
-    /// `(cognized_bits, unknowable_void_bits)` for [`Self::GATEWAY_APERTURE_MASK`].
+    /// `(cognized_bits, unobserved_lacuna_bits)` for [`Self::GATEWAY_APERTURE_MASK`].
     #[inline(always)]
     fn partition_gateway_horizon(&self) -> (u32, u32) {
         let cut = BitCut32::split(self.causal_provenance_bits(), Self::GATEWAY_APERTURE_MASK);
@@ -427,13 +428,18 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     #[inline]
     fn synthesize_gateway_with_core_layers(
         &self,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let mut frame = self.synthesize_gateway_with_aperture_from_stack(stack);
-        stack.intervene_ego_and_modulate_frame_branchless(delta, horizon, venn_report, &mut frame);
+        stack.intervene_ego_and_modulate_frame_branchless(
+            delta,
+            horizon,
+            overlap_report,
+            &mut frame,
+        );
         let out_words = *frame.phase_words_ref();
         (frame, out_words)
     }
@@ -444,13 +450,13 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
         &self,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let mut frame = self.synthesize_gateway_with_aperture_from_stack(stack);
-        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut frame);
+        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, overlap_report, &mut frame);
         let out_words = *frame.phase_words_ref();
         (frame, out_words)
     }
@@ -458,10 +464,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// Shared helper resolving `self`'s dynamic cognitive aperture against `stack` and shaping
     /// the base synthesized [`GatewayFrame`].
     #[inline(always)]
-    fn synthesize_gateway_with_aperture_from_stack(
-        &self,
-        stack: &AutonomousCoreLayerStack,
-    ) -> GatewayFrame {
+    fn synthesize_gateway_with_aperture_from_stack(&self, stack: &CoreStateStack) -> GatewayFrame {
         let (dyn_mask, dyn_gain_q7, dyn_shift_q7) = self.resolve_dynamic_core_aperture(stack);
         let (mut frame, mut words) = self.synthesize_gateway_frame_with_words();
         apply_dynamic_aperture_to_frame_and_words(
@@ -478,22 +481,22 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     /// according to their live core-layer cognitive apertures:
     /// - `mask_a & !mask_b`: exclusive routing to `A`
     /// - `!mask_a & mask_b`: exclusive routing to `B`
-    /// - `mask_a & mask_b`: Venn overlap cooperative fusion or Layer 2 Ego conflict tie-breaking
+    /// - `mask_a & mask_b`: aperture overlap cooperative fusion or Layer 2 Ego conflict tie-breaking
     /// - `!mask_a & !mask_b`: gated to `Liminal` exterior (`0`)
     #[inline]
     fn combine_pair_with_core_layers<B: ManifoldGatewaySignal + ?Sized>(
         &self,
         other: &B,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let mut combined = combine_pair_aperture_frame_pure(self, other, stack);
         stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
-            venn_report,
+            overlap_report,
             &mut combined,
         );
         let final_words = *combined.phase_words_ref();
@@ -506,13 +509,18 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     fn combine_pair_with_core_layers_readonly<B: ManifoldGatewaySignal + ?Sized>(
         &self,
         other: &B,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let mut combined = combine_pair_aperture_frame_pure(self, other, stack);
-        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut combined);
+        stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            overlap_report,
+            &mut combined,
+        );
         let final_words = *combined.phase_words_ref();
         (combined, final_words)
     }
@@ -523,10 +531,10 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
     #[inline]
     fn synthesize_fragment_ensemble_with_core_layers(
         fragments: &[Self],
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (
         GatewayFrame,
         [u64; NUM_STIGMERGIC_GRANULES],
@@ -558,13 +566,12 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         let mut rep_sev = 0.0_f32;
         let mut action_flags = 0u8;
 
-        let venn_has_info = (venn_report.venn_core_mask
-            | venn_report.venn_penumbra_mask
-            | venn_report.void_exterior_mask)
+        let venn_has_info = (overlap_report.overlap_core_mask
+            | overlap_report.overlap_fringe_mask
+            | overlap_report.lacuna_exterior_mask)
             != 0;
         let venn_core_boost = 1.25_f32
-            + 0.25_f32
-                * branchless_clamp_f32(venn_report.venn_intersection_energy * 0.25, 0.0, 1.0);
+            + 0.25_f32 * branchless_clamp_f32(overlap_report.overlap_core_energy * 0.25, 0.0, 1.0);
 
         let mut idx = 0usize;
         while idx < fragments.len() {
@@ -578,8 +585,10 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             let (f, fw) = frag.synthesize_gateway_ensemble_item();
             let raw_e = branchless_flush_subnormal_f32(branchless_relu_f32(f.effective_energy));
             let f_e = raw_e * ((f32::from(frag_gain_q7) + 32.0) * (1.0 / 128.0));
-            let core_overlap_cnt = (frag_mask & venn_report.venn_core_mask).count_ones() as f32;
-            let pen_overlap_cnt = (frag_mask & venn_report.venn_penumbra_mask).count_ones() as f32;
+            let core_overlap_cnt =
+                (frag_mask & overlap_report.overlap_core_mask).count_ones() as f32;
+            let pen_overlap_cnt =
+                (frag_mask & overlap_report.overlap_fringe_mask).count_ones() as f32;
             let venn_frag_mult = if venn_has_info {
                 0.50_f32 + 0.20_f32 * core_overlap_cnt + 0.05_f32 * pen_overlap_cnt
             } else {
@@ -587,9 +596,9 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             };
             let venn_weighted_e = f_e * venn_frag_mult;
 
-            if f_e > DEFAULT_ENTROPY_EPS || f.provenance_bits != 0 {
+            if f_e > DEFAULT_ENTROPY_EPS || f.lineage_flags != 0 {
                 active_frag_count = active_frag_count.saturating_add(1);
-                prov_bits |= f.provenance_bits;
+                prov_bits |= f.lineage_flags;
                 rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
                 action_flags |= f.action_mode_flags;
                 let s_idx = usize::from(f.dominant_slot & ATTRACTOR_SLOT_ID_MASK);
@@ -608,11 +617,11 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
                     if in_window {
                         let venn_g_weight = if !venn_has_info {
                             1.0_f32
-                        } else if (venn_report.venn_core_mask & bit) != 0 {
+                        } else if (overlap_report.overlap_core_mask & bit) != 0 {
                             venn_core_boost
-                        } else if (venn_report.venn_penumbra_mask & bit) != 0 {
+                        } else if (overlap_report.overlap_fringe_mask & bit) != 0 {
                             0.75_f32
-                        } else if (venn_report.serendipity_excursion_mask & bit) != 0 {
+                        } else if (overlap_report.discovery_excursion_mask & bit) != 0 {
                             0.90_f32
                         } else {
                             0.35_f32
@@ -643,7 +652,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             idx += 1;
         }
 
-        let ego_active = stack.ego_layer.is_active();
+        let ego_active = stack.ego.is_active();
         let mut out_words = [0u64; NUM_STIGMERGIC_GRANULES];
         let mut quorum_agreed_mask = 0u8;
         let mut split_contested_mask = 0u8;
@@ -666,11 +675,11 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             quorum_agreed_mask |= branchless_select_u8(agreed, bit, 0);
             split_contested_mask |= branchless_select_u8(contested, bit, 0);
 
-            let ego_can_break = ego_active & (stack.ego_layer.granule_autonomy_q7[g] >= 16);
+            let ego_can_break = ego_active & (stack.ego.granule_autonomy_q7[g] >= 16);
             let ego_tie = contested & ego_can_break;
             ego_tiebreak_mask |= branchless_select_u8(ego_tie, bit, 0);
 
-            let ego_pref_pos = stack.ego_layer.sovereign_granule_phase_q7[g] >= 0;
+            let ego_pref_pos = stack.ego.sovereign_granule_phase_q7[g] >= 0;
             let e_pref_pos = pos_energy[g] >= neg_energy[g];
             let choose_pos = branchless_select_u8(
                 contested,
@@ -679,7 +688,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             ) != 0;
 
             let chosen_w = branchless_select_u64(choose_pos, pos_words[g], neg_words[g]);
-            let ego_word = (stack.ego_layer.sovereign_granule_phase_q7[g] as u8 as u64)
+            let ego_word = (stack.ego.sovereign_granule_phase_q7[g] as u8 as u64)
                 .wrapping_mul(SWAR_SPLAT_BYTE_64);
             let damped_contested = swar_q7_scale_le128_with_bias_x8(
                 chosen_w,
@@ -716,7 +725,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         while s < MAX_ATTRACTOR_DOMAINS {
             let mut sc = slot_votes[s];
             if ego_active {
-                sc += f32::from(stack.ego_layer.slot_affinity_bias_q7[s].max(0)) * (1.0 / 64.0);
+                sc += f32::from(stack.ego.slot_affinity_bias_q7[s].max(0)) * (1.0 / 64.0);
             }
             if sc > best_slot_score {
                 best_slot_score = sc;
@@ -735,7 +744,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         let mut out_frame = seed_frame;
         out_frame.effective_energy =
             branchless_min_f32(consensus_energy * diversity_gain, MAX_ATTRACTOR_PULL_FORCE);
-        out_frame.provenance_bits = prov_bits;
+        out_frame.lineage_flags = prov_bits;
         out_frame.repulsion_severity = rep_sev;
         out_frame.dominant_slot = dom_slot;
         out_frame.action_mode_flags = branchless_select_u8(
@@ -750,12 +759,12 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
         out_frame.mean_phase_tag_q7 = tag_q7;
         out_frame.frame_flags = ptr_tag as u16;
         out_frame.tagged_ptr =
-            gcso_tagged_ptr_t::pack(out_frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
+            TaggedPtr::pack(out_frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
 
         stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
-            venn_report,
+            overlap_report,
             &mut out_frame,
         );
         let final_words = *out_frame.phase_words_ref();
@@ -846,8 +855,7 @@ fn apply_dynamic_aperture_to_frame_and_words(
     );
     frame.mean_phase_tag_q7 = tag_q7;
     frame.frame_flags = ptr_tag as u16;
-    frame.tagged_ptr =
-        gcso_tagged_ptr_t::pack(frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
+    frame.tagged_ptr = TaggedPtr::pack(frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
 }
 
 /// Folds an arbitrary-length slice of [`ManifoldGatewaySignal`] items into a single
@@ -1015,8 +1023,8 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
 
     let mut storage_addr = 0u64;
     let mut target_anchor_id = 0u32;
-    let mut ripa_clamp_rad = DEFAULT_PHASE_CLAMP_MAX_RAD;
-    let mut qdps_min_step_rad = DEFAULT_PHASE_STEP_MIN_RAD;
+    let mut phase_clamp_rad = DEFAULT_PHASE_CLAMP_MAX_RAD;
+    let mut phase_step_min_rad = DEFAULT_PHASE_STEP_MIN_RAD;
     let mut eff_inv_temp = 1.0_f32;
     let mut fp_coh = 1.0_f32;
     let mut rep_sev = 0.0_f32;
@@ -1058,7 +1066,7 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
         };
         let f_has_signal = (f_e > DEFAULT_ENTROPY_EPS)
             | (f.repulsion_severity > DEFAULT_ENTROPY_EPS)
-            | (f.provenance_bits != 0)
+            | (f.lineage_flags != 0)
             | ((f.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0);
 
         if f_has_signal {
@@ -1069,17 +1077,17 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                 best_e = f_e;
                 storage_addr = f.mapped_section_offset48;
                 target_anchor_id = f.target_anchor_id;
-                ripa_clamp_rad = f.ripa_clamp_rad;
-                qdps_min_step_rad = f.qdps_min_step_rad;
+                phase_clamp_rad = f.phase_clamp_rad;
+                phase_step_min_rad = f.phase_step_min_rad;
                 eff_inv_temp = f.effective_inv_temp;
                 fp_coh = f.fact_persona_coherence;
                 rep_sev = f.repulsion_severity;
-                prov_bits = f.provenance_bits;
-                dom_cause = f.dominant_cause_code;
+                prov_bits = f.lineage_flags;
+                dom_cause = f.attribution_tag;
                 dom_slot = f.dominant_slot;
                 action_flags = f.action_mode_flags;
                 swarm_mask = f.active_swarm_cell_mask;
-                qdps_step_q7 = f.qdps_min_step_q7;
+                qdps_step_q7 = f.phase_step_min_q7;
                 subhead_fact = f.subhead_fact_heads;
                 subhead_logic = f.subhead_logic_heads;
                 subhead_explore = f.subhead_explore_heads;
@@ -1143,10 +1151,10 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                 }
                 action_flags |= f.action_mode_flags;
                 swarm_mask &= f.active_swarm_cell_mask;
-                prov_bits |= f.provenance_bits;
+                prov_bits |= f.lineage_flags;
                 rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
-                if f.dominant_cause_code > dom_cause {
-                    dom_cause = f.dominant_cause_code;
+                if f.attribution_tag > dom_cause {
+                    dom_cause = f.attribution_tag;
                 }
             }
         }
@@ -1160,7 +1168,7 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
     let phase_deltas = words_to_q7_array_64(&acc_w);
     let tag_q7 = swar_q7_mean_i8_from_words_with_uniform_flag_64(&acc_w, acc_is_uniform);
     let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
-    let tagged_ptr = gcso_tagged_ptr_t::pack(storage_addr, packed_tag, tag_q7).raw();
+    let tagged_ptr = TaggedPtr::pack(storage_addr, packed_tag, tag_q7).raw();
     let out_energy = if use_query_resonance {
         branchless_min_f32(best_e, MAX_ATTRACTOR_PULL_FORCE)
     } else {
@@ -1172,17 +1180,17 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
             mapped_section_offset48: storage_addr,
             target_anchor_id,
             effective_energy: out_energy,
-            ripa_clamp_rad,
-            qdps_min_step_rad,
+            phase_clamp_rad,
+            phase_step_min_rad,
             effective_inv_temp: eff_inv_temp,
             fact_persona_coherence: fp_coh,
             repulsion_severity: rep_sev,
-            provenance_bits: prov_bits,
-            dominant_cause_code: dom_cause,
+            lineage_flags: prov_bits,
+            attribution_tag: dom_cause,
             dominant_slot: dom_slot,
             action_mode_flags: action_flags,
             active_swarm_cell_mask: swarm_mask,
-            qdps_min_step_q7: qdps_step_q7,
+            phase_step_min_q7: qdps_step_q7,
             subhead_fact_heads: subhead_fact,
             subhead_logic_heads: subhead_logic,
             subhead_explore_heads: subhead_explore,
@@ -1220,44 +1228,50 @@ impl<T: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for &T {
     #[inline]
     fn synthesize_gateway_with_core_layers(
         &self,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        (**self).synthesize_gateway_with_core_layers(stack, delta, horizon, venn_report)
+        (**self).synthesize_gateway_with_core_layers(stack, delta, horizon, overlap_report)
     }
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
         &self,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        (**self).synthesize_gateway_with_core_layers_readonly(stack, delta, horizon, venn_report)
+        (**self).synthesize_gateway_with_core_layers_readonly(stack, delta, horizon, overlap_report)
     }
     #[inline]
     fn combine_pair_with_core_layers<B: ManifoldGatewaySignal + ?Sized>(
         &self,
         other: &B,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        (**self).combine_pair_with_core_layers(other, stack, delta, horizon, venn_report)
+        (**self).combine_pair_with_core_layers(other, stack, delta, horizon, overlap_report)
     }
     #[inline]
     fn combine_pair_with_core_layers_readonly<B: ManifoldGatewaySignal + ?Sized>(
         &self,
         other: &B,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-        (**self).combine_pair_with_core_layers_readonly(other, stack, delta, horizon, venn_report)
+        (**self).combine_pair_with_core_layers_readonly(
+            other,
+            stack,
+            delta,
+            horizon,
+            overlap_report,
+        )
     }
 }
 
@@ -1269,7 +1283,7 @@ fn combine_pair_aperture_from_frames(
     fb: GatewayFrame,
     wb: [u64; NUM_STIGMERGIC_GRANULES],
     (mask_b, gain_b, shift_b): (u8, u8, i8),
-    stack: &AutonomousCoreLayerStack,
+    stack: &CoreStateStack,
 ) -> GatewayFrame {
     let ea = branchless_flush_subnormal_f32(branchless_relu_f32(fa.effective_energy));
     let eb = branchless_flush_subnormal_f32(branchless_relu_f32(fb.effective_energy));
@@ -1281,7 +1295,7 @@ fn combine_pair_aperture_from_frames(
     let bias_a = s_u64.wrapping_mul(SWAR_SPLAT_BYTE_64);
     let bias_b = inv_s.wrapping_mul(SWAR_SPLAT_BYTE_64);
 
-    let ego_active = stack.ego_layer.is_active();
+    let ego_active = stack.ego.is_active();
     let mut out_words = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut g = 0usize;
     while g < NUM_STIGMERGIC_GRANULES {
@@ -1298,8 +1312,8 @@ fn combine_pair_aperture_from_frames(
             swar_q7_scale_le128_with_bias_x8(aw, inv_s, bias_a),
             swar_q7_scale_le128_with_bias_x8(bw, s_u64, bias_b),
         );
-        let ego_phase_word = (stack.ego_layer.sovereign_granule_phase_q7[g] as u8 as u64)
-            .wrapping_mul(SWAR_SPLAT_BYTE_64);
+        let ego_phase_word =
+            (stack.ego.sovereign_granule_phase_q7[g] as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let coh_ea = coherence_from_uniform_words_x8(aw, ego_phase_word);
         let coh_eb = coherence_from_uniform_words_x8(bw, ego_phase_word);
         let prefer_b_tie =
@@ -1350,8 +1364,8 @@ fn combine_pair_aperture_from_frames(
         ),
         target_anchor_id: branchless_select_u32(dom_a, fa.target_anchor_id, fb.target_anchor_id),
         effective_energy: eff_energy,
-        ripa_clamp_rad: branchless_lerp_f32(fa.ripa_clamp_rad, fb.ripa_clamp_rad, ratio_b),
-        qdps_min_step_rad: branchless_min_f32(fa.qdps_min_step_rad, fb.qdps_min_step_rad),
+        phase_clamp_rad: branchless_lerp_f32(fa.phase_clamp_rad, fb.phase_clamp_rad, ratio_b),
+        phase_step_min_rad: branchless_min_f32(fa.phase_step_min_rad, fb.phase_step_min_rad),
         effective_inv_temp: branchless_lerp_f32(
             fa.effective_inv_temp,
             fb.effective_inv_temp,
@@ -1359,20 +1373,20 @@ fn combine_pair_aperture_from_frames(
         ),
         fact_persona_coherence: pair_coh,
         repulsion_severity: branchless_max_f32(fa.repulsion_severity, fb.repulsion_severity),
-        provenance_bits: fa.provenance_bits | fb.provenance_bits,
-        dominant_cause_code: branchless_select_u8(
-            fa.dominant_cause_code >= fb.dominant_cause_code,
-            fa.dominant_cause_code,
-            fb.dominant_cause_code,
+        lineage_flags: fa.lineage_flags | fb.lineage_flags,
+        attribution_tag: branchless_select_u8(
+            fa.attribution_tag >= fb.attribution_tag,
+            fa.attribution_tag,
+            fb.attribution_tag,
         ),
         dominant_slot: branchless_select_u8(dom_a, fa.dominant_slot, fb.dominant_slot),
         action_mode_flags: fa.action_mode_flags | fb.action_mode_flags,
         active_swarm_cell_mask: combined_mask
             & (fa.active_swarm_cell_mask | fb.active_swarm_cell_mask),
-        qdps_min_step_q7: branchless_select_u8(
-            fa.qdps_min_step_q7 <= fb.qdps_min_step_q7,
-            fa.qdps_min_step_q7,
-            fb.qdps_min_step_q7,
+        phase_step_min_q7: branchless_select_u8(
+            fa.phase_step_min_q7 <= fb.phase_step_min_q7,
+            fa.phase_step_min_q7,
+            fb.phase_step_min_q7,
         ),
         subhead_fact_heads: branchless_select_u8(
             dom_a,
@@ -1416,8 +1430,7 @@ fn combine_pair_aperture_from_frames(
     );
     combined.mean_phase_tag_q7 = tag_q7;
     combined.frame_flags = ptr_tag as u16;
-    combined.tagged_ptr =
-        gcso_tagged_ptr_t::pack(combined.mapped_section_offset48, ptr_tag, tag_q7).raw();
+    combined.tagged_ptr = TaggedPtr::pack(combined.mapped_section_offset48, ptr_tag, tag_q7).raw();
     combined
 }
 
@@ -1428,7 +1441,7 @@ fn combine_pair_aperture_frame_pure<
 >(
     a: &A,
     b: &B,
-    stack: &AutonomousCoreLayerStack,
+    stack: &CoreStateStack,
 ) -> GatewayFrame {
     let ap_a = a.resolve_dynamic_core_aperture(stack);
     let ap_b = b.resolve_dynamic_core_aperture(stack);
@@ -1444,7 +1457,7 @@ fn combine_fact_persona_aperture_frame_pure<
 >(
     fact: &F,
     persona: &P,
-    stack: &AutonomousCoreLayerStack,
+    stack: &CoreStateStack,
 ) -> GatewayFrame {
     let ap_a = fact.resolve_dynamic_core_aperture(stack);
     let ap_b = persona.resolve_dynamic_core_aperture(stack);
@@ -1473,10 +1486,10 @@ fn apply_sys_and_guard_to_pair_frame<
     mut frame: GatewayFrame,
 ) -> GatewayFrame {
     let mut prov_bits =
-        frame.provenance_bits | sys.causal_provenance_bits() | CAUSAL_AXIS_SYSTEM_CONSTRAINT;
+        frame.lineage_flags | sys.causal_provenance_bits() | CAUSAL_AXIS_SYSTEM_CONSTRAINT;
     let active_swarm_mask = frame.active_swarm_cell_mask & sys.active_swarm_cells_mask();
     let force_skip = sys.recommend_layer_skip();
-    let qdps_rad = branchless_max_f32(0.0, sys.qdps_min_step_rad_override());
+    let min_step_rad = branchless_max_f32(0.0, sys.phase_step_min_rad_override());
     let sys_sev = branchless_clamp_f32(sys.causal_anomaly_severity(), 0.0, 1.0);
     if force_skip | (sys.active_swarm_cells_mask() != 0xFF) {
         prov_bits |= CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE;
@@ -1485,7 +1498,7 @@ fn apply_sys_and_guard_to_pair_frame<
     let mut rep_sev = branchless_max_f32(frame.repulsion_severity, sys_sev);
     let words = *frame.phase_words_ref();
     if let Some(guard) = guard_opt {
-        const ZERO_PHASES_64: [gcso_q7_t; MAX_ATTENTION_HEADS] = [0i8; MAX_ATTENTION_HEADS];
+        const ZERO_PHASES_64: [PhaseQ7; MAX_ATTENTION_HEADS] = [0i8; MAX_ATTENTION_HEADS];
         prov_bits |= guard.causal_provenance_bits() | CAUSAL_AXIS_CONTRADICTION_GUARD;
         let g_sev = if guard.requires_phase_slice_for_repulsion() {
             guard.evaluate_repulsion_severity_from_words(&words, &frame.phase_deltas)
@@ -1516,16 +1529,16 @@ fn apply_sys_and_guard_to_pair_frame<
         frame.dominant_slot = ATTRACTOR_SLOT_REPULSION;
         rep_sev = branchless_max_f32(rep_sev, 0.85);
         frame.action_mode_flags = ACTION_PRESET_REPULSION_ESCAPE;
-        frame.dominant_cause_code = ROOT_CAUSE_COHOMOLOGY_REPULSION;
+        frame.attribution_tag = ROOT_CAUSE_COHOMOLOGY_REPULSION;
         frame.effective_inv_temp = 0.75;
     } else if force_skip {
         frame.action_mode_flags |= ACTION_MODE_LAYER_SKIP;
     }
 
-    frame.provenance_bits = prov_bits;
+    frame.lineage_flags = prov_bits;
     frame.active_swarm_cell_mask = active_swarm_mask;
-    frame.qdps_min_step_rad = branchless_max_f32(frame.qdps_min_step_rad, qdps_rad);
-    frame.qdps_min_step_q7 = branchless_rad_to_phase_step_u8(frame.qdps_min_step_rad);
+    frame.phase_step_min_rad = branchless_max_f32(frame.phase_step_min_rad, min_step_rad);
+    frame.phase_step_min_q7 = branchless_rad_to_phase_step_u8(frame.phase_step_min_rad);
     frame.repulsion_severity = rep_sev;
     let tag_q7 = swar_q7_mean_i8_from_words_64(frame.phase_words_ref());
     let ptr_tag = pack_action_slot_tag(
@@ -1534,15 +1547,14 @@ fn apply_sys_and_guard_to_pair_frame<
     );
     frame.mean_phase_tag_q7 = tag_q7;
     frame.frame_flags = ptr_tag as u16;
-    frame.tagged_ptr =
-        gcso_tagged_ptr_t::pack(frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
+    frame.tagged_ptr = TaggedPtr::pack(frame.mapped_section_offset48, ptr_tag, tag_q7).raw();
     frame
 }
 
 impl CausalProvenanceSignal for GatewayFrame {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        self.provenance_bits
+        self.lineage_flags
     }
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
@@ -1583,20 +1595,20 @@ where
     let mut prov_bits = 0u32;
     let mut active_swarm_mask = 0xFFu8;
     let mut force_skip = false;
-    let mut qdps_rad = DEFAULT_PHASE_STEP_MIN_RAD;
+    let mut min_step_rad = DEFAULT_PHASE_STEP_MIN_RAD;
     let mut sys_sev = 0.0_f32;
 
     if let Some(sys) = sys_opt {
         prov_bits |= sys.causal_provenance_bits() | CAUSAL_AXIS_SYSTEM_CONSTRAINT;
         active_swarm_mask = sys.active_swarm_cells_mask();
         force_skip = sys.recommend_layer_skip();
-        qdps_rad = branchless_max_f32(0.0, sys.qdps_min_step_rad_override());
+        min_step_rad = branchless_max_f32(0.0, sys.phase_step_min_rad_override());
         sys_sev = branchless_clamp_f32(sys.causal_anomaly_severity(), 0.0, 1.0);
         if force_skip | (active_swarm_mask != 0xFF) {
             prov_bits |= CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE;
         }
     }
-    let qdps_step_u8 = branchless_rad_to_phase_step_u8(qdps_rad);
+    let min_step_q7 = branchless_rad_to_phase_step_u8(min_step_rad);
 
     let mut has_fact = false;
     let mut fact_e = 0.0_f32;
@@ -1613,10 +1625,10 @@ where
         let (fw, fe, fa, fid, fh) = fact.synthesize_grounding_envelope();
         fact_w = fw;
         fact_e = branchless_flush_subnormal_f32(branchless_relu_f32(fe));
-        fact_addr = fa & gcso_tagged_ptr_t::ADDR_MASK;
+        fact_addr = fa & TaggedPtr::ADDR_MASK;
         fact_id = fid;
         fact_heads = fh.clamp(1, MAX_ATTENTION_HEADS as u16);
-        let fc = fact.fact_ripa_clamp_rad();
+        let fc = fact.fact_phase_clamp_rad();
         fact_clamp = branchless_select_f32(
             branchless_is_finite_f32(fc) & (fc > 0.0),
             fc,
@@ -1644,10 +1656,10 @@ where
         let (pw, pe, pa, pid, ph) = pers.synthesize_grounding_envelope();
         pers_w = pw;
         pers_e = branchless_flush_subnormal_f32(branchless_relu_f32(pe));
-        pers_addr = pa & gcso_tagged_ptr_t::ADDR_MASK;
+        pers_addr = pa & TaggedPtr::ADDR_MASK;
         pers_id = pid;
         pers_heads = ph.clamp(1, MAX_ATTENTION_HEADS as u16);
-        let pc = pers.persona_ripa_clamp_rad();
+        let pc = pers.persona_phase_clamp_rad();
         pers_clamp = branchless_select_f32(
             branchless_is_finite_f32(pc) & (pc > 0.0),
             pc,
@@ -1672,7 +1684,7 @@ where
     let mut blended_w = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut blended_uni = true;
     #[allow(unused_mut)]
-    let mut avx_precomputed_tag: Option<gcso_q7_t> = None;
+    let mut avx_precomputed_tag: Option<PhaseQ7> = None;
     let mut eff_energy = 0.0_f32;
     let mut raw_clamp = DEFAULT_PERSONA_PHASE_CLAMP_RAD;
     let mut dom_slot = ATTRACTOR_SLOT_SYSTEM_BASELINE;
@@ -1807,9 +1819,9 @@ where
         subhead_explore = 24;
     }
 
-    let norm_ripa_clamp = {
+    let norm_phase_clamp = {
         if raw_clamp < DEFAULT_FACT_PHASE_CLAMP_RAD {
-            let auth_ratio = branchless_clamp_f32(raw_clamp * INV_FACT_RIPA_CLAMP_RAD, 0.10, 1.0);
+            let auth_ratio = branchless_clamp_f32(raw_clamp * INV_FACT_PHASE_CLAMP_RAD, 0.10, 1.0);
             let auth_u64 = ((auth_ratio * 128.0 + 0.5) as u8).min(128) as u64;
             if auth_u64 < 128 {
                 let bias_auth = (128u64.wrapping_sub(auth_u64)).wrapping_mul(SWAR_SPLAT_BYTE_64);
@@ -1834,11 +1846,11 @@ where
         DEFAULT_PHASE_CLAMP_MAX_RAD
     };
 
-    if qdps_step_u8 > 1 {
+    if min_step_q7 > 1 {
         let (fw, fu) = swar_q7_phase_step_filter_words_with_uniform_flag_64(
             &blended_w,
             blended_uni,
-            qdps_step_u8,
+            min_step_q7,
         );
         blended_w = fw;
         blended_uni = fu;
@@ -1846,7 +1858,7 @@ where
 
     let mut rep_sev = 0.0_f32;
     if let Some(guard) = guard_opt {
-        const ZERO_PHASES_64: [gcso_q7_t; MAX_ATTENTION_HEADS] = [0i8; MAX_ATTENTION_HEADS];
+        const ZERO_PHASES_64: [PhaseQ7; MAX_ATTENTION_HEADS] = [0i8; MAX_ATTENTION_HEADS];
         prov_bits |= guard.causal_provenance_bits() | CAUSAL_AXIS_CONTRADICTION_GUARD;
         let g_sev = if guard.requires_phase_slice_for_repulsion() {
             let guard_phases = words_to_q7_array_64(&blended_w);
@@ -1932,7 +1944,7 @@ where
         None => swar_q7_mean_i8_from_words_with_uniform_flag_64(&blended_w, blended_uni),
     };
     let packed_tag = pack_action_slot_tag(dom_slot, action_flags);
-    let tagged_ptr = gcso_tagged_ptr_t::pack(storage_addr, packed_tag, tag_q7).raw();
+    let tagged_ptr = TaggedPtr::pack(storage_addr, packed_tag, tag_q7).raw();
     let logic_gain_q7 = ((fact_gain_q7 as u16 + pers_gain_q7 as u16) >> 1) as u8;
 
     (
@@ -1941,17 +1953,17 @@ where
             mapped_section_offset48: storage_addr,
             target_anchor_id: dom_anchor_id,
             effective_energy: eff_energy,
-            ripa_clamp_rad: norm_ripa_clamp,
-            qdps_min_step_rad: qdps_rad,
+            phase_clamp_rad: norm_phase_clamp,
+            phase_step_min_rad: min_step_rad,
             effective_inv_temp: inv_temp,
             fact_persona_coherence: fp_coh,
             repulsion_severity: branchless_max_f32(rep_sev, sys_sev),
-            provenance_bits: prov_bits,
-            dominant_cause_code: dominant_cause,
+            lineage_flags: prov_bits,
+            attribution_tag: dominant_cause,
             dominant_slot: dom_slot,
             action_mode_flags: action_flags,
             active_swarm_cell_mask: active_swarm_mask,
-            qdps_min_step_q7: qdps_step_u8,
+            phase_step_min_q7: min_step_q7,
             subhead_fact_heads: subhead_fact,
             subhead_logic_heads: subhead_logic,
             subhead_explore_heads: subhead_explore,
@@ -2008,7 +2020,7 @@ impl<T> ManifoldGatewaySignal for SystemConstraint<T> {
     }
 }
 
-impl ManifoldGatewaySignal for gcso_edbc_state_t {
+impl ManifoldGatewaySignal for EntropyState {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -2026,7 +2038,7 @@ impl ManifoldGatewaySignal for gcso_edbc_state_t {
     }
 }
 
-impl ManifoldGatewaySignal for gcso_config_t {
+impl ManifoldGatewaySignal for RuntimeConfig {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -2155,16 +2167,16 @@ impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> ManifoldGatewaySignal f
     #[inline]
     fn synthesize_gateway_with_core_layers(
         &self,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let mut combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
         stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
-            venn_report,
+            overlap_report,
             &mut combined,
         );
         let words = *combined.phase_words_ref();
@@ -2173,13 +2185,18 @@ impl<F: ObjectiveFactSignal, P: SubjectivePersonaSignal> ManifoldGatewaySignal f
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
         &self,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let mut combined = combine_fact_persona_aperture_frame_pure(&self.0, &self.1, stack);
-        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut combined);
+        stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            overlap_report,
+            &mut combined,
+        );
         let words = *combined.phase_words_ref();
         (combined, words)
     }
@@ -2230,10 +2247,10 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
     #[inline]
     fn synthesize_gateway_with_core_layers(
         &self,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
         let mut guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
@@ -2242,7 +2259,7 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
         stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
-            venn_report,
+            overlap_report,
             &mut guarded,
         );
         let words = *guarded.phase_words_ref();
@@ -2251,16 +2268,21 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
         &self,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
         let mut guarded = apply_sys_and_guard_to_pair_frame::<S, ContradictionGuard<()>>(
             &self.0, None, pair_frame,
         );
-        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut guarded);
+        stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            overlap_report,
+            &mut guarded,
+        );
         let words = *guarded.phase_words_ref();
         (guarded, words)
     }
@@ -2324,17 +2346,17 @@ impl<
     #[inline]
     fn synthesize_gateway_with_core_layers(
         &self,
-        stack: &mut AutonomousCoreLayerStack,
+        stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
         let mut guarded = apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
         stack.intervene_ego_and_modulate_frame_branchless(
             delta,
             horizon,
-            venn_report,
+            overlap_report,
             &mut guarded,
         );
         let words = *guarded.phase_words_ref();
@@ -2343,14 +2365,19 @@ impl<
     #[inline]
     fn synthesize_gateway_with_core_layers_readonly(
         &self,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         let pair_frame = combine_fact_persona_aperture_frame_pure(&self.1, &self.2, stack);
         let mut guarded = apply_sys_and_guard_to_pair_frame(&self.0, Some(&self.3), pair_frame);
-        stack.modulate_gateway_frame_with_ego_readonly(delta, horizon, venn_report, &mut guarded);
+        stack.modulate_gateway_frame_with_ego_readonly(
+            delta,
+            horizon,
+            overlap_report,
+            &mut guarded,
+        );
         let words = *guarded.phase_words_ref();
         (guarded, words)
     }
@@ -2474,7 +2501,7 @@ impl<'a, S: ManifoldGatewaySignal> ResonantSignalSlice<'a, S> {
     /// Wraps an arbitrary slice `signals` with a Q7 phase probe slice (`<= 64` heads).
     #[inline]
     #[must_use]
-    pub fn from_q7_probe(signals: &'a [S], probe_q7: &[gcso_q7_t]) -> Self {
+    pub fn from_q7_probe(signals: &'a [S], probe_q7: &[PhaseQ7]) -> Self {
         let mut arr = [0i8; MAX_ATTENTION_HEADS];
         let limit = probe_q7.len().min(MAX_ATTENTION_HEADS);
         arr[..limit].copy_from_slice(&probe_q7[..limit]);
@@ -2488,7 +2515,7 @@ impl<'a, S: ManifoldGatewaySignal> ResonantSignalSlice<'a, S> {
     /// Wraps an arbitrary slice `signals` using the accumulated phase words of `trail`.
     #[inline]
     #[must_use]
-    pub fn from_trail(signals: &'a [S], trail: &gcso_pointer_trail_t) -> Self {
+    pub fn from_trail(signals: &'a [S], trail: &PointerTrail) -> Self {
         Self {
             signals,
             query_phase_words: *trail_phase_words_ref(trail),
@@ -2531,7 +2558,7 @@ impl<S: CognitiveGroundingSignal + ManifoldGatewaySignal> CognitiveGroundingSign
     for ResonantSignalSlice<'_, S>
 {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.synthesize_gateway_frame().phase_deltas
     }
 
@@ -2591,7 +2618,7 @@ impl<S: ContradictionGuardSignal + CognitiveGroundingSignal + ManifoldGatewaySig
     #[inline]
     fn evaluate_repulsion_severity(
         &self,
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let candidate_words = candidate_phases.project_to_words_64();
         self.evaluate_repulsion_severity_from_words(&candidate_words, candidate_phases)
@@ -2601,7 +2628,7 @@ impl<S: ContradictionGuardSignal + CognitiveGroundingSignal + ManifoldGatewaySig
     fn evaluate_repulsion_severity_from_words(
         &self,
         candidate_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        candidate_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let mut max_coh = -1.0_f32;
         let mut max_sev = 0.0_f32;
@@ -2647,7 +2674,7 @@ impl<S: ContradictionGuardSignal + CognitiveGroundingSignal + ManifoldGatewaySig
 
 impl RawPhaseProjectable for GatewayFrame {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.phase_deltas
     }
     #[inline(always)]

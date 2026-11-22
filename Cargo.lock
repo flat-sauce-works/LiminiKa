@@ -265,14 +265,14 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "liminika-adapter"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "liminika-core",
 ]
 
 [[package]]
 name = "liminika-cli"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "liminika-adapter",
  "liminika-core",
@@ -281,14 +281,14 @@ dependencies = [
 
 [[package]]
 name = "liminika-core"
-version = "0.1.3"
+version = "0.2.0"
 dependencies = [
  "criterion",
 ]
 
 [[package]]
 name = "liminika-dsl"
-version = "0.1.3"
+version = "0.2.0"
 
 [[package]]
 name = "memchr"

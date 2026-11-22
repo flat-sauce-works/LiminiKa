@@ -1,7 +1,7 @@
 // name: src/core/src/runtime/context.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! High-level configuration builder ([`Config`]), [`AutonomousCoreLayerStack`] (128B `Pod`),
+//! High-level configuration builder ([`Config`]), [`CoreStateStack`] (128B `Pod`),
 //! [`OrchestratorStatusSnapshot`], unified [`RuntimeContext`], and capability query helpers.
 
 #![deny(missing_docs)]
@@ -11,35 +11,30 @@
 #![allow(clippy::must_use_candidate)]
 
 use crate::drivers::{
-    gcso_edbc_state_t, AnonymousComputePool, ComputeDispatchMask, DistortionTension,
-    EgoDifferentialNet, EntropyController, LiminalEgoState, SystemPressureReading,
-    SystemSpineState,
+    AnonymousComputePool, ComputeDispatchMask, DistortionTension, EgoDifferentialNet,
+    EntropyController, EntropyState, LiminalEgoState, SystemPressureReading, SystemSpineState,
 };
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
     branchless_q7_inhibit_words_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
-    gcso_tagged_ptr_t, is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64,
-    store_q7_words_64, swar_or_avx2_q7_add_sat_words_64, swar_slerp_words_with_uniform_flag_64,
-    swar_words_equal_64, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSliceMut16,
-    AlignedSliceMut32, PhaseSteering, Pod, RopeSteeringTarget, ACTION_MODE_LAYER_SKIP,
+    is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64, store_q7_words_64,
+    swar_or_avx2_q7_add_sat_words_64, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
+    swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSliceMut16, AlignedSliceMut32,
+    PhaseSteering, Pod, RopeSteeringTarget, TaggedPtr, ACTION_MODE_LAYER_SKIP,
     ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
     DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    gcso_config_t, gcso_q7_t, AttributionTag, BitCut8, DriverKind, EpistemicPartition,
-    EpistemicRegime, GcsoResult, LiminalThresholdState, PrimitiveKind, Scoped, DEFAULT_ENTROPY_EPS,
-    GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR, GCSO_ABI_VERSION_PATCH,
-    GCSO_ABI_VERSION_STRING, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED,
-    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
-};
-use crate::runtime::abi::types::{
-    gcso_capability_flags_t, gcso_kv_keyframe_header_t, gcso_mapped_storage_descriptor_t,
-    gcso_snapshot_header_t, GCSO_CAP_CPU_BASELINE, GCSO_CAP_CUDA_BACKEND, GCSO_CAP_METAL_BACKEND,
-    GCSO_CAP_VULKAN_BACKEND,
+    AttributionTag, BitCut8, DriverKind, EpistemicRegime, LacunaPartition8, LiminalThresholdState,
+    LmnkResult, PhaseQ7, PrimitiveKind, RuntimeConfig, Scoped, DEFAULT_ENTROPY_EPS,
+    LMNK_ABI_VERSION_MAJOR, LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH,
+    LMNK_ABI_VERSION_STRING, LMNK_CAP_INPLACE_CONTEXT_INIT, LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON,
+    LMNK_CAP_SIMD_WASM128, LMNK_CAP_SWAR_BASELINE, LMNK_CAP_ZERO_ALLOC_CORE,
+    LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, Q7_PHASE_SCALE_RAD,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
@@ -53,37 +48,24 @@ use crate::runtime::horizon::{
 };
 use crate::stigmergy::{
     PhaseDeltaSlice, PhaseSteeringEngine, ATTRACTOR_SLOT_PERSONA, DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-    DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN, MAX_ANCHORS_PER_FIELD,
+    DEFAULT_SUBSTRATE_CAPACITY, LEDGER_HISTORY_LEN, MAX_PHASE_ANCHORS,
     WORKBENCH_LANE_FLAG_REPULSION,
 };
 
 /// Default number of tokens per PagedAttention KV cache block (`32`).
 pub const DEFAULT_PAGED_BLOCK_SIZE: u32 = 32;
 
-/// Number of orthogonal self-tuning slots in the autonomous core stack
-/// (`Slot 0: Liminal`, `Slot 1: Stigmergic`, `Slot 2: Ego`).
-pub const NUM_CORE_AUTONOMOUS_LAYERS: usize = 3;
-
-/// Autonomous Core Stack Slot 0 identifier: Epistemic Horizon & Trait Threshold (`LiminalThresholdState`).
-pub const CORE_LAYER_LIMINAL: usize = 0;
-
-/// Autonomous Core Stack Slot 1 identifier: Stigmergic Granule Approximation, Overlap & Serendipity (`StigmergicGranuleState`).
-pub const CORE_LAYER_STIGMERGIC: usize = 1;
-
-/// Autonomous Core Stack Slot 2 identifier: Wide-Threshold Subjective Ego & Top-Down Boundary Intervention (`LiminalEgoState`).
-pub const CORE_LAYER_EGO: usize = 2;
 use crate::runtime::storage::{
     finalize_snapshot_header_crc32, init_snapshot_header, verify_snapshot_payload_crc32,
-    KvKeyframeCache, MappedStorage,
+    KvKeyframeCache, KvKeyframeHeader, LmnkSnapshotHeader, MappedStorage,
 };
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
-    gcso_ledger_slot_t, gcso_paged_bitmask_t, gcso_pointer_trail_t, trail_phase_words_mut,
-    trail_phase_words_ref, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
-    CorePrimitiveState, DissipativeOverflowReport, FastPathLedger, PointerSubstrate,
-    SandboxLifecycleEvent, StigmergicActionDecision, StigmergicGranuleState,
-    StigmergicOverlapSerendipityReport, StigmergicSubstrate, StigmergicSubstrateOps,
-    WorkbenchLanePlacement, WorkbenchSlotSpec, LEDGER_METRIC_FAST_PATH_HIT,
+    trail_phase_words_mut, trail_phase_words_ref, CognitiveTrajectoryLedger,
+    ContrastivePhaseBloomFilter, CorePrimitiveState, DissipativeOverflowReport, FastPathLedger,
+    LedgerSlot, OverlapDiscoveryReport, PagedBitmask, PointerSubstrate, PointerTrail,
+    SandboxLifecycleEvent, StigmergicActionDecision, StigmergicGranuleState, StigmergicSubstrate,
+    StigmergicSubstrateOps, WorkbenchLanePlacement, WorkbenchSlotSpec, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED, MAX_ATTRACTOR_PULL_FORCE,
     SUBSTRATE_INLINE_TRAILS, TRAIL_FLAG_REPULSION_ACTIVE,
 };
@@ -93,62 +75,63 @@ use crate::stigmergy::{
 #[must_use]
 pub const fn abi_version() -> (u32, u32, u32) {
     (
-        GCSO_ABI_VERSION_MAJOR,
-        GCSO_ABI_VERSION_MINOR,
-        GCSO_ABI_VERSION_PATCH,
+        LMNK_ABI_VERSION_MAJOR,
+        LMNK_ABI_VERSION_MINOR,
+        LMNK_ABI_VERSION_PATCH,
     )
 }
 
-/// Returns the static ABI version string ([`GCSO_ABI_VERSION_STRING`]).
+/// Returns the static ABI version string ([`LMNK_ABI_VERSION_STRING`]).
 #[inline(always)]
 #[must_use]
 pub const fn abi_version_string() -> &'static str {
-    GCSO_ABI_VERSION_STRING
+    LMNK_ABI_VERSION_STRING
 }
 
-/// Queries active compute capability bitmask flags without branching.
+/// Queries active compute capability bitmask flags without branching (`LMNK_CAP_*`).
 #[inline(always)]
 #[must_use]
-pub const fn query_capability() -> gcso_capability_flags_t {
-    GCSO_CAP_CPU_BASELINE
-        | ((cfg!(feature = "cuda") as u64) * GCSO_CAP_CUDA_BACKEND)
-        | ((cfg!(feature = "vulkan") as u64) * GCSO_CAP_VULKAN_BACKEND)
-        | (((cfg!(target_os = "macos") || cfg!(feature = "metal")) as u64) * GCSO_CAP_METAL_BACKEND)
+pub const fn query_capability() -> u64 {
+    LMNK_CAP_SWAR_BASELINE
+        | ((cfg!(target_feature = "avx2") as u64) * LMNK_CAP_SIMD_AVX2)
+        | ((cfg!(target_feature = "neon") as u64) * LMNK_CAP_SIMD_NEON)
+        | ((cfg!(target_feature = "simd128") as u64) * LMNK_CAP_SIMD_WASM128)
+        | LMNK_CAP_ZERO_ALLOC_CORE
+        | LMNK_CAP_INPLACE_CONTEXT_INIT
 }
 
-/// Populates default runtime configuration parameters conforming to GCSO architectural invariants.
+/// Populates default runtime configuration parameters conforming to LiminiKa architectural invariants.
 ///
 /// # Errors
 /// Never returns an error in the default implementation.
 #[inline(always)]
-pub fn init_default_config(config: &mut gcso_config_t) -> GcsoResult<()> {
-    *config = gcso_config_t {
+pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
+    *config = RuntimeConfig {
         head_dim: 128,
         num_heads: 32,
         paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
         q7_phase_scale: Q7_PHASE_SCALE_RAD,
-        ripa_clamp_max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-        qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+        phase_clamp_max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+        phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
         entropy_singularity_eps: DEFAULT_ENTROPY_EPS,
-        max_prompt_anchors: MAX_ANCHORS_PER_FIELD as u32,
-        action_hub_capacity: DEFAULT_SUBSTRATE_CAPACITY,
-        enable_cuda_warp_shuffle: 1,
+        max_prompt_anchors: MAX_PHASE_ANCHORS as u32,
+        substrate_capacity: DEFAULT_SUBSTRATE_CAPACITY,
+        execution_flags: 0,
         enable_zero_alloc_strict: 1,
         ledger_mode: 0,
-        reserved_flags: 0,
         rotary_dim: 0,
         rope_layout: 0,
-        reserved: [0; 19],
+        reserved: [0; 20],
     };
     Ok(())
 }
 
-/// Branchlessly validates a [`gcso_config_t`] descriptor against GCSO architectural invariants.
+/// Branchlessly validates a [`RuntimeConfig`] descriptor against LiminiKa architectural invariants.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any dimension, scale, or capacity invariant is violated.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any dimension, scale, or capacity invariant is violated.
 #[inline(always)]
-pub fn validate_config_invariants(config: &gcso_config_t) -> GcsoResult<()> {
+pub fn validate_config_invariants(config: &RuntimeConfig) -> LmnkResult<()> {
     let valid_dims = (config.head_dim != 0)
         & ((config.head_dim & 1) == 0)
         & (config.num_heads != 0)
@@ -156,20 +139,20 @@ pub fn validate_config_invariants(config: &gcso_config_t) -> GcsoResult<()> {
         & ((config.paged_block_size == 16) | (config.paged_block_size == 32));
     let valid_scales = branchless_is_finite_f32(config.q7_phase_scale)
         & (config.q7_phase_scale > 0.0)
-        & branchless_is_finite_f32(config.ripa_clamp_max_rad)
-        & (config.ripa_clamp_max_rad > 0.0)
-        & branchless_is_finite_f32(config.qdps_min_step_rad)
-        & (config.qdps_min_step_rad >= 0.0)
+        & branchless_is_finite_f32(config.phase_clamp_max_rad)
+        & (config.phase_clamp_max_rad > 0.0)
+        & branchless_is_finite_f32(config.phase_step_min_rad)
+        & (config.phase_step_min_rad >= 0.0)
         & branchless_is_finite_f32(config.entropy_singularity_eps)
         & (config.entropy_singularity_eps > 0.0);
     let valid_caps = (config.max_prompt_anchors != 0)
-        & (config.action_hub_capacity != 0)
+        & (config.substrate_capacity != 0)
         & (config.ledger_mode <= 2);
 
     if valid_dims & valid_scales & valid_caps {
         Ok(())
     } else {
-        Err(GCSO_ERROR_INVALID_ARGUMENT)
+        Err(LMNK_ERR_INVALID_ARGUMENT)
     }
 }
 
@@ -179,28 +162,28 @@ pub fn validate_config_invariants(config: &gcso_config_t) -> GcsoResult<()> {
 
 /// Unified 128-byte (2 cache lines, `#[repr(C, align(64))]`) 3-slot autonomous core stack pairing:
 /// - **Slot 0 ([`LiminalThresholdState`], 32 B)**: Epistemic Horizon & Trait Cognitive Apertures
-/// - **Slot 1 ([`StigmergicGranuleState`], 32 B)**: Stigmergic Granule Approximation, Venn Overlap & Serendipity
+/// - **Slot 1 ([`StigmergicGranuleState`], 32 B)**: Stigmergic Granule Approximation, Overlap & Discovery
 /// - **Slot 2 ([`LiminalEgoState`], 64 B)**: Top-Down Subjective Ego Boundary & Phase Intervention
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct AutonomousCoreLayerStack {
+pub struct CoreStateStack {
     /// Core Stack Slot 0: Epistemic Horizon & Trait Cognitive Aperture Controller (`offset 0..32`).
-    pub liminal_layer: LiminalThresholdState,
-    /// Core Stack Slot 1: Stigmergic Granule Approximation & Serendipity Controller (`offset 32..64`).
-    pub stigmergic_layer: StigmergicGranuleState,
+    pub liminal: LiminalThresholdState,
+    /// Core Stack Slot 1: Stigmergic Granule Approximation & Discovery Controller (`offset 32..64`).
+    pub stigmergy: StigmergicGranuleState,
     /// Core Stack Slot 2: Wide-Aperture Subjective Ego Controller (`offset 64..128`).
-    pub ego_layer: LiminalEgoState,
+    pub ego: LiminalEgoState,
 }
 
-impl AutonomousCoreLayerStack {
-    /// Constructs a neutral 128-byte [`AutonomousCoreLayerStack`] with all 3 core slots initialized.
+impl CoreStateStack {
+    /// Constructs a neutral 128-byte [`CoreStateStack`] with all 3 core slots initialized.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            liminal_layer: LiminalThresholdState::new(),
-            stigmergic_layer: StigmergicGranuleState::new(),
-            ego_layer: LiminalEgoState::new(),
+            liminal: LiminalThresholdState::new(),
+            stigmergy: StigmergicGranuleState::new(),
+            ego: LiminalEgoState::new(),
         }
     }
 
@@ -210,16 +193,16 @@ impl AutonomousCoreLayerStack {
     #[must_use]
     pub const fn core_primitive_state(&self) -> CorePrimitiveState {
         CorePrimitiveState {
-            liminal: self.liminal_layer,
-            stigmergy: self.stigmergic_layer,
+            liminal: self.liminal,
+            stigmergy: self.stigmergy,
         }
     }
 
     /// Replaces the `Liminal` + `Stigmergy` halves from `primitives`.
     #[inline(always)]
     pub const fn set_core_primitive_state(&mut self, primitives: CorePrimitiveState) {
-        self.liminal_layer = primitives.liminal;
-        self.stigmergic_layer = primitives.stigmergy;
+        self.liminal = primitives.liminal;
+        self.stigmergy = primitives.stigmergy;
     }
 
     /// Branchlessly co-adapts Slot 0 (`LiminalThresholdState`) and Slot 1 (`StigmergicGranuleState`)
@@ -229,38 +212,32 @@ impl AutonomousCoreLayerStack {
         &mut self,
         ledger: &CognitiveTrajectoryLedger,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
         overflow_opt: Option<&DissipativeOverflowReport>,
     ) {
-        self.liminal_layer
+        self.liminal
             .adapt_from_circuit_and_overflow_branchless(ledger, horizon, overflow_opt);
-        let discovered = venn_report.serendipity_triggered != 0;
-        self.liminal_layer.threshold_floor_q7[1] = branchless_select_u8(
+        let discovered = overlap_report.discovery_triggered != 0;
+        self.liminal.threshold_floor_q7[1] = branchless_select_u8(
             discovered,
-            self.liminal_layer.threshold_floor_q7[1]
-                .saturating_sub(4)
-                .max(8),
-            self.liminal_layer.threshold_floor_q7[1],
+            self.liminal.threshold_floor_q7[1].saturating_sub(4).max(8),
+            self.liminal.threshold_floor_q7[1],
         );
-        self.liminal_layer.threshold_floor_q7[6] = branchless_select_u8(
+        self.liminal.threshold_floor_q7[6] = branchless_select_u8(
             discovered,
-            self.liminal_layer.threshold_floor_q7[6]
-                .saturating_sub(4)
-                .max(8),
-            self.liminal_layer.threshold_floor_q7[6],
+            self.liminal.threshold_floor_q7[6].saturating_sub(4).max(8),
+            self.liminal.threshold_floor_q7[6],
         );
-        self.liminal_layer.aperture_gain_q7[6] = branchless_select_u8(
+        self.liminal.aperture_gain_q7[6] = branchless_select_u8(
             discovered,
-            self.liminal_layer.aperture_gain_q7[6]
-                .saturating_add(6)
-                .min(127),
-            self.liminal_layer.aperture_gain_q7[6],
+            self.liminal.aperture_gain_q7[6].saturating_add(6).min(127),
+            self.liminal.aperture_gain_q7[6],
         );
-        self.liminal_layer.active_aperture_mask |=
+        self.liminal.active_aperture_mask |=
             branchless_select_u32(discovered, (1 << 1) | (1 << 6), 0);
 
-        self.stigmergic_layer
-            .adapt_from_horizon_and_overlap_branchless(horizon, venn_report, ledger);
+        self.stigmergy
+            .adapt_from_horizon_and_overlap_branchless(horizon, overlap_report, ledger);
     }
 
     /// Branchlessly modulates `frame` in-place across Core Stack Slot 0 (`Liminal`) and Slot 1 (`Stigmergic`).
@@ -269,25 +246,26 @@ impl AutonomousCoreLayerStack {
         &self,
         frame: &mut GatewayFrame,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
     ) {
-        self.liminal_layer
+        self.liminal
             .modulate_gateway_frame_branchless(frame, horizon);
-        let core_cnt = venn_report.venn_core_mask.count_ones() as f32;
-        let has_venn = (venn_report.venn_core_mask | venn_report.venn_penumbra_mask) != 0;
+        let core_cnt = overlap_report.overlap_core_mask.count_ones() as f32;
+        let has_overlap =
+            (overlap_report.overlap_core_mask | overlap_report.overlap_fringe_mask) != 0;
         let coop_boost = branchless_clamp_f32(1.0 + 0.05 * core_cnt, 1.0, 1.40);
-        let void_gated = horizon.is_liminal()
-            | (horizon.total_memory_support < self.liminal_layer.channel_threshold_floor_f32(1));
+        let liminal_gated = horizon.is_liminal()
+            | (horizon.total_memory_support < self.liminal.channel_threshold_floor_f32(1));
         frame.effective_energy = branchless_select_f32(
-            !void_gated & (venn_report.venn_core_mask != 0),
+            !liminal_gated & (overlap_report.overlap_core_mask != 0),
             frame.effective_energy * coop_boost,
             frame.effective_energy,
         );
-        let active_granules = venn_report.venn_core_mask
-            | venn_report.venn_penumbra_mask
-            | venn_report.serendipity_excursion_mask;
+        let active_granules = overlap_report.overlap_core_mask
+            | overlap_report.overlap_fringe_mask
+            | overlap_report.discovery_excursion_mask;
         frame.active_swarm_cell_mask =
-            branchless_select_u8(has_venn, active_granules, frame.active_swarm_cell_mask);
+            branchless_select_u8(has_overlap, active_granules, frame.active_swarm_cell_mask);
     }
 
     /// Branchlessly modulates `frame` in-place across Core Stack Slot 0 (`Liminal`), Slot 1
@@ -299,49 +277,49 @@ impl AutonomousCoreLayerStack {
         &self,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
         frame: &mut GatewayFrame,
     ) {
-        self.modulate_gateway_frame_branchless(frame, horizon, venn_report);
-        if self.ego_layer.is_active() {
-            let _ = self.ego_layer.modulate_frame_pure(
-                &self.liminal_layer,
-                &self.stigmergic_layer,
+        self.modulate_gateway_frame_branchless(frame, horizon, overlap_report);
+        if self.ego.is_active() {
+            let _ = self.ego.modulate_frame_pure(
+                &self.liminal,
+                &self.stigmergy,
                 delta,
                 horizon,
-                venn_report,
+                overlap_report,
                 frame,
             );
         }
     }
 
     /// Branchlessly modulates `frame` in-place across Core Stack Slot 0 (`Liminal`) and Slot 1
-    /// (`Stigmergic`) and, when Core Stack Slot 2 (`ego_layer`) is active, performs in-place Ego
+    /// (`Stigmergic`) and, when Core Stack Slot 2 (`ego`) is active, performs in-place Ego
     /// intervention across all three slots and `frame`.
     #[inline]
     pub fn intervene_ego_and_modulate_frame_branchless(
         &mut self,
         delta: &LiminalBoundaryDelta,
         horizon: &EpistemicHorizonReading,
-        venn_report: &StigmergicOverlapSerendipityReport,
+        overlap_report: &OverlapDiscoveryReport,
         frame: &mut GatewayFrame,
     ) {
-        self.modulate_gateway_frame_branchless(frame, horizon, venn_report);
-        if self.ego_layer.is_active() {
-            self.ego_layer.intervene_on_sublayers_and_frame_branchless(
-                &mut self.liminal_layer,
-                &mut self.stigmergic_layer,
+        self.modulate_gateway_frame_branchless(frame, horizon, overlap_report);
+        if self.ego.is_active() {
+            self.ego.intervene_on_sublayers_and_frame_branchless(
+                &mut self.liminal,
+                &mut self.stigmergy,
                 delta,
                 horizon,
-                venn_report,
+                overlap_report,
                 frame,
             );
         }
     }
 }
 
-/// Convenient crate-level result type alias for GCSO operations.
-pub type Result<T> = GcsoResult<T>;
+/// Convenient crate-level result type alias for LiminiKa runtime operations.
+pub type Result<T> = LmnkResult<T>;
 
 /// Default `EntropyController` hysteresis band width ($\delta_{\mathrm{hyst}}$).
 pub const DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND: f32 = 0.15;
@@ -368,11 +346,11 @@ pub const DEFAULT_SLOT_WEIGHTS: [f32; MAX_ATTRACTOR_DOMAINS] = [0.0; MAX_ATTRACT
 // Safe High-Level Rust Configuration Wrapper & Fluent Builder
 // ===================================================================
 
-/// Safe high-level configuration wrapper for GCSO runtime initialization.
+/// Safe high-level configuration wrapper for LiminiKa runtime initialization.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Config {
     /// Inner raw C-ABI configuration structure (64 bytes, 16-byte aligned).
-    pub raw: gcso_config_t,
+    pub raw: RuntimeConfig,
     /// Hysteresis band ($\delta_{\mathrm{hyst}}$) for `EntropyController` branch control stabilization.
     pub hysteresis_band: f32,
     /// Tau flux threshold ($\tau_{\mathrm{flux}}$) for sliding-window entropy rate integration.
@@ -395,28 +373,27 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Creates a new default configuration instance adhering to GCSO architectural invariants.
+    /// Creates a new default configuration instance adhering to LiminiKa architectural invariants.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            raw: gcso_config_t {
+            raw: RuntimeConfig {
                 head_dim: 128,
                 num_heads: 32,
                 paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
                 q7_phase_scale: Q7_PHASE_SCALE_RAD,
-                ripa_clamp_max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
-                qdps_min_step_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+                phase_clamp_max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+                phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
                 entropy_singularity_eps: DEFAULT_ENTROPY_EPS,
-                max_prompt_anchors: MAX_ANCHORS_PER_FIELD as u32,
-                action_hub_capacity: DEFAULT_SUBSTRATE_CAPACITY,
-                enable_cuda_warp_shuffle: 1,
+                max_prompt_anchors: MAX_PHASE_ANCHORS as u32,
+                substrate_capacity: DEFAULT_SUBSTRATE_CAPACITY,
+                execution_flags: 0,
                 enable_zero_alloc_strict: 1,
                 ledger_mode: 0,
-                reserved_flags: 0,
                 rotary_dim: 0,
                 rope_layout: 0,
-                reserved: [0; 19],
+                reserved: [0; 20],
             },
             hysteresis_band: DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND,
             tau_flux: DEFAULT_ENTROPY_GATE_TAU_FLUX,
@@ -427,10 +404,10 @@ impl Config {
         }
     }
 
-    /// Constructs a high-level [`Config`] wrapper from a raw [`gcso_config_t`] descriptor.
+    /// Constructs a high-level [`Config`] wrapper from a raw [`RuntimeConfig`] descriptor.
     #[inline(always)]
     #[must_use]
-    pub const fn from_raw(raw: gcso_config_t) -> Self {
+    pub const fn from_raw(raw: RuntimeConfig) -> Self {
         Self {
             raw,
             hysteresis_band: DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND,
@@ -477,16 +454,16 @@ impl Config {
     /// Sets the soft-bounded (`PhaseClamp`) limit in radians ($\theta_{\max}$).
     #[inline(always)]
     #[must_use]
-    pub const fn with_phase_clamp_max_rad(mut self, ripa_clamp_max_rad: f32) -> Self {
-        self.raw.ripa_clamp_max_rad = ripa_clamp_max_rad;
+    pub const fn with_phase_clamp_max_rad(mut self, phase_clamp_max_rad: f32) -> Self {
+        self.raw.phase_clamp_max_rad = phase_clamp_max_rad;
         self
     }
 
     /// Sets the `PhaseStepFilter` quantization threshold angle in radians ($\Delta\theta_{\mathrm{min\_step}}$).
     #[inline(always)]
     #[must_use]
-    pub const fn with_phase_step_min_rad(mut self, qdps_min_step_rad: f32) -> Self {
-        self.raw.qdps_min_step_rad = qdps_min_step_rad;
+    pub const fn with_phase_step_min_rad(mut self, phase_step_min_rad: f32) -> Self {
+        self.raw.phase_step_min_rad = phase_step_min_rad;
         self
     }
 
@@ -510,7 +487,7 @@ impl Config {
     #[inline(always)]
     #[must_use]
     pub const fn with_substrate_capacity(mut self, substrate_capacity: u32) -> Self {
-        self.raw.action_hub_capacity = substrate_capacity;
+        self.raw.substrate_capacity = substrate_capacity;
         self
     }
 
@@ -518,14 +495,14 @@ impl Config {
     #[inline(always)]
     #[must_use]
     pub const fn substrate_capacity(&self) -> u32 {
-        self.raw.action_hub_capacity
+        self.raw.substrate_capacity
     }
 
-    /// Configures GPU warp shuffle instruction usage (`1` = enabled, `0` = disabled).
+    /// Configures vendor-neutral runtime execution flags (`0` = default).
     #[inline(always)]
     #[must_use]
-    pub const fn with_enable_cuda_warp_shuffle(mut self, enable_cuda_warp_shuffle: u8) -> Self {
-        self.raw.enable_cuda_warp_shuffle = enable_cuda_warp_shuffle;
+    pub const fn with_execution_flags(mut self, execution_flags: u8) -> Self {
+        self.raw.execution_flags = execution_flags;
         self
     }
 
@@ -593,10 +570,10 @@ impl Config {
         self
     }
 
-    /// Validates configuration parameters branchlessly against GCSO architectural invariants.
+    /// Validates configuration parameters branchlessly against LiminiKa architectural invariants.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is odd or zero,
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim` is odd or zero,
     /// `num_heads` is zero or exceeds `64`, `paged_block_size` is neither `16` nor `32`,
     /// `ledger_mode > 2`, capacity bounds are zero, or any floating-point threshold is non-finite
     /// or outside its valid domain.
@@ -610,15 +587,15 @@ impl Config {
 
         let valid_scales = branchless_is_finite_f32(self.raw.q7_phase_scale)
             & (self.raw.q7_phase_scale > 0.0)
-            & branchless_is_finite_f32(self.raw.ripa_clamp_max_rad)
-            & (self.raw.ripa_clamp_max_rad > 0.0)
-            & branchless_is_finite_f32(self.raw.qdps_min_step_rad)
-            & (self.raw.qdps_min_step_rad >= 0.0)
+            & branchless_is_finite_f32(self.raw.phase_clamp_max_rad)
+            & (self.raw.phase_clamp_max_rad > 0.0)
+            & branchless_is_finite_f32(self.raw.phase_step_min_rad)
+            & (self.raw.phase_step_min_rad >= 0.0)
             & branchless_is_finite_f32(self.raw.entropy_singularity_eps)
             & (self.raw.entropy_singularity_eps > 0.0);
 
         let valid_entropy_and_caps = (self.raw.max_prompt_anchors != 0)
-            & (self.raw.action_hub_capacity != 0)
+            & (self.raw.substrate_capacity != 0)
             & (self.raw.ledger_mode <= 2)
             & branchless_is_finite_f32(self.hysteresis_band)
             & (self.hysteresis_band >= 0.0)
@@ -630,7 +607,7 @@ impl Config {
         if valid_dims & valid_scales & valid_entropy_and_caps {
             Ok(())
         } else {
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
+            Err(LMNK_ERR_INVALID_ARGUMENT)
         }
     }
 }
@@ -661,7 +638,7 @@ pub struct OrchestratorStatusSnapshot {
     pub slot_sandbox_mask: u8,
     /// Active Core Stack Slot 0 `Liminal` channel aperture mask (`8` channels).
     pub liminal_threshold_mask: u32,
-    /// Active Core Stack Slot 1 `Stigmergic` Venn-core granule mask.
+    /// Active Core Stack Slot 1 `Stigmergic` overlap-core granule mask.
     pub stigmergic_overlap_core_mask: u8,
     /// Whether Core Stack Slot 2 `LiminalEgoState` intervention is active.
     pub ego_active: bool,
@@ -677,41 +654,63 @@ pub struct OrchestratorStatusSnapshot {
     pub quiescent_dwell_steps: u16,
 }
 
+/// Allocation provenance tag for [`RuntimeContext::allocation_mode`]: stack / uninitialized.
+pub(crate) const CTX_ALLOC_UNINIT: u8 = 0;
+/// Allocation provenance tag for [`RuntimeContext::allocation_mode`]: heap `Box<RuntimeContext>`.
+pub(crate) const CTX_ALLOC_HEAP_BOXED: u8 = 1;
+/// Allocation provenance tag for [`RuntimeContext::allocation_mode`]: caller-owned `in_place` memory.
+pub(crate) const CTX_ALLOC_IN_PLACE: u8 = 2;
+
 /// High-level safe Rust single orchestrator facade integrating concrete core engines
 /// ([`StigmergicSubstrate`], [`PhaseSteeringEngine`], [`EntropyController`]),
-/// the 128-byte 3-slot core stack ([`AutonomousCoreLayerStack`]: `Liminal` + `Stigmergic` + `Ego`),
+/// the 128-byte 3-slot core stack ([`CoreStateStack`]: `Liminal` + `Stigmergic` + `Ego`),
 /// and dynamic slide-in/slide-out [`LatentHorizonSlot`] boundaries.
+///
+/// Field ordering follows Hot -> Warm -> Cold cache locality under `#[repr(C, align(64))]`,
+/// guaranteeing `size_of % 64 == 0` and zero [`core::mem::needs_drop`] glue for caller-managed
+/// zero-heap `in_place` initialization.
+#[repr(C, align(64))]
 #[derive(Debug)]
 pub struct RuntimeContext {
+    // --- Hot (per-token step working set) ---
     config: Config,
-    substrate: StigmergicSubstrate,
-    phase_steering: PhaseSteeringEngine,
+    core_layers: CoreStateStack,
     entropy_controller: EntropyController,
-    core_layers: AutonomousCoreLayerStack,
-    last_boundary_delta: LiminalBoundaryDelta,
+    probe_baseline: ManifoldProbeBaseline,
+    system_spine: SystemSpineState,
     last_horizon: EpistemicHorizonReading,
-    last_overlap_report: StigmergicOverlapSerendipityReport,
+    last_overlap_report: OverlapDiscoveryReport,
+    distortion_tension: DistortionTension,
+    phase_steering: PhaseSteeringEngine,
+    last_lacuna_partition: LacunaPartition8,
+    last_boundary_delta: LiminalBoundaryDelta,
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
+    sandbox_settlements: u32,
     escalated_workbench_lane: Option<u8>,
     sandbox_workbench_lane: Option<u8>,
     last_sandbox_event: SandboxLifecycleEvent,
-    sandbox_settlements: u32,
-    probe_baseline: ManifoldProbeBaseline,
-    telemetry: CoreTelemetryBank,
+    allocation_mode: u8,
+    // --- Warm (substrate & differential network) ---
     compute_pool: AnonymousComputePool,
-    system_spine: SystemSpineState,
-    last_epistemic_partition: EpistemicPartition,
-    distortion_tension: DistortionTension,
     ego_differential_net: EgoDifferentialNet,
+    substrate: StigmergicSubstrate,
+    // --- Cold (telemetry counters & breakdown) ---
+    telemetry: CoreTelemetryBank,
 }
+
+const _: () = {
+    assert!(core::mem::align_of::<RuntimeContext>() == 64);
+    assert!(core::mem::size_of::<RuntimeContext>() % 64 == 0);
+    assert!(!core::mem::needs_drop::<RuntimeContext>());
+};
 
 impl RuntimeContext {
     /// Creates a new verified [`RuntimeContext`] instance from [`Config`].
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if configuration parameters violate
-    /// GCSO architectural invariants.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if configuration parameters violate
+    /// LiminiKa architectural invariants.
     #[inline]
     pub fn new(config: Config) -> Result<Self> {
         config.validate()?;
@@ -720,7 +719,7 @@ impl RuntimeContext {
         substrate.repulsion_threshold = config.repulsion_threshold;
         substrate.repulsion_scale_u7 = config.repulsion_scale_u7;
         substrate.coupling_matrix_8x8 = config.slot_coupling_matrix;
-        let entropy_state = gcso_edbc_state_t {
+        let entropy_state = EntropyState {
             singularity_eps: config.raw.entropy_singularity_eps,
             bifurcation_threshold: config.bifurcation_threshold,
             ..Default::default()
@@ -731,41 +730,180 @@ impl RuntimeContext {
 
         Ok(Self {
             config,
-            substrate,
-            phase_steering,
+            core_layers: CoreStateStack::new(),
             entropy_controller: entropy_ctrl,
-            core_layers: AutonomousCoreLayerStack::new(),
-            last_boundary_delta: LiminalBoundaryDelta::default(),
+            probe_baseline: ManifoldProbeBaseline::new(),
+            system_spine: SystemSpineState::new(),
             last_horizon: EpistemicHorizonReading::default(),
-            last_overlap_report: StigmergicOverlapSerendipityReport::default(),
+            last_overlap_report: OverlapDiscoveryReport::default(),
+            distortion_tension: DistortionTension::default(),
+            phase_steering,
+            last_lacuna_partition: LacunaPartition8::default(),
+            last_boundary_delta: LiminalBoundaryDelta::default(),
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
+            sandbox_settlements: 0,
             escalated_workbench_lane: None,
             sandbox_workbench_lane: None,
             last_sandbox_event: SandboxLifecycleEvent::Idle,
-            sandbox_settlements: 0,
-            probe_baseline: ManifoldProbeBaseline::new(),
-            telemetry: CoreTelemetryBank::default(),
+            allocation_mode: CTX_ALLOC_UNINIT,
             compute_pool: AnonymousComputePool::default(),
-            system_spine: SystemSpineState::new(),
-            last_epistemic_partition: EpistemicPartition::default(),
-            distortion_tension: DistortionTension::default(),
             ego_differential_net: EgoDifferentialNet::default(),
+            substrate,
+            telemetry: CoreTelemetryBank::default(),
         })
     }
 
-    /// Returns an immutable reference to the 128-byte 3-slot [`AutonomousCoreLayerStack`]
+    /// Initializes a caller-allocated `RuntimeContext` buffer in-place with zero heap
+    /// allocation and without staging the full ~5 KB struct on the stack.
+    ///
+    /// # Safety
+    /// Caller must ensure `dst` is non-null, properly aligned (`align_of::<RuntimeContext>() == 64`),
+    /// writable for `size_of::<RuntimeContext>()` bytes, and not currently aliased.
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] before modifying `dst` if `config` violates
+    /// architectural invariants or dimension limits.
+    pub unsafe fn write_in_place(dst: *mut Self, config: Config) -> Result<()> {
+        config.validate()?;
+        if config.raw.substrate_capacity == 0
+            || config.raw.head_dim > u16::MAX as u32
+            || config.raw.num_heads > u16::MAX as u32
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        let phase_steering = PhaseSteeringEngine::new(config.raw.head_dim, config.raw.num_heads)?;
+        let entropy_state = EntropyState {
+            singularity_eps: config.raw.entropy_singularity_eps,
+            bifurcation_threshold: config.bifurcation_threshold,
+            ..Default::default()
+        };
+        let mut entropy_ctrl = EntropyController::new(entropy_state);
+        entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
+        entropy_ctrl.set_tau_flux(config.tau_flux);
+
+        let raw_cfg = config.raw;
+        let rep_thresh = config.repulsion_threshold;
+        let rep_scale_u7 = config.repulsion_scale_u7;
+        let coupling = config.slot_coupling_matrix;
+
+        // SAFETY: Caller guarantees `dst` is valid, writable, non-aliased, and 64-byte aligned.
+        unsafe {
+            core::ptr::write_bytes(dst, 0u8, 1);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).config), config);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).core_layers),
+                CoreStateStack::new(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).entropy_controller),
+                entropy_ctrl,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).probe_baseline),
+                ManifoldProbeBaseline::new(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).system_spine),
+                SystemSpineState::new(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).last_horizon),
+                EpistemicHorizonReading::default(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).last_overlap_report),
+                OverlapDiscoveryReport::default(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).distortion_tension),
+                DistortionTension::default(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).phase_steering),
+                phase_steering,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).last_lacuna_partition),
+                LacunaPartition8::default(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).last_boundary_delta),
+                LiminalBoundaryDelta::default(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).horizon_dwell),
+                HorizonDwellState::default(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).escalated_workbench_lane),
+                None,
+            );
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).sandbox_workbench_lane), None);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).last_sandbox_event),
+                SandboxLifecycleEvent::Idle,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).allocation_mode),
+                CTX_ALLOC_IN_PLACE,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).compute_pool),
+                AnonymousComputePool::default(),
+            );
+            EgoDifferentialNet::init_in_place_on_zeroed(
+                core::ptr::addr_of_mut!((*dst).ego_differential_net),
+                1,
+            );
+            StigmergicSubstrate::init_in_place_on_zeroed(
+                core::ptr::addr_of_mut!((*dst).substrate),
+                &raw_cfg,
+                rep_thresh,
+                rep_scale_u7,
+                coupling,
+            );
+            CoreTelemetryBank::init_in_place_on_zeroed(
+                core::ptr::addr_of_mut!((*dst).telemetry),
+                TelemetryCapturePolicy::default(),
+            );
+        }
+        Ok(())
+    }
+
+    /// Returns the internal allocation provenance tag (`CTX_ALLOC_*`).
+    #[inline(always)]
+    #[must_use]
+    pub(crate) const fn allocation_mode(&self) -> u8 {
+        self.allocation_mode
+    }
+
+    /// Updates the internal allocation provenance tag (`CTX_ALLOC_*`).
+    #[inline(always)]
+    pub(crate) fn set_allocation_mode(&mut self, mode: u8) {
+        self.allocation_mode = mode;
+    }
+
+    /// Resets transient runtime state before caller-managed deinitialization and marks
+    /// `allocation_mode` back to [`CTX_ALLOC_UNINIT`].
+    #[inline]
+    pub(crate) fn deinit_hot_state(&mut self) {
+        let _ = self.reset();
+        self.allocation_mode = CTX_ALLOC_UNINIT;
+    }
+
+    /// Returns an immutable reference to the 128-byte 3-slot [`CoreStateStack`]
     /// (`Slot 0: Liminal`, `Slot 1: Stigmergic`, `Slot 2: Ego`).
     #[inline(always)]
     #[must_use]
-    pub const fn core_layers(&self) -> &AutonomousCoreLayerStack {
+    pub const fn core_layers(&self) -> &CoreStateStack {
         &self.core_layers
     }
 
-    /// Returns a mutable reference to the 128-byte 3-slot [`AutonomousCoreLayerStack`].
+    /// Returns a mutable reference to the 128-byte 3-slot [`CoreStateStack`].
     #[inline(always)]
     #[must_use]
-    pub fn core_layers_mut(&mut self) -> &mut AutonomousCoreLayerStack {
+    pub fn core_layers_mut(&mut self) -> &mut CoreStateStack {
         &mut self.core_layers
     }
 
@@ -831,17 +969,17 @@ impl RuntimeContext {
         &mut self.last_horizon
     }
 
-    /// Returns an immutable reference to the latest [`StigmergicOverlapSerendipityReport`].
+    /// Returns an immutable reference to the latest [`OverlapDiscoveryReport`].
     #[inline(always)]
     #[must_use]
-    pub const fn last_overlap_report(&self) -> &StigmergicOverlapSerendipityReport {
+    pub const fn last_overlap_report(&self) -> &OverlapDiscoveryReport {
         &self.last_overlap_report
     }
 
-    /// Returns a mutable reference to the latest [`StigmergicOverlapSerendipityReport`].
+    /// Returns a mutable reference to the latest [`OverlapDiscoveryReport`].
     #[inline(always)]
     #[must_use]
-    pub fn last_overlap_report_mut(&mut self) -> &mut StigmergicOverlapSerendipityReport {
+    pub fn last_overlap_report_mut(&mut self) -> &mut OverlapDiscoveryReport {
         &mut self.last_overlap_report
     }
 
@@ -902,11 +1040,11 @@ impl RuntimeContext {
         &mut self.system_spine
     }
 
-    /// Returns the most recent branchless [`EpistemicPartition`].
+    /// Returns the most recent branchless [`LacunaPartition8`].
     #[inline(always)]
     #[must_use]
-    pub const fn last_epistemic_partition(&self) -> &EpistemicPartition {
-        &self.last_epistemic_partition
+    pub const fn last_lacuna_partition(&self) -> &LacunaPartition8 {
+        &self.last_lacuna_partition
     }
 
     /// Returns a shared reference to the live [`DistortionTension`] homeostatic state.
@@ -993,10 +1131,10 @@ impl RuntimeContext {
             slot_pinned_mask: self.substrate.slot_pinned_mask,
             slot_repulsion_mask: self.substrate.slot_repulsion_mask,
             slot_sandbox_mask: self.substrate.slot_sandbox_mask,
-            liminal_threshold_mask: self.core_layers.liminal_layer.active_aperture_mask,
-            stigmergic_overlap_core_mask: self.core_layers.stigmergic_layer.venn_overlap_mask,
-            ego_active: self.core_layers.ego_layer.is_active(),
-            ego_intervention_epochs: self.core_layers.ego_layer.intervention_epochs,
+            liminal_threshold_mask: self.core_layers.liminal.active_aperture_mask,
+            stigmergic_overlap_core_mask: self.core_layers.stigmergy.overlap_mask,
+            ego_active: self.core_layers.ego.is_active(),
+            ego_intervention_epochs: self.core_layers.ego.intervention_epochs,
             stationary_shortcut_ready: self.last_boundary_delta.stationary_shortcut_ready != 0,
             active_horizon_slots_mask: self.active_horizon_slots_mask,
             unstable_dwell_steps: self.horizon_dwell.unstable_dwell_steps,
@@ -1053,31 +1191,31 @@ impl RuntimeContext {
         &mut self.substrate.bloom_filter
     }
 
-    /// Returns an immutable reference to the active [`gcso_ledger_slot_t`] scratchpad.
+    /// Returns an immutable reference to the active [`LedgerSlot`] scratchpad.
     #[inline(always)]
     #[must_use]
-    pub const fn ledger_slot(&self) -> &gcso_ledger_slot_t {
+    pub const fn ledger_slot(&self) -> &LedgerSlot {
         &self.substrate.ledger_slot
     }
 
-    /// Returns a mutable reference to the active [`gcso_ledger_slot_t`] scratchpad.
+    /// Returns a mutable reference to the active [`LedgerSlot`] scratchpad.
     #[inline(always)]
     #[must_use]
-    pub fn ledger_slot_mut(&mut self) -> &mut gcso_ledger_slot_t {
+    pub fn ledger_slot_mut(&mut self) -> &mut LedgerSlot {
         &mut self.substrate.ledger_slot
     }
 
     /// Returns an immutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
-    pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, gcso_q7_t> {
+    pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, PhaseQ7> {
         self.substrate.slot_phase_bank.relax_slice::<16>()
     }
 
     /// Returns a mutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
-    pub fn slot_phase_bank_mut(&mut self) -> AlignedSliceMut16<'_, gcso_q7_t> {
+    pub fn slot_phase_bank_mut(&mut self) -> AlignedSliceMut16<'_, PhaseQ7> {
         self.substrate.slot_phase_bank.relax_slice_mut::<16>()
     }
 
@@ -1085,9 +1223,9 @@ impl RuntimeContext {
     #[inline(always)]
     fn slot_words_mut(&mut self, slot_idx: usize) -> Result<&mut [u64; NUM_STIGMERGIC_GRANULES]> {
         if slot_idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: `self.substrate.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+        // SAFETY: `self.substrate.slot_phase_bank` is `AlignedBuffer64<PhaseQ7, 512>`, so every
         // 64-byte slot at byte offset `slot_idx * 64` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
         Ok(unsafe {
             &mut *(self
@@ -1103,12 +1241,12 @@ impl RuntimeContext {
     /// Sets the 64-head Q7 phase profile for a specific Workbench Lane (`0..=7`) and enables it.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `slot_id >= MAX_ATTRACTOR_DOMAINS`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `slot_id >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
     pub fn set_slot_phase_profile(
         &mut self,
         slot_id: u8,
-        phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+        phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> Result<()> {
         let dst_w = self.slot_words_mut(usize::from(slot_id))?;
         *dst_w = load_q7_words_64(phases);
@@ -1193,7 +1331,7 @@ impl RuntimeContext {
     #[must_use]
     pub(crate) fn evaluate_multi_domain_superposition_words(
         &self,
-        trail: &gcso_pointer_trail_t,
+        trail: &PointerTrail,
     ) -> ([u64; NUM_STIGMERGIC_GRANULES], f32) {
         let tw = *trail_phase_words_ref(trail);
         let tn = swar_words_nonzero_64(&tw);
@@ -1217,7 +1355,7 @@ impl RuntimeContext {
                 standard_bits &= standard_bits - 1;
                 let base_e = branchless_flush_subnormal_f32(branchless_relu_f32(weights[idx]));
                 if base_e > DEFAULT_ENTROPY_EPS {
-                    // SAFETY: `self.substrate.slot_phase_bank` is `AlignedBuffer64<gcso_q7_t, 512>`, so every
+                    // SAFETY: `self.substrate.slot_phase_bank` is `AlignedBuffer64<PhaseQ7, 512>`, so every
                     // 64-byte row `bank_2d[idx]` is 64-byte aligned (`>= 8-byte` alignment of `u64`).
                     let slot_w = unsafe {
                         &*(bank_2d[idx].as_ptr() as *const [u64; NUM_STIGMERGIC_GRANULES])
@@ -1291,23 +1429,25 @@ impl RuntimeContext {
         (run_w, clamped_pull)
     }
 
-    /// Serializes active runtime context state into a `.gcso` binary snapshot conforming to
-    /// [`crate::liminal::GCSO_ABI_VERSION_HEX`], stamping an IEEE 802.3 CRC32 checksum over the payload.
+    /// Serializes active runtime context state into a `.lmnk` binary snapshot conforming to
+    /// [`crate::liminal::LMNK_ABI_VERSION_HEX`], stamping an IEEE 802.3 CRC32 checksum over the payload.
     ///
     /// Supports two-pass sizing: passing an empty `buffer` writes the required byte size (`320` bytes)
     /// into `*required_size` and returns `Ok(())`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `buffer` is non-empty and smaller
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `buffer` is non-empty and smaller
     /// than `320` bytes.
     #[inline]
     pub fn serialize_to_bytes(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
-        let header_size = core::mem::size_of::<gcso_snapshot_header_t>(); // 128 bytes
-        let context_data_size = 64usize; // 64-byte aligned context & attractor metadata block
-        let entropy_size = core::mem::size_of::<gcso_edbc_state_t>(); // 64 bytes
-        let ledger_size = core::mem::size_of::<gcso_ledger_slot_t>(); // 64 bytes
+        let header_size = core::mem::size_of::<LmnkSnapshotHeader>(); // 128 bytes
+        let context_data_size = 64usize; // 64-byte context & attractor metadata block
+        let entropy_size = core::mem::size_of::<EntropyState>(); // 32 bytes
+        let context_meta_size = 32usize; // 32-byte saved dimension & geometry block
+        let ledger_size = core::mem::size_of::<LedgerSlot>(); // 64 bytes
 
-        let total_required = header_size + context_data_size + entropy_size + ledger_size; // 320 bytes
+        let total_required =
+            header_size + context_data_size + entropy_size + context_meta_size + ledger_size; // 320 bytes
 
         if buffer.is_empty() {
             *required_size = total_required;
@@ -1315,14 +1455,15 @@ impl RuntimeContext {
         }
         if buffer.len() < total_required {
             *required_size = total_required;
-            return Err(GCSO_ERROR_BUFFER_TOO_SMALL);
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
 
         buffer[..total_required].fill(0);
 
         let substrate_off = header_size; // 128
         let entropy_off = substrate_off + context_data_size; // 192
-        let ledger_off = entropy_off + entropy_size; // 256
+        let meta_off = entropy_off + entropy_size; // 224
+        let ledger_off = meta_off + context_meta_size; // 256
 
         let ctx_buf = &mut buffer[substrate_off..entropy_off];
         ctx_buf[0..8].copy_from_slice(&self.substrate.step_counter.to_le_bytes());
@@ -1337,22 +1478,26 @@ impl RuntimeContext {
         ctx_buf[24..32].copy_from_slice(&self.substrate.coupling_matrix_8x8.to_le_bytes());
         f32::write_unaligned_slice_to(&self.substrate.slot_weights, ctx_buf, 32)?;
 
-        let mut entropy_state = self.entropy_controller.state();
-        entropy_state.reserved[0..4]
-            .copy_from_slice(&self.substrate.last_selected_trail_id.to_le_bytes());
-        entropy_state.reserved[4..8].copy_from_slice(&self.config.raw.head_dim.to_le_bytes());
-        entropy_state.reserved[8..12].copy_from_slice(&self.config.raw.num_heads.to_le_bytes());
+        let entropy_state = self.entropy_controller.state();
         entropy_state.write_unaligned_to(buffer, entropy_off)?;
+
+        let meta_buf = &mut buffer[meta_off..ledger_off];
+        meta_buf[0..4].copy_from_slice(&self.substrate.last_selected_trail_id.to_le_bytes());
+        meta_buf[4..8].copy_from_slice(&self.config.raw.head_dim.to_le_bytes());
+        meta_buf[8..12].copy_from_slice(&self.config.raw.num_heads.to_le_bytes());
+        meta_buf[12..16].copy_from_slice(&self.config.raw.rotary_dim.to_le_bytes());
+        meta_buf[16] = self.config.raw.rope_layout;
+
         self.substrate
             .ledger_slot
             .write_unaligned_to(buffer, ledger_off)?;
 
         let mut header = init_snapshot_header(total_required as u64, 1_774_900_000);
-        header.action_hub_offset = substrate_off as u64;
-        header.attractor_field_offset = substrate_off as u64;
-        header.dpsr_state_offset = entropy_off as u64;
-        header.rank1_state_offset = entropy_off as u64;
-        header.edbc_state_offset = entropy_off as u64;
+        header.substrate_offset = substrate_off as u64;
+        header.anchor_offset = substrate_off as u64;
+        header.phase_steering_offset = entropy_off as u64;
+        header.rank1_offset = entropy_off as u64;
+        header.entropy_offset = entropy_off as u64;
         header.ledger_slot_offset = ledger_off as u32;
         finalize_snapshot_header_crc32(&mut header, &buffer[..total_required])?;
 
@@ -1361,32 +1506,32 @@ impl RuntimeContext {
         Ok(())
     }
 
-    /// Deserializes a `.gcso` binary snapshot buffer to restore context state in-place with
+    /// Deserializes a `.lmnk` binary snapshot buffer to restore context state in-place with
     /// ABI header validation and IEEE 802.3 CRC32 payload integrity verification.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] if the header magic, section
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if the header magic, section
     /// offsets, buffer bounds, or payload CRC32 checksum are invalid.
-    /// Returns [`crate::liminal::GCSO_ERROR_VERSION_MISMATCH`] if the snapshot ABI version does not
-    /// match [`crate::liminal::GCSO_ABI_VERSION_HEX`].
+    /// Returns [`crate::liminal::LMNK_ERR_VERSION_MISMATCH`] if the snapshot ABI version does not
+    /// match [`crate::liminal::LMNK_ABI_VERSION_HEX`].
     #[inline]
     pub fn deserialize_from_bytes(&mut self, buffer: &[u8]) -> Result<()> {
-        let header_size = core::mem::size_of::<gcso_snapshot_header_t>();
+        let header_size = core::mem::size_of::<LmnkSnapshotHeader>();
         if buffer.len() < header_size {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
-        let header = gcso_snapshot_header_t::read_unaligned_from(buffer, 0)
-            .map_err(|_| GCSO_ERROR_CONTAINER_CORRUPTED)?;
+        let header = LmnkSnapshotHeader::read_unaligned_from(buffer, 0)
+            .map_err(|_| LMNK_ERR_CONTAINER_CORRUPTED)?;
 
         verify_snapshot_payload_crc32(&header, buffer)?;
 
-        let substrate_off = header.action_hub_offset as usize;
-        let entropy_off = header.edbc_state_offset as usize;
+        let substrate_off = header.substrate_offset as usize;
+        let entropy_off = header.entropy_offset as usize;
         let ledger_off = header.ledger_slot_offset as usize;
 
         if substrate_off < header_size || entropy_off < substrate_off || ledger_off < entropy_off {
-            return Err(GCSO_ERROR_CONTAINER_CORRUPTED);
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
         if buffer.len() >= substrate_off + 21 {
@@ -1422,49 +1567,42 @@ impl RuntimeContext {
             }
         }
 
-        let entropy_size = core::mem::size_of::<gcso_edbc_state_t>();
+        let entropy_size = core::mem::size_of::<EntropyState>();
         if buffer.len() >= entropy_off + entropy_size {
-            let mut entropy_st = gcso_edbc_state_t::read_unaligned_from(buffer, entropy_off)?;
-            self.substrate.last_selected_trail_id = u32::from_le_bytes([
-                entropy_st.reserved[0],
-                entropy_st.reserved[1],
-                entropy_st.reserved[2],
-                entropy_st.reserved[3],
-            ]);
-            let saved_head_dim = u32::from_le_bytes([
-                entropy_st.reserved[4],
-                entropy_st.reserved[5],
-                entropy_st.reserved[6],
-                entropy_st.reserved[7],
-            ]);
-            let saved_num_heads = u32::from_le_bytes([
-                entropy_st.reserved[8],
-                entropy_st.reserved[9],
-                entropy_st.reserved[10],
-                entropy_st.reserved[11],
-            ]);
-            if saved_head_dim != 0
-                && (saved_head_dim & 1) == 0
-                && saved_num_heads != 0
-                && (saved_num_heads as usize) <= MAX_ATTENTION_HEADS
-            {
-                self.config.raw.head_dim = saved_head_dim;
-                self.config.raw.num_heads = saved_num_heads;
-                let restored_engine = PhaseSteeringEngine::new(saved_head_dim, saved_num_heads)?;
-                self.phase_steering = restored_engine;
-                self.substrate.phase_steering = restored_engine;
+            let entropy_st = EntropyState::read_unaligned_from(buffer, entropy_off)?;
+            let meta_off = entropy_off + entropy_size;
+            if meta_off + 32 <= ledger_off && buffer.len() >= meta_off + 32 {
+                self.substrate.last_selected_trail_id = u32::read_unaligned_from(buffer, meta_off)?;
+                let saved_head_dim = u32::read_unaligned_from(buffer, meta_off + 4)?;
+                let saved_num_heads = u32::read_unaligned_from(buffer, meta_off + 8)?;
+                let saved_rotary_dim = u32::read_unaligned_from(buffer, meta_off + 12)?;
+                let saved_rope_layout = buffer[meta_off + 16];
+                if saved_head_dim != 0
+                    && (saved_head_dim & 1) == 0
+                    && saved_num_heads != 0
+                    && (saved_num_heads as usize) <= MAX_ATTENTION_HEADS
+                    && saved_head_dim <= u16::MAX as u32
+                    && saved_num_heads <= u16::MAX as u32
+                {
+                    self.config.raw.head_dim = saved_head_dim;
+                    self.config.raw.num_heads = saved_num_heads;
+                    self.config.raw.rotary_dim = saved_rotary_dim;
+                    self.config.raw.rope_layout = saved_rope_layout;
+                    self.phase_steering =
+                        PhaseSteeringEngine::new(saved_head_dim, saved_num_heads)?;
+                    self.substrate.head_dim = saved_head_dim as u16;
+                    self.substrate.num_heads = saved_num_heads as u16;
+                }
             }
-            entropy_st.reserved = [0u8; 36];
             self.entropy_controller = EntropyController::new(entropy_st);
             self.entropy_controller
                 .set_hysteresis_band(self.config.hysteresis_band);
             self.entropy_controller.set_tau_flux(self.config.tau_flux);
         }
 
-        let ledger_size = core::mem::size_of::<gcso_ledger_slot_t>();
+        let ledger_size = core::mem::size_of::<LedgerSlot>();
         if buffer.len() >= ledger_off + ledger_size {
-            self.substrate.ledger_slot =
-                gcso_ledger_slot_t::read_unaligned_from(buffer, ledger_off)?;
+            self.substrate.ledger_slot = LedgerSlot::read_unaligned_from(buffer, ledger_off)?;
         }
 
         Ok(())
@@ -1483,7 +1621,7 @@ impl RuntimeContext {
         abi_version()
     }
 
-    /// Returns the static ABI version string ([`GCSO_ABI_VERSION_STRING`]).
+    /// Returns the static ABI version string ([`LMNK_ABI_VERSION_STRING`]).
     #[inline(always)]
     #[must_use]
     pub const fn abi_version_string(&self) -> &'static str {
@@ -1493,7 +1631,7 @@ impl RuntimeContext {
     /// Queries active compute capability bitmask flags without branching.
     #[inline(always)]
     #[must_use]
-    pub const fn query_capability(&self) -> gcso_capability_flags_t {
+    pub const fn query_capability(&self) -> u64 {
         query_capability()
     }
 
@@ -1502,7 +1640,7 @@ impl RuntimeContext {
     /// # Errors
     /// Never fails in the default implementation.
     #[inline(always)]
-    pub fn init_default_config(&self, config: &mut gcso_config_t) -> Result<()> {
+    pub fn init_default_config(&self, config: &mut RuntimeConfig) -> Result<()> {
         *config = self.config.raw;
         Ok(())
     }
@@ -1517,20 +1655,20 @@ impl RuntimeContext {
         self.substrate.reset()?;
         self.clear_all_domains()?;
         self.substrate.bloom_filter.clear();
-        self.substrate.ledger_slot = gcso_ledger_slot_t {
+        self.substrate.ledger_slot = LedgerSlot {
             mode: u32::from(self.config.raw.ledger_mode),
             ..Default::default()
         };
-        self.core_layers = AutonomousCoreLayerStack::new();
+        self.core_layers = CoreStateStack::new();
         self.last_boundary_delta = LiminalBoundaryDelta::default();
         self.last_horizon = EpistemicHorizonReading::default();
-        self.last_overlap_report = StigmergicOverlapSerendipityReport::default();
+        self.last_overlap_report = OverlapDiscoveryReport::default();
         self.active_horizon_slots_mask = 0;
         self.sandbox_workbench_lane = None;
         self.last_sandbox_event = SandboxLifecycleEvent::Idle;
         self.sandbox_settlements = 0;
         self.system_spine = SystemSpineState::new();
-        self.last_epistemic_partition = EpistemicPartition::default();
+        self.last_lacuna_partition = LacunaPartition8::default();
         self.distortion_tension = DistortionTension::new(false);
         self.ego_differential_net = EgoDifferentialNet::default();
         Ok(())
@@ -1539,25 +1677,25 @@ impl RuntimeContext {
     /// Executes a per-token Hot Path inference step in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias.
     #[inline]
     pub fn step_token(
         &mut self,
         token_id: u32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        trail_out: Option<&mut gcso_pointer_trail_t>,
+        trail_out: Option<&mut PointerTrail>,
     ) -> Result<()> {
         if let (Some(q), Some(k)) = (query_tensor.as_deref(), key_tensor.as_deref()) {
             q.ensure_disjoint_mut(k)?;
         }
 
-        let mut state_out = gcso_edbc_state_t::default();
+        let mut state_out = EntropyState::default();
         self.entropy_controller.eval_stateful(0.0, &mut state_out)?;
 
         let next_step = self.substrate.step_counter.wrapping_add(1);
         self.substrate.step_counter = next_step;
-        let cap = self.config.raw.action_hub_capacity;
+        let cap = self.config.raw.substrate_capacity;
         let cur_active = self.substrate.active_count;
         self.substrate.active_count =
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
@@ -1603,19 +1741,19 @@ impl RuntimeContext {
         Ok(())
     }
 
-    /// Serializes active runtime context state into a `.gcso` binary snapshot buffer.
+    /// Serializes active runtime context state into a `.lmnk` binary snapshot buffer.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_BUFFER_TOO_SMALL`] if `buffer.len() < *required_size`.
+    /// Returns [`LMNK_ERR_BUFFER_TOO_SMALL`] if `buffer.len() < *required_size`.
     #[inline]
     pub fn serialize(&self, buffer: &mut [u8], required_size: &mut usize) -> Result<()> {
         self.serialize_to_bytes(buffer, required_size)
     }
 
-    /// Deserializes a `.gcso` binary snapshot buffer to restore context state in-place.
+    /// Deserializes a `.lmnk` binary snapshot buffer to restore context state in-place.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_CONTAINER_CORRUPTED`] or [`crate::liminal::GCSO_ERROR_VERSION_MISMATCH`]
+    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] or [`crate::liminal::LMNK_ERR_VERSION_MISMATCH`]
     /// if the snapshot header magic, version, or payload checksum is invalid.
     #[inline]
     pub fn deserialize(&mut self, buffer: &[u8]) -> Result<()> {
@@ -1630,7 +1768,7 @@ impl RuntimeContext {
     pub fn seek_to_token(
         &mut self,
         token_index: u32,
-        header_out: &mut gcso_kv_keyframe_header_t,
+        header_out: &mut KvKeyframeHeader,
     ) -> Result<()> {
         header_out.token_index = token_index;
         header_out.frame_type = 0;
@@ -1661,11 +1799,13 @@ impl RuntimeContext {
         geometry: &G,
         latent_slots: &mut H,
         escalation_provider: &mut E,
-        trail_out: &mut gcso_pointer_trail_t,
+        trail_out: &mut PointerTrail,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> Result<(GatewayFrame, CausalProvenanceReport, u32, u32, bool)> {
         let (head_dim, num_heads, _expected_len) =
             self.substrate.validate_substrate_cascade_params(
+                self.phase_steering.head_dim(),
+                self.phase_steering.num_heads(),
                 self.phase_steering.phase_step_min_rad(),
                 self.phase_steering.phase_clamp_max_rad(),
                 query_tensor.as_deref(),
@@ -1673,14 +1813,14 @@ impl RuntimeContext {
             )?;
         let geom = geometry.rope_geometry();
         if geom.head_dim != head_dim || geom.num_heads != num_heads {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
         // 1. Compute pure `SystemSpine` I-Frame baseline when Ego is active, then pierce
         //    `Liminal` -> `Stigmergy` -> `EgoDifferentialNet` and enforce physical `pinned` isolation.
-        let prev_layer0 = self.core_layers.liminal_layer;
-        let prev_venn = self.core_layers.stigmergic_layer.venn_overlap_mask;
-        let (mut frame, pframe_delta_q7, pframe_hops) = if self.core_layers.ego_layer.is_active() {
+        let prev_liminal = self.core_layers.liminal;
+        let prev_overlap = self.core_layers.stigmergy.overlap_mask;
+        let (mut frame, pframe_delta_q7, pframe_hops) = if self.core_layers.ego.is_active() {
             let mut sys_baseline =
                 signal.synthesize_gateway_with_aperture_from_stack(&self.core_layers);
             self.core_layers.modulate_gateway_frame_branchless(
@@ -1694,18 +1834,18 @@ impl RuntimeContext {
                 &self.last_horizon,
                 &self.last_overlap_report,
             );
-            self.core_layers.liminal_layer.active_aperture_mask =
+            self.core_layers.liminal.active_aperture_mask =
                 self.system_spine.mask_ego_aperture_edits(
-                    prev_layer0.active_aperture_mask,
-                    self.core_layers.liminal_layer.active_aperture_mask,
+                    prev_liminal.active_aperture_mask,
+                    self.core_layers.liminal.active_aperture_mask,
                 );
             let (d_q7, hops, pframe_matched_mask) = self
                 .ego_differential_net
                 .evaluate_pframe_chain_with_mask_branchless(
-                    &self.core_layers.ego_layer,
+                    &self.core_layers.ego,
                     &self.system_spine,
-                    &self.last_epistemic_partition,
-                    &self.core_layers.stigmergic_layer,
+                    &self.last_lacuna_partition,
+                    &self.core_layers.stigmergy,
                     &self.distortion_tension,
                     &mut ego_frame,
                 );
@@ -1728,10 +1868,10 @@ impl RuntimeContext {
         };
         let mut frm_w = *frame.phase_words_ref();
         self.last_boundary_delta = LiminalBoundaryDelta::compute_branchless(
-            &prev_layer0,
-            &self.core_layers.liminal_layer,
-            prev_venn,
-            self.last_overlap_report.venn_core_mask,
+            &prev_liminal,
+            &self.core_layers.liminal,
+            prev_overlap,
+            self.last_overlap_report.overlap_core_mask,
             &self.last_boundary_delta,
         );
 
@@ -1741,10 +1881,10 @@ impl RuntimeContext {
             entropy_gate_mode: entropy_st.active_branch_mode,
             moving_z_entropy: entropy_st.moving_z_entropy,
             repulsion_severity: frame.repulsion_severity,
-            causal_root_cause: frame.dominant_cause_code,
+            causal_root_cause: frame.attribution_tag,
             epistemic_regime: self.last_horizon.regime_code,
             stationary_shortcut_ready: self.last_boundary_delta.stationary_shortcut_ready != 0,
-            ego_active_triggers: self.core_layers.ego_layer.last_intervened_mask,
+            ego_active_triggers: self.core_layers.ego.last_intervened_mask,
             unstable_dwell_steps: 0,
             quiescent_dwell_steps: 0,
         };
@@ -1777,7 +1917,7 @@ impl RuntimeContext {
                 0
             },
             layer_scale_q7: 64,
-            desired_aperture_mask: self.core_layers.liminal_layer.active_aperture_mask,
+            desired_aperture_mask: self.core_layers.liminal.active_aperture_mask,
             current_frame_energy: frame.effective_energy,
         };
         let escalated = self.substrate.apply_horizon_escalation(
@@ -1792,7 +1932,7 @@ impl RuntimeContext {
         let (bypass_hit, _eff_ptr, _density, repulsion_active, post_rep_words) = self
             .substrate
             .step_substrate_with_bloom_repulsion_to_words(
-                gcso_tagged_ptr_t(frame.tagged_ptr),
+                TaggedPtr(frame.tagged_ptr),
                 &mut ledger_slot,
                 &bloom_snapshot,
                 self.config.repulsion_threshold,
@@ -1818,7 +1958,7 @@ impl RuntimeContext {
                     store_q7_words_64(&mut q7_stack.data, &final_w);
                     let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
                     if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
-                        .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                        .cut_by_lacuna(frame.phase_clamp_rad > 0.0, frame.phase_clamp_rad, 0.0)
                         .into_active()
                     {
                         self.phase_steering
@@ -1826,7 +1966,7 @@ impl RuntimeContext {
                                 geometry,
                                 q,
                                 active_deltas,
-                                frame.ripa_clamp_rad,
+                                frame.phase_clamp_rad,
                             )?;
                         steered = true;
                     }
@@ -1851,7 +1991,7 @@ impl RuntimeContext {
         } else {
             StigmergicActionDecision::PassiveSidecar
         };
-        let qos_throttled = frame.dominant_cause_code == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
+        let qos_throttled = frame.attribution_tag == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
         let _ = self.telemetry.evaluate_policy(
             trigger.is_destabilized(),
             quiescent_dwell,
@@ -1862,23 +2002,23 @@ impl RuntimeContext {
         let guard_prox_q7 =
             (branchless_clamp_f32(frame.repulsion_severity, 0.0, 1.0) * 127.0) as u8;
         let active_overdrive = matches!(step_decision, StigmergicActionDecision::RepulsionEscape)
-            && self.core_layers.ego_layer.is_active();
+            && self.core_layers.ego.is_active();
         self.distortion_tension.step_hot_path_branchless(
             pframe_delta_q7,
-            self.last_epistemic_partition.boundary_sensitivity_q7,
+            self.last_lacuna_partition.boundary_sensitivity_q7,
             exit_ent_q7,
             guard_prox_q7,
             active_overdrive,
         );
         let step_tag = AttributionTag::new(
-            if self.last_epistemic_partition.sandbox_eligible != 0
-                || self.core_layers.stigmergic_layer.venn_overlap_mask != 0
+            if self.last_lacuna_partition.is_sandbox_eligible()
+                || self.core_layers.stigmergy.overlap_mask != 0
             {
                 PrimitiveKind::Stigmergy
             } else {
                 PrimitiveKind::Liminal
             },
-            if pframe_hops > 0 || self.core_layers.ego_layer.last_intervened_mask != 0 {
+            if pframe_hops > 0 || self.core_layers.ego.last_intervened_mask != 0 {
                 DriverKind::Ego
             } else {
                 DriverKind::System
@@ -1887,7 +2027,7 @@ impl RuntimeContext {
         self.telemetry.record_two_by_two_step(
             step_tag.raw(),
             self.system_spine.whole_token_bypass_active != 0,
-            &self.last_epistemic_partition,
+            &self.last_lacuna_partition,
             &self.distortion_tension,
             pframe_hops,
         );
@@ -1896,7 +2036,7 @@ impl RuntimeContext {
             &self.last_horizon,
             &self.last_boundary_delta,
             &self.last_overlap_report,
-            &self.core_layers.ego_layer,
+            &self.core_layers.ego,
             entropy_st.active_branch_mode,
             slid_in,
             slid_out,
@@ -1911,16 +2051,16 @@ impl RuntimeContext {
             0.15_f32,
         );
         let exterior_granule_mask = BitCut8::split(
-            self.last_overlap_report.void_exterior_mask
-                | self.last_overlap_report.serendipity_excursion_mask,
-            self.last_overlap_report.venn_core_mask,
+            self.last_overlap_report.lacuna_exterior_mask
+                | self.last_overlap_report.discovery_excursion_mask,
+            self.last_overlap_report.overlap_core_mask,
         )
         .outside;
         let sb_event = self.substrate.step_sandbox_hypothesis_lifecycle(
             &mut self.telemetry,
             &mut self.sandbox_workbench_lane,
             step_decision,
-            self.core_layers.ego_layer.is_active(),
+            self.core_layers.ego.is_active(),
             exterior_granule_mask,
             trail_phase_words_ref(trail_out),
             frame.effective_energy,
@@ -1965,18 +2105,14 @@ impl PointerSubstrate for RuntimeContext {
     }
 
     #[inline]
-    fn step_pointer(
-        &mut self,
-        current_ptr: u64,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> Result<()> {
-        let cap = self.config.raw.action_hub_capacity;
+    fn step_pointer(&mut self, current_ptr: u64, trail_out: &mut PointerTrail) -> Result<()> {
+        let cap = self.config.raw.substrate_capacity;
         let cur_active = self.substrate.active_count;
         self.substrate.active_count =
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
         self.substrate.step_counter = self.substrate.step_counter.wrapping_add(1);
         trail_out.record_pointer_transition(current_ptr, 1, 1.0);
-        let tp = gcso_tagged_ptr_t(current_ptr);
+        let tp = TaggedPtr(current_ptr);
         let embedded_phase = tp.unpack_phase();
         if embedded_phase != 0 {
             trail_out.accumulate_uniform_phase(embedded_phase);
@@ -1998,13 +2134,9 @@ impl PointerSubstrate for RuntimeContext {
     }
 
     #[inline]
-    fn update_cellular_state_express(
-        &mut self,
-        trail_id: u32,
-        phase_delta: gcso_q7_t,
-    ) -> Result<()> {
-        if trail_id >= self.config.raw.action_hub_capacity {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    fn update_cellular_state_express(&mut self, trail_id: u32, phase_delta: PhaseQ7) -> Result<()> {
+        if trail_id >= self.config.raw.substrate_capacity {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         self.substrate
             .update_cellular_state_express(trail_id, phase_delta)
@@ -2018,7 +2150,7 @@ impl PointerSubstrate for RuntimeContext {
         pull_force: f32,
     ) -> Result<()> {
         if !branchless_is_finite_f32(pull_force) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         if trail_id < self.substrate.capacity {
             self.substrate
@@ -2043,7 +2175,7 @@ impl PointerSubstrate for RuntimeContext {
 
     #[inline(always)]
     fn capacity(&self) -> u32 {
-        self.config.raw.action_hub_capacity
+        self.config.raw.substrate_capacity
     }
 
     #[inline(always)]
@@ -2082,23 +2214,19 @@ impl PointerSubstrate for RuntimeContext {
 
 impl FastPathLedger for RuntimeContext {
     #[inline]
-    fn evaluate_auto_tune(
-        &self,
-        slot: &gcso_ledger_slot_t,
-        config_out: &mut gcso_config_t,
-    ) -> Result<()> {
+    fn evaluate_auto_tune(&self, slot: &LedgerSlot, config_out: &mut RuntimeConfig) -> Result<()> {
         *config_out = self.config.raw;
 
         // Count high-intensity telemetry spike events (>= 0x80) across all 8 ring bytes via 1 SWAR op.
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
         let spike_count = (word & 0x8080_8080_8080_8080).count_ones();
         let base_ripa = branchless_select_f32(
-            config_out.ripa_clamp_max_rad > 0.0,
-            config_out.ripa_clamp_max_rad,
+            config_out.phase_clamp_max_rad > 0.0,
+            config_out.phase_clamp_max_rad,
             DEFAULT_PHASE_CLAMP_MAX_RAD,
         );
         let damping = 1.0 - 0.025 * (spike_count as f32);
-        config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
+        config_out.phase_clamp_max_rad = branchless_clamp_f32(base_ripa * damping, 0.01, 0.25);
         config_out.ledger_mode = (slot.mode & 0xFF) as u8;
         let _ = LEDGER_HISTORY_LEN;
         Ok(())
@@ -2109,11 +2237,11 @@ impl RuntimeContext {
     /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `chunk_len == 0`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `chunk_len == 0`.
     #[inline]
-    pub fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> Result<()> {
+    pub fn step_chunk(&mut self, _mask: &PagedBitmask, chunk_len: u32) -> Result<()> {
         if chunk_len == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         self.substrate.step_counter = self
             .substrate
@@ -2131,7 +2259,7 @@ impl RuntimeContext {
     #[inline]
     pub fn inject_phase_repulsion(
         &mut self,
-        repulsion_deltas: &AlignedSlice16<'_, gcso_q7_t>,
+        repulsion_deltas: &AlignedSlice16<'_, PhaseQ7>,
         gain: f32,
     ) -> Result<()> {
         let raw = repulsion_deltas.as_slice();
@@ -2156,12 +2284,12 @@ impl RuntimeContext {
     /// Sets the relative weight of workbench domain lane `domain_id`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS` or `weight` is negative/non-finite.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS` or `weight` is negative/non-finite.
     #[inline]
     pub fn set_domain_weight(&mut self, domain_id: u32, weight: f32) -> Result<()> {
         let idx = domain_id as usize;
         if idx >= MAX_ATTRACTOR_DOMAINS || !branchless_is_finite_f32(weight) || weight < 0.0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         self.substrate.slot_weights[idx] = weight;
         Ok(())
@@ -2170,12 +2298,12 @@ impl RuntimeContext {
     /// Enables or disables workbench domain lane `domain_id`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
     pub fn set_domain_enabled(&mut self, domain_id: u32, enabled: bool) -> Result<()> {
         let idx = domain_id as usize;
         if idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let bit = 1u8 << (domain_id as u8);
         let enable_mask = (enabled as u8).wrapping_neg();
@@ -2210,17 +2338,17 @@ impl RuntimeContext {
     /// Evaluates the phase vector and pull force for a single workbench domain lane.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
     pub fn evaluate_slot_force(
         &self,
         domain_id: u32,
-        _trail: &gcso_pointer_trail_t,
-        slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+        _trail: &PointerTrail,
+        slot_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> Result<f32> {
         let idx = domain_id as usize;
         if idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let enabled = ((self.substrate.slot_enabled_mask >> idx) & 1) != 0;
         if !enabled {
@@ -2243,8 +2371,8 @@ impl RuntimeContext {
     #[inline]
     pub fn evaluate_multi_domain_superposition(
         &self,
-        trail: &gcso_pointer_trail_t,
-        composite_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+        trail: &PointerTrail,
+        composite_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> f32 {
         let (run_w, pull) = self.evaluate_multi_domain_superposition_words(trail);
         store_q7_words_64(composite_phase_out, &run_w);
@@ -2265,20 +2393,17 @@ impl RuntimeContext {
     /// Applies a binary persona phase modulation patch into the Persona workbench lane.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `patch_data` is empty.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `patch_data` is empty.
     #[inline]
     pub fn apply_patch(&mut self, patch_data: &[u8]) -> Result<()> {
         if patch_data.is_empty() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         if patch_data.len() >= MAX_ATTENTION_HEADS {
             // SAFETY: `patch_data.len() >= 64` and `[u8; 64]` has the exact same layout and
-            // alignment (1) as `[gcso_q7_t; 64]` (`[i8; 64]`).
-            let patch_ref: &[gcso_q7_t; MAX_ATTENTION_HEADS] = unsafe {
-                &*patch_data
-                    .as_ptr()
-                    .cast::<[gcso_q7_t; MAX_ATTENTION_HEADS]>()
-            };
+            // alignment (1) as `[PhaseQ7; 64]` (`[i8; 64]`).
+            let patch_ref: &[PhaseQ7; MAX_ATTENTION_HEADS] =
+                unsafe { &*patch_data.as_ptr().cast::<[PhaseQ7; MAX_ATTENTION_HEADS]>() };
             let pw = load_q7_words_64(patch_ref);
             let sw = self.slot_words_mut(usize::from(ATTRACTOR_SLOT_PERSONA))?;
             swar_or_avx2_q7_add_sat_words_64(sw, &pw);
@@ -2287,7 +2412,7 @@ impl RuntimeContext {
             let persona_slot = bank_mut
                 .slot_exact_mut::<MAX_ATTENTION_HEADS>(usize::from(ATTRACTOR_SLOT_PERSONA))?;
             for (h, slot_p) in persona_slot.iter_mut().enumerate() {
-                let delta = patch_data[h % patch_data.len()] as gcso_q7_t;
+                let delta = patch_data[h % patch_data.len()] as PhaseQ7;
                 *slot_p = branchless_q7_add_sat(*slot_p, delta);
             }
         }
@@ -2298,11 +2423,7 @@ impl RuntimeContext {
 
 impl KvKeyframeCache for RuntimeContext {
     #[inline]
-    fn seek_to_token(
-        &mut self,
-        token_index: u32,
-        header_out: &mut gcso_kv_keyframe_header_t,
-    ) -> Result<()> {
+    fn seek_to_token(&mut self, token_index: u32, header_out: &mut KvKeyframeHeader) -> Result<()> {
         header_out.token_index = token_index;
         header_out.frame_type = 0;
         Ok(())
@@ -2319,7 +2440,7 @@ impl MappedStorage for RuntimeContext {
     fn deserialize_snapshot(
         &mut self,
         buffer: &[u8],
-        config_out: &mut gcso_config_t,
+        config_out: &mut RuntimeConfig,
     ) -> Result<()> {
         self.deserialize_from_bytes(buffer)?;
         *config_out = self.config.raw;
@@ -2327,38 +2448,14 @@ impl MappedStorage for RuntimeContext {
     }
 
     #[inline]
-    fn open_mmap(
-        &mut self,
-        file_path: &str,
-        descriptor_out: &mut gcso_mapped_storage_descriptor_t,
-    ) -> Result<()> {
-        if file_path.is_empty() {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
-        }
-        descriptor_out.mapped_address = 0x1000_0000;
-        descriptor_out.file_size_bytes = 4096;
-        descriptor_out.fd_handle = 3;
-        descriptor_out.flags = 0;
-        Ok(())
-    }
-
-    #[inline]
-    fn close_mmap(&mut self, descriptor: &mut gcso_mapped_storage_descriptor_t) -> Result<()> {
-        descriptor.mapped_address = 0;
-        descriptor.file_size_bytes = 0;
-        descriptor.fd_handle = -1;
-        Ok(())
-    }
-
-    #[inline]
     fn get_track_offset(&self, track_id: u32) -> Result<u64> {
-        let header_size = core::mem::size_of::<gcso_snapshot_header_t>() as u64;
+        let header_size = core::mem::size_of::<LmnkSnapshotHeader>() as u64;
         match track_id {
             0 => Ok(header_size),
             1 => Ok(header_size + 1024),
             2 => Ok(header_size + 2048),
             3 => Ok(header_size + 3072),
-            _ => Err(GCSO_ERROR_INVALID_ARGUMENT),
+            _ => Err(LMNK_ERR_INVALID_ARGUMENT),
         }
     }
 }
@@ -2400,10 +2497,10 @@ impl SystemConstraintSignal for RuntimeContext {
     }
 
     #[inline(always)]
-    fn qdps_min_step_rad_override(&self) -> f32 {
+    fn phase_step_min_rad_override(&self) -> f32 {
         branchless_max_f32(
-            self.config.raw.qdps_min_step_rad_override(),
-            self.entropy_controller.qdps_min_step_rad_override(),
+            self.config.raw.phase_step_min_rad_override(),
+            self.entropy_controller.phase_step_min_rad_override(),
         )
     }
 }
@@ -2415,10 +2512,10 @@ impl ManifoldGatewaySignal for RuntimeContext {
     ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
         if self.substrate.active_count > 0 {
             let (mut frame, words) = self.substrate.synthesize_gateway_frame_with_words();
-            frame.provenance_bits |= self.causal_provenance_bits();
+            frame.lineage_flags |= self.causal_provenance_bits();
             frame.active_swarm_cell_mask &= self.active_swarm_cells_mask();
-            frame.qdps_min_step_rad = self.qdps_min_step_rad_override();
-            frame.qdps_min_step_q7 = branchless_rad_to_phase_step_u8(frame.qdps_min_step_rad);
+            frame.phase_step_min_rad = self.phase_step_min_rad_override();
+            frame.phase_step_min_q7 = branchless_rad_to_phase_step_u8(frame.phase_step_min_rad);
             if self.recommend_layer_skip() {
                 frame.action_mode_flags |= ACTION_MODE_LAYER_SKIP;
             }
@@ -2450,8 +2547,8 @@ const _: () = {
     assert_full_stack_bounds::<RuntimeContext>();
 };
 
-// SAFETY: `AutonomousCoreLayerStack` is `#[repr(C, align(64))]` of 128 bytes with zero padding traps.
-unsafe impl Pod for AutonomousCoreLayerStack {}
+// SAFETY: `CoreStateStack` is `#[repr(C, align(64))]` of 128 bytes with zero padding traps.
+unsafe impl Pod for CoreStateStack {}
 
 #[cfg(test)]
 mod tests {
@@ -2471,7 +2568,7 @@ mod tests {
         assert!(config.validate().is_ok());
 
         let invalid_config = config.with_head_dim(127);
-        assert_eq!(invalid_config.validate(), Err(GCSO_ERROR_INVALID_ARGUMENT));
+        assert_eq!(invalid_config.validate(), Err(LMNK_ERR_INVALID_ARGUMENT));
     }
 
     #[test]
@@ -2517,7 +2614,7 @@ mod tests {
         let expected_rep = 1u8 << rep_lane;
         let expected_sb = 1u8 << sb_lane;
 
-        let mut trail = gcso_pointer_trail_t::default();
+        let mut trail = PointerTrail::default();
         assert!(ctx.step_token(42, None, None, Some(&mut trail)).is_ok());
         assert_eq!(ctx.step_counter(), 1);
         assert_eq!(trail.current_ptr, 42);
@@ -2547,34 +2644,31 @@ mod tests {
         buffer[200] ^= 0xFF;
         assert_eq!(
             ctx.deserialize_from_bytes(&buffer),
-            Err(GCSO_ERROR_CONTAINER_CORRUPTED)
+            Err(LMNK_ERR_CONTAINER_CORRUPTED)
         );
     }
 
     #[test]
     fn test_runtime_context_capabilities_and_mapped_storage() {
         let config = Config::new();
-        let mut ctx = RuntimeContext::new(config).unwrap();
+        let ctx = RuntimeContext::new(config).unwrap();
 
         assert_eq!(
             ctx.abi_version(),
             (
-                GCSO_ABI_VERSION_MAJOR,
-                GCSO_ABI_VERSION_MINOR,
-                GCSO_ABI_VERSION_PATCH,
+                LMNK_ABI_VERSION_MAJOR,
+                LMNK_ABI_VERSION_MINOR,
+                LMNK_ABI_VERSION_PATCH,
             )
         );
         assert_eq!(ctx.abi_version_string(), env!("CARGO_PKG_VERSION"));
-        assert_ne!(ctx.query_capability() & GCSO_CAP_CPU_BASELINE, 0);
+        assert_ne!(ctx.query_capability() & LMNK_CAP_SWAR_BASELINE, 0);
+        assert_ne!(ctx.query_capability() & LMNK_CAP_INPLACE_CONTEXT_INIT, 0);
 
-        let mut desc = gcso_mapped_storage_descriptor_t::default();
-        assert!(ctx.open_mmap("test.gcso", &mut desc).is_ok());
-        assert_eq!(desc.fd_handle, 3);
         assert_eq!(
             ctx.get_track_offset(0).unwrap(),
-            core::mem::size_of::<gcso_snapshot_header_t>() as u64
+            core::mem::size_of::<LmnkSnapshotHeader>() as u64
         );
-        assert!(ctx.close_mmap(&mut desc).is_ok());
     }
 
     #[test]
@@ -2606,11 +2700,11 @@ mod tests {
             fn on_slide_in_modulate(
                 &mut self,
                 frame: &mut GatewayFrame,
-                stack: &mut AutonomousCoreLayerStack,
+                stack: &mut CoreStateStack,
                 _trigger: &HorizonTriggerInput,
             ) {
                 self.invoked_count += 1;
-                stack.liminal_layer.active_aperture_mask |= 1 << 7;
+                stack.liminal.active_aperture_mask |= 1 << 7;
                 frame.phase_deltas.fill(24);
             }
         }
@@ -2622,7 +2716,7 @@ mod tests {
             fn try_escalate_horizon(
                 &mut self,
                 _req: &HorizonEscalationRequest,
-                slot_phase_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+                slot_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
             ) -> Result<Option<f32>> {
                 self.calls += 1;
                 slot_phase_out.fill(18);
@@ -2632,7 +2726,7 @@ mod tests {
 
         let mut ctx = RuntimeContext::new(Config::new()).unwrap();
         let mut q_buf = AlignedBuffer32::new([1.0_f32; 128 * 32]);
-        let mut trail = gcso_pointer_trail_t::default();
+        let mut trail = PointerTrail::default();
         let signal = (
             SystemConstraint::new((), 0.1, 0.0, 0xFF),
             ObjectiveFact::new([12i8; 64], 1.5, 0x1000, 7),
@@ -2661,7 +2755,7 @@ mod tests {
         assert_eq!(ctx.slot_enabled_mask(), 0);
 
         // 2. Destabilize via Core Stack Slot 2 Ego trigger -> slot slides in & external escalator leases an anonymous lane.
-        ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
+        ctx.core_layers_mut().ego.last_intervened_mask = EGO_TRIGGER_BOUNDARY_CHATTER;
         let (f2, _r2, in2, out2, esc2) = ctx
             .pierce_and_orchestrate_step(
                 &signal,
@@ -2687,7 +2781,7 @@ mod tests {
         assert_eq!(ctx.active_horizon_slots_mask(), 1 << 3);
 
         // 3. Stabilize -> slot automatically retracts (slides out) and leased lane returns to free pool.
-        ctx.core_layers_mut().ego_layer.last_intervened_mask = 0;
+        ctx.core_layers_mut().ego.last_intervened_mask = 0;
         ctx.last_boundary_delta_mut().stationary_shortcut_ready = 1;
         let (_f3, _r3, in3, out3, esc3) = ctx
             .pierce_and_orchestrate_step(
@@ -2711,7 +2805,7 @@ mod tests {
     #[test]
     fn test_latent_horizon_slot_tuple_isolation_dwell_and_slide_out_cleanup() {
         use {
-            apply_latent_horizon_slots, AutonomousCoreLayerStack, GatewayFrame, HorizonDwellState,
+            apply_latent_horizon_slots, CoreStateStack, GatewayFrame, HorizonDwellState,
             HorizonTriggerInput,
         };
 
@@ -2730,7 +2824,7 @@ mod tests {
             fn on_slide_in_modulate(
                 &mut self,
                 frame: &mut GatewayFrame,
-                _stack: &mut AutonomousCoreLayerStack,
+                _stack: &mut CoreStateStack,
                 _trigger: &HorizonTriggerInput,
             ) {
                 frame.phase_deltas[1] = 32;
@@ -2739,7 +2833,7 @@ mod tests {
             fn on_slide_out(
                 &mut self,
                 frame: &mut GatewayFrame,
-                _stack: &mut AutonomousCoreLayerStack,
+                _stack: &mut CoreStateStack,
                 _trigger: &HorizonTriggerInput,
             ) {
                 self.slid_out_calls += 1;
@@ -2766,11 +2860,11 @@ mod tests {
             fn on_slide_in_modulate(
                 &mut self,
                 frame: &mut GatewayFrame,
-                stack: &mut AutonomousCoreLayerStack,
+                stack: &mut CoreStateStack,
                 _trigger: &HorizonTriggerInput,
             ) {
                 self.modulate_calls += 1;
-                stack.liminal_layer.active_aperture_mask |= 1 << 4;
+                stack.liminal.active_aperture_mask |= 1 << 4;
                 frame.phase_deltas[4] = 48;
             }
         }
@@ -2782,7 +2876,7 @@ mod tests {
         let mut active_mask = 0u32;
         let mut dwell = HorizonDwellState::default();
         let mut frame = GatewayFrame::default();
-        let mut stack = AutonomousCoreLayerStack::new();
+        let mut stack = CoreStateStack::new();
 
         // Step 1: Destabilized (step 1 of dwell, high repulsion) -> only FastSlot slides in!
         let mut t1 = HorizonTriggerInput {
@@ -2869,7 +2963,7 @@ mod tests {
 
         let mut ctx = RuntimeContext::new(Config::new()).unwrap();
         let mut q_buf = AlignedBuffer32::new([1.0_f32; 128 * 32]);
-        let mut trail = gcso_pointer_trail_t::default();
+        let mut trail = PointerTrail::default();
         let signal = (
             SystemConstraint::new((), 0.2, 0.0, 0xFF),
             ObjectiveFact::new([20i8; 64], 1.5, 0x3000, 17),
@@ -2885,7 +2979,7 @@ mod tests {
         });
 
         // 1. Step 1 destabilized -> held back by slide_in_dwell (2).
-        ctx.core_layers_mut().ego_layer.last_intervened_mask = EGO_TRIGGER_INTERNAL_CONFLICT;
+        ctx.core_layers_mut().ego.last_intervened_mask = EGO_TRIGGER_INTERNAL_CONFLICT;
         let (_f1, _, in1, _, _) = ctx
             .pierce_and_orchestrate_step(
                 &signal,

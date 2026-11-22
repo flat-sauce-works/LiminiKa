@@ -11,15 +11,13 @@ use core::arch::x86_64::{
 };
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
-use crate::foundation::pod::{
-    gcso_rank1_residual_descriptor_t, gcso_tagged_ptr_t, ACTION_MODE_RANK1_INJECT,
-};
+use crate::foundation::pod::{Rank1Descriptor, TaggedPtr, ACTION_MODE_RANK1_INJECT};
 use crate::foundation::rope::kernels::ptr_has_action_mode;
 use crate::foundation::scalar_math::{branchless_flush_subnormal_f32, branchless_is_finite_f32};
 use crate::foundation::simd_stats::dot_f32_unrolled4;
 use crate::liminal::{
-    GcsoResult, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
-    GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_NULL_POINTER,
+    LmnkResult, LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
+    LMNK_ERR_NULL_POINTER,
 };
 
 // ===================================================================
@@ -255,29 +253,29 @@ pub(crate) fn rank1_accum_outer_product_simd(
 
 #[inline(always)]
 fn validate_and_unpack_rank1_descriptor<'a>(
-    desc: &'a gcso_rank1_residual_descriptor_t,
+    desc: &'a Rank1Descriptor,
     d_in: usize,
     d_out: usize,
-) -> GcsoResult<(
+) -> LmnkResult<(
     AlignedSlice32<'a, f32>,
     AlignedSlice32<'a, f32>,
     Option<AlignedSlice32<'a, f32>>,
 )> {
     if desc.u_vector_ptr == 0 || desc.v_vector_ptr == 0 {
-        return Err(GCSO_ERROR_NULL_POINTER);
+        return Err(LMNK_ERR_NULL_POINTER);
     }
     if desc.rank != 1 || d_in == 0 || d_out == 0 || !branchless_is_finite_f32(desc.scale_factor) {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let u_ptr = desc.u_vector_ptr as *const f32;
     let v_ptr = desc.v_vector_ptr as *const f32;
     if (u_ptr as usize) & 31 != 0 || (v_ptr as usize) & 31 != 0 {
-        return Err(GCSO_ERROR_MISALIGNED_POINTER);
+        return Err(LMNK_ERR_ALIGNMENT);
     }
     let g_slice_opt = if desc.gain_scalar_ptr != 0 {
         let g_ptr = desc.gain_scalar_ptr as *const f32;
         if (g_ptr as usize) & 31 != 0 {
-            return Err(GCSO_ERROR_MISALIGNED_POINTER);
+            return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: `g_ptr` is non-null, 32-byte aligned, and sized to `d_out` elements per C-ABI contract.
         Some(unsafe { AlignedSlice32::new_unchecked(slice::from_raw_parts(g_ptr, d_out)) })
@@ -295,7 +293,7 @@ fn validate_and_unpack_rank1_descriptor<'a>(
 /// into `y_out` from safe hardware-aligned slices using AVX2 (`dot_f32_unrolled4`, `rank1_write_outer_product_simd`).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `y_out`, `x_in`, `u_vec`, or `v_vec` is empty,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `y_out`, `x_in`, `u_vec`, or `v_vec` is empty,
 /// `x_in.len() != v_vec.len()`, `y_out.len() != u_vec.len()`, or `scale_factor` is non-finite.
 #[inline]
 pub fn eval_rank1_slices(
@@ -305,7 +303,7 @@ pub fn eval_rank1_slices(
     v_vec: &AlignedSlice32<'_, f32>,
     gain_vec: Option<&AlignedSlice32<'_, f32>>,
     scale_factor: f32,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let d_in = x_in.len();
     let d_out = y_out.len();
     if d_in == 0
@@ -314,17 +312,17 @@ pub fn eval_rank1_slices(
         || u_vec.len() < d_out
         || !branchless_is_finite_f32(scale_factor)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     if let Some(g) = gain_vec {
         if g.len() < d_out {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
     }
 
     let dot_vx = dot_f32_unrolled4(v_vec.as_slice(), x_in.as_slice(), d_in);
     if !branchless_is_finite_f32(dot_vx) {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
     }
     let eff_scale = branchless_flush_subnormal_f32(scale_factor * dot_vx);
     let g_slice_opt = gain_vec.map(|g| &g.as_slice()[..d_out]);
@@ -341,7 +339,7 @@ pub fn eval_rank1_slices(
 /// in-place into `y_inout` from safe hardware-aligned slices using AVX2 (`rank1_accum_outer_product_simd`).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slice is empty, lengths mismatch, or `scale_factor` is non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slice is empty, lengths mismatch, or `scale_factor` is non-finite.
 #[inline]
 pub fn eval_rank1_slices_fused(
     y_inout: &mut AlignedSliceMut32<'_, f32>,
@@ -350,7 +348,7 @@ pub fn eval_rank1_slices_fused(
     v_vec: &AlignedSlice32<'_, f32>,
     gain_vec: Option<&AlignedSlice32<'_, f32>>,
     scale_factor: f32,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let d_in = x_in.len();
     let d_out = y_inout.len();
     if d_in == 0
@@ -359,17 +357,17 @@ pub fn eval_rank1_slices_fused(
         || u_vec.len() < d_out
         || !branchless_is_finite_f32(scale_factor)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     if let Some(g) = gain_vec {
         if g.len() < d_out {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
     }
 
     let dot_vx = dot_f32_unrolled4(v_vec.as_slice(), x_in.as_slice(), d_in);
     if !branchless_is_finite_f32(dot_vx) {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
     }
     let eff_scale = branchless_flush_subnormal_f32(scale_factor * dot_vx);
     let g_slice_opt = gain_vec.map(|g| &g.as_slice()[..d_out]);
@@ -383,18 +381,18 @@ pub fn eval_rank1_slices_fused(
 }
 
 /// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// from a C-ABI [`gcso_rank1_residual_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
+/// from a C-ABI [`Rank1Descriptor`] (including optional 32B-aligned `gain_scalar_ptr`).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
-/// [`GCSO_ERROR_MISALIGNED_POINTER`] if pointers are not 32B-aligned, or
-/// [`GCSO_ERROR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
+/// Returns [`LMNK_ERR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
+/// [`LMNK_ERR_ALIGNMENT`] if pointers are not 32B-aligned, or
+/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
 #[inline]
 pub fn eval_rank1(
     y_out: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
-    desc: &gcso_rank1_residual_descriptor_t,
-) -> GcsoResult<()> {
+    desc: &Rank1Descriptor,
+) -> LmnkResult<()> {
     let (u_slice, v_slice, g_slice_opt) =
         validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_out.len())?;
     eval_rank1_slices(
@@ -408,18 +406,18 @@ pub fn eval_rank1(
 }
 
 /// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// in-place into `y_inout` from a C-ABI [`gcso_rank1_residual_descriptor_t`] (including optional 32B-aligned `gain_scalar_ptr`).
+/// in-place into `y_inout` from a C-ABI [`Rank1Descriptor`] (including optional 32B-aligned `gain_scalar_ptr`).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
-/// [`GCSO_ERROR_MISALIGNED_POINTER`] if pointers are not 32B-aligned, or
-/// [`GCSO_ERROR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
+/// Returns [`LMNK_ERR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
+/// [`LMNK_ERR_ALIGNMENT`] if pointers are not 32B-aligned, or
+/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite, or slices are empty.
 #[inline]
 pub fn eval_rank1_fused(
     y_inout: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
-    desc: &gcso_rank1_residual_descriptor_t,
-) -> GcsoResult<()> {
+    desc: &Rank1Descriptor,
+) -> LmnkResult<()> {
     let (u_slice, v_slice, g_slice_opt) =
         validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
     eval_rank1_slices_fused(
@@ -438,11 +436,11 @@ pub fn eval_rank1_fused(
 /// Propagates any pointer/slice validation error from [`eval_rank1_fused`].
 #[inline]
 pub fn eval_rank1_pointer_gated_fused(
-    tagged_ptr: gcso_tagged_ptr_t,
+    tagged_ptr: TaggedPtr,
     y_inout: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
-    desc: &gcso_rank1_residual_descriptor_t,
-) -> GcsoResult<bool> {
+    desc: &Rank1Descriptor,
+) -> LmnkResult<bool> {
     let (u_slice, v_slice, g_slice_opt) =
         validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_inout.len())?;
     if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_RANK1_INJECT) {
@@ -472,7 +470,7 @@ mod tests {
         let u_rank1 = AlignedBuffer32::new([0.5_f32; 8]);
         let v_rank1 = AlignedBuffer32::new([0.25_f32; 8]);
         let g_rank1 = AlignedBuffer32::new([2.0_f32; 8]);
-        let desc = gcso_rank1_residual_descriptor_t {
+        let desc = Rank1Descriptor {
             layer_idx: 0,
             rank: 1,
             u_vector_ptr: u_rank1.as_aligned_slice().as_ptr() as u64,
@@ -482,7 +480,7 @@ mod tests {
             flags: 0,
             reserved: [0; 24],
         };
-        let ptr = gcso_tagged_ptr_t::pack(0x1000, (1 << 5) | ACTION_PRESET_FULL_ORCHESTRATION, 0);
+        let ptr = TaggedPtr::pack(0x1000, (1 << 5) | ACTION_PRESET_FULL_ORCHESTRATION, 0);
         let injected = eval_rank1_pointer_gated_fused(
             ptr,
             &mut y_rank1.as_aligned_slice_mut(),
@@ -493,7 +491,7 @@ mod tests {
         assert!(injected);
         assert!((y_rank1.data[0] - 2.0).abs() < 1.0e-5);
 
-        let desc_with_gain = gcso_rank1_residual_descriptor_t {
+        let desc_with_gain = Rank1Descriptor {
             gain_scalar_ptr: g_rank1.as_aligned_slice().as_ptr() as u64,
             ..desc
         };

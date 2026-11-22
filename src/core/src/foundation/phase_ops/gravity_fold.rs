@@ -31,7 +31,7 @@ use crate::foundation::scalar_math::{
 };
 use crate::foundation::swar_simd::{is_word_array_uniform_64, load_q7_words_64, store_q7_words_64};
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_usize, gcso_q7_t,
+    branchless_select_f32, branchless_select_u32, branchless_select_usize, PhaseQ7,
     DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
 };
 
@@ -47,7 +47,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
     trail_words: &[u64; 8],
     trail_init_weight: f32,
     default_dominant_idx: u32,
-    anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+    anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     anchor_base_energies: &[f32],
 ) -> ([u64; 8], f32, f32, u32, u32, bool, bool) {
     let count = branchless_select_usize(
@@ -196,8 +196,8 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
                                 let bb0 = (bw0 & 0xFF) as u8;
                                 if r_w0 == r_w0.rotate_right(8) && bw0 == bw0.rotate_right(8) {
                                     let b_lerp = branchless_q7_circular_lerp(
-                                        rb0 as gcso_q7_t,
-                                        bb0 as gcso_q7_t,
+                                        rb0 as PhaseQ7,
+                                        bb0 as PhaseQ7,
                                         s as u8,
                                     );
                                     r_w0 = ((b_lerp as u8) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
@@ -458,7 +458,7 @@ pub(crate) fn branchless_q7_unified_field_fold_words_with_flags_64(
 pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
     trail_words: &[u64; 8],
     trail_init_weight: f32,
-    anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+    anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     anchor_base_energies: &[f32],
 ) -> ([u64; 8], f32, f32, u32, u32) {
     let (r, total_w, mean_coh, dom_idx, act_cnt, _any_resonant, _any_liminal) =
@@ -478,11 +478,11 @@ pub fn branchless_q7_unified_field_fold_words_with_init_weight_64(
 /// initial inertia weight `trail_init_weight`.
 #[inline]
 pub fn branchless_q7_unified_field_fold_with_init_weight_64(
-    trail_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    trail_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     trail_init_weight: f32,
-    anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+    anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     anchor_base_energies: &[f32],
-    folded_phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    folded_phases_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
 ) -> (f32, f32, u32, u32) {
     let t = load_q7_words_64(trail_phases);
     let (r, total_pull, mean_coh, dom_idx, act_cnt) =
@@ -500,10 +500,10 @@ pub fn branchless_q7_unified_field_fold_with_init_weight_64(
 /// **Single Unified Attractor Phase Manifold** ($SO(2)^{d_{\mathrm{head}}/2}$) into `folded_phases_out`.
 #[inline(always)]
 pub fn branchless_q7_unified_field_fold_64(
-    trail_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+    trail_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     anchor_base_energies: &[f32],
-    folded_phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    folded_phases_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
 ) -> (f32, f32, u32, u32) {
     branchless_q7_unified_field_fold_with_init_weight_64(
         trail_phases,
@@ -521,11 +521,11 @@ pub fn branchless_q7_unified_field_fold_64(
 /// Returns `(total_gravity_pull, mean_coherence, dominant_anchor_idx, active_count)`.
 #[inline]
 pub fn branchless_q7_gravity_fold_64(
-    query_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    anchor_phases: &[[gcso_q7_t; MAX_ATTENTION_HEADS]],
+    query_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    anchor_phases: &[[PhaseQ7; MAX_ATTENTION_HEADS]],
     anchor_gravity_masses: &[f32],
     softening_eps: f32,
-    folded_phases_out: &mut [gcso_q7_t; MAX_ATTENTION_HEADS],
+    folded_phases_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
 ) -> (f32, f32, u32, u32) {
     let count = branchless_select_usize(
         anchor_phases.len() < anchor_gravity_masses.len(),
@@ -861,8 +861,8 @@ pub fn branchless_q7_transition_log_prob_words_64(
 /// and log-transition probability $\ln P(M_t \mid M_{t-1}) = \ln(\max((1 + \mathcal{C}_{\mathrm{phase}})/2, \epsilon_{\mathrm{log}})) \le 0$.
 #[inline(always)]
 pub fn branchless_q7_transition_log_prob_64(
-    prev_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    curr_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    prev_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    curr_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
 ) -> (f32, f32) {
     branchless_q7_transition_log_prob_words_64(
         &load_q7_words_64(prev_phases),

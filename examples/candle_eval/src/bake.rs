@@ -11,7 +11,7 @@ use liminika_adapter::{
     AttractorRole, ModelBaseAttractorProfile, ModelSteeringAdapter, SequenceActivationPooler,
     TokenSequenceEntry,
 };
-use liminika_core::abi::gcso_q7_t;
+use liminika_core::abi::lmnk_q7_t;
 use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
@@ -294,9 +294,9 @@ pub(crate) fn sample_startup_base_prior(
 }
 
 pub(crate) struct BakedModelProfile {
-    pub(crate) per_layer_q7: Vec<Vec<gcso_q7_t>>,
-    pub(crate) fact_q7: Vec<Vec<gcso_q7_t>>,
-    pub(crate) persona_q7: Vec<Vec<gcso_q7_t>>,
+    pub(crate) per_layer_q7: Vec<Vec<lmnk_q7_t>>,
+    pub(crate) fact_q7: Vec<Vec<lmnk_q7_t>>,
+    pub(crate) persona_q7: Vec<Vec<lmnk_q7_t>>,
     pub(crate) neg_sum: Vec<Vec<f32>>,
     pub(crate) pos_sum: Vec<Vec<f32>>,
     pub(crate) fact_anchors_per_layer: Vec<Vec<ObjectiveFact<[i8; 64]>>>,
@@ -482,7 +482,7 @@ pub(crate) fn bake_via_adapter(
 }
 
 pub(crate) fn out_push_q7(
-    out: &mut Vec<Vec<gcso_q7_t>>,
+    out: &mut Vec<Vec<lmnk_q7_t>>,
     adapter: &ModelSteeringAdapter,
     neg: &[f32],
     pos: &[f32],

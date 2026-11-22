@@ -9,32 +9,32 @@ use crate::drivers::{DistortionTension, EgoDifferentialNet, SystemSpineState};
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_relu_f32,
-    dispatch_fused_phase_clamp_and_subhead_words_core, gcso_tagged_ptr_t,
+    dispatch_fused_phase_clamp_and_subhead_words_core,
     rotate_fused_self_phase_clamp_and_subhead_default_words,
     rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words, scale_f32_slice_unrolled8,
     steer_from_swar_words_core_safe, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
     swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_phase_step_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64,
     AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32, PhaseSteering,
-    RawPhaseProjectable, RopePairLayout, RopeSteeringTarget, ACTION_MODE_LAYER_SKIP,
+    RawPhaseProjectable, RopePairLayout, RopeSteeringTarget, TaggedPtr, ACTION_MODE_LAYER_SKIP,
     ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
     DEFAULT_PHASE_CLAMP_MAX_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, gcso_q7_t, EpistemicPartition, GcsoResult, Scoped,
-    GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_u32, branchless_select_u8, LacunaPartition8, LmnkResult, PhaseQ7, Scoped,
+    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
-use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
-    gcso_ledger_slot_t, gcso_pointer_trail_t, swar_mean_u8_le128_x8, trail_phase_words_mut,
-    trail_phase_words_ref, validate_optional_qk_tensors, CognitiveCircuitActivation,
-    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter,
-    CrystallizedAttractorRecord, PhaseDeltaSlice, PhaseSteeringActiveExt, ResidualAdapterEngine,
-    ResidualScale, StigmergicActionDecision, StigmergicOverlapSerendipityReport,
-    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrateOps,
-    StigmergicThresholds, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    swar_mean_u8_le128_x8, trail_phase_words_mut, trail_phase_words_ref,
+    validate_optional_qk_tensors, CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp,
+    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LedgerSlot, OverlapDiscoveryReport,
+    PhaseAnchorRecord, PhaseDeltaSlice, PhaseSteeringActiveExt, PointerTrail,
+    ResidualAdapterEngine, ResidualScale, StigmergicActionDecision, StigmergicReconstitutionReport,
+    StigmergicScaleGranularity, StigmergicSubstrateOps, StigmergicThresholds,
+    LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
     LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
     LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
@@ -45,14 +45,14 @@ use crate::stigmergy::{
 pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
     frame: &GatewayFrame,
     frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
-    trail_inout: &mut gcso_pointer_trail_t,
+    trail_inout: &mut PointerTrail,
     unresolved_damping_u7: u8,
     head_dim: usize,
     num_heads: usize,
     query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-) -> GcsoResult<(bool, bool, bool)> {
+) -> LmnkResult<(bool, bool, bool)> {
     let frm_nonzero = swar_words_nonzero_64(frm_w);
     let next_w = if frm_nonzero {
         *trail_phase_words_mut(trail_inout) = *frm_w;
@@ -73,17 +73,17 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
         trail_inout.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
     } else if query_tensor.is_some() | key_tensor.is_some() {
         steered = true;
-        let swar_words = if frame.qdps_min_step_q7 <= 1 {
+        let swar_words = if frame.phase_step_min_q7 <= 1 {
             next_w
-        } else if frame.qdps_min_step_q7 > 127 {
+        } else if frame.phase_step_min_q7 > 127 {
             [0u64; NUM_STIGMERGIC_GRANULES]
         } else {
-            swar_q7_phase_step_filter_words_64(&next_w, frame.qdps_min_step_q7)
+            swar_q7_phase_step_filter_words_64(&next_w, frame.phase_step_min_q7)
         };
         let clean_damping =
             branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
 
-        let has_nonzero_words = if frm_nonzero & (frame.qdps_min_step_q7 <= 1) {
+        let has_nonzero_words = if frm_nonzero & (frame.phase_step_min_q7 <= 1) {
             true
         } else {
             swar_words_nonzero_64(&swar_words)
@@ -91,7 +91,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
         if (frame.action_mode_flags & ACTION_MODE_SUBHEAD_ROUTE) != 0
             && frame.active_swarm_cell_mask == 0xFF
         {
-            let is_def_clamp = (frame.ripa_clamp_rad.to_bits()
+            let is_def_clamp = (frame.phase_clamp_rad.to_bits()
                 == DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits())
                 & frame.has_unit_subhead_gains()
                 & (num_heads > 0)
@@ -114,12 +114,12 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                             dispatch_fused_phase_clamp_and_subhead_words_core(
                                 q,
                                 &swar_words,
-                                frame.ripa_clamp_rad,
+                                frame.phase_clamp_rad,
                                 &subhead_cfg,
                                 &swar_words,
                                 &swar_words,
                                 &swar_words,
-                                frame.ripa_clamp_rad,
+                                frame.phase_clamp_rad,
                                 0,
                                 head_dim,
                                 true,
@@ -131,7 +131,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                                 head_dim,
                                 num_heads,
                                 false,
-                                frame.ripa_clamp_rad,
+                                frame.phase_clamp_rad,
                                 k,
                                 None,
                             );
@@ -156,12 +156,12 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                             dispatch_fused_phase_clamp_and_subhead_words_core(
                                 q,
                                 &swar_words,
-                                frame.ripa_clamp_rad,
+                                frame.phase_clamp_rad,
                                 &subhead_cfg,
                                 &swar_words,
                                 &swar_words,
                                 &swar_words,
-                                frame.ripa_clamp_rad,
+                                frame.phase_clamp_rad,
                                 0,
                                 head_dim,
                                 true,
@@ -179,7 +179,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                             head_dim,
                             num_heads,
                             false,
-                            frame.ripa_clamp_rad,
+                            frame.phase_clamp_rad,
                             k,
                             None,
                         );
@@ -197,7 +197,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                         head_dim,
                         num_heads,
                         false,
-                        frame.ripa_clamp_rad,
+                        frame.phase_clamp_rad,
                         q,
                         k_opt,
                     );
@@ -210,7 +210,7 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
                         head_dim,
                         num_heads,
                         false,
-                        frame.ripa_clamp_rad,
+                        frame.phase_clamp_rad,
                         k,
                         None,
                     );
@@ -232,15 +232,15 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
 #[inline(always)]
 pub(super) fn filter_and_damp_gateway_words(
     next_w: &[u64; NUM_STIGMERGIC_GRANULES],
-    qdps_min_step_q7: u8,
+    phase_step_min_q7: u8,
     unresolved_damping_u7: u8,
 ) -> [u64; NUM_STIGMERGIC_GRANULES] {
-    let qdps_words = if qdps_min_step_q7 <= 1 {
+    let qdps_words = if phase_step_min_q7 <= 1 {
         *next_w
-    } else if qdps_min_step_q7 > 127 {
+    } else if phase_step_min_q7 > 127 {
         [0u64; NUM_STIGMERGIC_GRANULES]
     } else {
-        swar_q7_phase_step_filter_words_64(next_w, qdps_min_step_q7)
+        swar_q7_phase_step_filter_words_64(next_w, phase_step_min_q7)
     };
     let clean_damping =
         branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
@@ -267,17 +267,17 @@ pub(super) fn filter_and_damp_gateway_words(
 #[derive(Clone, Copy)]
 pub struct CoreLayerEvalContext<'a> {
     /// Unified 3-layer autonomous core stack (`128 B`).
-    pub stack: &'a AutonomousCoreLayerStack,
+    pub stack: &'a CoreStateStack,
     /// Temporal boundary velocity between consecutive Layer 0 epochs.
     pub delta: &'a LiminalBoundaryDelta,
     /// Latest epistemic horizon reading (`KnownCoherent`, `InternalConflict`, or `Liminal`).
     pub horizon: &'a EpistemicHorizonReading,
     /// Latest Venn overlap & serendipity telemetry report across the 8 SWAR granules.
-    pub venn: &'a StigmergicOverlapSerendipityReport,
+    pub venn: &'a OverlapDiscoveryReport,
     /// Read-only Slow-Loop Q0.7 derivative weight $\alpha \in [0, 127]$ for convex pheromone synthesis.
     pub derivative_alpha_q7: u8,
-    /// Optional 4-region branchless [`EpistemicPartition`].
-    pub venn_partition: Option<&'a EpistemicPartition>,
+    /// Optional 4-region branchless [`LacunaPartition8`].
+    pub venn_partition: Option<&'a LacunaPartition8>,
     /// Optional [`SystemSpineState`] physical `pinned` isolation barrier.
     pub spine: Option<&'a SystemSpineState>,
     /// Optional P-Frame differential chain [`EgoDifferentialNet`].
@@ -292,9 +292,9 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
     core_ctx: Option<CoreLayerEvalContext<'_>>,
 ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
     if let Some(ctx) = core_ctx {
-        if ctx.stack.liminal_layer.adaptation_epochs > 0 || ctx.stack.ego_layer.is_active() {
+        if ctx.stack.liminal.adaptation_epochs > 0 || ctx.stack.ego.is_active() {
             let mut frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
-            if ctx.stack.ego_layer.is_active() {
+            if ctx.stack.ego.is_active() {
                 // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoState` and
                 // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
                 // pre-Ego state.
@@ -314,10 +314,10 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
                     (ctx.spine, ctx.venn_partition, ctx.ego_net, ctx.tension)
                 {
                     let _ = net.evaluate_pframe_chain_branchless(
-                        &ctx.stack.ego_layer,
+                        &ctx.stack.ego,
                         spine,
                         vp,
-                        &ctx.stack.stigmergic_layer,
+                        &ctx.stack.stigmergy,
                         tension,
                         &mut frame,
                     );
@@ -332,7 +332,7 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
                 }
             } else {
                 // Non-Ego fast path: modulate in-place without cloning `sys_baseline` or
-                // enforcing pinned isolation when `ego_layer` is inactive.
+                // enforcing pinned isolation when `ego` is inactive.
                 ctx.stack
                     .modulate_gateway_frame_branchless(&mut frame, ctx.horizon, ctx.venn);
             }
@@ -351,10 +351,10 @@ pub(super) fn prepare_gateway_steering_state<
     engine: &T,
     signal: &S,
     core_ctx: Option<CoreLayerEvalContext<'_>>,
-    trail_inout: &mut gcso_pointer_trail_t,
+    trail_inout: &mut PointerTrail,
     query_tensor: &AlignedSliceMut32<'_, f32>,
     key_tensor: Option<&AlignedSliceMut32<'_, f32>>,
-) -> GcsoResult<(
+) -> LmnkResult<(
     GatewayFrame,
     [u64; NUM_STIGMERGIC_GRANULES],
     CausalProvenanceReport,
@@ -365,12 +365,12 @@ pub(super) fn prepare_gateway_steering_state<
     let report = frame.to_causal_report();
     let (head_dim, num_heads, expected_len) = engine.validate_head_layout()?;
     if num_heads > MAX_ATTENTION_HEADS
-        || frame.qdps_min_step_rad < 0.0
-        || !branchless_is_finite_f32(frame.qdps_min_step_rad)
-        || frame.ripa_clamp_rad <= 0.0
-        || !branchless_is_finite_f32(frame.ripa_clamp_rad)
+        || frame.phase_step_min_rad < 0.0
+        || !branchless_is_finite_f32(frame.phase_step_min_rad)
+        || frame.phase_clamp_rad <= 0.0
+        || !branchless_is_finite_f32(frame.phase_clamp_rad)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     validate_optional_qk_tensors(Some(query_tensor), key_tensor, expected_len)?;
 
@@ -393,18 +393,18 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
     /// phase words, updates `trail_inout`, and executes $SO(2)$-fused `PhaseClamp` + sub-head router sub-head steering.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if head dimensions, radian clamps, or tensor slices
-    /// violate layout or `GCSO_RESTRICT` disjointness invariants.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if head dimensions, radian clamps, or tensor slices
+    /// violate layout or `LMNK_RESTRICT` disjointness invariants.
     #[inline(always)]
     fn steer_gateway_signal_safe<S: ManifoldGatewaySignal + ?Sized>(
         &self,
         signal: &S,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         unresolved_damping_u7: u8,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
+    ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
         let (frame, frm_w, report, head_dim, num_heads) = prepare_gateway_steering_state(
             self,
             signal,
@@ -428,14 +428,14 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
         Ok((frame, report))
     }
 
-    /// Synthesizes any [`ManifoldGatewaySignal`] into structural hyperparameters (`ripa_clamp_rad`,
-    /// `qdps_min_step_rad`, `effective_inv_temp`, SWAR phase words) and steers `query_tensor`
+    /// Synthesizes any [`ManifoldGatewaySignal`] into structural hyperparameters (`phase_clamp_rad`,
+    /// `phase_step_min_rad`, `effective_inv_temp`, SWAR phase words) and steers `query_tensor`
     /// (and optional `key_tensor`) according to [`RopeSteeringTarget`] (`Interleaved` or `HalfSplit`,
     /// including partial `rotary_dim`) with zero heap allocation.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
-    /// violate layout or `GCSO_RESTRICT` disjointness invariants.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
+    /// violate layout or `LMNK_RESTRICT` disjointness invariants.
     #[inline]
     fn steer_gateway_signal_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
@@ -444,12 +444,12 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
         &self,
         signal: &S,
         geometry: &G,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         unresolved_damping_u7: u8,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
+    ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
         self.steer_gateway_signal_with_core_layers_for_geometry_safe(
             signal,
             geometry,
@@ -466,8 +466,8 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
     /// dynamic trait cognitive apertures and read-only 3-layer modulation (`Liminal` + `Stigmergic` + `Ego`).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
-    /// violate layout or `GCSO_RESTRICT` disjointness invariants.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
+    /// violate layout or `LMNK_RESTRICT` disjointness invariants.
     #[inline]
     fn steer_gateway_signal_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
@@ -477,12 +477,12 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
         signal: &S,
         geometry: &G,
         core_ctx: Option<CoreLayerEvalContext<'_>>,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         unresolved_damping_u7: u8,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
+    ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
         let geom = geometry.rope_geometry();
         geom.validate()?;
         if core_ctx.is_none()
@@ -508,7 +508,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
             key_tensor.as_deref(),
         )?;
         if geom.head_dim != head_dim || geom.num_heads != num_heads {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
         let frm_nonzero = swar_words_nonzero_64(&frm_w);
@@ -529,7 +529,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
         } else {
             let swar_words = filter_and_damp_gateway_words(
                 &next_w,
-                frame.qdps_min_step_q7,
+                frame.phase_step_min_q7,
                 unresolved_damping_u7,
             );
 
@@ -538,7 +538,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
                 store_q7_words_64(&mut q7_stack.data, &swar_words);
                 let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
                 if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
-                    .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                    .cut_by_lacuna(frame.phase_clamp_rad > 0.0, frame.phase_clamp_rad, 0.0)
                     .into_active()
                 {
                     PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
@@ -546,7 +546,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
                         geometry,
                         query_tensor,
                         active_deltas,
-                        frame.ripa_clamp_rad,
+                        frame.phase_clamp_rad,
                     )?;
                     if let Some(k) = key_tensor {
                         PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
@@ -554,7 +554,7 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
                             geometry,
                             k,
                             active_deltas,
-                            frame.ripa_clamp_rad,
+                            frame.phase_clamp_rad,
                         )?;
                     }
                 }
@@ -576,11 +576,11 @@ impl<T: PhaseSteering + ?Sized> GatewayPhaseSteeringExt for T {}
 /// circuit-modulated [`GatewayFrame`].
 ///
 /// Derives a scale-invariant residual injection gain autonomously from the hidden state's
-/// L2 norm and [`GatewayFrame`] structural quantities (`effective_energy`, `ripa_clamp_rad`,
+/// L2 norm and [`GatewayFrame`] structural quantities (`effective_energy`, `phase_clamp_rad`,
 /// `fact_persona_coherence`, `repulsion_severity`), eliminating manual scalar tuning.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slice lengths mismatch or Rank-1 residual evaluation rejects inputs.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slice lengths mismatch or Rank-1 residual evaluation rejects inputs.
 #[inline]
 pub fn apply_gateway_frame_rank1_hidden_fused(
     frame: &GatewayFrame,
@@ -588,7 +588,7 @@ pub fn apply_gateway_frame_rank1_hidden_fused(
     x_in: &AlignedSlice32<'_, f32>,
     u_vec: &AlignedSlice32<'_, f32>,
     v_vec: &AlignedSlice32<'_, f32>,
-) -> GcsoResult<f32> {
+) -> LmnkResult<f32> {
     if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0 {
         return Ok(0.0);
     }
@@ -601,7 +601,7 @@ pub fn apply_gateway_frame_rank1_hidden_fused(
     );
     let coh_boost = branchless_clamp_f32(0.5 + 0.5 * frame.fact_persona_coherence, 0.25, 1.0);
     let structural_gain = branchless_flush_subnormal_f32(branchless_clamp_f32(
-        frame.ripa_clamp_rad * energy_gate * coh_boost * 0.125,
+        frame.phase_clamp_rad * energy_gate * coh_boost * 0.125,
         0.0,
         0.05,
     ));
@@ -623,7 +623,7 @@ pub fn apply_gateway_frame_rank1_hidden_fused(
 
 /// Blanket-implemented extension trait equipping any [`StigmergicSubstrateOps`] with single-call
 /// [`ManifoldGatewaySignal`] ingestion, Online Toroidal $k$-Means / DP-Means macro clustering,
-/// online basin consolidation, and `.gcso` crystallization.
+/// online basin consolidation, and `.lmnk` crystallization.
 pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     /// Synthesizes `signal` with dynamic trait cognitive apertures and optional 3-layer core
     /// modulation (`core_ctx`), then steers `query_tensor` and optional `logits_opt` for `geometry`.
@@ -639,27 +639,29 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         signal: &S,
         geometry: &G,
         core_ctx: Option<CoreLayerEvalContext<'_>>,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
+        ledger_slot: &mut LedgerSlot,
+        trail_out: &mut PointerTrail,
         unresolved_damping_u7: u8,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(GatewayFrame, CausalProvenanceReport)> {
+    ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
         let geom = geometry.rope_geometry();
         let (frame, frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         let report = frame.to_causal_report();
         let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
-            frame.qdps_min_step_rad,
-            frame.ripa_clamp_rad,
+            geom.head_dim as u32,
+            geom.num_heads as u32,
+            frame.phase_step_min_rad,
+            frame.phase_clamp_rad,
             query_tensor.as_deref(),
             None,
         )?;
         if geom.head_dim != head_dim || geom.num_heads != num_heads {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
         let (bypass_hit, effective_ptr) =
-            self.resolve_or_pass_tagged_ptr(ledger_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
+            self.resolve_or_pass_tagged_ptr(ledger_slot, TaggedPtr(frame.tagged_ptr));
         let frm_nonzero = swar_words_nonzero_64(&frm_w);
         let next_w = if frm_nonzero {
             *trail_phase_words_mut(trail_out) = frm_w;
@@ -690,7 +692,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         let mut metrics = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(is_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
-                (frame.provenance_bits
+                (frame.lineage_flags
                     & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
                     == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
                 LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
@@ -705,21 +707,25 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             let clean_damping =
                 branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
             let swar_words =
-                filter_and_damp_gateway_words(&next_w, frame.qdps_min_step_q7, clean_damping);
+                filter_and_damp_gateway_words(&next_w, frame.phase_step_min_q7, clean_damping);
             if swar_words_nonzero_64(&swar_words) {
                 let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
                 store_q7_words_64(&mut q7_stack.data, &swar_words);
                 let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
                 if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
-                    .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                    .cut_by_lacuna(frame.phase_clamp_rad > 0.0, frame.phase_clamp_rad, 0.0)
                     .into_active()
                 {
+                    let steering = crate::stigmergy::PhaseSteeringEngine::new(
+                        head_dim as u32,
+                        num_heads as u32,
+                    )?;
                     PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
-                        self,
+                        &steering,
                         geometry,
                         q,
                         active_deltas,
-                        frame.ripa_clamp_rad,
+                        frame.phase_clamp_rad,
                     )?;
                     metrics |= LEDGER_METRIC_PHASE_STEERED;
                 }
@@ -753,8 +759,8 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         thresholds: &StigmergicThresholds,
         scale: StigmergicScaleGranularity,
         entropy_h_tilde: f32,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
+        ledger_slot: &mut LedgerSlot,
+        trail_out: &mut PointerTrail,
         unresolved_damping_u7: u8,
         mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         rank1_hidden: Option<(
@@ -764,7 +770,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             &AlignedSlice32<'_, f32>,
         )>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(
+    ) -> LmnkResult<(
         GatewayFrame,
         CausalProvenanceReport,
         StigmergicActionDecision,
@@ -786,12 +792,12 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             let mut eligible_lanes = active_cut.outside | active_cut.inside;
             if eligible_lanes != 0 {
                 let standard_granule_mask = core_ctx.map_or(0xFF_u8, |c| {
-                    c.venn.venn_core_mask | c.venn.venn_penumbra_mask
+                    c.venn.overlap_core_mask | c.venn.overlap_fringe_mask
                 });
                 let sandbox_granule_mask = core_ctx.map_or(0x00_u8, |c| {
                     crate::liminal::BitCut8::split(
-                        c.venn.void_exterior_mask | c.venn.serendipity_excursion_mask,
-                        c.venn.venn_core_mask,
+                        c.venn.lacuna_exterior_mask | c.venn.discovery_excursion_mask,
+                        c.venn.overlap_core_mask,
                     )
                     .outside
                 });
@@ -842,13 +848,15 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         }
         let report = frame.to_causal_report();
         let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
-            frame.qdps_min_step_rad,
-            frame.ripa_clamp_rad,
+            geom.head_dim as u32,
+            geom.num_heads as u32,
+            frame.phase_step_min_rad,
+            frame.phase_clamp_rad,
             query_tensor.as_deref(),
             None,
         )?;
         if geom.head_dim != head_dim || geom.num_heads != num_heads {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
         // Evaporate stale pheromone and deposit new pheromone weighted by resonance energy and
@@ -895,7 +903,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         };
 
         let (bypass_hit, effective_ptr) =
-            self.resolve_or_pass_tagged_ptr(ledger_slot, gcso_tagged_ptr_t(frame.tagged_ptr));
+            self.resolve_or_pass_tagged_ptr(ledger_slot, TaggedPtr(frame.tagged_ptr));
         let next_w = if frm_nonzero {
             *trail_phase_words_mut(trail_out) = frm_w;
             frm_w
@@ -937,7 +945,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         let (alpha_q7, noise_tol_q7) = match core_ctx {
             Some(c) => (
                 c.derivative_alpha_q7,
-                c.stack.stigmergic_layer.mean_noise_tolerance_q7(),
+                c.stack.stigmergy.mean_noise_tolerance_q7(),
             ),
             None => (0, 4),
         };
@@ -968,7 +976,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         let mut metrics = branchless_select_u8(bypass_hit, LEDGER_METRIC_FAST_PATH_HIT, 0)
             | branchless_select_u8(is_repulsed, LEDGER_METRIC_REPULSION_APPLIED, 0)
             | branchless_select_u8(
-                (frame.provenance_bits
+                (frame.lineage_flags
                     & (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA))
                     == (CAUSAL_AXIS_OBJECTIVE_FACT | CAUSAL_AXIS_SUBJECTIVE_PERSONA),
                 LEDGER_METRIC_SLOT_SYNERGY_ACTIVE,
@@ -995,21 +1003,25 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                         clean_damping
                     };
                 let swar_words =
-                    filter_and_damp_gateway_words(&next_w, frame.qdps_min_step_q7, hub_damping_u7);
+                    filter_and_damp_gateway_words(&next_w, frame.phase_step_min_q7, hub_damping_u7);
                 if swar_words_nonzero_64(&swar_words) {
                     let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
                     store_q7_words_64(&mut q7_stack.data, &swar_words);
                     let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
                     if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
-                        .cut_by_lacuna(frame.ripa_clamp_rad > 0.0, frame.ripa_clamp_rad, 0.0)
+                        .cut_by_lacuna(frame.phase_clamp_rad > 0.0, frame.phase_clamp_rad, 0.0)
                         .into_active()
                     {
+                        let steering = crate::stigmergy::PhaseSteeringEngine::new(
+                            head_dim as u32,
+                            num_heads as u32,
+                        )?;
                         PhaseSteeringActiveExt::apply_phase_steering_for_geometry_safe_active(
-                            self,
+                            &steering,
                             geometry,
                             q,
                             active_deltas,
-                            frame.ripa_clamp_rad,
+                            frame.phase_clamp_rad,
                         )?;
                         metrics |= LEDGER_METRIC_PHASE_STEERED;
                     }
@@ -1062,8 +1074,8 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         probe: &ManifoldProbeBaseline,
         scale: StigmergicScaleGranularity,
         entropy_h_tilde: f32,
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
+        ledger_slot: &mut LedgerSlot,
+        trail_out: &mut PointerTrail,
         unresolved_damping_u7: u8,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         rank1_hidden: Option<(
@@ -1073,7 +1085,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             &AlignedSlice32<'_, f32>,
         )>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(
+    ) -> LmnkResult<(
         GatewayFrame,
         CausalProvenanceReport,
         StigmergicActionDecision,
@@ -1121,21 +1133,21 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     fn orchestrate_scale_layer(
         &mut self,
         layer: &(impl StigmergicScaleLayer + ?Sized),
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         input_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
+        ledger_slot: &mut LedgerSlot,
+        trail_out: &mut PointerTrail,
         layer_index: usize,
         total_layers: usize,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-    ) -> GcsoResult<(
+    ) -> LmnkResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
         StigmergicReconstitutionReport,
     )> {
         let mut ledger = CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot);
         let proj = layer.project_scale_layer(input_words, &ledger, layer_index, total_layers);
-        let eff_ptr = gcso_tagged_ptr_t(if input_ptr.is_null() {
+        let eff_ptr = TaggedPtr(if input_ptr.is_null() {
             proj.frame.tagged_ptr
         } else {
             input_ptr.raw()
@@ -1160,19 +1172,19 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// [`StigmergicScaleLayer`] stages using `AdaptiveThresholdPolicy::default()`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
     /// propagates pointer/telemetry errors.
     #[inline]
     fn orchestrate_adaptive_depth_n<L: StigmergicScaleLayer>(
         &mut self,
         layers: &[L],
         depth_n: usize,
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         input_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
+        ledger_slot: &mut LedgerSlot,
+        trail_out: &mut PointerTrail,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-    ) -> GcsoResult<(
+    ) -> LmnkResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
         StigmergicReconstitutionReport,
@@ -1195,7 +1207,7 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// from `circuit_policy`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
     /// propagates pointer/telemetry errors.
     #[inline]
     fn orchestrate_adaptive_depth_n_with_policy<
@@ -1205,13 +1217,13 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
         &mut self,
         layers: &[L],
         depth_n: usize,
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         input_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        ledger_slot: &mut gcso_ledger_slot_t,
-        trail_out: &mut gcso_pointer_trail_t,
+        ledger_slot: &mut LedgerSlot,
+        trail_out: &mut PointerTrail,
         bloom_filter: Option<&ContrastivePhaseBloomFilter>,
         circuit_policy: &P,
-    ) -> GcsoResult<(
+    ) -> LmnkResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
         StigmergicReconstitutionReport,
@@ -1229,7 +1241,7 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
 
         let active_n = depth_n.min(layers.len());
         if active_n == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let fuse_floor = circuit_policy.early_exit_fuse_floor_q7();
         let repulse_ceil = circuit_policy.early_exit_repulse_ceiling_q7();
@@ -1382,7 +1394,7 @@ impl HybridScaleCircuit {
 
 impl RawPhaseProjectable for HybridScaleCircuit {
     #[inline(always)]
-    fn project_to_q7_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_to_q7_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.to_blended_ledger(64).project_to_q7_64()
     }
 
@@ -1401,7 +1413,7 @@ impl CausalProvenanceSignal for HybridScaleCircuit {
 
 impl CognitiveGroundingSignal for HybridScaleCircuit {
     #[inline(always)]
-    fn project_grounding_phases_64(&self) -> [gcso_q7_t; MAX_ATTENTION_HEADS] {
+    fn project_grounding_phases_64(&self) -> [PhaseQ7; MAX_ATTENTION_HEADS] {
         self.project_to_q7_64()
     }
 
@@ -1828,7 +1840,7 @@ impl StigmergicScaleLayer for GuardPhaseAnchor {
     }
 }
 
-impl StigmergicScaleLayer for CrystallizedAttractorRecord {
+impl StigmergicScaleLayer for PhaseAnchorRecord {
     #[inline(always)]
     fn scale_granularity(&self) -> StigmergicScaleGranularity {
         StigmergicScaleGranularity::MacroCoalition

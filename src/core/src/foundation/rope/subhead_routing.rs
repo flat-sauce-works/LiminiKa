@@ -19,11 +19,11 @@ pub(super) const fn sanitize_subhead_gain_to_u7(gain: f32) -> u8 {
 #[inline(always)]
 #[must_use]
 pub(super) const fn compute_subhead_eff_q7(
-    slot_q7: gcso_q7_t,
+    slot_q7: PhaseQ7,
     gain_u7: u8,
-    pulse_q7: gcso_q7_t,
+    pulse_q7: PhaseQ7,
     fold_geodesic: bool,
-) -> gcso_q7_t {
+) -> PhaseQ7 {
     if (gain_u7 == 128) & (pulse_q7 == 0) {
         return if fold_geodesic {
             branchless_q7_fold_s1_geodesic(slot_q7)
@@ -49,7 +49,7 @@ pub(super) const fn compute_subhead_eff_q7(
 pub(super) const fn compute_subhead_eff_word_x8(
     slot_word: u64,
     gain_u7: u8,
-    pulse_q7: gcso_q7_t,
+    pulse_q7: PhaseQ7,
     fold_geodesic: bool,
 ) -> u64 {
     if (gain_u7 == 128) & (pulse_q7 == 0) {
@@ -89,18 +89,18 @@ pub(super) const fn compute_subhead_eff_word_x8(
 #[inline(always)]
 pub(super) fn dispatch_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    config: &gcso_subhead_config_t,
-    fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    config: &SubheadConfig,
+    fact_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    logic_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    explore_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
     fold_geodesic: bool,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     if head_dim == 0 || (head_dim & 1) != 0 || max_rad <= 0.0 || !branchless_is_finite_f32(max_rad)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let fact_h = config.num_fact_heads as usize;
     let logic_h = config.num_logic_heads as usize;
@@ -108,12 +108,12 @@ pub(super) fn dispatch_subhead_profiles_core(
     let total_heads = fact_h
         .checked_add(logic_h)
         .and_then(|v| v.checked_add(explore_h))
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     let expected_len = total_heads
         .checked_mul(head_dim)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     if total_heads == 0 || total_heads > MAX_ATTENTION_HEADS || tensor.len() < expected_len {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let (is_default, eff_max, q7_to_norm_scale) = resolve_phase_clamp_norm_params(max_rad);
@@ -171,7 +171,7 @@ pub(super) const fn build_subhead_eff_words_64(
     explore_w: &[u64; NUM_SWARM_CELLS],
     total_heads: usize,
     explore_gain_u7: u8,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     fold_geodesic: bool,
 ) -> [u64; NUM_SWARM_CELLS] {
     let mut out = [0u64; NUM_SWARM_CELLS];
@@ -281,16 +281,16 @@ pub(super) const fn build_subhead_eff_words_64(
 #[inline]
 #[must_use]
 pub(super) fn build_subhead_eff_words_from_profiles_64(
-    fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    fact_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     fact_h: usize,
     fact_gain_u7: u8,
-    logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    logic_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     logic_end: usize,
     logic_gain_u7: u8,
-    explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    explore_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     total_heads: usize,
     explore_gain_u7: u8,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     fold_geodesic: bool,
 ) -> [u64; NUM_SWARM_CELLS] {
     let mut out = [0u64; NUM_SWARM_CELLS];
@@ -445,12 +445,12 @@ pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
         return (sb * cp + cb * sp, cb * cp - sb * sp);
     }
     eval_fused_phase_clamp_subhead_sincos_q7_fast(
-        b_u8 as gcso_q7_t,
+        b_u8 as PhaseQ7,
         false,
         base_is_def,
         base_eff_max,
         base_scale,
-        s_u8 as gcso_q7_t,
+        s_u8 as PhaseQ7,
         false,
         subhead_is_def,
         subhead_eff_max,
@@ -1009,15 +1009,15 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
     base_clamp_max_rad: f32,
-    config: &gcso_subhead_config_t,
+    config: &SubheadConfig,
     fact_words: &[u64; NUM_SWARM_CELLS],
     logic_words: &[u64; NUM_SWARM_CELLS],
     explore_words: &[u64; NUM_SWARM_CELLS],
     subhead_max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
     fold_geodesic: bool,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     if head_dim == 0
         || (head_dim & 1) != 0
         || base_clamp_max_rad <= 0.0
@@ -1025,7 +1025,7 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
         || subhead_max_rad <= 0.0
         || !branchless_is_finite_f32(subhead_max_rad)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let fact_h = config.num_fact_heads as usize;
     let logic_h = config.num_logic_heads as usize;
@@ -1033,12 +1033,12 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     let total_heads = fact_h
         .checked_add(logic_h)
         .and_then(|v| v.checked_add(explore_h))
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     let expected_len = total_heads
         .checked_mul(head_dim)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     if total_heads == 0 || total_heads > MAX_ATTENTION_HEADS || tensor.len() < expected_len {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let (base_is_def, base_eff_max, base_scale) =
@@ -1101,11 +1101,11 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
         };
         if let (Some(fb), Some(lb), Some(eb)) = (f_uni, l_uni, e_uni) {
             let f_eff_u8 =
-                compute_subhead_eff_q7(fb as gcso_q7_t, fact_gain_u7, 0, fold_geodesic) as u8;
+                compute_subhead_eff_q7(fb as PhaseQ7, fact_gain_u7, 0, fold_geodesic) as u8;
             let l_eff_u8 =
-                compute_subhead_eff_q7(lb as gcso_q7_t, logic_gain_u7, 0, fold_geodesic) as u8;
+                compute_subhead_eff_q7(lb as PhaseQ7, logic_gain_u7, 0, fold_geodesic) as u8;
             let e_eff_u8 = compute_subhead_eff_q7(
-                eb as gcso_q7_t,
+                eb as PhaseQ7,
                 explore_gain_u7,
                 explore_pulse_q7,
                 fold_geodesic,
@@ -1166,15 +1166,15 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
     base_clamp_max_rad: f32,
-    config: &gcso_subhead_config_t,
-    fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    config: &SubheadConfig,
+    fact_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    logic_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    explore_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     subhead_max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
     fold_geodesic: bool,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     if head_dim == 0
         || (head_dim & 1) != 0
         || base_clamp_max_rad <= 0.0
@@ -1182,7 +1182,7 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
         || subhead_max_rad <= 0.0
         || !branchless_is_finite_f32(subhead_max_rad)
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let fact_h = config.num_fact_heads as usize;
     let logic_h = config.num_logic_heads as usize;
@@ -1190,12 +1190,12 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     let total_heads = fact_h
         .checked_add(logic_h)
         .and_then(|v| v.checked_add(explore_h))
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     let expected_len = total_heads
         .checked_mul(head_dim)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     if total_heads == 0 || total_heads > MAX_ATTENTION_HEADS || tensor.len() < expected_len {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let (base_is_def, base_eff_max, base_scale) =
@@ -1245,17 +1245,17 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
 #[inline(always)]
 pub(crate) fn dispatch_fused_phase_clamp_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    base_clamp_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    base_clamp_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     base_clamp_max_rad: f32,
-    config: &gcso_subhead_config_t,
-    fact_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    logic_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
-    explore_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    config: &SubheadConfig,
+    fact_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    logic_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
+    explore_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     subhead_max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
     fold_geodesic: bool,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let base_words = load_q7_words_64(base_clamp_phases);
     dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
         tensor,
@@ -1275,16 +1275,16 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_profiles_core(
 #[inline(always)]
 pub(super) fn dispatch_subhead_slot_ensemble_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    config: &gcso_subhead_config_t,
-    slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
+    config: &SubheadConfig,
+    slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
     fact_slot_id: u8,
     logic_slot_id: u8,
     explore_slot_id: u8,
     max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
     fold_geodesic: bool,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let f_id = usize::from(fact_slot_id);
     let l_id = usize::from(logic_slot_id);
     let e_id = usize::from(explore_slot_id);
@@ -1292,7 +1292,7 @@ pub(super) fn dispatch_subhead_slot_ensemble_core(
         || l_id >= MAX_ATTRACTOR_DOMAINS
         || e_id >= MAX_ATTRACTOR_DOMAINS
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let bank_2d = slot_phase_bank.as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()?;
     dispatch_subhead_profiles_core(
@@ -1316,16 +1316,16 @@ pub(super) fn dispatch_subhead_slot_ensemble_core(
 /// `(fact_heads, logic_heads, explore_heads, total_heads, rot_dim)`.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim == 0`, `head_dim` is odd,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim == 0`, `head_dim` is odd,
 /// `total_heads == 0`, or `tensor.len() < total_heads * head_dim`.
 #[inline(always)]
 pub fn validate_subhead_layout(
     tensor: &AlignedSliceMut32<'_, f32>,
-    config: &gcso_subhead_config_t,
+    config: &SubheadConfig,
     head_dim: usize,
-) -> GcsoResult<(usize, usize, usize, usize, usize)> {
+) -> LmnkResult<(usize, usize, usize, usize, usize)> {
     if head_dim == 0 || (head_dim & 1) != 0 {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let fact_h = config.num_fact_heads as usize;
     let logic_h = config.num_logic_heads as usize;
@@ -1333,12 +1333,12 @@ pub fn validate_subhead_layout(
     let total_heads = fact_h
         .checked_add(logic_h)
         .and_then(|v| v.checked_add(explore_h))
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     let expected_len = total_heads
         .checked_mul(head_dim)
-        .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+        .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
     if total_heads == 0 || tensor.len() < expected_len {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let rot_dim = phase_clamp_upper_rot_dim(head_dim);
     Ok((fact_h, logic_h, explore_h, total_heads, rot_dim))
@@ -1347,14 +1347,14 @@ pub fn validate_subhead_layout(
 /// Executes single-pass sub-head routing across Fact, Logic, and Exploration head groups (Section 2.4).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim` is zero or odd, `total_heads == 0`,
 /// or `tensor` has fewer than `total_heads * head_dim` elements.
 #[inline]
 pub fn dispatch_single_pass(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    config: &gcso_subhead_config_t,
+    config: &SubheadConfig,
     head_dim: usize,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let (fact_h, logic_h, _explore_h, total_heads, rot_dim) =
         validate_subhead_layout(tensor, config, head_dim)?;
     let t_slice = tensor.as_mut_slice();
@@ -1420,23 +1420,23 @@ pub fn dispatch_single_pass(
 /// the composite angle $\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$ in a single traversal.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
 /// `head_dim` is invalid, `base_clamp_max_rad <= 0.0`, `subhead_max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
 pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    base_clamp_phases: &[gcso_q7_t; MAX_ATTENTION_HEADS],
+    base_clamp_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     base_clamp_max_rad: f32,
-    config: &gcso_subhead_config_t,
-    slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
+    config: &SubheadConfig,
+    slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
     fact_slot_id: u8,
     logic_slot_id: u8,
     explore_slot_id: u8,
     subhead_max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
     fold_geodesic: bool,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     let f_id = usize::from(fact_slot_id);
     let l_id = usize::from(logic_slot_id);
     let e_id = usize::from(explore_slot_id);
@@ -1444,7 +1444,7 @@ pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
         || l_id >= MAX_ATTRACTOR_DOMAINS
         || e_id >= MAX_ATTRACTOR_DOMAINS
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let bank_2d = slot_phase_bank.as_slot_bank::<MAX_ATTRACTOR_DOMAINS, MAX_ATTENTION_HEADS>()?;
     dispatch_fused_phase_clamp_and_subhead_profiles_core(
@@ -1467,20 +1467,20 @@ pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
 /// and `Explore` heads to `explore_slot_id` from a 512-byte `slot_phase_bank`.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
 /// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
 pub fn dispatch_subhead_slot_ensemble(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    config: &gcso_subhead_config_t,
-    slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
+    config: &SubheadConfig,
+    slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
     fact_slot_id: u8,
     logic_slot_id: u8,
     explore_slot_id: u8,
     max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     dispatch_subhead_slot_ensemble_core(
         tensor,
         config,
@@ -1498,20 +1498,20 @@ pub fn dispatch_subhead_slot_ensemble(
 /// Executes **Seam-Free $S^1$ Geodesic Sub-Head Attractor Slot Ensemble Routing** (Section 2.4 & 4.1).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
 /// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
 pub fn dispatch_subhead_slot_ensemble_geodesic(
     tensor: &mut AlignedSliceMut32<'_, f32>,
-    config: &gcso_subhead_config_t,
-    slot_phase_bank: &AlignedSlice16<'_, gcso_q7_t>,
+    config: &SubheadConfig,
+    slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
     fact_slot_id: u8,
     logic_slot_id: u8,
     explore_slot_id: u8,
     max_rad: f32,
-    explore_pulse_q7: gcso_q7_t,
+    explore_pulse_q7: PhaseQ7,
     head_dim: usize,
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     dispatch_subhead_slot_ensemble_core(
         tensor,
         config,

@@ -84,6 +84,41 @@ const _: () = {
     assert!(align_of::<SpineFrameTransitionInput>() == 8);
 };
 
+impl SpineFrameTransitionInput {
+    /// Builds a [`SpineFrameTransitionInput`] branchlessly from a 16-byte [`crate::liminal::LacunaPartition8`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_lacuna_partition(
+        partition: &crate::liminal::LacunaPartition8,
+        phase_delta_q7: u8,
+        reanchor_delta_thresh_q7: u8,
+        steps_since_keyframe: u8,
+        max_gop_steps: u8,
+        flags: u8,
+    ) -> Self {
+        let mut lacuna_code = Lacuna::Unobserved.code();
+        if partition.self_ref_mask != 0 {
+            lacuna_code = Lacuna::SelfRef.code();
+        }
+        if partition.exterior_mask != 0 {
+            lacuna_code = Lacuna::Exterior.code();
+        }
+        if partition.undefined_mask != 0 {
+            lacuna_code = Lacuna::Undefined.code();
+        }
+        Self {
+            lacuna_code,
+            phase_delta_q7,
+            reanchor_delta_thresh_q7,
+            steps_since_keyframe,
+            max_gop_steps,
+            candidate_granule_mask: partition.self_ref_mask | partition.exterior_mask,
+            flags,
+            reserved: 0,
+        }
+    }
+}
+
 // SAFETY: `SpineFrameTransitionInput` is `#[repr(C, align(8))]` of exact size 8 bytes with primitive `u8` fields only.
 unsafe impl Pod for SpineFrameTransitionInput {}
 
@@ -112,8 +147,8 @@ pub struct SystemSpineState {
     pub pinned_slot_mask: u8,
     /// Physical `ACTION_MODE_*` bits protected from Ego suppression (`offset 5`).
     pub pinned_action_mode_mask: u8,
-    /// Non-zero when True Void ($\overline{S \cup O}$) forces aperture-0 lock (`offset 6`).
-    pub ood_void_locked: u8,
+    /// Non-zero when Unobserved boundary ($\overline{S \cup O}$) forces aperture-0 lock (`offset 6`).
+    pub unobserved_locked: u8,
     /// Non-zero during irreversible Prefill / safety checkpoints (`offset 7`).
     pub irreversible_step_lock: u8,
     /// Physical compute slot bitmask protected from Fast-Loop bypass (`offset 8..16`).
@@ -152,7 +187,7 @@ impl SystemSpineState {
             pinned_slot_mask: (1u8 << ATTRACTOR_SLOT_SYSTEM_BASELINE)
                 | (1u8 << ATTRACTOR_SLOT_REPULSION),
             pinned_action_mode_mask: ACTION_MODE_PHASE_REPULSE,
-            ood_void_locked: 0,
+            unobserved_locked: 0,
             irreversible_step_lock: 0,
             pinned_compute_mask: 0,
             gauge_anchor_epoch: 0,
@@ -194,7 +229,7 @@ impl SystemSpineState {
         let eff_slot = branchless_select_u8(slot_is_pinned, base_slot, ego_slot);
         let preserved_modes = BitCut8::split(base_modes, self.pinned_action_mode_mask).inside;
         let eff_modes = ego_modes | preserved_modes;
-        let full_lock = (self.ood_void_locked != 0) | (self.irreversible_step_lock != 0);
+        let full_lock = (self.unobserved_locked != 0) | (self.irreversible_step_lock != 0);
         (full_lock, eff_slot, eff_modes)
     }
 
@@ -218,7 +253,7 @@ impl SystemSpineState {
 
     /// Evaluates branchless whole-token bypass veto flags (`SPINE_BYPASS_VETO_*`).
     ///
-    /// Explicitly excludes `ood_void_locked` so OOD (`Lacuna::Void`) does not trigger
+    /// Explicitly excludes `unobserved_locked` so OOD (`Lacuna::Unobserved`) does not trigger
     /// guard/repulsion bypass vetoes.
     #[inline(always)]
     #[must_use]
@@ -286,7 +321,7 @@ impl SystemSpineState {
     ///
     /// Priority order (highest to lowest):
     /// 1. [`Lacuna::Undefined`] (`>= 3`) -> [`FrameDirective::RejectUndefined`] (`allowed = 0`).
-    /// 2. Spine lock (`irreversible_step_lock`, `SPINE_TRANSITION_FLAG_IRREVERSIBLE`, or `ood_void_locked`)
+    /// 2. Spine lock (`irreversible_step_lock`, `SPINE_TRANSITION_FLAG_IRREVERSIBLE`, or `unobserved_locked`)
     ///    -> [`FrameDirective::PassThrough`] (`allowed = 0`).
     /// 3. Defined observed re-anchor (`!Unobserved` and (`max_gop_steps` expired, `NEW_BASIN_SPAWNED`,
     ///    `GUARD_REPULSION`, [`Lacuna::Exterior`], or `phase_delta_q7 >= reanchor_delta_thresh_q7`))
@@ -307,7 +342,7 @@ impl SystemSpineState {
 
         let irreversible = (self.irreversible_step_lock != 0)
             | ((input.flags & SPINE_TRANSITION_FLAG_IRREVERSIBLE) != 0);
-        let ood_locked = self.ood_void_locked != 0;
+        let ood_locked = self.unobserved_locked != 0;
         let guard_repulsion = (input.flags & SPINE_TRANSITION_FLAG_GUARD_REPULSION) != 0;
         let new_basin = (input.flags & SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED) != 0;
         let stationary_ready = (input.flags & SPINE_TRANSITION_FLAG_STATIONARY_BYPASS_READY) != 0;
@@ -451,7 +486,7 @@ mod tests {
             }),
             (FrameDirective::PassThrough, 0)
         );
-        spine.ood_void_locked = 1;
+        spine.unobserved_locked = 1;
         assert_eq!(
             spine.evaluate_frame_transition_branchless(nominal),
             (FrameDirective::PassThrough, 0)

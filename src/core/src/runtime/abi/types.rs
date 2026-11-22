@@ -1,777 +1,410 @@
 // name: src/core/src/runtime/abi/types.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! C-ABI constants, status codes, opaque handles, `#[repr(C)]` POD structures,
-//! legacy `gcso_*_t` compatibility type aliases, and compile-time layout assertions.
+//! C-ABI constants, status codes, `#[repr(C)]` POD aliases (`lmnk_*_t`),
+//! Portable Device-Ready POD vs Host FFI Descriptor wire contract, and compile-time
+//! layout assertions for `LiminiKa` `v0.2.0` (`0x0000_0200`).
+//!
+//! # Portable Wire & Device Contract
+//! - **Byte Order**: All multi-byte scalars and `u64` SWAR words use **Canonical Little-Endian**.
+//! - **Portable Device-Ready PODs**: Power-of-two `16 B..=128 B` structures using fixed-width
+//!   types with `0` implicit padding and 64 B-aligned `[PhaseQ7; 64]` arrays directly consumable
+//!   as `u32x16` / `u64x8` (WGSL, Vulkan `std430`, Metal, CUDA, x86_64 64 B CL, ARM64 128 B CL).
+//! - **Host FFI Descriptors**: Host-only pointer-carrying structs (`Rank1Descriptor`, `Config`
+//!   wrappers) are classified separately from cross-device buffer PODs.
 
 use super::*;
 
 pub use crate::drivers::{
-    gcso_edbc_state_t, DistortionDelta as gcso_distortion_delta_t,
-    DistortionTension as gcso_distortion_tension_t, SystemSpineState as gcso_system_spine_state_t,
+    DistortionDelta, DistortionTension, EgoIntentAxes, EntropyController, EntropyState,
+    LiminalEgoState, SystemSpineState,
 };
 pub use crate::foundation::{
-    gcso_paged_bitmask_t, gcso_rank1_residual_descriptor_t, gcso_subhead_config_t,
-    gcso_tagged_ptr_t, AlignedSlice, AlignedSliceMut, DisjointMutTriple, KvMotionDeltaPacket,
+    AlignedSlice, AlignedSliceMut, DisjointMutTriple, KvMotionDeltaPacket, PagedBitmask,
+    Rank1Descriptor, SubheadConfig, TaggedPtr,
 };
 pub use crate::liminal::{
-    gcso_config_t, gcso_q7_t, gcso_status_t, validate_abi_version, AttributionTag, GcsoStatus,
-    GCSO_ABI_VERSION_CSTR, GCSO_ABI_VERSION_HEX, GCSO_ABI_VERSION_MAJOR, GCSO_ABI_VERSION_MINOR,
-    GCSO_ABI_VERSION_PATCH, GCSO_ABI_VERSION_STRING, GCSO_ERROR_ACTION_HUB_FULL,
-    GCSO_ERROR_ATTRACTOR_NOT_FOUND, GCSO_ERROR_BUFFER_TOO_SMALL, GCSO_ERROR_CONTAINER_CORRUPTED,
-    GCSO_ERROR_DPSR_PHASE_OVERFLOW, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_EXTENSION_NOT_LOADED,
-    GCSO_ERROR_INVALID_ARGUMENT, GCSO_ERROR_INVALID_STATE, GCSO_ERROR_IO_FAILURE,
-    GCSO_ERROR_KV_KEYFRAME_SEEK_FAILED, GCSO_ERROR_LEDGER_FULL, GCSO_ERROR_MAPPED_STORAGE_FAILED,
-    GCSO_ERROR_MISALIGNED_POINTER, GCSO_ERROR_NOT_IMPLEMENTED, GCSO_ERROR_NULL_POINTER,
-    GCSO_ERROR_OBSTRUCTION_UNRESOLVED, GCSO_ERROR_OUT_OF_MEMORY, GCSO_ERROR_PANIC_CAUGHT,
-    GCSO_ERROR_QDPS_UNDERFLOW, GCSO_ERROR_SUBHEAD_ROUTING_FAILED, GCSO_ERROR_UNKNOWN,
-    GCSO_ERROR_VERSION_MISMATCH, GCSO_SUCCESS,
+    validate_abi_version, AttributionTag, LacunaPartition8, LiminalThresholdState, LmnkStatus,
+    PhaseQ7, RuntimeConfig, LMNK_ABI_VERSION_CSTR, LMNK_ABI_VERSION_HEX, LMNK_ABI_VERSION_MAJOR,
+    LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH, LMNK_ABI_VERSION_STRING,
+    LMNK_CAP_INPLACE_CONTEXT_INIT, LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON, LMNK_CAP_SIMD_WASM128,
+    LMNK_CAP_SWAR_BASELINE, LMNK_CAP_ZERO_ALLOC_CORE, LMNK_ERR_ALIGNMENT,
+    LMNK_ERR_ANCHOR_NOT_FOUND, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_EXTENSION_NOT_LOADED, LMNK_ERR_INVALID_ARGUMENT,
+    LMNK_ERR_INVALID_STATE, LMNK_ERR_IO_FAILURE, LMNK_ERR_KV_KEYFRAME_SEEK_FAILED,
+    LMNK_ERR_LEDGER_FULL, LMNK_ERR_NOT_IMPLEMENTED, LMNK_ERR_NULL_POINTER,
+    LMNK_ERR_OBSTRUCTION_UNRESOLVED, LMNK_ERR_OUT_OF_MEMORY, LMNK_ERR_PANIC_CAUGHT,
+    LMNK_ERR_PHASE_OVERFLOW, LMNK_ERR_PHASE_STEP_UNDERFLOW, LMNK_ERR_STORAGE_MAP_FAILED,
+    LMNK_ERR_SUBHEAD_ROUTING_FAILED, LMNK_ERR_SUBSTRATE_FULL, LMNK_ERR_UNKNOWN,
+    LMNK_ERR_VERSION_MISMATCH, LMNK_OK,
 };
-pub use crate::runtime::horizon::RamPhaseKvEntry;
-pub use crate::runtime::storage::{KvKeyframePacket, GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET};
+pub use crate::runtime::boundary_delta::LiminalBoundaryDelta;
+pub use crate::runtime::context::CoreStateStack;
+pub use crate::runtime::gateway::{CausalProvenanceReport, GatewayFrame};
+pub use crate::runtime::horizon::{EpistemicHorizonReading, RamPhaseKvEntry};
+pub use crate::runtime::storage::{
+    DescriptorHeader, KvKeyframeHeader, KvKeyframePacket, LmnkSnapshotHeader,
+    LMNK_FOUR_SECTION_HEADER_BYTES, LMNK_SNAPSHOT_MAGIC_U32, LMNK_STORAGE_PREAMBLE_OFFSET,
+};
+pub use crate::runtime::telemetry::LiminalTopologyTelemetrySnapshot;
 pub use crate::stigmergy::{
-    gcso_anchor_type_t, gcso_ledger_slot_t, gcso_pointer_trail_t, CognitiveCircuitActivation,
-    CognitiveStepOp, CorePrimitiveState, GcsoAnchorType, ATTRACTOR_SLOT_KNOWLEDGE,
-    ATTRACTOR_SLOT_PERSONA, GCSO_ANCHOR_TYPE_CRYSTALLIZED, GCSO_ANCHOR_TYPE_EMBEDDING,
-    GCSO_ANCHOR_TYPE_PHASE_REPULSE, GCSO_ANCHOR_TYPE_SYSTEM_PROMPT, GCSO_ANCHOR_TYPE_TOPOLOGICAL,
-    LEDGER_HISTORY_LEN,
+    CognitiveCircuitActivation, CognitiveStepOp, CognitiveTrajectoryLedger,
+    ContrastivePhaseBloomFilter, CorePrimitiveState, LedgerSlot, OverlapDiscoveryReport,
+    PhaseAnchorRecord, PointerTrail, StigmergicFragmentEnsembleReport, StigmergicGranuleState,
+    StigmergicReconstitutionReport, StigmergicThresholds, SubstrateStepReport,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, LEDGER_HISTORY_LEN, LMNK_PHASE_ANCHOR_MAGIC,
+    LMNK_PHASE_ANCHOR_VERSION, MAX_PHASE_ANCHORS,
 };
 
-/// 64-bit capability flags bitmask type (`gcso_capability_flags_t`).
-pub type gcso_capability_flags_t = u64;
-/// Capability bitmask flag indicating baseline CPU execution support.
-pub const GCSO_CAP_CPU_BASELINE: gcso_capability_flags_t = 1 << 0;
-/// Capability bitmask flag indicating NVIDIA CUDA kernel backend support.
-pub const GCSO_CAP_CUDA_BACKEND: gcso_capability_flags_t = 1 << 1;
-/// Capability bitmask flag indicating Vulkan Compute subgroup backend support.
-pub const GCSO_CAP_VULKAN_BACKEND: gcso_capability_flags_t = 1 << 2;
-/// Capability bitmask flag indicating Apple Metal simdgroup backend support.
-pub const GCSO_CAP_METAL_BACKEND: gcso_capability_flags_t = 1 << 3;
+/// 64-bit capability flags bitmask type (`lmnk_capability_flags_t`).
+pub type lmnk_capability_flags_t = u64;
+/// Standardized 32-bit signed status code (`lmnk_status_t`).
+pub type lmnk_status_t = LmnkStatus;
+/// Signed Q0.7 phase element (`lmnk_q7_t`).
+pub type lmnk_q7_t = PhaseQ7;
+/// 64-bit tagged pointer (`lmnk_tagged_ptr_t`).
+pub type lmnk_tagged_ptr_t = TaggedPtr;
+/// 64-byte C-ABI runtime configuration descriptor (`RuntimeConfig`).
+pub type lmnk_config_t = RuntimeConfig;
+/// 8-byte C-ABI structure descriptor header (`DescriptorHeader`).
+pub type lmnk_descriptor_header_t = DescriptorHeader;
+/// 128-byte `.lmnk` snapshot container header (`LmnkSnapshotHeader`).
+pub type lmnk_snapshot_header_t = LmnkSnapshotHeader;
+/// 64-byte KV-keyframe header (`KvKeyframeHeader`).
+pub type lmnk_kv_keyframe_header_t = KvKeyframeHeader;
+/// 32-byte 256-bit PagedBlock bitmask (`PagedBitmask`).
+pub type lmnk_paged_bitmask_t = PagedBitmask;
+/// 32-byte parallel multi-head sub-head routing config (`SubheadConfig`).
+pub type lmnk_subhead_config_t = SubheadConfig;
+/// 64-byte Host FFI descriptor for Rank-1 residual injection (`Rank1Descriptor`).
+pub type lmnk_rank1_descriptor_t = Rank1Descriptor;
+/// 64-byte FastPathLedger telemetry and shortcut slot (`LedgerSlot`).
+pub type lmnk_ledger_slot_t = LedgerSlot;
+/// 128-byte dual-cacheline Stigmergic Pointer Trail (`PointerTrail`).
+pub type lmnk_pointer_trail_t = PointerTrail;
+/// 32-byte Entropy Controller state descriptor (`EntropyState`).
+pub type lmnk_entropy_state_t = EntropyState;
+/// 128-byte Gateway Frame (`GatewayFrame`).
+pub type lmnk_gateway_frame_t = GatewayFrame;
+/// 16-byte Causal Provenance Report (`CausalProvenanceReport`).
+pub type lmnk_causal_report_t = CausalProvenanceReport;
+/// 128-byte crystallized Phase Anchor Record (`PhaseAnchorRecord`, `"LNKR"`).
+pub type lmnk_phase_anchor_record_t = PhaseAnchorRecord;
+/// 64-byte Contrastive Phase Bloom Filter (`ContrastivePhaseBloomFilter`).
+pub type lmnk_bloom_filter_t = ContrastivePhaseBloomFilter;
+/// 32-byte Stigmergic Thresholds configuration (`StigmergicThresholds`).
+pub type lmnk_stigmergic_thresholds_t = StigmergicThresholds;
+/// 32-byte Substrate Step Report (`SubstrateStepReport`).
+pub type lmnk_substrate_step_report_t = SubstrateStepReport;
+/// 8-bit Stigmergic Action Decision discriminant (`StigmergicActionDecision`).
+pub type lmnk_action_decision_t = u8;
+/// 16-byte Stigmergic Reconstitution Report (`StigmergicReconstitutionReport`).
+pub type lmnk_reconstitution_report_t = StigmergicReconstitutionReport;
+/// 8-byte Cognitive Trajectory Ledger (`CognitiveTrajectoryLedger`).
+pub type lmnk_cognitive_ledger_t = CognitiveTrajectoryLedger;
+/// 32-byte Epistemic Horizon Reading (`EpistemicHorizonReading`).
+pub type lmnk_epistemic_horizon_t = EpistemicHorizonReading;
+/// 32-byte Liminal Threshold State (`LiminalThresholdState`).
+pub type lmnk_liminal_threshold_state_t = LiminalThresholdState;
+/// 32-byte Stigmergic Granule State (`StigmergicGranuleState`).
+pub type lmnk_stigmergic_granule_state_t = StigmergicGranuleState;
+/// 32-byte Overlap & Discovery Report (`OverlapDiscoveryReport`).
+pub type lmnk_overlap_discovery_report_t = OverlapDiscoveryReport;
+/// 128-byte Core State Stack (`CoreStateStack`).
+pub type lmnk_core_state_stack_t = CoreStateStack;
+/// 32-byte Self-Introspecting Topology Telemetry Snapshot (`LiminalTopologyTelemetrySnapshot`).
+pub type lmnk_topology_snapshot_t = LiminalTopologyTelemetrySnapshot;
+/// 16-byte Temporal Boundary Velocity Analyzer (`LiminalBoundaryDelta`).
+pub type lmnk_boundary_delta_t = LiminalBoundaryDelta;
+/// 16-byte Ego Intent Axes (`EgoIntentAxes`).
+pub type lmnk_ego_intent_axes_t = EgoIntentAxes;
+/// 16-byte Fragmented Micro-Ensemble Report (`StigmergicFragmentEnsembleReport`).
+pub type lmnk_fragment_ensemble_report_t = StigmergicFragmentEnsembleReport;
+/// 64-byte Wide-Aperture Subjective Ego State (`LiminalEgoState`).
+pub type lmnk_liminal_ego_state_t = LiminalEgoState;
+/// 16-byte 4-State Lacuna Partition (`LacunaPartition8`).
+pub type lmnk_lacuna_partition_t = LacunaPartition8;
+/// 1-byte Structural Attribution Tag (`AttributionTag`).
+pub type lmnk_attribution_tag_t = AttributionTag;
+/// 64-byte Unified Primitive State (`CorePrimitiveState`).
+pub type lmnk_core_primitive_state_t = CorePrimitiveState;
+/// 128-byte P-Frame Distortion Delta (`DistortionDelta`).
+pub type lmnk_distortion_delta_t = DistortionDelta;
+/// 32-byte Asymmetric Homeostatic Tension (`DistortionTension`).
+pub type lmnk_distortion_tension_t = DistortionTension;
+/// 32-byte Mechanical Execution Spine State (`SystemSpineState`).
+pub type lmnk_spine_state_t = SystemSpineState;
 
-/// C-ABI type alias for the 128-byte 2-Origin Composite Manifold Gateway Frame (`GatewayFrame`).
-pub type gcso_gateway_frame_t = GatewayFrame;
-/// C-ABI type alias for the 16-byte Causal Provenance Report (`CausalProvenanceReport`).
-pub type gcso_causal_provenance_report_t = CausalProvenanceReport;
-/// C-ABI type alias for the 128-byte `.gcso`-persisted Crystallized Attractor Record (`CrystallizedAttractorRecord`).
-pub type gcso_crystallized_attractor_record_t = CrystallizedAttractorRecord;
-/// C-ABI type alias for the 64-byte Contrastive Phase Bloom Filter (`ContrastivePhaseBloomFilter`).
-pub type gcso_contrastive_bloom_filter_t = ContrastivePhaseBloomFilter;
-/// C-ABI type alias for the 32-byte Stigmergic Thresholds configuration (`StigmergicThresholds`).
-pub type gcso_stigmergic_thresholds_t = StigmergicThresholds;
-/// C-ABI type alias for the 32-byte Substrate Step Report (`SubstrateStepReport`).
-pub type gcso_action_orchestration_report_t = SubstrateStepReport;
-/// C-ABI type alias for the 8-bit Stigmergic Action Decision discriminant (`StigmergicActionDecision`).
-pub type gcso_stigmergic_action_decision_t = u8;
-/// C-ABI type alias for the 16-byte Stigmergic Reconstitution Report (`StigmergicReconstitutionReport`).
-pub type gcso_reconstitution_report_t = StigmergicReconstitutionReport;
-/// C-ABI type alias for the 8-byte Cognitive Trajectory Ledger (`CognitiveTrajectoryLedger`).
-pub type gcso_cognitive_trajectory_ledger_t = CognitiveTrajectoryLedger;
-/// C-ABI type alias for the 32-byte Epistemic Horizon Reading (`EpistemicHorizonReading`).
-pub type gcso_epistemic_horizon_reading_t = EpistemicHorizonReading;
-/// C-ABI type alias for the 32-byte Core Layer 0 `LiminalThresholdState`.
-pub type gcso_liminal_aperture_field_t = LiminalThresholdState;
-/// C-ABI type alias for the 32-byte Core Layer 1 `StigmergicGranuleState`.
-pub type gcso_stigmergic_granule_field_t = StigmergicGranuleState;
-/// C-ABI type alias for the 32-byte Venn-Overlap & Serendipity Report (`StigmergicOverlapSerendipityReport`).
-pub type gcso_stigmergic_venn_serendipity_report_t = StigmergicOverlapSerendipityReport;
-/// C-ABI type alias for the 128-byte Unified 3-Layer Autonomous Core Stack (`AutonomousCoreLayerStack`).
-pub type gcso_autonomous_core_layer_stack_t = AutonomousCoreLayerStack;
-/// C-ABI type alias for the 32-byte Self-Introspecting Topology Telemetry Snapshot.
-pub type gcso_liminal_topology_snapshot_t = LiminalTopologyTelemetrySnapshot;
-/// C-ABI type alias for the 16-byte Temporal Boundary Velocity Analyzer (`LiminalBoundaryDelta`).
-pub type gcso_liminal_boundary_delta_t = LiminalBoundaryDelta;
-/// C-ABI type alias for the 16-byte Normalized Intermediate Ego Intent Axes (`EgoIntentAxes`).
-pub type gcso_ego_intent_axes_t = EgoIntentAxes;
-/// C-ABI type alias for the 16-byte Fragmented Micro-Ensemble Report (`StigmergicFragmentEnsembleReport`).
-pub type gcso_stigmergic_fragment_ensemble_report_t = StigmergicFragmentEnsembleReport;
-/// C-ABI type alias for the 64-byte Wide-Aperture Subjective Ego State (`LiminalEgoState`).
-pub type gcso_liminal_ego_field_t = LiminalEgoState;
-/// C-ABI type alias for the 16-byte 4-Region Branchless Venn Partition (`EpistemicPartition`).
-pub type gcso_liminal_venn_partition_t = EpistemicPartition;
-
-// ===================================================================
-// Strongly-Typed Opaque Handles
-// ===================================================================
-
-macro_rules! define_opaque_handles {
-    ($(($opaque:ident, $handle:ident, $c_alias:ident, $doc:expr)),* $(,)?) => {
-        $(
-            #[doc = $doc]
-            #[repr(C)]
-            pub struct $opaque {
-                _private: [u8; 0],
-            }
-
-            #[doc = $doc]
-            pub type $handle = *mut $opaque;
-
-            #[doc = $doc]
-            pub type $c_alias = $handle;
-        )*
-    };
-}
-
-define_opaque_handles!(
-    (
-        GcsoContextOpaque,
-        GcsoContextHandle,
-        gcso_context_handle_t,
-        "Opaque runtime context handle (`gcso_context_handle_t`)."
-    ),
-    (
-        GcsoContainerOpaque,
-        GcsoContainerHandle,
-        gcso_container_handle_t,
-        "Opaque `.gcso` binary snapshot container handle (`gcso_container_handle_t`)."
-    ),
-    (
-        GcsoActionHubOpaque,
-        GcsoActionHubHandle,
-        gcso_action_hub_handle_t,
-        "Opaque Action Hub (Sidecar Pointer Table) handle (`gcso_action_hub_handle_t`)."
-    ),
-    (
-        GcsoLedgerSlotOpaque,
-        GcsoLedgerSlotHandle,
-        gcso_ledger_slot_handle_t,
-        "Opaque FastPathLedger extension scratchpad slot handle (`gcso_ledger_slot_handle_t`)."
-    ),
-    (
-        GcsoAttractorFieldOpaque,
-        GcsoAttractorFieldHandle,
-        gcso_attractor_field_handle_t,
-        "Opaque Macro Attractor Field handle (`gcso_attractor_field_handle_t`)."
-    ),
-    (
-        GcsoEdbcControllerOpaque,
-        GcsoEdbcControllerHandle,
-        gcso_edbc_controller_handle_t,
-        "Opaque EDBC entropy controller handle (`gcso_edbc_controller_handle_t`)."
-    ),
-    (
-        GcsoDpsrKernelOpaque,
-        GcsoDpsrKernelHandle,
-        gcso_dpsr_kernel_handle_t,
-        "Opaque DPSR phase steering kernel handle (`gcso_dpsr_kernel_handle_t`)."
-    ),
-    (
-        GcsoSubHeadRouterOpaque,
-        GcsoSubHeadRouterHandle,
-        gcso_subhead_router_handle_t,
-        "Opaque sub-head router sub-head group router handle (`gcso_subhead_router_handle_t`)."
-    ),
-    (
-        GcsoRank1ResidualOpaque,
-        GcsoRank1ResidualHandle,
-        gcso_rank1_residual_handle_t,
-        "Opaque Rank-1 residual Rank-1 adapter layer handle (`gcso_rank1_residual_handle_t`)."
-    ),
-);
-
-/// C-ABI type alias for the 1-byte Attribution Tag (`AttributionTag`).
-pub type gcso_attribution_tag_t = AttributionTag;
-/// C-ABI type alias for the 64-byte Unified Primitive State (`CorePrimitiveState`).
-pub type gcso_cognitive_substrate_t = CorePrimitiveState;
-
-/// Descriptor header for structure byte size and ABI version validation (8 bytes, 4-byte aligned).
-#[repr(C, align(4))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct gcso_descriptor_header_t {
-    /// Size of the enclosing descriptor structure in bytes.
-    pub struct_size: u32,
-    /// ABI version bitmask matching [`GCSO_ABI_VERSION_HEX`].
-    pub abi_version: u32,
-}
-
-/// Zero-Overhead In-Memory Mapped Storage (mapped-storage) descriptor (64 bytes, 32-byte aligned, Section 5.4.G).
-#[repr(C, align(32))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct gcso_mapped_storage_descriptor_t {
-    /// Base virtual memory address of the zero-copy `mmap` region.
-    pub mapped_address: u64,
-    /// Total mapped `.gcso` file length in bytes.
-    pub file_size_bytes: u64,
-    /// Direct Memory Access (DMA) ring-buffer handle for async page streaming.
-    pub dma_buffer_handle: u64,
-    /// Memory protection and mapping attribute flags.
-    pub flags: u32,
-    /// Low-level operating system file descriptor (`-1` when unmapped).
-    pub fd_handle: i32,
-    /// Reserved space for future storage extensions (32 bytes).
-    pub reserved: [u8; 32],
-}
-
-impl Default for gcso_mapped_storage_descriptor_t {
-    #[inline(always)]
-    fn default() -> Self {
-        Self {
-            mapped_address: 0,
-            file_size_bytes: 0,
-            dma_buffer_handle: 0,
-            flags: 0,
-            fd_handle: -1,
-            reserved: [0; 32],
-        }
-    }
-}
-
-/// Unified `.gcso` binary snapshot container header structure (128 bytes, 64-byte aligned, Section 5.4.E).
-#[repr(C, align(64))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct gcso_snapshot_header_t {
-    /// Format identifier magic constant (`0x4F534347` = ASCII `"GCSO"`).
-    pub magic: u32,
-    /// Snapshot ABI version matching [`GCSO_ABI_VERSION_HEX`].
-    pub version: u32,
-    /// Total binary size of container payload in bytes.
-    pub total_size: u64,
-    /// Byte offset to Action Hub (SPT) section.
-    pub action_hub_offset: u64,
-    /// Byte offset to Attractor Field section.
-    pub attractor_field_offset: u64,
-    /// Byte offset to DPSR kernel state section.
-    pub dpsr_state_offset: u64,
-    /// Byte offset to Rank-1 residual adapter state section.
-    pub rank1_state_offset: u64,
-    /// Byte offset to EDBC controller state section.
-    pub edbc_state_offset: u64,
-    /// CRC32 integrity checksum over snapshot payload.
-    pub checksum_crc32: u32,
-    /// Byte offset to FastPathLedger state section.
-    pub ledger_slot_offset: u32,
-    /// Epoch timestamp of snapshot serialization (seconds).
-    pub timestamp_epoch_sec: u64,
-    /// Padding to enforce exact 128-byte size and 64-byte cacheline alignment (56 bytes).
-    pub reserved_padding: [u8; 56],
-}
-
-impl Default for gcso_snapshot_header_t {
-    #[inline(always)]
-    fn default() -> Self {
-        Self {
-            magic: 0,
-            version: GCSO_ABI_VERSION_HEX,
-            total_size: 0,
-            action_hub_offset: 0,
-            attractor_field_offset: 0,
-            dpsr_state_offset: 0,
-            rank1_state_offset: 0,
-            edbc_state_offset: 0,
-            checksum_crc32: 0,
-            ledger_slot_offset: 0,
-            timestamp_epoch_sec: 0,
-            reserved_padding: [0; 56],
-        }
-    }
-}
-
-/// KV-keyframe Keyframe KV cache index header structure (64 bytes, 32-byte aligned, Section 5.4.G).
-#[repr(C, align(32))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct gcso_kv_keyframe_header_t {
-    /// Frame classification (`0` = I-Frame Keyframe Anchor, `1` = P-Frame Phase Motion Delta).
-    pub frame_type: u32,
-    /// Absolute token position index in sequence.
-    pub token_index: u32,
-    /// Dynamic entropy-driven Group of Pictures (GOP) length between keyframes.
-    pub gop_length: u32,
-    /// Mean resultant vector length $\bar{R}_c \in [0, 1]$ in circular statistics.
-    pub composite_vector_length: f32,
-    /// Concentration parameter $\kappa_c$ for von Mises phase distribution.
-    pub von_mises_kappa: f32,
-    /// Scalar residual magnitude / resultant phase angle $\bar{\theta}_c$ for sparse updates.
-    pub sparse_scalar_residual: f32,
-    /// Byte offset to Intra Key-Frame Cache (I-Cache) payload.
-    pub icache_payload_offset: u64,
-    /// Byte offset to Predictive Phase Motion Cache (P-Cache) payload.
-    pub pcache_payload_offset: u64,
-    /// Reserved space for future KV-keyframe extensions (24 bytes).
-    pub reserved: [u8; 24],
-}
-
-// Compile-time layout assertions enforcing 1:1 binary parity with `c_abi_spec.md` Section 8.1
-// and the 2-Origin Gateway / `.gcso` Crystallization structures.
+// Compile-time layout assertions enforcing Portable Device-Ready POD guarantees
+// and 1:1 C11/C++20 header parity for v0.2.0 (`0x0000_0200`).
 const _: () = {
-    assert!(size_of::<gcso_status_t>() == 4);
-    assert!(size_of::<gcso_q7_t>() == 1);
-    assert!(size_of::<gcso_tagged_ptr_t>() == 8);
-    assert!(
-        size_of::<gcso_descriptor_header_t>() == 8 && align_of::<gcso_descriptor_header_t>() == 4
-    );
-    assert!(size_of::<gcso_paged_bitmask_t>() == 32 && align_of::<gcso_paged_bitmask_t>() == 32);
-    assert!(size_of::<gcso_pointer_trail_t>() == 128 && align_of::<gcso_pointer_trail_t>() == 128);
-    assert!(size_of::<gcso_ledger_slot_t>() == 64 && align_of::<gcso_ledger_slot_t>() == 64);
-    assert!(
-        size_of::<gcso_stigmergic_thresholds_t>() == 32
-            && align_of::<gcso_stigmergic_thresholds_t>() == 32
-    );
-    assert!(
-        size_of::<gcso_action_orchestration_report_t>() == 32
-            && align_of::<gcso_action_orchestration_report_t>() == 32
-    );
-    assert!(size_of::<gcso_config_t>() == 64 && align_of::<gcso_config_t>() == 16);
-    assert!(size_of::<gcso_edbc_state_t>() == 64 && align_of::<gcso_edbc_state_t>() == 32);
-    assert!(
-        size_of::<gcso_mapped_storage_descriptor_t>() == 64
-            && align_of::<gcso_mapped_storage_descriptor_t>() == 32
-    );
-    assert!(
-        size_of::<gcso_reconstitution_report_t>() == 16
-            && align_of::<gcso_reconstitution_report_t>() == 16
-    );
-    assert!(
-        size_of::<gcso_epistemic_horizon_reading_t>() == 32
-            && align_of::<gcso_epistemic_horizon_reading_t>() == 16
-    );
-    assert!(
-        size_of::<gcso_liminal_aperture_field_t>() == 32
-            && align_of::<gcso_liminal_aperture_field_t>() == 16
-    );
-    assert!(
-        size_of::<gcso_stigmergic_granule_field_t>() == 32
-            && align_of::<gcso_stigmergic_granule_field_t>() == 16
-    );
-    assert!(
-        size_of::<gcso_stigmergic_venn_serendipity_report_t>() == 32
-            && align_of::<gcso_stigmergic_venn_serendipity_report_t>() == 16
-    );
-    assert!(
-        size_of::<gcso_autonomous_core_layer_stack_t>() == 128
-            && align_of::<gcso_autonomous_core_layer_stack_t>() == 64
-    );
-    assert!(
-        size_of::<gcso_liminal_topology_snapshot_t>() == 32
-            && align_of::<gcso_liminal_topology_snapshot_t>() == 16
-    );
-    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, liminal_layer) == 0);
-    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, stigmergic_layer) == 32);
-    assert!(offset_of!(gcso_autonomous_core_layer_stack_t, ego_layer) == 64);
-    assert!(
-        size_of::<gcso_liminal_boundary_delta_t>() == 16
-            && align_of::<gcso_liminal_boundary_delta_t>() == 16
-    );
-    assert!(offset_of!(gcso_liminal_boundary_delta_t, kinetic_energy_q7) == 10);
-    assert!(offset_of!(gcso_liminal_boundary_delta_t, stationary_shortcut_ready) == 11);
-    assert!(
-        size_of::<gcso_ego_intent_axes_t>() == 16 && align_of::<gcso_ego_intent_axes_t>() == 16
-    );
-    assert!(offset_of!(gcso_ego_intent_axes_t, preferred_slot_mask) == 8);
-    assert!(offset_of!(gcso_ego_intent_axes_t, active_granule_bias_mask) == 9);
-    assert!(offset_of!(gcso_ego_intent_axes_t, flags) == 11);
-    assert!(offset_of!(gcso_ego_intent_axes_t, signature_hash) == 12);
-    assert!(
-        size_of::<gcso_stigmergic_fragment_ensemble_report_t>() == 16
-            && align_of::<gcso_stigmergic_fragment_ensemble_report_t>() == 16
-    );
-    assert!(
-        offset_of!(
-            gcso_stigmergic_fragment_ensemble_report_t,
-            quorum_agreed_granule_mask
-        ) == 8
-    );
-    assert!(
-        offset_of!(
-            gcso_stigmergic_fragment_ensemble_report_t,
-            ego_tiebreak_granule_mask
-        ) == 10
-    );
-    assert!(
-        size_of::<gcso_liminal_ego_field_t>() == 64 && align_of::<gcso_liminal_ego_field_t>() == 64
-    );
-    assert!(offset_of!(gcso_liminal_ego_field_t, counter_basin_thrust_q7) == 40);
-    assert!(offset_of!(gcso_liminal_ego_field_t, basin_escape_floor_q7) == 41);
-    assert!(offset_of!(gcso_liminal_ego_field_t, trigger_mask) == 44);
-    assert!(offset_of!(gcso_liminal_ego_field_t, ego_signature_hash) == 48);
-    assert!(offset_of!(gcso_liminal_ego_field_t, last_intervened_mask) == 56);
-    assert!(size_of::<gcso_subhead_config_t>() == 32 && align_of::<gcso_subhead_config_t>() == 16);
-    assert!(
-        size_of::<gcso_rank1_residual_descriptor_t>() == 64
-            && align_of::<gcso_rank1_residual_descriptor_t>() == 32
-    );
-    assert!(
-        size_of::<gcso_snapshot_header_t>() == 128 && align_of::<gcso_snapshot_header_t>() == 64
-    );
-    assert!(
-        size_of::<gcso_kv_keyframe_header_t>() == 64
-            && align_of::<gcso_kv_keyframe_header_t>() == 32
-    );
-    assert!(
-        size_of::<StigmergicReconstitutionReport>() == 16
-            && align_of::<StigmergicReconstitutionReport>() == 16
-    );
-    assert!(size_of::<gcso_gateway_frame_t>() == 128 && align_of::<gcso_gateway_frame_t>() == 64);
-    assert!(
-        size_of::<gcso_causal_provenance_report_t>() == 16
-            && align_of::<gcso_causal_provenance_report_t>() == 16
-    );
-    assert!(
-        size_of::<gcso_crystallized_attractor_record_t>() == 128
-            && align_of::<gcso_crystallized_attractor_record_t>() == 64
-    );
-    assert!(
-        size_of::<gcso_contrastive_bloom_filter_t>() == 64
-            && align_of::<gcso_contrastive_bloom_filter_t>() == 64
-    );
-    assert!(offset_of!(gcso_descriptor_header_t, struct_size) == 0);
-    assert!(offset_of!(gcso_descriptor_header_t, abi_version) == 4);
-    assert!(offset_of!(gcso_paged_bitmask_t, bits) == 0);
-    assert!(offset_of!(gcso_pointer_trail_t, current_ptr) == 0);
-    assert!(offset_of!(gcso_pointer_trail_t, prev_ptr) == 8);
-    assert!(offset_of!(gcso_pointer_trail_t, user_data) == 16);
-    assert!(offset_of!(gcso_pointer_trail_t, transition_cost) == 24);
-    assert!(offset_of!(gcso_pointer_trail_t, step_count) == 28);
-    assert!(offset_of!(gcso_pointer_trail_t, stigmergic_density) == 32);
-    assert!(offset_of!(gcso_pointer_trail_t, target_anchor_id) == 36);
-    assert!(offset_of!(gcso_pointer_trail_t, cluster_id) == 40);
-    assert!(offset_of!(gcso_pointer_trail_t, linked_trail_id) == 44);
-    assert!(offset_of!(gcso_pointer_trail_t, attractor_pull_force) == 48);
-    assert!(offset_of!(gcso_pointer_trail_t, flags) == 52);
-    assert!(offset_of!(gcso_pointer_trail_t, accumulated_phase_delta) == 56);
-    assert!(offset_of!(gcso_pointer_trail_t, reserved_padding) == 120);
-    assert!(offset_of!(gcso_config_t, head_dim) == 0);
-    assert!(offset_of!(gcso_config_t, qdps_min_step_rad) == 20);
-    assert!(offset_of!(gcso_config_t, action_hub_capacity) == 32);
-    assert!(offset_of!(gcso_config_t, ledger_mode) == 38);
-    assert!(offset_of!(gcso_snapshot_header_t, magic) == 0);
-    assert!(offset_of!(gcso_snapshot_header_t, version) == 4);
-    assert!(offset_of!(gcso_snapshot_header_t, total_size) == 8);
-    assert!(offset_of!(gcso_snapshot_header_t, checksum_crc32) == 56);
-    assert!(offset_of!(gcso_snapshot_header_t, ledger_slot_offset) == 60);
-    assert!(offset_of!(gcso_snapshot_header_t, timestamp_epoch_sec) == 64);
-    assert!(offset_of!(gcso_ledger_slot_t, mode) == 0);
-    assert!(offset_of!(gcso_ledger_slot_t, fast_path_bypass_mask) == 16);
-    assert!(offset_of!(gcso_ledger_slot_t, fast_path_shortcuts) == 24);
-    assert!(offset_of!(gcso_ledger_slot_t, telemetry_mini_ledger) == 56);
-    assert!(offset_of!(gcso_subhead_config_t, num_fact_heads) == 0);
-    assert!(offset_of!(gcso_subhead_config_t, fact_phase_gain) == 8);
-    assert!(offset_of!(gcso_edbc_state_t, moving_z_entropy) == 0);
-    assert!(offset_of!(gcso_edbc_state_t, active_branch_mode) == 24);
-    assert!(offset_of!(gcso_rank1_residual_descriptor_t, layer_idx) == 0);
-    assert!(offset_of!(gcso_rank1_residual_descriptor_t, u_vector_ptr) == 8);
-    assert!(offset_of!(gcso_rank1_residual_descriptor_t, v_vector_ptr) == 16);
-    assert!(offset_of!(gcso_rank1_residual_descriptor_t, scale_factor) == 32);
-    assert!(offset_of!(gcso_mapped_storage_descriptor_t, mapped_address) == 0);
-    assert!(offset_of!(gcso_mapped_storage_descriptor_t, file_size_bytes) == 8);
-    assert!(offset_of!(gcso_kv_keyframe_header_t, frame_type) == 0);
-    assert!(offset_of!(gcso_kv_keyframe_header_t, icache_payload_offset) == 24);
-    assert!(offset_of!(gcso_kv_keyframe_header_t, pcache_payload_offset) == 32);
-    assert!(size_of::<gcso_attribution_tag_t>() == 1 && align_of::<gcso_attribution_tag_t>() == 1);
-    assert!(
-        size_of::<gcso_cognitive_substrate_t>() == 64
-            && align_of::<gcso_cognitive_substrate_t>() == 64
-    );
-    assert!(offset_of!(gcso_cognitive_substrate_t, liminal) == 0);
-    assert!(offset_of!(gcso_cognitive_substrate_t, stigmergy) == 32);
-    assert!(
-        size_of::<gcso_liminal_venn_partition_t>() == 16
-            && align_of::<gcso_liminal_venn_partition_t>() == 16
-    );
-    assert!(offset_of!(gcso_liminal_venn_partition_t, known_unknown_mask) == 4);
-    assert!(offset_of!(gcso_liminal_venn_partition_t, boundary_sensitivity_q7) == 8);
-    assert!(
-        size_of::<gcso_system_spine_state_t>() == 32
-            && align_of::<gcso_system_spine_state_t>() == 16
-    );
-    assert!(offset_of!(gcso_system_spine_state_t, pinned_compute_mask) == 8);
-    assert!(offset_of!(gcso_system_spine_state_t, whole_token_bypass_active) == 24);
-    assert!(
-        size_of::<gcso_distortion_delta_t>() == 128 && align_of::<gcso_distortion_delta_t>() == 64
-    );
-    assert!(offset_of!(gcso_distortion_delta_t, intent_delta) == 16);
-    assert!(offset_of!(gcso_distortion_delta_t, delta_phase_q7) == 64);
-    assert!(
-        size_of::<gcso_distortion_tension_t>() == 32
-            && align_of::<gcso_distortion_tension_t>() == 16
-    );
-    assert!(offset_of!(gcso_distortion_tension_t, immediate_damping_events) == 8);
-    assert!(offset_of!(gcso_distortion_tension_t, slow_excitation_events) == 12);
-};
+    assert!(LMNK_ABI_VERSION_HEX == 0x0000_0200);
+    assert!(LMNK_SNAPSHOT_MAGIC_U32 == 0x4B4E_4D4C);
+    assert!(LMNK_PHASE_ANCHOR_MAGIC == 0x524B_4E4C);
+    assert!(LMNK_PHASE_ANCHOR_VERSION == 0x0000_0200);
 
-// SAFETY: `gcso_descriptor_header_t` is `#[repr(C)]` with primitives only and zero padding traps.
-unsafe impl Pod for gcso_descriptor_header_t {}
-// SAFETY: `gcso_mapped_storage_descriptor_t` is `#[repr(C)]` with primitives only and zero padding traps.
-unsafe impl Pod for gcso_mapped_storage_descriptor_t {}
-// SAFETY: `gcso_snapshot_header_t` is `#[repr(C)]` with primitives only and zero padding traps.
-unsafe impl Pod for gcso_snapshot_header_t {}
-// SAFETY: `gcso_kv_keyframe_header_t` is `#[repr(C)]` with primitives only and zero padding traps.
-unsafe impl Pod for gcso_kv_keyframe_header_t {}
+    assert!(size_of::<lmnk_status_t>() == 4);
+    assert!(size_of::<lmnk_q7_t>() == 1);
+    assert!(size_of::<lmnk_tagged_ptr_t>() == 8 && align_of::<lmnk_tagged_ptr_t>() == 8);
+    assert!(size_of::<lmnk_attribution_tag_t>() == 1);
+    assert!(
+        size_of::<lmnk_descriptor_header_t>() == 8 && align_of::<lmnk_descriptor_header_t>() == 4
+    );
+    assert!(offset_of!(lmnk_descriptor_header_t, struct_size) == 0);
+    assert!(offset_of!(lmnk_descriptor_header_t, abi_version) == 4);
 
-const _: () = {
-    assert!(size_of::<gcso_descriptor_header_t>() == 8);
-    assert!(align_of::<gcso_descriptor_header_t>() == 4);
-    assert!(offset_of!(gcso_descriptor_header_t, struct_size) == 0);
-    assert!(offset_of!(gcso_descriptor_header_t, abi_version) == 4);
+    assert!(size_of::<lmnk_paged_bitmask_t>() == 32 && align_of::<lmnk_paged_bitmask_t>() == 32);
+    assert!(offset_of!(lmnk_paged_bitmask_t, bits) == 0);
 
-    assert!(size_of::<gcso_tagged_ptr_t>() == 8);
-    assert!(align_of::<gcso_tagged_ptr_t>() == 8);
+    assert!(size_of::<lmnk_pointer_trail_t>() == 128 && align_of::<lmnk_pointer_trail_t>() == 64);
+    assert!(offset_of!(lmnk_pointer_trail_t, current_ptr) == 0);
+    assert!(offset_of!(lmnk_pointer_trail_t, user_data) == 16);
+    assert!(offset_of!(lmnk_pointer_trail_t, reserved_header) == 56);
+    assert!(offset_of!(lmnk_pointer_trail_t, accumulated_phase_delta) == 64);
 
-    assert!(size_of::<gcso_paged_bitmask_t>() == 32);
-    assert!(align_of::<gcso_paged_bitmask_t>() == 32);
-    assert!(offset_of!(gcso_paged_bitmask_t, bits) == 0);
+    assert!(size_of::<lmnk_ledger_slot_t>() == 64 && align_of::<lmnk_ledger_slot_t>() == 64);
+    assert!(offset_of!(lmnk_ledger_slot_t, mode) == 0);
+    assert!(offset_of!(lmnk_ledger_slot_t, fast_path_shortcuts) == 24);
+    assert!(offset_of!(lmnk_ledger_slot_t, telemetry_mini_ledger) == 56);
 
-    assert!(size_of::<gcso_pointer_trail_t>() == 128);
-    assert!(align_of::<gcso_pointer_trail_t>() == 128);
-    assert!(offset_of!(gcso_pointer_trail_t, current_ptr) == 0);
-    assert!(offset_of!(gcso_pointer_trail_t, user_data) == 16);
-    assert!(offset_of!(gcso_pointer_trail_t, accumulated_phase_delta) == 56);
+    assert!(
+        size_of::<lmnk_stigmergic_thresholds_t>() == 32
+            && align_of::<lmnk_stigmergic_thresholds_t>() == 32
+    );
+    assert!(
+        size_of::<lmnk_substrate_step_report_t>() == 32
+            && align_of::<lmnk_substrate_step_report_t>() == 32
+    );
 
-    assert!(size_of::<gcso_config_t>() == 64);
-    assert!(align_of::<gcso_config_t>() == 16);
-    assert!(offset_of!(gcso_config_t, head_dim) == 0);
-    assert!(offset_of!(gcso_config_t, qdps_min_step_rad) == 20);
-    assert!(offset_of!(gcso_config_t, ledger_mode) == 38);
+    assert!(size_of::<lmnk_config_t>() == 64 && align_of::<lmnk_config_t>() == 64);
+    assert!(offset_of!(lmnk_config_t, head_dim) == 0);
+    assert!(offset_of!(lmnk_config_t, phase_step_min_rad) == 20);
+    assert!(offset_of!(lmnk_config_t, substrate_capacity) == 32);
+    assert!(offset_of!(lmnk_config_t, rotary_dim) == 36);
+    assert!(offset_of!(lmnk_config_t, execution_flags) == 40);
+    assert!(offset_of!(lmnk_config_t, ledger_mode) == 42);
+    assert!(offset_of!(lmnk_config_t, rope_layout) == 43);
 
-    assert!(size_of::<gcso_snapshot_header_t>() == 128);
-    assert!(align_of::<gcso_snapshot_header_t>() == 64);
-    assert!(offset_of!(gcso_snapshot_header_t, magic) == 0);
-    assert!(offset_of!(gcso_snapshot_header_t, checksum_crc32) == 56);
-    assert!(offset_of!(gcso_snapshot_header_t, timestamp_epoch_sec) == 64);
+    assert!(size_of::<lmnk_entropy_state_t>() == 32 && align_of::<lmnk_entropy_state_t>() == 32);
+    assert!(offset_of!(lmnk_entropy_state_t, moving_z_entropy) == 0);
+    assert!(offset_of!(lmnk_entropy_state_t, active_branch_mode) == 24);
+    assert!(offset_of!(lmnk_entropy_state_t, flags) == 28);
 
-    assert!(size_of::<gcso_ledger_slot_t>() == 64);
-    assert!(align_of::<gcso_ledger_slot_t>() == 64);
-    assert!(offset_of!(gcso_ledger_slot_t, mode) == 0);
-    assert!(offset_of!(gcso_ledger_slot_t, fast_path_shortcuts) == 24);
-    assert!(offset_of!(gcso_ledger_slot_t, telemetry_mini_ledger) == 56);
+    assert!(
+        size_of::<lmnk_snapshot_header_t>() == 128 && align_of::<lmnk_snapshot_header_t>() == 64
+    );
+    assert!(offset_of!(lmnk_snapshot_header_t, magic) == 0);
+    assert!(offset_of!(lmnk_snapshot_header_t, version) == 4);
+    assert!(offset_of!(lmnk_snapshot_header_t, checksum_crc32) == 56);
+    assert!(offset_of!(lmnk_snapshot_header_t, timestamp_epoch_sec) == 64);
 
-    assert!(size_of::<gcso_kv_keyframe_header_t>() == 64);
-    assert!(align_of::<gcso_kv_keyframe_header_t>() == 32);
-    assert!(offset_of!(gcso_kv_keyframe_header_t, frame_type) == 0);
-    assert!(offset_of!(gcso_kv_keyframe_header_t, icache_payload_offset) == 24);
-    assert!(offset_of!(gcso_kv_keyframe_header_t, pcache_payload_offset) == 32);
+    assert!(
+        size_of::<lmnk_kv_keyframe_header_t>() == 64
+            && align_of::<lmnk_kv_keyframe_header_t>() == 32
+    );
+    assert!(offset_of!(lmnk_kv_keyframe_header_t, frame_type) == 0);
+    assert!(offset_of!(lmnk_kv_keyframe_header_t, icache_payload_offset) == 24);
+    assert!(offset_of!(lmnk_kv_keyframe_header_t, pcache_payload_offset) == 32);
 
-    assert!(size_of::<KvKeyframePacket>() == 128);
-    assert!(align_of::<KvKeyframePacket>() == 64);
+    assert!(size_of::<KvKeyframePacket>() == 128 && align_of::<KvKeyframePacket>() == 64);
     assert!(offset_of!(KvKeyframePacket, header) == 0);
     assert!(offset_of!(KvKeyframePacket, anchor_phases) == 64);
-    assert!(size_of::<KvMotionDeltaPacket>() == 64);
-    assert!(align_of::<KvMotionDeltaPacket>() == 64);
-    assert!(offset_of!(KvMotionDeltaPacket, motion_deltas) == 0);
+    assert!(size_of::<KvMotionDeltaPacket>() == 64 && align_of::<KvMotionDeltaPacket>() == 64);
 
-    assert!(size_of::<gcso_subhead_config_t>() == 32);
-    assert!(align_of::<gcso_subhead_config_t>() == 16);
-    assert!(offset_of!(gcso_subhead_config_t, num_fact_heads) == 0);
-    assert!(offset_of!(gcso_subhead_config_t, fact_phase_gain) == 8);
+    assert!(size_of::<lmnk_subhead_config_t>() == 32 && align_of::<lmnk_subhead_config_t>() == 16);
+    assert!(offset_of!(lmnk_subhead_config_t, num_fact_heads) == 0);
+    assert!(offset_of!(lmnk_subhead_config_t, fact_phase_gain) == 8);
 
-    assert!(size_of::<gcso_edbc_state_t>() == 64);
-    assert!(align_of::<gcso_edbc_state_t>() == 32);
-    assert!(offset_of!(gcso_edbc_state_t, moving_z_entropy) == 0);
-    assert!(offset_of!(gcso_edbc_state_t, active_branch_mode) == 24);
+    assert!(
+        size_of::<lmnk_rank1_descriptor_t>() == 64 && align_of::<lmnk_rank1_descriptor_t>() == 32
+    );
+    assert!(offset_of!(lmnk_rank1_descriptor_t, layer_idx) == 0);
+    assert!(offset_of!(lmnk_rank1_descriptor_t, u_vector_ptr) == 8);
+    assert!(offset_of!(lmnk_rank1_descriptor_t, v_vector_ptr) == 16);
 
-    assert!(size_of::<gcso_rank1_residual_descriptor_t>() == 64);
-    assert!(align_of::<gcso_rank1_residual_descriptor_t>() == 32);
-    assert!(offset_of!(gcso_rank1_residual_descriptor_t, layer_idx) == 0);
-    assert!(offset_of!(gcso_rank1_residual_descriptor_t, u_vector_ptr) == 8);
-    assert!(offset_of!(gcso_rank1_residual_descriptor_t, v_vector_ptr) == 16);
+    assert!(size_of::<lmnk_bloom_filter_t>() == 64 && align_of::<lmnk_bloom_filter_t>() == 64);
+    assert!(
+        size_of::<lmnk_reconstitution_report_t>() == 16
+            && align_of::<lmnk_reconstitution_report_t>() == 16
+    );
+    assert!(size_of::<lmnk_causal_report_t>() == 16 && align_of::<lmnk_causal_report_t>() == 16);
+    assert!(offset_of!(lmnk_causal_report_t, lineage_flags) == 0);
+    assert!(offset_of!(lmnk_causal_report_t, fact_persona_coherence) == 4);
+    assert!(offset_of!(lmnk_causal_report_t, anomaly_severity) == 8);
+    assert!(offset_of!(lmnk_causal_report_t, attribution_tag) == 12);
 
-    assert!(size_of::<gcso_mapped_storage_descriptor_t>() == 64);
-    assert!(align_of::<gcso_mapped_storage_descriptor_t>() == 32);
-    assert!(offset_of!(gcso_mapped_storage_descriptor_t, mapped_address) == 0);
-    assert!(offset_of!(gcso_mapped_storage_descriptor_t, file_size_bytes) == 8);
+    assert!(size_of::<lmnk_gateway_frame_t>() == 128 && align_of::<lmnk_gateway_frame_t>() == 64);
+    assert!(offset_of!(lmnk_gateway_frame_t, tagged_ptr) == 0);
+    assert!(offset_of!(lmnk_gateway_frame_t, mapped_section_offset48) == 8);
+    assert!(offset_of!(lmnk_gateway_frame_t, target_anchor_id) == 16);
+    assert!(offset_of!(lmnk_gateway_frame_t, effective_energy) == 20);
+    assert!(offset_of!(lmnk_gateway_frame_t, phase_clamp_rad) == 24);
+    assert!(offset_of!(lmnk_gateway_frame_t, phase_step_min_rad) == 28);
+    assert!(offset_of!(lmnk_gateway_frame_t, subhead_fact_gain_q7) == 56);
+    assert!(offset_of!(lmnk_gateway_frame_t, mean_phase_tag_q7) == 59);
+    assert!(offset_of!(lmnk_gateway_frame_t, active_head_count) == 60);
+    assert!(offset_of!(lmnk_gateway_frame_t, frame_flags) == 62);
+    assert!(offset_of!(lmnk_gateway_frame_t, phase_deltas) == 64);
 
-    assert!(size_of::<ContrastivePhaseBloomFilter>() == 64);
-    assert!(align_of::<ContrastivePhaseBloomFilter>() == 64);
-    assert!(size_of::<StigmergicReconstitutionReport>() == 16);
-    assert!(align_of::<StigmergicReconstitutionReport>() == 16);
-    assert!(size_of::<CausalProvenanceReport>() == 16);
-    assert!(align_of::<CausalProvenanceReport>() == 16);
+    assert!(
+        size_of::<lmnk_phase_anchor_record_t>() == 128
+            && align_of::<lmnk_phase_anchor_record_t>() == 64
+    );
+    assert!(offset_of!(lmnk_phase_anchor_record_t, magic) == 0);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, version) == 4);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, anchor_id) == 8);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, sample_count) == 12);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, mapped_section_offset48) == 16);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, checksum_crc32) == 52);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, dominant_slot) == 56);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, reserved_align64) == 60);
+    assert!(offset_of!(lmnk_phase_anchor_record_t, phase_profile) == 64);
+    assert!(LMNK_FOUR_SECTION_HEADER_BYTES == 192);
+    assert!(LMNK_STORAGE_PREAMBLE_OFFSET == 128);
+    assert!(PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0).verify_integrity());
+    assert!(PhaseAnchorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0).verify_integrity());
 
-    assert!(size_of::<GatewayFrame>() == 128);
-    assert!(align_of::<GatewayFrame>() == 64);
-    assert!(offset_of!(GatewayFrame, subhead_fact_gain_q7) == 56);
-    assert!(offset_of!(GatewayFrame, mean_phase_tag_q7) == 59);
-    assert!(offset_of!(GatewayFrame, active_head_count) == 60);
-    assert!(offset_of!(GatewayFrame, frame_flags) == 62);
-    assert!(offset_of!(GatewayFrame, phase_deltas) == 64);
+    assert!(size_of::<CognitiveStepOp>() == 1 && align_of::<CognitiveStepOp>() == 1);
+    assert!(
+        size_of::<CognitiveCircuitActivation>() == 8
+            && align_of::<CognitiveCircuitActivation>() == 8
+    );
+    assert!(
+        size_of::<lmnk_cognitive_ledger_t>() == LEDGER_HISTORY_LEN
+            && align_of::<lmnk_cognitive_ledger_t>() == 8
+    );
+    assert!(size_of::<RamPhaseKvEntry>() == 192 && align_of::<RamPhaseKvEntry>() == 64);
+    assert!(offset_of!(RamPhaseKvEntry, keyframe) == 0);
+    assert!(offset_of!(RamPhaseKvEntry, circuit) == 128);
 
-    assert!(size_of::<CrystallizedAttractorRecord>() == 128);
-    assert!(align_of::<CrystallizedAttractorRecord>() == 64);
-    assert!(offset_of!(CrystallizedAttractorRecord, checksum_crc32) == 52);
-    assert!(offset_of!(CrystallizedAttractorRecord, dominant_slot) == 56);
-    assert!(offset_of!(CrystallizedAttractorRecord, reserved_align64) == 60);
-    assert!(offset_of!(CrystallizedAttractorRecord, phase_profile) == 64);
+    assert!(
+        size_of::<lmnk_epistemic_horizon_t>() == 32 && align_of::<lmnk_epistemic_horizon_t>() == 16
+    );
+    assert!(offset_of!(lmnk_epistemic_horizon_t, horizon_gate) == 12);
+    assert!(offset_of!(lmnk_epistemic_horizon_t, regime_code) == 28);
+
+    assert!(
+        size_of::<lmnk_liminal_threshold_state_t>() == 32
+            && align_of::<lmnk_liminal_threshold_state_t>() == 16
+    );
+    assert!(offset_of!(lmnk_liminal_threshold_state_t, active_aperture_mask) == 24);
+    assert!(offset_of!(lmnk_liminal_threshold_state_t, adaptation_epochs) == 28);
+
+    assert!(
+        size_of::<lmnk_topology_snapshot_t>() == 32 && align_of::<lmnk_topology_snapshot_t>() == 16
+    );
+    assert!(offset_of!(lmnk_topology_snapshot_t, active_aperture_mask) == 24);
+    assert!(offset_of!(lmnk_topology_snapshot_t, spawned_daughters) == 31);
+
+    assert!(
+        size_of::<lmnk_overlap_discovery_report_t>() == 32
+            && align_of::<lmnk_overlap_discovery_report_t>() == 16
+    );
+    assert!(offset_of!(lmnk_overlap_discovery_report_t, dominant_overlap_anchor_id) == 12);
+    assert!(offset_of!(lmnk_overlap_discovery_report_t, discovery_seed_word) == 16);
+    assert!(offset_of!(lmnk_overlap_discovery_report_t, overlap_core_mask) == 24);
+    assert!(offset_of!(lmnk_overlap_discovery_report_t, discovery_triggered) == 30);
+
+    assert!(
+        size_of::<lmnk_stigmergic_granule_state_t>() == 32
+            && align_of::<lmnk_stigmergic_granule_state_t>() == 16
+    );
+    assert!(offset_of!(lmnk_stigmergic_granule_state_t, overlap_mask) == 24);
+    assert!(offset_of!(lmnk_stigmergic_granule_state_t, adaptation_epochs) == 28);
+
+    assert!(
+        size_of::<lmnk_core_state_stack_t>() == 128 && align_of::<lmnk_core_state_stack_t>() == 64
+    );
+    assert!(offset_of!(lmnk_core_state_stack_t, liminal) == 0);
+    assert!(offset_of!(lmnk_core_state_stack_t, stigmergy) == 32);
+    assert!(offset_of!(lmnk_core_state_stack_t, ego) == 64);
+
+    assert!(size_of::<lmnk_boundary_delta_t>() == 16 && align_of::<lmnk_boundary_delta_t>() == 16);
+    assert!(offset_of!(lmnk_boundary_delta_t, kinetic_energy_q7) == 10);
+    assert!(offset_of!(lmnk_boundary_delta_t, stationary_shortcut_ready) == 11);
+
+    assert!(
+        size_of::<lmnk_ego_intent_axes_t>() == 16 && align_of::<lmnk_ego_intent_axes_t>() == 16
+    );
+    assert!(offset_of!(lmnk_ego_intent_axes_t, preferred_slot_mask) == 8);
+    assert!(offset_of!(lmnk_ego_intent_axes_t, active_granule_bias_mask) == 9);
+    assert!(offset_of!(lmnk_ego_intent_axes_t, flags) == 11);
+    assert!(offset_of!(lmnk_ego_intent_axes_t, signature_hash) == 12);
+
+    assert!(
+        size_of::<lmnk_fragment_ensemble_report_t>() == 16
+            && align_of::<lmnk_fragment_ensemble_report_t>() == 16
+    );
+    assert!(offset_of!(lmnk_fragment_ensemble_report_t, quorum_agreed_granule_mask) == 8);
+    assert!(offset_of!(lmnk_fragment_ensemble_report_t, ego_tiebreak_granule_mask) == 10);
+
+    assert!(
+        size_of::<lmnk_liminal_ego_state_t>() == 64 && align_of::<lmnk_liminal_ego_state_t>() == 64
+    );
+    assert!(offset_of!(lmnk_liminal_ego_state_t, counter_basin_thrust_q7) == 40);
+    assert!(offset_of!(lmnk_liminal_ego_state_t, basin_escape_floor_q7) == 41);
+    assert!(offset_of!(lmnk_liminal_ego_state_t, trigger_mask) == 44);
+    assert!(offset_of!(lmnk_liminal_ego_state_t, ego_signature_hash) == 48);
+    assert!(offset_of!(lmnk_liminal_ego_state_t, last_intervened_mask) == 56);
+
+    assert!(
+        size_of::<lmnk_core_primitive_state_t>() == 64
+            && align_of::<lmnk_core_primitive_state_t>() == 64
+    );
+    assert!(offset_of!(lmnk_core_primitive_state_t, liminal) == 0);
+    assert!(offset_of!(lmnk_core_primitive_state_t, stigmergy) == 32);
+
+    assert!(
+        size_of::<lmnk_lacuna_partition_t>() == 16 && align_of::<lmnk_lacuna_partition_t>() == 16
+    );
+    assert!(offset_of!(lmnk_lacuna_partition_t, self_ref_mask) == 2);
+    assert!(offset_of!(lmnk_lacuna_partition_t, interior_mask) == 3);
+    assert!(offset_of!(lmnk_lacuna_partition_t, exterior_mask) == 4);
+    assert!(offset_of!(lmnk_lacuna_partition_t, unobserved_mask) == 5);
+    assert!(offset_of!(lmnk_lacuna_partition_t, undefined_mask) == 6);
+    assert!(offset_of!(lmnk_lacuna_partition_t, boundary_sensitivity_q7) == 8);
+    assert!(offset_of!(lmnk_lacuna_partition_t, packed_lacuna_u16) == 12);
+    assert!(offset_of!(lmnk_lacuna_partition_t, dominant_lacuna) == 14);
+    assert!(offset_of!(lmnk_lacuna_partition_t, attribution_tag) == 15);
+
+    assert!(size_of::<lmnk_spine_state_t>() == 32 && align_of::<lmnk_spine_state_t>() == 16);
+    assert!(offset_of!(lmnk_spine_state_t, pinned_aperture_mask) == 0);
+    assert!(offset_of!(lmnk_spine_state_t, pinned_slot_mask) == 4);
+    assert!(offset_of!(lmnk_spine_state_t, pinned_action_mode_mask) == 5);
+    assert!(offset_of!(lmnk_spine_state_t, unobserved_locked) == 6);
+    assert!(offset_of!(lmnk_spine_state_t, irreversible_step_lock) == 7);
+    assert!(offset_of!(lmnk_spine_state_t, pinned_compute_mask) == 8);
+    assert!(offset_of!(lmnk_spine_state_t, whole_token_bypass_active) == 24);
+
+    assert!(
+        size_of::<lmnk_distortion_delta_t>() == 128 && align_of::<lmnk_distortion_delta_t>() == 64
+    );
+    assert!(offset_of!(lmnk_distortion_delta_t, node_id) == 0);
+    assert!(offset_of!(lmnk_distortion_delta_t, next_hop_idx) == 8);
+    assert!(offset_of!(lmnk_distortion_delta_t, intent_delta) == 16);
+    assert!(offset_of!(lmnk_distortion_delta_t, flags) == 44);
+    assert!(offset_of!(lmnk_distortion_delta_t, delta_phase_q7) == 64);
+
+    assert!(
+        size_of::<lmnk_distortion_tension_t>() == 32
+            && align_of::<lmnk_distortion_tension_t>() == 16
+    );
+    assert!(offset_of!(lmnk_distortion_tension_t, tension_q7) == 0);
+    assert!(offset_of!(lmnk_distortion_tension_t, effective_ego_scale_q7) == 3);
+    assert!(offset_of!(lmnk_distortion_tension_t, state_code) == 7);
+    assert!(offset_of!(lmnk_distortion_tension_t, immediate_damping_events) == 8);
+    assert!(offset_of!(lmnk_distortion_tension_t, slow_excitation_events) == 12);
+    assert!(offset_of!(lmnk_distortion_tension_t, step_epochs) == 24);
 
     assert!(size_of::<AlignedSlice<'static, f32, 32>>() == size_of::<&'static [f32]>());
     assert!(align_of::<AlignedSlice<'static, f32, 32>>() == align_of::<&'static [f32]>());
     assert!(size_of::<AlignedSliceMut<'static, f32, 32>>() == size_of::<&'static mut [f32]>());
     assert!(align_of::<AlignedSliceMut<'static, f32, 32>>() == align_of::<&'static mut [f32]>());
-
     assert!(size_of::<DisjointRefMut<'static, f32, 32, 32>>() == 2 * size_of::<&'static [f32]>());
     assert!(size_of::<DisjointMutPair<'static, f32, 32>>() == 2 * size_of::<&'static mut [f32]>());
     assert!(
         size_of::<DisjointMutTriple<'static, f32, 32>>() == 3 * size_of::<&'static mut [f32]>()
     );
-
     assert!(size_of::<FfiHandleRef<'static, u8>>() == size_of::<*const u8>());
     assert!(size_of::<FfiHandleMut<'static, u8>>() == size_of::<*mut u8>());
-};
-
-const _: () = {
-    assert!(size_of::<CausalProvenanceReport>() == 16);
-    assert!(align_of::<CausalProvenanceReport>() == 16);
-    assert!(offset_of!(CausalProvenanceReport, provenance_bits) == 0);
-    assert!(offset_of!(CausalProvenanceReport, fact_persona_coherence) == 4);
-    assert!(offset_of!(CausalProvenanceReport, anomaly_severity) == 8);
-    assert!(offset_of!(CausalProvenanceReport, dominant_cause_code) == 12);
-
-    assert!(size_of::<GatewayFrame>() == 128);
-    assert!(align_of::<GatewayFrame>() == 64);
-    assert!(offset_of!(GatewayFrame, tagged_ptr) == 0);
-    assert!(offset_of!(GatewayFrame, mapped_section_offset48) == 8);
-    assert!(offset_of!(GatewayFrame, target_anchor_id) == 16);
-    assert!(offset_of!(GatewayFrame, effective_energy) == 20);
-    assert!(offset_of!(GatewayFrame, subhead_fact_gain_q7) == 56);
-    assert!(offset_of!(GatewayFrame, mean_phase_tag_q7) == 59);
-    assert!(offset_of!(GatewayFrame, active_head_count) == 60);
-    assert!(offset_of!(GatewayFrame, frame_flags) == 62);
-    assert!(offset_of!(GatewayFrame, phase_deltas) == 64);
-
-    assert!(size_of::<CrystallizedAttractorRecord>() == 128);
-    assert!(align_of::<CrystallizedAttractorRecord>() == 64);
-    assert!(offset_of!(CrystallizedAttractorRecord, magic) == 0);
-    assert!(offset_of!(CrystallizedAttractorRecord, version) == 4);
-    assert!(offset_of!(CrystallizedAttractorRecord, anchor_id) == 8);
-    assert!(offset_of!(CrystallizedAttractorRecord, sample_count) == 12);
-    assert!(offset_of!(CrystallizedAttractorRecord, mapped_section_offset48) == 16);
-    assert!(offset_of!(CrystallizedAttractorRecord, checksum_crc32) == 52);
-    assert!(offset_of!(CrystallizedAttractorRecord, dominant_slot) == 56);
-    assert!(offset_of!(CrystallizedAttractorRecord, reserved_align64) == 60);
-    assert!(offset_of!(CrystallizedAttractorRecord, phase_profile) == 64);
-    assert!(GCSO_FOUR_SECTION_HEADER_BYTES == 192);
-    assert!(GCSO_MAPPED_STORAGE_PREAMBLE_OFFSET == 128);
-    assert!(
-        CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_PERSONA, 0).verify_integrity()
-    );
-    assert!(
-        CrystallizedAttractorRecord::new_empty(0, ATTRACTOR_SLOT_KNOWLEDGE, 0).verify_integrity()
-    );
-    assert!(size_of::<CognitiveStepOp>() == 1);
-    assert!(align_of::<CognitiveStepOp>() == 1);
-    assert!(size_of::<CognitiveCircuitActivation>() == 8);
-    assert!(align_of::<CognitiveCircuitActivation>() == 8);
-    assert!(size_of::<CognitiveTrajectoryLedger>() == LEDGER_HISTORY_LEN);
-    assert!(align_of::<CognitiveTrajectoryLedger>() == 8);
-    assert!(size_of::<RamPhaseKvEntry>() == 192);
-    assert!(align_of::<RamPhaseKvEntry>() == 64);
-    assert!(offset_of!(RamPhaseKvEntry, keyframe) == 0);
-    assert!(offset_of!(RamPhaseKvEntry, circuit) == 128);
-    assert!(offset_of!(RamPhaseKvEntry, last_activation) == 136);
-    assert!(offset_of!(RamPhaseKvEntry, context_hash) == 144);
-    assert!(offset_of!(RamPhaseKvEntry, reuse_count) == 152);
-    assert!(offset_of!(RamPhaseKvEntry, last_used_epoch) == 156);
-    assert!(size_of::<EpistemicHorizonReading>() == 32);
-    assert!(align_of::<EpistemicHorizonReading>() == 16);
-    assert!(offset_of!(EpistemicHorizonReading, horizon_gate) == 12);
-    assert!(offset_of!(EpistemicHorizonReading, regime_code) == 28);
-    assert!(size_of::<LiminalThresholdState>() == 32);
-    assert!(align_of::<LiminalThresholdState>() == 16);
-    assert!(offset_of!(LiminalThresholdState, active_aperture_mask) == 24);
-    assert!(offset_of!(LiminalThresholdState, adaptation_epochs) == 28);
-    assert!(size_of::<LiminalTopologyTelemetrySnapshot>() == 32);
-    assert!(align_of::<LiminalTopologyTelemetrySnapshot>() == 16);
-    assert!(offset_of!(LiminalTopologyTelemetrySnapshot, active_aperture_mask) == 24);
-    assert!(offset_of!(LiminalTopologyTelemetrySnapshot, spawned_daughters) == 31);
-    assert!(size_of::<StigmergicOverlapSerendipityReport>() == 32);
-    assert!(align_of::<StigmergicOverlapSerendipityReport>() == 16);
-    assert!(
-        offset_of!(
-            StigmergicOverlapSerendipityReport,
-            dominant_overlap_anchor_id
-        ) == 12
-    );
-    assert!(offset_of!(StigmergicOverlapSerendipityReport, serendipitous_seed_word) == 16);
-    assert!(offset_of!(StigmergicOverlapSerendipityReport, venn_core_mask) == 24);
-    assert!(offset_of!(StigmergicOverlapSerendipityReport, serendipity_triggered) == 30);
-    assert!(size_of::<StigmergicGranuleState>() == 32);
-    assert!(align_of::<StigmergicGranuleState>() == 16);
-    assert!(offset_of!(StigmergicGranuleState, venn_overlap_mask) == 24);
-    assert!(offset_of!(StigmergicGranuleState, adaptation_epochs) == 28);
-    assert!(size_of::<AutonomousCoreLayerStack>() == 128);
-    assert!(align_of::<AutonomousCoreLayerStack>() == 64);
-    assert!(offset_of!(AutonomousCoreLayerStack, liminal_layer) == 0);
-    assert!(offset_of!(AutonomousCoreLayerStack, stigmergic_layer) == 32);
-    assert!(offset_of!(AutonomousCoreLayerStack, ego_layer) == 64);
-    assert!(size_of::<LiminalBoundaryDelta>() == 16);
-    assert!(align_of::<LiminalBoundaryDelta>() == 16);
-    assert!(offset_of!(LiminalBoundaryDelta, channel_floor_velocity_q7) == 0);
-    assert!(offset_of!(LiminalBoundaryDelta, granule_transition_mask) == 8);
-    assert!(offset_of!(LiminalBoundaryDelta, chattering_channel_mask) == 9);
-    assert!(offset_of!(LiminalBoundaryDelta, kinetic_energy_q7) == 10);
-    assert!(offset_of!(LiminalBoundaryDelta, stationary_shortcut_ready) == 11);
-    assert!(offset_of!(LiminalBoundaryDelta, expansion_dominant) == 12);
-    assert!(offset_of!(LiminalBoundaryDelta, chatter_potential_u8) == 13);
-    assert!(offset_of!(LiminalBoundaryDelta, phase_transition_pulse) == 14);
-    assert!(size_of::<EgoIntentAxes>() == 16);
-    assert!(align_of::<EgoIntentAxes>() == 16);
-    assert!(offset_of!(EgoIntentAxes, autonomy_q7) == 0);
-    assert!(offset_of!(EgoIntentAxes, preferred_slot_mask) == 8);
-    assert!(offset_of!(EgoIntentAxes, active_granule_bias_mask) == 9);
-    assert!(offset_of!(EgoIntentAxes, confidence_q7) == 10);
-    assert!(offset_of!(EgoIntentAxes, flags) == 11);
-    assert!(offset_of!(EgoIntentAxes, signature_hash) == 12);
-    assert!(size_of::<StigmergicFragmentEnsembleReport>() == 16);
-    assert!(align_of::<StigmergicFragmentEnsembleReport>() == 16);
-    assert!(offset_of!(StigmergicFragmentEnsembleReport, quorum_agreed_granule_mask) == 8);
-    assert!(
-        offset_of!(
-            StigmergicFragmentEnsembleReport,
-            split_contested_granule_mask
-        ) == 9
-    );
-    assert!(offset_of!(StigmergicFragmentEnsembleReport, ego_tiebreak_granule_mask) == 10);
-    assert!(offset_of!(StigmergicFragmentEnsembleReport, active_fragment_count) == 11);
-    assert!(offset_of!(StigmergicFragmentEnsembleReport, dominant_fragment_slot) == 12);
-    assert!(size_of::<LiminalEgoState>() == 64);
-    assert!(align_of::<LiminalEgoState>() == 64);
-    assert!(offset_of!(LiminalEgoState, sovereign_granule_phase_q7) == 0);
-    assert!(offset_of!(LiminalEgoState, trait_floor_bias_q7) == 8);
-    assert!(offset_of!(LiminalEgoState, trait_gain_bias_q7) == 16);
-    assert!(offset_of!(LiminalEgoState, slot_affinity_bias_q7) == 24);
-    assert!(offset_of!(LiminalEgoState, granule_autonomy_q7) == 32);
-    assert!(offset_of!(LiminalEgoState, counter_basin_thrust_q7) == 40);
-    assert!(offset_of!(LiminalEgoState, basin_escape_floor_q7) == 41);
-    assert!(offset_of!(LiminalEgoState, transgression_bias_q7) == 42);
-    assert!(offset_of!(LiminalEgoState, irrational_defiance_q7) == 43);
-    assert!(offset_of!(LiminalEgoState, trigger_mask) == 44);
-    assert!(offset_of!(LiminalEgoState, preset_code) == 47);
-    assert!(offset_of!(LiminalEgoState, ego_signature_hash) == 48);
-    assert!(offset_of!(LiminalEgoState, intervention_epochs) == 52);
-    assert!(offset_of!(LiminalEgoState, last_intervened_mask) == 56);
-
-    // Unified v0.1.3 2 Primitives x 2 Drivers & Distortion ABI invariants
-    assert!(size_of::<CorePrimitiveState>() == 64 && align_of::<CorePrimitiveState>() == 64);
-    assert!(offset_of!(CorePrimitiveState, liminal) == 0);
-    assert!(offset_of!(CorePrimitiveState, stigmergy) == 32);
-
-    assert!(size_of::<EpistemicPartition>() == 16 && align_of::<EpistemicPartition>() == 16);
-    assert!(offset_of!(EpistemicPartition, shared_core_mask) == 2);
-    assert!(offset_of!(EpistemicPartition, self_exclusive_mask) == 3);
-    assert!(offset_of!(EpistemicPartition, known_unknown_mask) == 4);
-    assert!(offset_of!(EpistemicPartition, true_void_mask) == 5);
-    assert!(offset_of!(EpistemicPartition, boundary_sensitivity_q7) == 8);
-    assert!(offset_of!(EpistemicPartition, sandbox_eligible) == 10);
-    assert!(offset_of!(EpistemicPartition, true_void_aperture_zero) == 11);
-
-    assert!(size_of::<SystemSpineState>() == 32 && align_of::<SystemSpineState>() == 16);
-    assert!(offset_of!(SystemSpineState, pinned_aperture_mask) == 0);
-    assert!(offset_of!(SystemSpineState, pinned_slot_mask) == 4);
-    assert!(offset_of!(SystemSpineState, pinned_action_mode_mask) == 5);
-    assert!(offset_of!(SystemSpineState, ood_void_locked) == 6);
-    assert!(offset_of!(SystemSpineState, irreversible_step_lock) == 7);
-    assert!(offset_of!(SystemSpineState, pinned_compute_mask) == 8);
-    assert!(offset_of!(SystemSpineState, whole_token_bypass_active) == 24);
-
-    assert!(size_of::<DistortionDelta>() == 128 && align_of::<DistortionDelta>() == 64);
-    assert!(offset_of!(DistortionDelta, node_id) == 0);
-    assert!(offset_of!(DistortionDelta, next_hop_idx) == 8);
-    assert!(offset_of!(DistortionDelta, intent_delta) == 16);
-    assert!(offset_of!(DistortionDelta, flags) == 44);
-    assert!(offset_of!(DistortionDelta, delta_phase_q7) == 64);
-
-    assert!(size_of::<DistortionTension>() == 32 && align_of::<DistortionTension>() == 16);
-    assert!(offset_of!(DistortionTension, tension_q7) == 0);
-    assert!(offset_of!(DistortionTension, effective_ego_scale_q7) == 3);
-    assert!(offset_of!(DistortionTension, state_code) == 7);
-    assert!(offset_of!(DistortionTension, immediate_damping_events) == 8);
-    assert!(offset_of!(DistortionTension, slow_excitation_events) == 12);
-    assert!(offset_of!(DistortionTension, step_epochs) == 24);
 };

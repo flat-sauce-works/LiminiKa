@@ -1,203 +1,284 @@
 // name: tests/ffi/test_c_abi_smoke.cpp
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-#include "liminika/gcso_config.h"
-#include "liminika/gcso_types.h"
-#include "liminika/gcso_abi.h"
+#include "liminika/lmnk_config.h"
+#include "liminika/lmnk_types.h"
+#include "liminika/lmnk_abi.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <vector>
+#include <memory>
 
-#define GCSO_TEST_CHECK(cond)                                                                 \
+namespace {
+
+#define LMNK_TEST_CHECK(cond)                                                                 \
     do {                                                                                      \
         if (!(cond)) {                                                                        \
-            std::fprintf(stderr, "CTest assertion failed at %s:%d: %s\n", __FILE__, __LINE__, \
+            std::fprintf(stderr, "LMNK C-ABI smoke check failed at line %d: %s\n", __LINE__,  \
                          #cond);                                                              \
             std::abort();                                                                     \
         }                                                                                     \
     } while (0)
 
-namespace {
-
-constexpr void check_static_abi_invariants() noexcept {
-    static_assert(GCSO_ABI_VERSION_MAJOR == 0U);
-    static_assert(GCSO_ABI_VERSION_MINOR == 1U);
-    static_assert(GCSO_ABI_VERSION_PATCH == 3U);
-    static_assert(GCSO_ABI_VERSION_HEX == 0x00000103U);
-    static_assert(GCSO_CRYSTAL_RECORD_VERSION == GCSO_ABI_VERSION_HEX);
-    static_assert(sizeof(gcso_liminal_ego_field_t) == 64U);
-    static_assert(alignof(gcso_liminal_ego_field_t) == 64U);
-    static_assert(sizeof(gcso_cognitive_substrate_t) == 64U);
-    static_assert(alignof(gcso_cognitive_substrate_t) == 64U);
-    static_assert(sizeof(gcso_liminal_venn_partition_t) == 16U);
-    static_assert(sizeof(gcso_system_spine_state_t) == 32U);
-    static_assert(sizeof(gcso_distortion_delta_t) == 128U);
-    static_assert(alignof(gcso_distortion_delta_t) == 64U);
-    static_assert(sizeof(gcso_distortion_tension_t) == 32U);
-    static_assert(GCSO_ATTRIBUTION_TAG(GCSO_SUBSTRATE_STIGMERGY, GCSO_DRIVER_EGO) == 3U);
-    static_assert(offsetof(gcso_liminal_ego_field_t, counter_basin_thrust_q7) == 40U);
-    static_assert(offsetof(gcso_liminal_ego_field_t, basin_escape_floor_q7) == 41U);
-    static_assert(GCSO_ATTRACTOR_SLOT_TEMPORAL == 5U);
-    static_assert(GCSO_ATTRACTOR_SLOT_USER_INTENT == 6U);
-    static_assert(GCSO_ATTRACTOR_SLOT_CRYSTALLIZED == 7U);
-    static_assert(GCSO_WORKBENCH_LANE_COUNT == 8U);
-    static_assert(GCSO_WORKBENCH_LANE_AUTO == 0xFFU);
-    static_assert(GCSO_WORKBENCH_LANE_FLAG_PINNED == (1U << 0));
-    static_assert(GCSO_WORKBENCH_LANE_FLAG_REPULSION == (1U << 1));
-    static_assert(GCSO_WORKBENCH_LANE_FLAG_SANDBOX == (1U << 2));
+void test_static_invariants() {
+    static_assert(LMNK_ABI_VERSION_MAJOR == 0U);
+    static_assert(LMNK_ABI_VERSION_MINOR == 2U);
+    static_assert(LMNK_ABI_VERSION_PATCH == 0U);
+    static_assert(LMNK_ABI_VERSION_HEX == 0x00000200U);
+    static_assert(LMNK_PHASE_ANCHOR_MAGIC == 0x524B4E4CU);
+    static_assert(LMNK_PHASE_ANCHOR_VERSION == LMNK_ABI_VERSION_HEX);
+    static_assert(sizeof(lmnk_config_t) == 64U);
+    static_assert(alignof(lmnk_config_t) == 64U);
+    static_assert(sizeof(lmnk_pointer_trail_t) == 128U);
+    static_assert(alignof(lmnk_pointer_trail_t) == 64U);
+    static_assert(sizeof(lmnk_entropy_state_t) == 32U);
+    static_assert(alignof(lmnk_entropy_state_t) == 32U);
+    static_assert(sizeof(lmnk_liminal_ego_state_t) == 64U);
+    static_assert(alignof(lmnk_liminal_ego_state_t) == 64U);
+    static_assert(sizeof(lmnk_core_primitive_state_t) == 64U);
+    static_assert(alignof(lmnk_core_primitive_state_t) == 64U);
+    static_assert(sizeof(lmnk_core_state_stack_t) == 128U);
+    static_assert(alignof(lmnk_core_state_stack_t) == 64U);
+    static_assert(sizeof(lmnk_lacuna_partition_t) == 16U);
+    static_assert(alignof(lmnk_lacuna_partition_t) == 16U);
+    static_assert(sizeof(lmnk_spine_state_t) == 32U);
+    static_assert(sizeof(lmnk_distortion_delta_t) == 128U);
+    static_assert(alignof(lmnk_distortion_delta_t) == 64U);
+    static_assert(sizeof(lmnk_distortion_tension_t) == 32U);
+    static_assert(sizeof(lmnk_phase_anchor_record_t) == 128U);
+    static_assert(alignof(lmnk_phase_anchor_record_t) == 64U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_STIGMERGY, LMNK_DRIVER_EGO) == 3U);
+    static_assert(offsetof(lmnk_liminal_ego_state_t, counter_basin_thrust_q7) == 40U);
+    static_assert(offsetof(lmnk_liminal_ego_state_t, basin_escape_floor_q7) == 41U);
+    static_assert(LMNK_ATTRACTOR_SLOT_TEMPORAL == 5U);
+    static_assert(LMNK_ATTRACTOR_SLOT_USER_INTENT == 6U);
+    static_assert(LMNK_ATTRACTOR_SLOT_CRYSTALLIZED == 7U);
 }
 
-void test_version_and_capabilities() {
-    uint32_t major = 99U;
-    uint32_t minor = 99U;
-    uint32_t patch = 99U;
-    GCSO_TEST_CHECK(gcso_abi_get_version(&major, &minor, &patch) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(major == GCSO_ABI_VERSION_MAJOR);
-    GCSO_TEST_CHECK(minor == GCSO_ABI_VERSION_MINOR);
-    GCSO_TEST_CHECK(patch == GCSO_ABI_VERSION_PATCH);
+void test_version_capabilities_and_tagged_ptr() {
+    LMNK_TEST_CHECK(lmnk_abi_version_major() == LMNK_ABI_VERSION_MAJOR);
+    LMNK_TEST_CHECK(lmnk_abi_version_minor() == LMNK_ABI_VERSION_MINOR);
+    LMNK_TEST_CHECK(lmnk_abi_version_patch() == LMNK_ABI_VERSION_PATCH);
+    LMNK_TEST_CHECK(lmnk_abi_version_hex() == LMNK_ABI_VERSION_HEX);
 
-    const char* version_str = gcso_abi_get_version_string();
-    GCSO_TEST_CHECK(version_str != nullptr);
-    GCSO_TEST_CHECK(std::strcmp(version_str, GCSO_ABI_VERSION_STRING) == 0);
-    GCSO_TEST_CHECK(std::strcmp(version_str, "0.1.3") == 0);
+    const char* version_str = lmnk_abi_version_string();
+    LMNK_TEST_CHECK(version_str != nullptr);
+    LMNK_TEST_CHECK(std::strcmp(version_str, LMNK_ABI_VERSION_STRING) == 0);
+    LMNK_TEST_CHECK(std::strcmp(version_str, "0.2.0") == 0);
 
-    const char* ok_str = gcso_status_to_string(GCSO_SUCCESS);
-    GCSO_TEST_CHECK(ok_str != nullptr);
-    GCSO_TEST_CHECK(std::strcmp(ok_str, "GCSO_SUCCESS") == 0);
+    const char* ok_str = lmnk_status_to_string(LMNK_OK);
+    LMNK_TEST_CHECK(ok_str != nullptr);
+    LMNK_TEST_CHECK(std::strcmp(ok_str, "LMNK_OK") == 0);
 
-    gcso_capability_flags_t caps = 0ULL;
-    GCSO_TEST_CHECK(gcso_abi_query_capability(&caps) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK((caps & GCSO_CAP_CPU_BASELINE) != 0ULL);
+    lmnk_capability_flags_t caps = 0ULL;
+    LMNK_TEST_CHECK(lmnk_abi_query_capability(&caps) == LMNK_OK);
+    const lmnk_capability_flags_t known_caps = LMNK_CAP_SWAR_BASELINE | LMNK_CAP_SIMD_AVX2 |
+        LMNK_CAP_SIMD_NEON | LMNK_CAP_SIMD_WASM128 | LMNK_CAP_ZERO_ALLOC_CORE |
+        LMNK_CAP_INPLACE_CONTEXT_INIT;
+    LMNK_TEST_CHECK((caps & LMNK_CAP_SWAR_BASELINE) != 0ULL);
+    LMNK_TEST_CHECK((caps & LMNK_CAP_ZERO_ALLOC_CORE) != 0ULL);
+    LMNK_TEST_CHECK((caps & LMNK_CAP_INPLACE_CONTEXT_INIT) != 0ULL);
+    LMNK_TEST_CHECK((caps & ~known_caps) == 0ULL);
+
+    lmnk_config_t cfg{};
+    LMNK_TEST_CHECK(lmnk_config_init_default(&cfg) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_config_validate(&cfg) == LMNK_OK);
+
+    lmnk_config_t bad_cfg = cfg;
+    bad_cfg.head_dim = 0U;
+    LMNK_TEST_CHECK(lmnk_config_validate(&bad_cfg) == LMNK_ERR_INVALID_ARGUMENT);
+
+    const uint64_t packed = lmnk_tagged_ptr_pack_action(
+        0x0000123456789AB0ULL, LMNK_ATTRACTOR_SLOT_KNOWLEDGE,
+        static_cast<uint8_t>(LMNK_ACTION_MODE_PHASE_STEER | LMNK_ACTION_MODE_SUBHEAD_ROUTE), 24);
+    LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_addr(packed) == 0x0000123456789AB0ULL);
+    LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_attractor_slot(packed) == LMNK_ATTRACTOR_SLOT_KNOWLEDGE);
+    LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_phase(packed) == 24);
+
+    const uint64_t repulsed = lmnk_tagged_ptr_evolve_mode(
+        packed, 0.90F, 0.45F, 1U, LMNK_ATTRACTOR_SLOT_KNOWLEDGE, 0.15F, 0.85F);
+    LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_attractor_slot(repulsed) ==
+                    LMNK_ATTRACTOR_SLOT_REPULSION);
+    LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_phase(repulsed) == -24);
 }
 
-void test_config_and_tagged_pointer() {
-    gcso_config_t cfg{};
-    GCSO_TEST_CHECK(gcso_config_init_default(&cfg) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(gcso_config_validate(&cfg) == GCSO_SUCCESS);
+void test_context_boxed_and_in_place_lifecycle() {
+    lmnk_config_t cfg{};
+    LMNK_TEST_CHECK(lmnk_config_init_default(&cfg) == LMNK_OK);
 
-    gcso_config_t bad_cfg = cfg;
-    bad_cfg.head_dim = 3U; // Must be non-zero even
-    GCSO_TEST_CHECK(gcso_config_validate(&bad_cfg) == GCSO_ERROR_INVALID_ARGUMENT);
+    const size_t ctx_size = lmnk_context_size();
+    const size_t ctx_align = lmnk_context_align();
+    LMNK_TEST_CHECK(ctx_size > 0U && (ctx_size % 64U) == 0U);
+    LMNK_TEST_CHECK(ctx_align == 64U);
 
-    const uint64_t packed = gcso_tagged_ptr_pack_action(
-        0x0000123456789AB0ULL, GCSO_ATTRACTOR_SLOT_KNOWLEDGE,
-        static_cast<uint8_t>(GCSO_ACTION_MODE_DPSR_STEER | GCSO_ACTION_MODE_SUBHEAD_ROUTE), 24);
-    GCSO_TEST_CHECK(gcso_tagged_ptr_unpack_addr(packed) == 0x0000123456789AB0ULL);
-    GCSO_TEST_CHECK(gcso_tagged_ptr_unpack_attractor_slot(packed) == GCSO_ATTRACTOR_SLOT_KNOWLEDGE);
-    GCSO_TEST_CHECK(gcso_tagged_ptr_unpack_phase(packed) == 24);
-
-    const uint64_t repulsed = gcso_tagged_ptr_evolve_mode_stigmergically(
-        packed, 0.90F, 0.45F, 1U, GCSO_ATTRACTOR_SLOT_KNOWLEDGE, 0.15F, 0.85F);
-    GCSO_TEST_CHECK(gcso_tagged_ptr_unpack_attractor_slot(repulsed) ==
-                    GCSO_ATTRACTOR_SLOT_REPULSION);
-    GCSO_TEST_CHECK(gcso_tagged_ptr_unpack_phase(repulsed) == -24);
-}
-
-void test_context_step_and_snapshot_roundtrip() {
-    gcso_config_t cfg{};
-    GCSO_TEST_CHECK(gcso_config_init_default(&cfg) == GCSO_SUCCESS);
-    cfg.head_dim = 8U;
-    cfg.num_heads = 4U;
-
-    gcso_context_handle_t ctx = nullptr;
-    GCSO_TEST_CHECK(gcso_context_create(&cfg, &ctx) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(ctx != nullptr);
-
-    GCSO_TEST_CHECK(gcso_context_set_system_prompt_anchor(ctx, "Maintain factual invariance.",
-                                                          1.0F) == GCSO_SUCCESS);
-
-    alignas(32) float query[32]{};
-    alignas(32) float key[32]{};
-    for (size_t i = 0; i < 32; ++i) {
-        query[i] = 0.5F + 0.01F * static_cast<float>(i);
-        key[i] = 0.25F - 0.005F * static_cast<float>(i);
+    alignas(64) float query[4096]{};
+    alignas(64) float key[4096]{};
+    for (size_t i = 0; i < 4096U; ++i) {
+        query[i] = 0.25F * static_cast<float>((i % 7U) + 1U);
+        key[i] = 0.50F * static_cast<float>((i % 5U) + 1U);
     }
 
-    alignas(128) gcso_pointer_trail_t trail{};
-    GCSO_TEST_CHECK(gcso_context_step_token(ctx, 42U, query, key, &trail) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(trail.current_ptr == 42U);
-    GCSO_TEST_CHECK(trail.step_count == 1U);
+    // 1. Boxed context create / serialize / deserialize / cross-guard check
+    lmnk_context_handle_t ctx = nullptr;
+    LMNK_TEST_CHECK(lmnk_context_create(&cfg, &ctx) == LMNK_OK);
+    LMNK_TEST_CHECK(ctx != nullptr);
+    LMNK_TEST_CHECK(lmnk_context_deinit_in_place(ctx) == LMNK_ERR_INVALID_STATE);
 
-    size_t required_bytes = 0U;
-    GCSO_TEST_CHECK(gcso_context_serialize(ctx, nullptr, &required_bytes) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(required_bytes > sizeof(gcso_snapshot_header_t));
+    alignas(64) lmnk_pointer_trail_t trail{};
+    LMNK_TEST_CHECK(lmnk_context_step_token(ctx, 42U, query, key, &trail) == LMNK_OK);
+    LMNK_TEST_CHECK(trail.current_ptr == 42U);
+    LMNK_TEST_CHECK(trail.step_count == 1U);
 
-    // Reserve aligned buffer matching alignof(gcso_snapshot_header_t)
-    struct alignas(64) AlignedBlock {
-        uint8_t bytes[64];
-    };
-    const size_t block_count = (required_bytes + 63U) / 64U;
-    std::vector<AlignedBlock> snap_buf(block_count);
-    auto* raw_ptr = reinterpret_cast<uint8_t*>(snap_buf.data());
-    size_t cap = block_count * 64U;
-    GCSO_TEST_CHECK(gcso_context_serialize(ctx, raw_ptr, &cap) == GCSO_SUCCESS);
+    size_t required_bytes = 0;
+    LMNK_TEST_CHECK(lmnk_context_serialize(ctx, nullptr, &required_bytes) == LMNK_OK);
+    LMNK_TEST_CHECK(required_bytes > sizeof(lmnk_snapshot_header_t));
 
-    gcso_context_handle_t restored = nullptr;
-    GCSO_TEST_CHECK(gcso_context_deserialize(raw_ptr, cap, &restored) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(restored != nullptr);
+    const size_t raw_cap = required_bytes + alignof(lmnk_snapshot_header_t);
+    auto raw_storage = std::make_unique<uint8_t[]>(raw_cap);
+    void* aligned_ptr = raw_storage.get();
+    size_t space = raw_cap;
+    LMNK_TEST_CHECK(std::align(alignof(lmnk_snapshot_header_t), required_bytes, aligned_ptr, space) !=
+                    nullptr);
+    auto* raw_ptr = static_cast<uint8_t*>(aligned_ptr);
+    size_t cap = required_bytes;
+    LMNK_TEST_CHECK(lmnk_context_serialize(ctx, raw_ptr, &cap) == LMNK_OK);
 
-    alignas(128) gcso_pointer_trail_t restored_trail{};
-    GCSO_TEST_CHECK(gcso_context_step_token(restored, 43U, query, key, &restored_trail) ==
-                    GCSO_SUCCESS);
-    GCSO_TEST_CHECK(restored_trail.step_count == 2U);
-    GCSO_TEST_CHECK(restored_trail.prev_ptr == 42U);
+    lmnk_context_handle_t restored = nullptr;
+    LMNK_TEST_CHECK(lmnk_context_deserialize(raw_ptr, cap, &restored) == LMNK_OK);
+    LMNK_TEST_CHECK(restored != nullptr);
 
-    GCSO_TEST_CHECK(gcso_context_destroy(restored) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(gcso_context_destroy(ctx) == GCSO_SUCCESS);
+    alignas(64) lmnk_pointer_trail_t restored_trail{};
+    LMNK_TEST_CHECK(lmnk_context_step_token(restored, 43U, query, key, &restored_trail) ==
+                    LMNK_OK);
+    LMNK_TEST_CHECK(restored_trail.step_count == 2U);
+    LMNK_TEST_CHECK(restored_trail.prev_ptr == 42U);
+
+    LMNK_TEST_CHECK(lmnk_context_destroy(restored) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_destroy(ctx) == LMNK_OK);
+
+    // 2. Zero-heap caller-owned in-place lifecycle + cross-guard check
+    const size_t inplace_cap = ctx_size + ctx_align;
+    auto backing = std::make_unique<uint8_t[]>(inplace_cap);
+    void* ctx_aligned = backing.get();
+    size_t ctx_space = inplace_cap;
+    LMNK_TEST_CHECK(std::align(ctx_align, ctx_size, ctx_aligned, ctx_space) != nullptr);
+    auto* ctx_bytes = static_cast<uint8_t*>(ctx_aligned);
+
+    LMNK_TEST_CHECK(lmnk_context_init_in_place(&cfg, ctx_bytes, ctx_size - 1U) ==
+                    LMNK_ERR_BUFFER_TOO_SMALL);
+    LMNK_TEST_CHECK(lmnk_context_init_in_place(&cfg, ctx_bytes + 1U, ctx_size) ==
+                    LMNK_ERR_ALIGNMENT);
+    LMNK_TEST_CHECK(lmnk_context_init_in_place(&cfg, ctx_bytes, ctx_size) == LMNK_OK);
+
+    auto in_place_ctx = reinterpret_cast<lmnk_context_handle_t>(ctx_bytes);
+    LMNK_TEST_CHECK(lmnk_context_destroy(in_place_ctx) == LMNK_ERR_INVALID_STATE);
+
+    alignas(64) lmnk_pointer_trail_t inplace_trail{};
+    LMNK_TEST_CHECK(lmnk_context_step_token(in_place_ctx, 99U, query, key, &inplace_trail) ==
+                    LMNK_OK);
+    LMNK_TEST_CHECK(inplace_trail.current_ptr == 99U);
+    LMNK_TEST_CHECK(inplace_trail.step_count == 1U);
+    LMNK_TEST_CHECK(lmnk_context_reset(in_place_ctx) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_deinit_in_place(in_place_ctx) == LMNK_OK);
 }
 
-void test_edbc_controller_and_ego_pod() {
-    alignas(32) gcso_edbc_state_t init_state{};
-    init_state.bifurcation_threshold = 0.50F;
-    init_state.singularity_eps = 1e-12F;
-    init_state.repulsion_gain = 0.25F;
+void test_entropy_lacuna_anchor_and_mermaid() {
+    alignas(32) lmnk_entropy_state_t init_state{};
+    init_state.moving_z_entropy = 0.0F;
+    init_state.bifurcation_threshold = 0.65F;
+    init_state.singularity_eps = 1.0e-12F;
+    init_state.sliding_entropy_rate = 0.0F;
+    init_state.repulsion_gain = 1.0F;
     init_state.sample_temperature = 1.0F;
 
-    gcso_edbc_controller_handle_t edbc = nullptr;
-    GCSO_TEST_CHECK(gcso_edbc_controller_create(&init_state, &edbc) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(edbc != nullptr);
+    lmnk_entropy_controller_handle_t entropy = nullptr;
+    LMNK_TEST_CHECK(lmnk_entropy_controller_create(&init_state, &entropy) == LMNK_OK);
+    LMNK_TEST_CHECK(entropy != nullptr);
 
-    alignas(32) gcso_edbc_state_t out_state{};
-    GCSO_TEST_CHECK(gcso_edbc_eval_stateful(edbc, 1.5F, &out_state) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(out_state.sample_temperature > 0.0F);
-    GCSO_TEST_CHECK(gcso_edbc_controller_destroy(edbc) == GCSO_SUCCESS);
+    alignas(32) lmnk_entropy_state_t out_state{};
+    LMNK_TEST_CHECK(lmnk_entropy_eval_stateful(entropy, 1.5F, &out_state) == LMNK_OK);
+    LMNK_TEST_CHECK(out_state.sample_temperature > 0.0F);
+    LMNK_TEST_CHECK(lmnk_entropy_controller_destroy(entropy) == LMNK_OK);
 
-    alignas(64) gcso_liminal_ego_field_t ego{};
-    ego.counter_basin_thrust_q7 = 48;
-    ego.basin_escape_floor_q7 = 16;
-    ego.trigger_mask = GCSO_EGO_TRIGGER_BASIN_CAPTURE;
-    GCSO_TEST_CHECK((ego.trigger_mask & GCSO_EGO_TRIGGER_BASIN_CAPTURE) != 0U);
+    alignas(64) lmnk_liminal_ego_state_t ego{};
+    LMNK_TEST_CHECK(lmnk_ego_state_init_preset(LMNK_EGO_PRESET_MEDIUM, &ego) == LMNK_OK);
+    ego.trigger_mask = LMNK_EGO_TRIGGER_BASIN_CAPTURE;
+    LMNK_TEST_CHECK((ego.trigger_mask & LMNK_EGO_TRIGGER_BASIN_CAPTURE) != 0U);
 
-    const uint8_t other_density[8] = {80, 72, 0, 0, 90, 95, 0, 0};
-    const uint8_t noise_tol[8] = {4, 4, 4, 4, 4, 4, 4, 4};
-    alignas(16) gcso_liminal_venn_partition_t part{};
-    GCSO_TEST_CHECK(gcso_liminal_evaluate_venn_partition(0x03U, other_density, noise_tol, 40U,
-                                                         &part) == GCSO_SUCCESS);
-    GCSO_TEST_CHECK(part.shared_core_mask == 0x03U);
-    GCSO_TEST_CHECK(part.known_unknown_mask == 0x30U);
-    GCSO_TEST_CHECK(part.boundary_sensitivity_q7 > 0U);
+    const uint8_t other_density[8] = {80U, 72U, 0U, 0U, 92U, 88U, 0U, 0U};
+    const uint8_t noise_tol[8] = {10U, 10U, 10U, 10U, 10U, 10U, 10U, 10U};
+    alignas(16) lmnk_lacuna_partition_t part{};
+    LMNK_TEST_CHECK(lmnk_liminal_evaluate_lacuna_partition(0x03U, other_density, noise_tol, 40U,
+                                                           &part) == LMNK_OK);
+    LMNK_TEST_CHECK(part.self_ref_mask == 0x03U);
+    LMNK_TEST_CHECK(part.exterior_mask == 0x30U);
+    LMNK_TEST_CHECK(part.boundary_sensitivity_q7 > 0U);
 
-    alignas(16) gcso_distortion_tension_t tension{};
+    alignas(16) lmnk_distortion_tension_t tension{};
     tension.deadband_low_q7 = 16U;
-    tension.deadband_high_q7 = 84U;
-    tension.effective_ego_scale_q7 = 96U;
-    GCSO_TEST_CHECK(gcso_distortion_tension_step_hot_path(&tension, 110U, 32U, 96U, 96U, 1U) ==
-                    GCSO_SUCCESS);
-    GCSO_TEST_CHECK(tension.effective_ego_scale_q7 == 0U);
-    GCSO_TEST_CHECK(tension.immediate_damping_events == 1U);
+    tension.deadband_high_q7 = 96U;
+    tension.effective_ego_scale_q7 = 64U;
+    LMNK_TEST_CHECK(lmnk_distortion_tension_step_hot_path(&tension, 110U, 32U, 96U, 96U, 1U) ==
+                    LMNK_OK);
+    LMNK_TEST_CHECK(tension.effective_ego_scale_q7 == 0U);
+    LMNK_TEST_CHECK(tension.immediate_damping_events == 1U);
+
+    // Online toroidal k-Means with "LNKR" PhaseAnchorRecord
+    alignas(64) lmnk_phase_anchor_record_t centroid{};
+    centroid.magic = LMNK_PHASE_ANCHOR_MAGIC;
+    centroid.version = LMNK_PHASE_ANCHOR_VERSION;
+    centroid.anchor_id = 7U;
+    centroid.dominant_slot = LMNK_ATTRACTOR_SLOT_KNOWLEDGE;
+
+    alignas(64) lmnk_gateway_frame_t frame{};
+    frame.target_anchor_id = 7U;
+    frame.effective_energy = 1.5F;
+    frame.dominant_slot = LMNK_ATTRACTOR_SLOT_KNOWLEDGE;
+    for (size_t i = 0; i < 64U; ++i) {
+        frame.phase_deltas[i] = 16;
+    }
+
+    alignas(64) lmnk_pointer_trail_t kmeans_trail{};
+    size_t assigned_idx = 99U;
+    float assigned_coh = 0.0F;
+    float updated_mass = 0.0F;
+    LMNK_TEST_CHECK(lmnk_anchor_step_online_toroidal_kmeans(
+                        &centroid, 1U, &frame, 0.35F, &kmeans_trail, &assigned_idx,
+                        &assigned_coh, &updated_mass) == LMNK_OK);
+    LMNK_TEST_CHECK(assigned_idx == 0U);
+    LMNK_TEST_CHECK(centroid.sample_count >= 1U);
+
+    // Two-pass Mermaid diagram sizing and zero-alloc formatting
+    alignas(64) lmnk_core_state_stack_t stack{};
+    LMNK_TEST_CHECK(lmnk_core_stack_init_default(&stack) == LMNK_OK);
+    alignas(16) lmnk_epistemic_horizon_t horizon{};
+    alignas(16) lmnk_overlap_discovery_report_t overlap{};
+
+    size_t mermaid_len = 0U;
+    LMNK_TEST_CHECK(lmnk_topology_format_mermaid(&stack, &horizon, &overlap, 3U, 1U, nullptr, 0U,
+                                                 &mermaid_len) == LMNK_OK);
+    LMNK_TEST_CHECK(mermaid_len > 64U);
+
+    auto mermaid_buf = std::make_unique<uint8_t[]>(mermaid_len + 1U);
+    size_t actual_written = 0U;
+    LMNK_TEST_CHECK(lmnk_topology_format_mermaid(&stack, &horizon, &overlap, 3U, 1U,
+                                                 mermaid_buf.get(), mermaid_len,
+                                                 &actual_written) == LMNK_OK);
+    LMNK_TEST_CHECK(actual_written == mermaid_len);
+    mermaid_buf[actual_written] = 0U;
+    const char* mermaid_str = reinterpret_cast<const char*>(mermaid_buf.get());
+    LMNK_TEST_CHECK(std::strncmp(mermaid_str, "flowchart TD\n", 13) == 0);
+    LMNK_TEST_CHECK(std::strstr(mermaid_str, "Anchors:3") != nullptr);
 }
 
-} // namespace
+}  // namespace
 
 int main() {
-    check_static_abi_invariants();
-    test_version_and_capabilities();
-    test_config_and_tagged_pointer();
-    test_context_step_and_snapshot_roundtrip();
-    test_edbc_controller_and_ego_pod();
+    test_static_invariants();
+    test_version_capabilities_and_tagged_ptr();
+    test_context_boxed_and_in_place_lifecycle();
+    test_entropy_lacuna_anchor_and_mermaid();
     return 0;
 }

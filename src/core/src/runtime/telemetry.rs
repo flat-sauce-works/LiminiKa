@@ -16,19 +16,18 @@ use crate::drivers::{
 };
 use crate::foundation::{branchless_clamp_f32, branchless_is_finite_f32, Pod};
 use crate::liminal::{
-    EpistemicPartition, EpistemicRegime, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS,
+    EpistemicRegime, LacunaPartition8, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS,
     NUM_STIGMERGIC_GRANULES, THRESHOLD_COGNITIVE_CIRCUIT, THRESHOLD_CONTRADICTION_GUARD,
     THRESHOLD_KV_PHASE_CACHE, THRESHOLD_MANIFOLD_GATEWAY, THRESHOLD_OBJECTIVE_FACT,
     THRESHOLD_RELATIVE_COUPLING, THRESHOLD_STIGMERGIC_CONSENSUS, THRESHOLD_STIGMERGY_WIDE,
     THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
-use crate::runtime::context::AutonomousCoreLayerStack;
+use crate::runtime::context::CoreStateStack;
 use crate::runtime::gateway::signals::ManifoldProbeBaseline;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
-    StigmergicActionDecision, StigmergicGranuleState, StigmergicOverlapSerendipityReport,
-    StigmergicThresholds,
+    OverlapDiscoveryReport, StigmergicActionDecision, StigmergicGranuleState, StigmergicThresholds,
 };
 
 /// Classification of cross-layer geometric/control distortion relative to Layer 2 Ego alignment.
@@ -77,68 +76,68 @@ pub struct LiminalHorizonNodeDescriptor {
     pub channel_idx: usize,
     /// Static cognitive threshold mask owned by this channel node.
     pub static_aperture_mask: u32,
-    /// Type-level unknowable exterior complement (`!static_aperture_mask`).
-    pub unknowable_void_mask: u32,
+    /// Type-level unobserved exterior complement (`!static_aperture_mask`).
+    pub unobserved_lacuna_mask: u32,
 }
 
 /// Canonical 8-channel capability/domain topology table derived from `liminal::threshold` channels.
-pub const GCSO_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
+pub const LMNK_LIMINAL_HORIZON_TOPOLOGY: [LiminalHorizonNodeDescriptor;
     NUM_LIMINAL_THRESHOLD_CHANNELS] = [
     LiminalHorizonNodeDescriptor {
         node_id: "N0",
         trait_name: "SystemConstraintSignal",
         channel_idx: 0,
         static_aperture_mask: THRESHOLD_SYSTEM_CONSTRAINT,
-        unknowable_void_mask: !THRESHOLD_SYSTEM_CONSTRAINT,
+        unobserved_lacuna_mask: !THRESHOLD_SYSTEM_CONSTRAINT,
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N1",
         trait_name: "ObjectiveFactSignal",
         channel_idx: 1,
         static_aperture_mask: THRESHOLD_OBJECTIVE_FACT,
-        unknowable_void_mask: !THRESHOLD_OBJECTIVE_FACT,
+        unobserved_lacuna_mask: !THRESHOLD_OBJECTIVE_FACT,
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N2",
         trait_name: "SubjectivePersonaSignal",
         channel_idx: 2,
         static_aperture_mask: THRESHOLD_SUBJECTIVE_PERSONA,
-        unknowable_void_mask: !THRESHOLD_SUBJECTIVE_PERSONA,
+        unobserved_lacuna_mask: !THRESHOLD_SUBJECTIVE_PERSONA,
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N3",
         trait_name: "ContradictionGuardSignal",
         channel_idx: 3,
         static_aperture_mask: THRESHOLD_CONTRADICTION_GUARD,
-        unknowable_void_mask: !THRESHOLD_CONTRADICTION_GUARD,
+        unobserved_lacuna_mask: !THRESHOLD_CONTRADICTION_GUARD,
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N4",
         trait_name: "CognitiveTrajectoryLedger",
         channel_idx: 4,
         static_aperture_mask: THRESHOLD_COGNITIVE_CIRCUIT,
-        unknowable_void_mask: !THRESHOLD_COGNITIVE_CIRCUIT,
+        unobserved_lacuna_mask: !THRESHOLD_COGNITIVE_CIRCUIT,
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N5",
         trait_name: "RamPhaseKvCacheOps",
         channel_idx: 5,
         static_aperture_mask: THRESHOLD_KV_PHASE_CACHE,
-        unknowable_void_mask: !THRESHOLD_KV_PHASE_CACHE,
+        unobserved_lacuna_mask: !THRESHOLD_KV_PHASE_CACHE,
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N6",
         trait_name: "RelativeCouplingMatrix",
         channel_idx: 6,
         static_aperture_mask: THRESHOLD_RELATIVE_COUPLING,
-        unknowable_void_mask: !THRESHOLD_RELATIVE_COUPLING,
+        unobserved_lacuna_mask: !THRESHOLD_RELATIVE_COUPLING,
     },
     LiminalHorizonNodeDescriptor {
         node_id: "N7",
         trait_name: "StigmergicSubstrateOps",
         channel_idx: 7,
         static_aperture_mask: THRESHOLD_STIGMERGY_WIDE,
-        unknowable_void_mask: !THRESHOLD_STIGMERGY_WIDE,
+        unobserved_lacuna_mask: !THRESHOLD_STIGMERGY_WIDE,
     },
 ];
 
@@ -175,8 +174,10 @@ impl<'a> BufCursor<'a> {
     fn write_bytes(&mut self, bytes: &[u8]) {
         let rem = self.buf.len().saturating_sub(self.pos);
         let n = bytes.len().min(rem);
-        self.buf[self.pos..self.pos + n].copy_from_slice(&bytes[..n]);
-        self.pos += n;
+        if n > 0 {
+            self.buf[self.pos..self.pos + n].copy_from_slice(&bytes[..n]);
+        }
+        self.pos = self.pos.saturating_add(bytes.len());
     }
 
     #[inline]
@@ -273,7 +274,7 @@ impl LiminalTopologyTelemetrySnapshot {
     #[inline]
     fn format_mermaid_flowchart_core(
         &self,
-        layer1_opt: Option<(&StigmergicGranuleState, &StigmergicOverlapSerendipityReport)>,
+        layer1_opt: Option<(&StigmergicGranuleState, &OverlapDiscoveryReport)>,
         layer2_opt: Option<&LiminalEgoState>,
         buf: &mut [u8],
     ) -> usize {
@@ -284,29 +285,29 @@ impl LiminalTopologyTelemetrySnapshot {
             EpistemicRegime::Liminal => "Liminal",
         };
         cur.write_str("flowchart TD\n");
-        cur.write_str("    LVOID[\"Core Layer 0: Liminal (Epistemic Horizon & Exterior)\"]\n");
+        cur.write_str("    LIM[\"Liminal (Boundary Horizon & Exterior)\"]\n");
 
         match layer1_opt {
-            Some((layer1, venn)) => {
-                cur.write_str("    STIG[\"Core Layer 1: StigmergicGranuleState | VennCore:");
-                cur.write_hex_u8(venn.venn_core_mask);
-                cur.write_str(" | Serendipity:");
-                cur.write_hex_u8(venn.serendipity_excursion_mask);
+            Some((stigmergy, report)) => {
+                cur.write_str("    STIG[\"StigmergicGranuleState | OverlapCore:");
+                cur.write_hex_u8(report.overlap_core_mask);
+                cur.write_str(" | Discovery:");
+                cur.write_hex_u8(report.discovery_excursion_mask);
                 cur.write_str(" | Quorum:");
-                cur.write_u8_dec(layer1.quorum_threshold);
+                cur.write_u8_dec(stigmergy.quorum_threshold);
                 cur.write_str("/8 | Epochs:");
-                cur.write_u8_dec((layer1.adaptation_epochs & 0xFF) as u8);
+                cur.write_u8_dec((stigmergy.adaptation_epochs & 0xFF) as u8);
                 cur.write_str("\"]\n");
             }
             None => {
-                cur.write_str("    STIG[\"Core Layer 1: Stigmergic Approximation | Apt:");
+                cur.write_str("    STIG[\"Stigmergic Approximation | Apt:");
                 cur.write_hex_u16(THRESHOLD_STIGMERGIC_CONSENSUS);
                 cur.write_str("\"]\n");
             }
         }
 
         if let Some(ego) = layer2_opt {
-            cur.write_str("    EGO[\"Core Layer 2: LiminalEgoState | Thrust:");
+            cur.write_str("    EGO[\"LiminalEgoState | Thrust:");
             cur.write_u8_dec(ego.counter_basin_thrust_q7);
             cur.write_str("/127 | Transgress:");
             cur.write_i8_dec(ego.transgression_bias_q7);
@@ -319,7 +320,7 @@ impl LiminalTopologyTelemetrySnapshot {
 
         let mut i = 0usize;
         while i < 7 {
-            let desc = &GCSO_LIMINAL_HORIZON_TOPOLOGY[i];
+            let desc = &LMNK_LIMINAL_HORIZON_TOPOLOGY[i];
             let ch = desc.channel_idx;
             let active = (self.active_aperture_mask & (1u32 << ch)) != 0;
             cur.write_str("    ");
@@ -328,7 +329,7 @@ impl LiminalTopologyTelemetrySnapshot {
             cur.write_str(desc.trait_name);
             cur.write_str(" | Apt:");
             cur.write_hex_u16(desc.static_aperture_mask);
-            cur.write_str(" | VoidFloor:");
+            cur.write_str(" | LacunaFloor:");
             cur.write_u8_dec(self.threshold_floor_q7[ch]);
             cur.write_str("/127 | Gain:");
             cur.write_u8_dec(self.aperture_gain_q7[ch]);
@@ -352,18 +353,18 @@ impl LiminalTopologyTelemetrySnapshot {
 
         cur.write_str("    HUB[\"L2_Substrate | Apt:");
         cur.write_hex_u16(THRESHOLD_STIGMERGY_WIDE);
-        cur.write_str(" | VoidFloor:");
+        cur.write_str(" | LiminalFloor:");
         cur.write_u8_dec(self.threshold_floor_q7[7]);
-        cur.write_str("/127 | Crystals:");
+        cur.write_str("/127 | Anchors:");
         cur.write_u8_dec(self.active_crystals);
         cur.write_str(" | Daughters:");
         cur.write_u8_dec(self.spawned_daughters);
         cur.write_str("\"]\n");
 
-        cur.write_str("    LVOID -. \"Cognitive Cut\" .-> N0 & N1 & N2 & N3 & N4 & N5 & N6\n");
-        cur.write_str("    LVOID <-->|\"Cross-Layer Feedback\"| STIG\n");
+        cur.write_str("    LIM -. \"Liminal Cut\" .-> N0 & N1 & N2 & N3 & N4 & N5 & N6\n");
+        cur.write_str("    LIM <-->|\"Cross-Layer Feedback\"| STIG\n");
         if layer2_opt.is_some() {
-            cur.write_str("    EGO -. \"Top-Down Intervention\" .-> LVOID & STIG\n");
+            cur.write_str("    EGO -. \"Top-Down Intervention\" .-> LIM & STIG\n");
             cur.write_str("    EGO -->|\"Counter-Basin / Defiance\"| GW\n");
         }
         cur.write_str("    N0 & N1 & N2 & N3 & N4 & N5 & N6 --> GW\n");
@@ -373,31 +374,31 @@ impl LiminalTopologyTelemetrySnapshot {
     }
 
     /// Renders all three autonomous core layers (`Liminal` Layer 0, `StigmergicGranuleState`
-    /// Layer 1, and `LiminalEgoState` Layer 2) alongside Venn overlap & serendipity telemetry as a
+    /// Layer 1, and `LiminalEgoState` Layer 2) alongside overlap & discovery telemetry as a
     /// `#![no_std]` zero-allocation Mermaid `flowchart TD` diagram directly into `buf`.
     #[inline]
-    pub fn format_three_core_layers_mermaid(
+    pub fn format_core_topology_mermaid(
         &self,
-        stack: &AutonomousCoreLayerStack,
-        venn: &StigmergicOverlapSerendipityReport,
+        stack: &CoreStateStack,
+        overlap: &OverlapDiscoveryReport,
         buf: &mut [u8],
     ) -> usize {
-        self.format_three_core_layers_mermaid_with_distortion(stack, venn, None, buf)
+        self.format_core_topology_mermaid_with_distortion(stack, overlap, None, buf)
     }
 
     /// Renders all three autonomous core layers plus optional cross-layer [`LayerDistortionReport`]
     /// diagnostics (`Aligned` / `PassiveSaturation` / `ActiveOverdrive`) into `buf`.
     #[inline]
-    pub fn format_three_core_layers_mermaid_with_distortion(
+    pub fn format_core_topology_mermaid_with_distortion(
         &self,
-        stack: &AutonomousCoreLayerStack,
-        venn: &StigmergicOverlapSerendipityReport,
+        stack: &CoreStateStack,
+        overlap: &OverlapDiscoveryReport,
         distortion_opt: Option<&LayerDistortionReport>,
         buf: &mut [u8],
     ) -> usize {
         let base_len = self.format_mermaid_flowchart_core(
-            Some((&stack.stigmergic_layer, venn)),
-            Some(&stack.ego_layer),
+            Some((&stack.stigmergy, overlap)),
+            Some(&stack.ego),
             buf,
         );
         let Some(dist) = distortion_opt else {
@@ -501,7 +502,7 @@ impl Default for TelemetryCapturePolicy {
 /// Layer 0 (`Liminal`) telemetry domain: cognitive boundaries, chatter, and slide-in aperture activity.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct LiminalLayerTelemetry {
+pub struct LiminalTelemetry {
     /// Step counts per [`EpistemicRegime`] (`[0]=KnownCoherent`, `[1]=InternalConflict`, `[2]=Liminal`).
     pub regime_counts: [u64; 3],
     /// Steps observing boundary chatter (`chattering_channel_mask != 0`).
@@ -516,29 +517,29 @@ pub struct LiminalLayerTelemetry {
     pub passive_stall_events: u64,
 }
 
-/// Layer 1 (`Stigmergic`) telemetry domain: 7-regime `StigmergicSubstrate` decisions, Venn overlap, and quorums.
+/// Layer 1 (`Stigmergic`) telemetry domain: 7-regime `StigmergicSubstrate` decisions, overlap, and quorums.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct StigmergicLayerTelemetry {
+pub struct StigmergicTelemetry {
     /// Per-regime [`StigmergicActionDecision`] invocation counts (`0..=6`).
     pub decision_counts: [u64; 7],
-    /// Steps where Venn serendipity discovered exterior overlap.
-    pub venn_serendipity_hits: u64,
-    /// Steps where micro-swarm granules maintained non-empty Venn core consensus.
+    /// Steps where excursion discovery detected exterior overlap.
+    pub overlap_discovery_hits: u64,
+    /// Steps where micro-swarm granules maintained non-empty overlap core consensus.
     pub quorum_core_hits: u64,
 }
 
 /// Layer 2 (`Ego`) telemetry domain: top-down interventions, tie-breaks, and cold-path escalations.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct EgoLayerTelemetry {
+pub struct EgoTelemetry {
     /// Steps where Layer 2 Ego actively intervened (`last_intervened_mask != 0`).
     pub intervention_count: u64,
     /// Steps where Ego resolved boundary conflict or basin capture.
     pub tiebreak_count: u64,
     /// Steps where cold-path escalation swapped external phases into a working lane.
     pub escalation_swaps: u64,
-    /// Steps where Ego intervened yet ended in repulsion or unaligned conflict without Venn quorum.
+    /// Steps where Ego intervened yet ended in repulsion or unaligned conflict without overlap quorum.
     pub unaligned_intervention_count: u64,
 }
 
@@ -582,8 +583,8 @@ pub struct SystemSpineTelemetry {
 pub struct DetailedLayerTelemetry {
     /// Per-channel Layer 0 boundary chatter counts (`0..8`).
     pub liminal_channel_chatter_counts: [u64; NUM_LIMINAL_THRESHOLD_CHANNELS],
-    /// Per-granule Layer 1 Venn core activation counts (`0..8`).
-    pub stigmergic_granule_venn_hits: [u64; NUM_STIGMERGIC_GRANULES],
+    /// Per-granule stigmergic granule overlap activation counts (`0..8`).
+    pub stigmergic_granule_overlap_hits: [u64; NUM_STIGMERGIC_GRANULES],
     /// Per-flag Layer 2 Ego trigger breakdown:
     /// `[0]=BasinCapture, [1]=InternalConflict, [2]=LiminalExterior, [3]=BoundaryChatter, [4]=BoundaryStagnation`.
     pub ego_trigger_counts: [u64; 5],
@@ -619,13 +620,13 @@ pub struct CoreTelemetrySnapshot {
     /// Configured verbosity policy.
     pub policy: TelemetryCapturePolicy,
     /// Layer 0 (`Liminal`) telemetry counters.
-    pub layer0: LiminalLayerTelemetry,
+    pub liminal: LiminalTelemetry,
     /// Layer 1 (`Stigmergic`) telemetry counters.
-    pub layer1: StigmergicLayerTelemetry,
+    pub stigmergy: StigmergicTelemetry,
     /// Layer 2 (`Ego`) telemetry counters.
-    pub layer2: EgoLayerTelemetry,
+    pub ego: EgoTelemetry,
     /// Vertical `+ System` spine counters.
-    pub system: SystemSpineTelemetry,
+    pub spine: SystemSpineTelemetry,
     /// Detailed breakdown if `Detailed` mode captured data or is currently active.
     pub detailed: Option<DetailedLayerTelemetry>,
     /// Lazy-computed `ActionDecision` percentage share (`0.0..=100.0`) over `continuous_standard_steps`.
@@ -665,15 +666,15 @@ pub struct CoreTelemetrySnapshot {
     /// Cumulative P-Frame hops traversed across [`crate::drivers::EgoDifferentialNet`].
     pub pframe_total_hops: u64,
     /// Cumulative steps where validated $O \setminus S$ staged an isolated non-copy sandbox lane.
-    pub known_unknown_sandbox_stages: u64,
-    /// Cumulative steps where True Void ($\overline{S \cup O}$) locked aperture to `0`.
-    pub true_void_aperture_zeros: u64,
+    pub exterior_sandbox_stages: u64,
+    /// Cumulative steps where Unobserved ($\overline{S \cup O}$) locked aperture to `0`.
+    pub unobserved_aperture_zeros: u64,
 }
 
 /// Standalone `#![no_std]` zero-alloc `3 + System` telemetry bank stored beside compute engines.
 ///
-/// Hot `Coarse`-mode control and counters (`policy`, `active_mode`, and `system.total_steps` /
-/// `system.qos_throttle_events`) reside in Cache Line 0 (`0..64`), while `detailed` is isolated at
+/// Hot `Coarse`-mode control and counters (`policy`, `active_mode`, and `spine.total_steps` /
+/// `spine.qos_throttle_events`) reside in Cache Line 0 (`0..64`), while `detailed` is isolated at
 /// offset `384` (Cache Line 6) to avoid polluting Hot/Warm cache lines.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -684,21 +685,21 @@ pub struct CoreTelemetryBank {
     ema_initialized: bool,
     reserved_cl0: u8,
     /// Vertical `+ System` spine counters (hot `Coarse` counters packed within `0..64`).
-    pub system: SystemSpineTelemetry,
+    pub spine: SystemSpineTelemetry,
     attribution_counts: [u64; 4],
     whole_token_bypass_events: u64,
     immediate_tension_damps: u64,
     slow_tension_excites: u64,
     pframe_chain_evals: u64,
     pframe_total_hops: u64,
-    known_unknown_sandbox_stages: u64,
-    true_void_aperture_zeros: u64,
+    exterior_sandbox_stages: u64,
+    unobserved_aperture_zeros: u64,
     /// Layer 0 (`Liminal`) counters.
-    pub layer0: LiminalLayerTelemetry,
+    pub liminal: LiminalTelemetry,
     /// Layer 1 (`Stigmergic`) counters.
-    pub layer1: StigmergicLayerTelemetry,
+    pub stigmergy: StigmergicTelemetry,
     /// Layer 2 (`Ego`) counters.
-    pub layer2: EgoLayerTelemetry,
+    pub ego: EgoTelemetry,
     /// Consecutive quiescent steps required before retracting from `Detailed` back to `base`.
     pub retract_dwell_threshold: u16,
     entropy_ema_q15: u16,
@@ -715,7 +716,7 @@ pub struct CoreTelemetryBank {
 const _: () = {
     assert!(core::mem::size_of::<TelemetryCapturePolicy>() == 4);
     assert!(core::mem::align_of::<CoreTelemetryBank>() == 64);
-    assert!(core::mem::offset_of!(CoreTelemetryBank, system) == 8);
+    assert!(core::mem::offset_of!(CoreTelemetryBank, spine) == 8);
     assert!(core::mem::offset_of!(CoreTelemetryBank, detailed) == 384);
 };
 
@@ -741,7 +742,7 @@ impl CoreTelemetryBank {
             derivative_alpha_q7: crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7,
             ema_initialized: false,
             reserved_cl0: 0,
-            system: SystemSpineTelemetry {
+            spine: SystemSpineTelemetry {
                 total_steps: 0,
                 continuous_standard_steps: 0,
                 qos_throttle_events: 0,
@@ -763,9 +764,9 @@ impl CoreTelemetryBank {
             slow_tension_excites: 0,
             pframe_chain_evals: 0,
             pframe_total_hops: 0,
-            known_unknown_sandbox_stages: 0,
-            true_void_aperture_zeros: 0,
-            layer0: LiminalLayerTelemetry {
+            exterior_sandbox_stages: 0,
+            unobserved_aperture_zeros: 0,
+            liminal: LiminalTelemetry {
                 regime_counts: [0; 3],
                 chatter_events: 0,
                 stationary_shortcut_hits: 0,
@@ -773,12 +774,12 @@ impl CoreTelemetryBank {
                 slide_out_count: 0,
                 passive_stall_events: 0,
             },
-            layer1: StigmergicLayerTelemetry {
+            stigmergy: StigmergicTelemetry {
                 decision_counts: [0; 7],
-                venn_serendipity_hits: 0,
+                overlap_discovery_hits: 0,
                 quorum_core_hits: 0,
             },
-            layer2: EgoLayerTelemetry {
+            ego: EgoTelemetry {
                 intervention_count: 0,
                 tiebreak_count: 0,
                 escalation_swaps: 0,
@@ -794,10 +795,31 @@ impl CoreTelemetryBank {
             reserved_warm: [0; 5],
             detailed: DetailedLayerTelemetry {
                 liminal_channel_chatter_counts: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
-                stigmergic_granule_venn_hits: [0; NUM_STIGMERGIC_GRANULES],
+                stigmergic_granule_overlap_hits: [0; NUM_STIGMERGIC_GRANULES],
                 ego_trigger_counts: [0; 5],
                 detailed_captured_steps: 0,
             },
+        }
+    }
+
+    /// Initializes non-zero fields of [`CoreTelemetryBank`] directly inside an already-zeroed target
+    /// buffer without materializing a 576-byte stack temporary.
+    ///
+    /// # Safety
+    /// Caller guarantees `ptr` points to a valid, properly aligned, all-zero `CoreTelemetryBank`.
+    #[inline]
+    pub(crate) unsafe fn init_in_place_on_zeroed(ptr: *mut Self, policy: TelemetryCapturePolicy) {
+        let initial_mode = match policy {
+            TelemetryCapturePolicy::Pinned(m) => m,
+            TelemetryCapturePolicy::Auto { base, .. } => base,
+        };
+        // SAFETY: `ptr` is valid, aligned, and zero-initialized.
+        unsafe {
+            core::ptr::addr_of_mut!((*ptr).policy).write(policy);
+            core::ptr::addr_of_mut!((*ptr).active_mode).write(initial_mode);
+            core::ptr::addr_of_mut!((*ptr).derivative_alpha_q7)
+                .write(crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7);
+            core::ptr::addr_of_mut!((*ptr).retract_dwell_threshold).write(2);
         }
     }
 
@@ -844,9 +866,9 @@ impl CoreTelemetryBank {
             TelemetryCapturePolicy::Auto { base, .. } => base,
         };
         if (next as u8) > (self.active_mode as u8) {
-            self.system.mode_expansions = self.system.mode_expansions.saturating_add(1);
+            self.spine.mode_expansions = self.spine.mode_expansions.saturating_add(1);
         } else if (next as u8) < (self.active_mode as u8) {
-            self.system.mode_retractions = self.system.mode_retractions.saturating_add(1);
+            self.spine.mode_retractions = self.spine.mode_retractions.saturating_add(1);
         }
         self.active_mode = next;
     }
@@ -854,10 +876,10 @@ impl CoreTelemetryBank {
     /// Clears all accumulated counters across `3 + System` domains while retaining policy and dwell config.
     #[inline]
     pub fn reset(&mut self) {
-        self.layer0 = LiminalLayerTelemetry::default();
-        self.layer1 = StigmergicLayerTelemetry::default();
-        self.layer2 = EgoLayerTelemetry::default();
-        self.system = SystemSpineTelemetry::default();
+        self.liminal = LiminalTelemetry::default();
+        self.stigmergy = StigmergicTelemetry::default();
+        self.ego = EgoTelemetry::default();
+        self.spine = SystemSpineTelemetry::default();
         self.detailed = DetailedLayerTelemetry::default();
         self.ema_initialized = false;
         self.entropy_ema_q15 = 0;
@@ -873,8 +895,8 @@ impl CoreTelemetryBank {
         self.slow_tension_excites = 0;
         self.pframe_chain_evals = 0;
         self.pframe_total_hops = 0;
-        self.known_unknown_sandbox_stages = 0;
-        self.true_void_aperture_zeros = 0;
+        self.exterior_sandbox_stages = 0;
+        self.unobserved_aperture_zeros = 0;
     }
 
     /// Records a `SystemSpine` whole-token stationary bypass event without polluting
@@ -885,13 +907,13 @@ impl CoreTelemetryBank {
     }
 
     /// Records lightweight `2 Primitives x 2 Drivers` structural attribution, P-Frame chain hops,
-    /// `DistortionTension` events, Venn $O \setminus S$ sandbox staging, and pre-inference bypass hits.
+    /// `DistortionTension` events, exterior $O \setminus S$ sandbox staging, and pre-inference bypass hits.
     #[inline]
     pub fn record_two_by_two_step(
         &mut self,
         tag_raw: u8,
         whole_token_bypass: bool,
-        venn_partition: &EpistemicPartition,
+        lacuna_partition: &LacunaPartition8,
         tension: &DistortionTension,
         pframe_hops: u8,
     ) {
@@ -900,11 +922,11 @@ impl CoreTelemetryBank {
         if whole_token_bypass {
             self.whole_token_bypass_events = self.whole_token_bypass_events.saturating_add(1);
         }
-        if venn_partition.sandbox_eligible != 0 {
-            self.known_unknown_sandbox_stages = self.known_unknown_sandbox_stages.saturating_add(1);
+        if lacuna_partition.is_sandbox_eligible() {
+            self.exterior_sandbox_stages = self.exterior_sandbox_stages.saturating_add(1);
         }
-        if venn_partition.true_void_aperture_zero != 0 {
-            self.true_void_aperture_zeros = self.true_void_aperture_zeros.saturating_add(1);
+        if lacuna_partition.is_unobserved_aperture_zero() {
+            self.unobserved_aperture_zeros = self.unobserved_aperture_zeros.saturating_add(1);
         }
         if pframe_hops > 0 {
             self.pframe_chain_evals = self.pframe_chain_evals.saturating_add(1);
@@ -961,7 +983,7 @@ impl CoreTelemetryBank {
 
         let tau_q15 = f32_unit_to_q15(drift_threshold).max(1);
         let hysteresis_floor = tau_q15.saturating_sub(tau_q15 >> 3);
-        let enough_samples = self.system.continuous_standard_steps >= 16;
+        let enough_samples = self.spine.continuous_standard_steps >= 16;
         if enough_samples && self.assimilation_drift_q15 >= tau_q15 {
             self.assimilation_drift_dwell = self.assimilation_drift_dwell.saturating_add(1);
         } else if self.assimilation_drift_q15 < hysteresis_floor {
@@ -1015,9 +1037,9 @@ impl CoreTelemetryBank {
     /// `evictions`) onto `+ System` telemetry in zero-alloc mode.
     #[inline(always)]
     pub fn sync_experience_metrics(&mut self, hits: u64, stores: u64, evictions: u64) {
-        self.system.experience_cache_hits = hits;
-        self.system.experience_cache_stores = stores;
-        self.system.experience_cache_evictions = evictions;
+        self.spine.experience_cache_hits = hits;
+        self.spine.experience_cache_stores = stores;
+        self.spine.experience_cache_evictions = evictions;
     }
 
     /// Evaluates automatic verbosity policy with dwell anti-chattering and returns the updated mode.
@@ -1047,9 +1069,9 @@ impl CoreTelemetryBank {
             }
         };
         if (next as u8) > (self.active_mode as u8) {
-            self.system.mode_expansions = self.system.mode_expansions.saturating_add(1);
+            self.spine.mode_expansions = self.spine.mode_expansions.saturating_add(1);
         } else if (next as u8) < (self.active_mode as u8) {
-            self.system.mode_retractions = self.system.mode_retractions.saturating_add(1);
+            self.spine.mode_retractions = self.spine.mode_retractions.saturating_add(1);
         }
         self.active_mode = next;
         next
@@ -1066,7 +1088,7 @@ impl CoreTelemetryBank {
         decision: StigmergicActionDecision,
         horizon: &EpistemicHorizonReading,
         delta: &LiminalBoundaryDelta,
-        venn: &StigmergicOverlapSerendipityReport,
+        overlap: &OverlapDiscoveryReport,
         ego: &LiminalEgoState,
         entropy_gate_mode: u32,
         slid_in_bits: u32,
@@ -1074,68 +1096,67 @@ impl CoreTelemetryBank {
         escalated: bool,
         qos_throttled: bool,
     ) {
-        self.system.total_steps = self.system.total_steps.saturating_add(1);
+        self.spine.total_steps = self.spine.total_steps.saturating_add(1);
         if qos_throttled {
-            self.system.qos_throttle_events = self.system.qos_throttle_events.saturating_add(1);
+            self.spine.qos_throttle_events = self.spine.qos_throttle_events.saturating_add(1);
         }
         if matches!(self.active_mode, TelemetryVerbosityMode::Coarse) {
             return;
         }
 
-        self.system.continuous_standard_steps =
-            self.system.continuous_standard_steps.saturating_add(1);
+        self.spine.continuous_standard_steps =
+            self.spine.continuous_standard_steps.saturating_add(1);
         if entropy_gate_mode == 1 {
-            self.system.entropy_gate_bifurcation_events = self
-                .system
-                .entropy_gate_bifurcation_events
-                .saturating_add(1);
+            self.spine.entropy_gate_bifurcation_events =
+                self.spine.entropy_gate_bifurcation_events.saturating_add(1);
         } else if entropy_gate_mode >= 2 {
-            self.system.entropy_gate_repulsion_events =
-                self.system.entropy_gate_repulsion_events.saturating_add(1);
+            self.spine.entropy_gate_repulsion_events =
+                self.spine.entropy_gate_repulsion_events.saturating_add(1);
         }
 
         // Layer 0: Liminal
         let reg_idx = usize::from(horizon.regime_code.min(2));
-        self.layer0.regime_counts[reg_idx] = self.layer0.regime_counts[reg_idx].saturating_add(1);
+        self.liminal.regime_counts[reg_idx] = self.liminal.regime_counts[reg_idx].saturating_add(1);
         if delta.chattering_channel_mask != 0 {
-            self.layer0.chatter_events = self.layer0.chatter_events.saturating_add(1);
+            self.liminal.chatter_events = self.liminal.chatter_events.saturating_add(1);
         }
         if delta.stationary_shortcut_ready != 0 {
-            self.layer0.stationary_shortcut_hits =
-                self.layer0.stationary_shortcut_hits.saturating_add(1);
+            self.liminal.stationary_shortcut_hits =
+                self.liminal.stationary_shortcut_hits.saturating_add(1);
         }
         if slid_in_bits != 0 {
-            self.layer0.slide_in_count = self.layer0.slide_in_count.saturating_add(1);
+            self.liminal.slide_in_count = self.liminal.slide_in_count.saturating_add(1);
         }
         if slid_out_bits != 0 {
-            self.layer0.slide_out_count = self.layer0.slide_out_count.saturating_add(1);
+            self.liminal.slide_out_count = self.liminal.slide_out_count.saturating_add(1);
         }
 
         // Layer 1: Stigmergic
         let dec_idx = (decision as usize).min(6);
-        self.layer1.decision_counts[dec_idx] =
-            self.layer1.decision_counts[dec_idx].saturating_add(1);
-        if venn.serendipity_triggered != 0 {
-            self.layer1.venn_serendipity_hits = self.layer1.venn_serendipity_hits.saturating_add(1);
+        self.stigmergy.decision_counts[dec_idx] =
+            self.stigmergy.decision_counts[dec_idx].saturating_add(1);
+        if overlap.discovery_triggered != 0 {
+            self.stigmergy.overlap_discovery_hits =
+                self.stigmergy.overlap_discovery_hits.saturating_add(1);
         }
-        if venn.venn_core_mask != 0 {
-            self.layer1.quorum_core_hits = self.layer1.quorum_core_hits.saturating_add(1);
+        if overlap.overlap_core_mask != 0 {
+            self.stigmergy.quorum_core_hits = self.stigmergy.quorum_core_hits.saturating_add(1);
         }
 
         // Layer 2: Ego & cross-layer distortion accounting
         if ego.last_intervened_mask != 0 {
-            self.layer2.intervention_count = self.layer2.intervention_count.saturating_add(1);
+            self.ego.intervention_count = self.ego.intervention_count.saturating_add(1);
             if (ego.last_intervened_mask
                 & (EGO_TRIGGER_INTERNAL_CONFLICT | EGO_TRIGGER_BASIN_CAPTURE))
                 != 0
             {
-                self.layer2.tiebreak_count = self.layer2.tiebreak_count.saturating_add(1);
+                self.ego.tiebreak_count = self.ego.tiebreak_count.saturating_add(1);
             }
             let unaligned = matches!(decision, StigmergicActionDecision::RepulsionEscape)
-                || (horizon.is_internal_conflict() && venn.venn_core_mask == 0);
+                || (horizon.is_internal_conflict() && overlap.overlap_core_mask == 0);
             if unaligned {
-                self.layer2.unaligned_intervention_count =
-                    self.layer2.unaligned_intervention_count.saturating_add(1);
+                self.ego.unaligned_intervention_count =
+                    self.ego.unaligned_intervention_count.saturating_add(1);
             }
         } else {
             let stalled = (horizon.is_internal_conflict() || horizon.is_liminal())
@@ -1147,16 +1168,16 @@ impl CoreTelemetryBank {
                         | StigmergicActionDecision::RepulsionEscape
                 );
             if stalled {
-                self.layer0.passive_stall_events =
-                    self.layer0.passive_stall_events.saturating_add(1);
+                self.liminal.passive_stall_events =
+                    self.liminal.passive_stall_events.saturating_add(1);
             }
         }
         if escalated {
-            self.layer2.escalation_swaps = self.layer2.escalation_swaps.saturating_add(1);
+            self.ego.escalation_swaps = self.ego.escalation_swaps.saturating_add(1);
         }
 
         if matches!(self.active_mode, TelemetryVerbosityMode::Detailed) {
-            self.record_detailed_breakdown(delta, venn, ego);
+            self.record_detailed_breakdown(delta, overlap, ego);
         }
     }
 
@@ -1164,7 +1185,7 @@ impl CoreTelemetryBank {
     fn record_detailed_breakdown(
         &mut self,
         delta: &LiminalBoundaryDelta,
-        venn: &StigmergicOverlapSerendipityReport,
+        overlap: &OverlapDiscoveryReport,
         ego: &LiminalEgoState,
     ) {
         self.detailed.detailed_captured_steps =
@@ -1183,15 +1204,15 @@ impl CoreTelemetryBank {
             }
         }
 
-        let venn_mask = venn.venn_core_mask;
+        let core_mask = overlap.overlap_core_mask;
         for (g, cnt) in self
             .detailed
-            .stigmergic_granule_venn_hits
+            .stigmergic_granule_overlap_hits
             .iter_mut()
             .enumerate()
             .take(NUM_STIGMERGIC_GRANULES)
         {
-            if ((venn_mask >> g) & 1) != 0 {
+            if ((core_mask >> g) & 1) != 0 {
                 *cnt = cnt.saturating_add(1);
             }
         }
@@ -1216,99 +1237,99 @@ impl CoreTelemetryBank {
     #[inline]
     pub fn accumulate_snapshot(&mut self, snap: &CoreTelemetrySnapshot) {
         for (dst, &src) in self
-            .layer0
+            .liminal
             .regime_counts
             .iter_mut()
-            .zip(snap.layer0.regime_counts.iter())
+            .zip(snap.liminal.regime_counts.iter())
         {
             *dst = dst.saturating_add(src);
         }
-        self.layer0.chatter_events = self
-            .layer0
+        self.liminal.chatter_events = self
+            .liminal
             .chatter_events
-            .saturating_add(snap.layer0.chatter_events);
-        self.layer0.stationary_shortcut_hits = self
-            .layer0
+            .saturating_add(snap.liminal.chatter_events);
+        self.liminal.stationary_shortcut_hits = self
+            .liminal
             .stationary_shortcut_hits
-            .saturating_add(snap.layer0.stationary_shortcut_hits);
-        self.layer0.slide_in_count = self
-            .layer0
+            .saturating_add(snap.liminal.stationary_shortcut_hits);
+        self.liminal.slide_in_count = self
+            .liminal
             .slide_in_count
-            .saturating_add(snap.layer0.slide_in_count);
-        self.layer0.slide_out_count = self
-            .layer0
+            .saturating_add(snap.liminal.slide_in_count);
+        self.liminal.slide_out_count = self
+            .liminal
             .slide_out_count
-            .saturating_add(snap.layer0.slide_out_count);
-        self.layer0.passive_stall_events = self
-            .layer0
+            .saturating_add(snap.liminal.slide_out_count);
+        self.liminal.passive_stall_events = self
+            .liminal
             .passive_stall_events
-            .saturating_add(snap.layer0.passive_stall_events);
+            .saturating_add(snap.liminal.passive_stall_events);
 
         for (dst, &src) in self
-            .layer1
+            .stigmergy
             .decision_counts
             .iter_mut()
-            .zip(snap.layer1.decision_counts.iter())
+            .zip(snap.stigmergy.decision_counts.iter())
         {
             *dst = dst.saturating_add(src);
         }
-        self.layer1.venn_serendipity_hits = self
-            .layer1
-            .venn_serendipity_hits
-            .saturating_add(snap.layer1.venn_serendipity_hits);
-        self.layer1.quorum_core_hits = self
-            .layer1
+        self.stigmergy.overlap_discovery_hits = self
+            .stigmergy
+            .overlap_discovery_hits
+            .saturating_add(snap.stigmergy.overlap_discovery_hits);
+        self.stigmergy.quorum_core_hits = self
+            .stigmergy
             .quorum_core_hits
-            .saturating_add(snap.layer1.quorum_core_hits);
+            .saturating_add(snap.stigmergy.quorum_core_hits);
 
-        self.layer2.intervention_count = self
-            .layer2
+        self.ego.intervention_count = self
+            .ego
             .intervention_count
-            .saturating_add(snap.layer2.intervention_count);
-        self.layer2.tiebreak_count = self
-            .layer2
+            .saturating_add(snap.ego.intervention_count);
+        self.ego.tiebreak_count = self
+            .ego
             .tiebreak_count
-            .saturating_add(snap.layer2.tiebreak_count);
-        self.layer2.escalation_swaps = self
-            .layer2
+            .saturating_add(snap.ego.tiebreak_count);
+        self.ego.escalation_swaps = self
+            .ego
             .escalation_swaps
-            .saturating_add(snap.layer2.escalation_swaps);
-        self.layer2.unaligned_intervention_count = self
-            .layer2
+            .saturating_add(snap.ego.escalation_swaps);
+        self.ego.unaligned_intervention_count = self
+            .ego
             .unaligned_intervention_count
-            .saturating_add(snap.layer2.unaligned_intervention_count);
+            .saturating_add(snap.ego.unaligned_intervention_count);
 
-        self.system.total_steps = self
-            .system
+        self.spine.total_steps = self
+            .spine
             .total_steps
-            .saturating_add(snap.system.total_steps);
-        self.system.continuous_standard_steps = self
-            .system
+            .saturating_add(snap.spine.total_steps);
+        self.spine.continuous_standard_steps = self
+            .spine
             .continuous_standard_steps
-            .saturating_add(snap.system.continuous_standard_steps);
-        self.system.qos_throttle_events = self
-            .system
+            .saturating_add(snap.spine.continuous_standard_steps);
+        self.spine.qos_throttle_events = self
+            .spine
             .qos_throttle_events
-            .saturating_add(snap.system.qos_throttle_events);
-        self.system.entropy_gate_bifurcation_events = self
-            .system
+            .saturating_add(snap.spine.qos_throttle_events);
+        self.spine.entropy_gate_bifurcation_events = self
+            .spine
             .entropy_gate_bifurcation_events
-            .saturating_add(snap.system.entropy_gate_bifurcation_events);
-        self.system.entropy_gate_repulsion_events = self
-            .system
+            .saturating_add(snap.spine.entropy_gate_bifurcation_events);
+        self.spine.entropy_gate_repulsion_events = self
+            .spine
             .entropy_gate_repulsion_events
-            .saturating_add(snap.system.entropy_gate_repulsion_events);
-        self.system.mode_expansions = self
-            .system
+            .saturating_add(snap.spine.entropy_gate_repulsion_events);
+        self.spine.mode_expansions = self
+            .spine
             .mode_expansions
-            .saturating_add(snap.system.mode_expansions);
-        self.system.mode_retractions = self
-            .system
+            .saturating_add(snap.spine.mode_expansions);
+        self.spine.mode_retractions = self
+            .spine
             .mode_retractions
-            .saturating_add(snap.system.mode_retractions);
-        self.system.experience_cache_hits = snap.system.experience_cache_hits;
-        self.system.experience_cache_stores = snap.system.experience_cache_stores;
-        self.system.experience_cache_evictions = snap.system.experience_cache_evictions;
+            .saturating_add(snap.spine.mode_retractions);
+        self.spine.experience_cache_hits = snap.spine.experience_cache_hits;
+        self.spine.experience_cache_stores = snap.spine.experience_cache_stores;
+        self.spine.experience_cache_evictions = snap.spine.experience_cache_evictions;
         for (dst, &src) in self
             .attribution_counts
             .iter_mut()
@@ -1331,12 +1352,12 @@ impl CoreTelemetryBank {
         self.pframe_total_hops = self
             .pframe_total_hops
             .saturating_add(snap.pframe_total_hops);
-        self.known_unknown_sandbox_stages = self
-            .known_unknown_sandbox_stages
-            .saturating_add(snap.known_unknown_sandbox_stages);
-        self.true_void_aperture_zeros = self
-            .true_void_aperture_zeros
-            .saturating_add(snap.true_void_aperture_zeros);
+        self.exterior_sandbox_stages = self
+            .exterior_sandbox_stages
+            .saturating_add(snap.exterior_sandbox_stages);
+        self.unobserved_aperture_zeros = self
+            .unobserved_aperture_zeros
+            .saturating_add(snap.unobserved_aperture_zeros);
     }
 
     /// Computes a Lazy-Pull cross-layer [`LayerDistortionReport`] diagnosing whether the core
@@ -1344,15 +1365,15 @@ impl CoreTelemetryBank {
     #[inline]
     #[must_use]
     pub fn compute_distortion_report(&self) -> LayerDistortionReport {
-        if self.system.continuous_standard_steps == 0 {
+        if self.spine.continuous_standard_steps == 0 {
             return LayerDistortionReport::default();
         }
-        let denom = self.system.continuous_standard_steps as f32;
+        let denom = self.spine.continuous_standard_steps as f32;
         let inv_denom = 1.0_f32 / denom;
         let skip_idx = StigmergicActionDecision::InertialLayerSkip as usize;
         let mut max_decision = 0_u64;
         let mut hhi = 0.0_f32;
-        for (idx, &cnt) in self.layer1.decision_counts.iter().enumerate() {
+        for (idx, &cnt) in self.stigmergy.decision_counts.iter().enumerate() {
             // Intentional stationary shortcuts (`InertialLayerSkip` / `SelfRef` passthrough)
             // are healthy low-entropy skips, not pathological stigmergic over-integration.
             if idx == skip_idx {
@@ -1370,20 +1391,17 @@ impl CoreTelemetryBank {
         let sat_excess = branchless_clamp_f32((action_saturation_ratio - 0.45) / 0.55, 0.0, 1.0);
         let sat_load = 0.5 * concentration + 0.5 * sat_excess;
         let passive_stall_rate = branchless_clamp_f32(
-            (self.layer0.passive_stall_events as f32) * inv_denom,
+            (self.liminal.passive_stall_events as f32) * inv_denom,
             0.0,
             1.0,
         );
         let active_mismatch_rate = branchless_clamp_f32(
-            (self.layer2.unaligned_intervention_count as f32) * inv_denom,
+            (self.ego.unaligned_intervention_count as f32) * inv_denom,
             0.0,
             1.0,
         );
-        let ego_ratio = branchless_clamp_f32(
-            (self.layer2.intervention_count as f32) * inv_denom,
-            0.0,
-            1.0,
-        );
+        let ego_ratio =
+            branchless_clamp_f32((self.ego.intervention_count as f32) * inv_denom, 0.0, 1.0);
 
         // Preserve total saturation load without diluting it by `ego_ratio`; attribute
         // whether saturation persists passively (low Ego) or despite/from Ego (active).
@@ -1406,13 +1424,13 @@ impl CoreTelemetryBank {
             1.0,
         );
         let mismatch_ratio = branchless_clamp_f32(
-            ((self.layer0.passive_stall_events + self.layer2.unaligned_intervention_count) as f32)
+            ((self.liminal.passive_stall_events + self.ego.unaligned_intervention_count) as f32)
                 * inv_denom,
             0.0,
             1.0,
         );
 
-        let enough_samples = self.system.continuous_standard_steps >= 16;
+        let enough_samples = self.spine.continuous_standard_steps >= 16;
         let is_distorted = enough_samples
             && (sat_load >= 0.40 || passive_stall_rate >= 0.35 || active_mismatch_rate >= 0.35);
         let ego_cooldown_recommended = is_distorted
@@ -1444,27 +1462,27 @@ impl CoreTelemetryBank {
     #[must_use]
     pub fn snapshot(
         &self,
-        stack: &AutonomousCoreLayerStack,
+        stack: &CoreStateStack,
         horizon: &EpistemicHorizonReading,
         active_crystals: u8,
         spawned_daughters: u8,
         active_horizon_slots_mask: u32,
     ) -> CoreTelemetrySnapshot {
-        let denom = self.system.continuous_standard_steps.max(1) as f32;
-        let has_samples = self.system.continuous_standard_steps > 0;
+        let denom = self.spine.continuous_standard_steps.max(1) as f32;
+        let has_samples = self.spine.continuous_standard_steps > 0;
         let mut decision_ratios_pct = [0.0_f32; 7];
         if has_samples {
             for (dst, &cnt) in decision_ratios_pct
                 .iter_mut()
-                .zip(self.layer1.decision_counts.iter())
+                .zip(self.stigmergy.decision_counts.iter())
             {
                 *dst = (cnt as f32 / denom) * 100.0;
             }
         }
         let excursion_cnt =
-            self.layer0.regime_counts[1].saturating_add(self.layer0.regime_counts[2]);
+            self.liminal.regime_counts[1].saturating_add(self.liminal.regime_counts[2]);
         let topology = LiminalTopologyTelemetrySnapshot::capture(
-            &stack.liminal_layer,
+            &stack.liminal,
             horizon,
             active_crystals,
             spawned_daughters,
@@ -1481,10 +1499,10 @@ impl CoreTelemetryBank {
         CoreTelemetrySnapshot {
             mode: self.active_mode,
             policy: self.policy,
-            layer0: self.layer0,
-            layer1: self.layer1,
-            layer2: self.layer2,
-            system: self.system,
+            liminal: self.liminal,
+            stigmergy: self.stigmergy,
+            ego: self.ego,
+            spine: self.spine,
             detailed,
             decision_ratios_pct,
             liminal_excursion_ratio: if has_samples {
@@ -1493,12 +1511,12 @@ impl CoreTelemetryBank {
                 0.0
             },
             stationary_shortcut_ratio: if has_samples {
-                self.layer0.stationary_shortcut_hits as f32 / denom
+                self.liminal.stationary_shortcut_hits as f32 / denom
             } else {
                 0.0
             },
             ego_intervention_ratio: if has_samples {
-                self.layer2.intervention_count as f32 / denom
+                self.ego.intervention_count as f32 / denom
             } else {
                 0.0
             },
@@ -1516,8 +1534,8 @@ impl CoreTelemetryBank {
             slow_tension_excites: self.slow_tension_excites,
             pframe_chain_evals: self.pframe_chain_evals,
             pframe_total_hops: self.pframe_total_hops,
-            known_unknown_sandbox_stages: self.known_unknown_sandbox_stages,
-            true_void_aperture_zeros: self.true_void_aperture_zeros,
+            exterior_sandbox_stages: self.exterior_sandbox_stages,
+            unobserved_aperture_zeros: self.unobserved_aperture_zeros,
         }
     }
 
@@ -1535,11 +1553,11 @@ impl CoreTelemetryBank {
         let distortion = self.compute_distortion_report();
         let req = min_samples.max(1);
         if matches!(self.active_mode, TelemetryVerbosityMode::Coarse)
-            || self.system.continuous_standard_steps < req
+            || self.spine.continuous_standard_steps < req
         {
             return SlowLoopTelemetryAdjustment {
                 applied: false,
-                sampled_steps: self.system.continuous_standard_steps,
+                sampled_steps: self.spine.continuous_standard_steps,
                 tuned_thresholds: *base,
                 suggested_slide_out_dwell_delta: 0,
                 suggested_repulse_bias_q7: 0,
@@ -1548,14 +1566,14 @@ impl CoreTelemetryBank {
             };
         }
 
-        let denom = self.system.continuous_standard_steps as f32;
-        let chatter_ratio = self.layer0.chatter_events as f32 / denom;
-        let excursion_ratio = (self.layer0.regime_counts[1]
-            .saturating_add(self.layer0.regime_counts[2])) as f32
+        let denom = self.spine.continuous_standard_steps as f32;
+        let chatter_ratio = self.liminal.chatter_events as f32 / denom;
+        let excursion_ratio = (self.liminal.regime_counts[1]
+            .saturating_add(self.liminal.regime_counts[2])) as f32
             / denom;
-        let skip_ratio = self.layer1.decision_counts[1] as f32 / denom;
-        let rank1_ratio = self.layer1.decision_counts[4] as f32 / denom;
-        let repulse_ratio = self.layer1.decision_counts[6] as f32 / denom;
+        let skip_ratio = self.stigmergy.decision_counts[1] as f32 / denom;
+        let rank1_ratio = self.stigmergy.decision_counts[4] as f32 / denom;
+        let repulse_ratio = self.stigmergy.decision_counts[6] as f32 / denom;
 
         // Layer 0 chatter -> bounded dwell hysteresis extension (prevents slot flapping).
         let dwell_delta: i8 = if chatter_ratio > 0.50 {
@@ -1655,13 +1673,13 @@ impl CoreTelemetryBank {
         };
         self.derivative_alpha_q7 = next_alpha;
 
-        self.system.slow_loop_epochs = self.system.slow_loop_epochs.saturating_add(1);
-        self.system.slow_loop_dwell_delta = dwell_delta;
-        self.system.slow_loop_repulse_bias_q7 = raw_bias;
+        self.spine.slow_loop_epochs = self.spine.slow_loop_epochs.saturating_add(1);
+        self.spine.slow_loop_dwell_delta = dwell_delta;
+        self.spine.slow_loop_repulse_bias_q7 = raw_bias;
 
         SlowLoopTelemetryAdjustment {
             applied: true,
-            sampled_steps: self.system.continuous_standard_steps,
+            sampled_steps: self.spine.continuous_standard_steps,
             tuned_thresholds,
             suggested_slide_out_dwell_delta: dwell_delta,
             suggested_repulse_bias_q7: raw_bias,

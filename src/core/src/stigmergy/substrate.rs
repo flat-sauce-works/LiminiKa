@@ -17,31 +17,30 @@ use crate::foundation::{
     branchless_fast_transition_log_prob, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     coherence_from_word_arrays_64, dispatch_fused_phase_clamp_and_subhead_words_core,
-    fast_inv_len_f32, gcso_paged_bitmask_t, gcso_subhead_config_t, gcso_tagged_ptr_t,
-    load_q7_words_64, pack_action_slot_tag, phase_clamp_upper_rot_dim,
+    fast_inv_len_f32, load_q7_words_64, pack_action_slot_tag, phase_clamp_upper_rot_dim,
     resolve_autonomous_swarm_rot_dim, scale_f32_slice_unrolled8, steer_from_swar_words_core_safe,
     swar_or_avx2_q7_add_sat_words_64, swar_q7_phase_step_filter_words_64, swar_words_nonzero_64,
     unpack_attractor_slot_from_tag, AlignedBuffer64, AlignedSlice16, AlignedSliceMut32,
-    PhaseSteering, Pod, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
+    PagedBitmask, Pod, SubheadConfig, TaggedPtr, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
     ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION,
     ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEER_HEAD_DIM,
-    DEFAULT_PHASE_STEER_NUM_HEADS, SWAR_SPLAT_BYTE_64,
+    DEFAULT_PHASE_STEER_NUM_HEADS, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    branchless_select_usize, gcso_config_t, gcso_q7_t, BitCut8, GcsoResult,
-    GCSO_ERROR_ACTION_HUB_FULL, GCSO_ERROR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_usize, BitCut8, LmnkResult, PhaseQ7, RuntimeConfig,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_SUBSTRATE_FULL, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES,
 };
-use crate::stigmergy::crystal::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
+use crate::stigmergy::anchor::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
 use crate::stigmergy::gate::PhaseSteeringEngine;
 use crate::stigmergy::granule::StigmergicGranuleState;
-use crate::stigmergy::ledger::{gcso_ledger_slot_t, ContrastivePhaseBloomFilter, FastPathLedger};
+use crate::stigmergy::ledger::{ContrastivePhaseBloomFilter, FastPathLedger, LedgerSlot};
 use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::trail::{
-    gcso_pointer_trail_t, select_rewire_bridge_and_modulate_with_preloaded_words_64,
-    trail_phase_words_mut, trail_phase_words_ref, PointerSubstrate, StigmergicSubstrateOps,
+    select_rewire_bridge_and_modulate_with_preloaded_words_64, trail_phase_words_mut,
+    trail_phase_words_ref, PointerSubstrate, PointerTrail, StigmergicSubstrateOps,
 };
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_SUBSTRATE_CAPACITY,
@@ -57,7 +56,7 @@ use crate::stigmergy::{
     TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
-/// Number of inline 128-byte [`gcso_pointer_trail_t`] cells stored inside [`StigmergicSubstrate`] (`16` = 2,048 bytes).
+/// Number of inline 128-byte [`PointerTrail`] cells stored inside [`StigmergicSubstrate`] (`16` = 2,048 bytes).
 pub const SUBSTRATE_INLINE_TRAILS: usize = 16;
 
 /// Default per-step pheromone retention factor ($\lambda_{\mathrm{retain}} = 0.95$).
@@ -267,7 +266,7 @@ pub struct WorkbenchSlotSpec {
     /// Non-negative lane weight.
     pub weight: f32,
     /// 64-head Q0.7 phase profile loaded into the lane.
-    pub phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+    pub phases: [PhaseQ7; MAX_ATTENTION_HEADS],
 }
 
 impl Default for WorkbenchSlotSpec {
@@ -286,7 +285,7 @@ impl WorkbenchSlotSpec {
     /// Constructs a standard unpinned [`WorkbenchSlotSpec`] allocated from the free pool.
     #[inline(always)]
     #[must_use]
-    pub const fn auto_free(weight: f32, phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+    pub const fn auto_free(weight: f32, phases: [PhaseQ7; MAX_ATTENTION_HEADS]) -> Self {
         Self {
             placement: WorkbenchLanePlacement::AutoFree,
             flags: 0,
@@ -298,7 +297,7 @@ impl WorkbenchSlotSpec {
     /// Constructs a repulsion-flagged [`WorkbenchSlotSpec`] allocated from the free pool.
     #[inline(always)]
     #[must_use]
-    pub const fn auto_repulsion(weight: f32, phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+    pub const fn auto_repulsion(weight: f32, phases: [PhaseQ7; MAX_ATTENTION_HEADS]) -> Self {
         Self {
             placement: WorkbenchLanePlacement::AutoFree,
             flags: WORKBENCH_LANE_FLAG_REPULSION,
@@ -310,7 +309,7 @@ impl WorkbenchSlotSpec {
     /// Constructs an isolated exterior-only sandbox [`WorkbenchSlotSpec`] allocated from the free pool.
     #[inline(always)]
     #[must_use]
-    pub const fn auto_sandbox(weight: f32, phases: [gcso_q7_t; MAX_ATTENTION_HEADS]) -> Self {
+    pub const fn auto_sandbox(weight: f32, phases: [PhaseQ7; MAX_ATTENTION_HEADS]) -> Self {
         Self {
             placement: WorkbenchLanePlacement::AutoFree,
             flags: WORKBENCH_LANE_FLAG_SANDBOX,
@@ -327,7 +326,7 @@ impl WorkbenchSlotSpec {
         pin: bool,
         flags: u8,
         weight: f32,
-        phases: [gcso_q7_t; MAX_ATTENTION_HEADS],
+        phases: [PhaseQ7; MAX_ATTENTION_HEADS],
     ) -> Self {
         Self {
             placement: WorkbenchLanePlacement::Explicit { lane, pin },
@@ -414,7 +413,7 @@ impl Default for StigmergicThresholds {
 }
 
 impl StigmergicThresholds {
-    /// Creates the canonical GCSO stigmergic threshold ladder.
+    /// Creates the canonical LiminiKa stigmergic threshold ladder.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -433,9 +432,9 @@ impl StigmergicThresholds {
     /// Validates that all threshold parameters are finite and ordered cleanly.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any threshold is non-finite or negative.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any threshold is non-finite or negative.
     #[inline(always)]
-    pub const fn validate(&self) -> GcsoResult<()> {
+    pub const fn validate(&self) -> LmnkResult<()> {
         let valid = branchless_is_finite_f32(self.evaporation_retain)
             & (self.evaporation_retain >= 0.0)
             & (self.evaporation_retain <= 1.0)
@@ -457,7 +456,7 @@ impl StigmergicThresholds {
         if valid {
             Ok(())
         } else {
-            Err(GCSO_ERROR_INVALID_ARGUMENT)
+            Err(LMNK_ERR_INVALID_ARGUMENT)
         }
     }
 
@@ -621,7 +620,7 @@ impl StigmergicThresholds {
     #[must_use]
     pub const fn evaluate_report_on_trail(
         &self,
-        trail: &gcso_pointer_trail_t,
+        trail: &PointerTrail,
         repulsion_threshold: u8,
         entropy_h_tilde: f32,
         phase_coherence: f32,
@@ -633,7 +632,7 @@ impl StigmergicThresholds {
         let repulsion_triggered = ((bloom_repulsion_density >= repulsion_threshold)
             & (bloom_repulsion_density > 0))
             | ((trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0);
-        let cur_ptr = gcso_tagged_ptr_t(trail.current_ptr);
+        let cur_ptr = TaggedPtr(trail.current_ptr);
         let embedded_slot = unpack_attractor_slot_from_tag(cur_ptr.unpack_tag());
         let pref_slot = branchless_select_u8(
             dominant_slot < (MAX_ATTRACTOR_DOMAINS as u8),
@@ -647,7 +646,7 @@ impl StigmergicThresholds {
             repulsion_triggered,
             pref_slot,
         );
-        let base_evolved = gcso_tagged_ptr_t::pack(
+        let base_evolved = TaggedPtr::pack(
             cur_ptr.unpack_addr(),
             pack_action_slot_tag(target_slot, mode_flags),
             cur_ptr.unpack_phase(),
@@ -685,7 +684,7 @@ impl StigmergicThresholds {
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(bool, bool, bool)> {
+    ) -> LmnkResult<(bool, bool, bool)> {
         let mut steered = false;
         let mut subhead_routed = false;
         let mut skip_compensated = false;
@@ -772,7 +771,7 @@ impl StigmergicThresholds {
                             let f_heads = (num_heads >> 1) as u16;
                             let l_heads = (num_heads >> 2) as u16;
                             let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
-                            let subhead_cfg = gcso_subhead_config_t {
+                            let subhead_cfg = SubheadConfig {
                                 num_fact_heads: f_heads,
                                 num_logic_heads: l_heads,
                                 num_explore_heads: e_heads,
@@ -834,27 +833,27 @@ impl StigmergicThresholds {
     /// (`0` stack table zero-init).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor`, `key_tensor`, or `logits_opt`
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor`, `key_tensor`, or `logits_opt`
     /// alias or have invalid dimensions.
     #[inline]
     pub fn orchestrate_stateless_action_step(
         &self,
         phase_steering: &PhaseSteeringEngine,
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         entropy_h_tilde: f32,
         dominant_slot: u8,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<SubstrateStepReport> {
+    ) -> LmnkResult<SubstrateStepReport> {
         let phase_step_min_rad = phase_steering.phase_step_min_rad();
         let phase_clamp_max = phase_steering.phase_clamp_max_rad();
-        let head_dim = phase_steering.head_dim() as usize;
-        let num_heads = phase_steering.num_heads() as usize;
+        let head_dim = phase_steering.head_dim as usize;
+        let num_heads = phase_steering.num_heads as usize;
         let expected_len = head_dim
             .checked_mul(num_heads)
-            .ok_or(GCSO_ERROR_INVALID_ARGUMENT)?;
+            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
         if head_dim == 0
             || (head_dim & 1) != 0
             || num_heads == 0
@@ -864,15 +863,15 @@ impl StigmergicThresholds {
             || phase_clamp_max <= 0.0
             || !branchless_is_finite_f32(phase_clamp_max)
         {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         if let Some(ref q_ref) = query_tensor {
             if q_ref.len() < expected_len {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
             if let Some(ref k_ref) = key_tensor {
                 if k_ref.len() < expected_len {
-                    return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
                 }
                 q_ref.ensure_disjoint_mut(k_ref)?;
             }
@@ -881,7 +880,7 @@ impl StigmergicThresholds {
             }
         } else if let Some(ref k_ref) = key_tensor {
             if k_ref.len() < expected_len {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
             if let Some(ref l_ref) = logits_opt {
                 k_ref.ensure_disjoint_mut(l_ref)?;
@@ -919,12 +918,12 @@ impl StigmergicThresholds {
         let (decision, mode_flags, target_slot, extra_flags) =
             self.select_action_decision(updated_rho, entropy_h_tilde, best_coh, false, pref_slot);
 
-        let base_evolved = gcso_tagged_ptr_t::pack(
+        let base_evolved = TaggedPtr::pack(
             input_ptr.unpack_addr(),
             pack_action_slot_tag(target_slot, mode_flags),
             input_ptr.unpack_phase(),
         );
-        let evolved_ptr = gcso_tagged_ptr_t(branchless_select_u64(
+        let evolved_ptr = TaggedPtr(branchless_select_u64(
             decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
             base_evolved.conjugate_phase().raw(),
             base_evolved.raw(),
@@ -974,7 +973,7 @@ impl StigmergicThresholds {
 #[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct SubstrateStepReport {
-    /// Evolved 64-bit tagged pointer (`gcso_tagged_ptr_t::raw()`) carrying the selected Action Mode and Target Slot.
+    /// Evolved 64-bit tagged pointer (`TaggedPtr::raw()`) carrying the selected Action Mode and Target Slot.
     pub evolved_ptr: u64,
     /// Updated local trail pheromone density $\rho_{\mathrm{stigmergy}}$ after evaporation & reinforcement.
     pub updated_density: f32,
@@ -1007,11 +1006,11 @@ impl SubstrateStepReport {
         StigmergicActionDecision::from_u8(self.decision)
     }
 
-    /// Returns `self.evolved_ptr` wrapped as a [`gcso_tagged_ptr_t`].
+    /// Returns `self.evolved_ptr` wrapped as a [`TaggedPtr`].
     #[inline(always)]
     #[must_use]
-    pub const fn tagged_ptr(&self) -> gcso_tagged_ptr_t {
-        gcso_tagged_ptr_t(self.evolved_ptr)
+    pub const fn tagged_ptr(&self) -> TaggedPtr {
+        TaggedPtr(self.evolved_ptr)
     }
 
     /// Computes the branchless stigmergic emergence potential
@@ -1034,69 +1033,71 @@ impl SubstrateStepReport {
     }
 }
 
-/// Concrete zero-allocation (`#[repr(C, align(128))]`, 2,816-byte [`Pod`]) micro passive carrier
+/// Concrete zero-allocation (`#[repr(C, align(64))]`, 2,816-byte [`Pod`]) micro passive carrier
 /// implementing [`StigmergicSubstrateOps`]. Accumulates pointer trails, pheromones, and rejection
-/// traces whose grounded clusters cross the `liminal` boundary to crystallize into `AttractorField`.
+/// traces whose grounded clusters cross the `liminal` boundary to form [`crate::stigmergy::anchor::PhaseAnchorRecord`] centroids.
 ///
-/// # Memory Layout (2,816 Bytes = `22 x 128B` Cache-Line Pairs, Zero Implicit Padding)
-/// - `0..2048` (`2048B`): `trails: [gcso_pointer_trail_t; 16]` (16 inline 128B pointer trails)
-/// - `2048..2560` (`512B`): `slot_phase_bank: AlignedBuffer64<gcso_q7_t, 512>` (8 working lanes $\times$ 64 heads)
-/// - `2560..2624` (`64B`): `ledger_slot: gcso_ledger_slot_t` (FastPathLedger fast-path shortcuts & telemetry ring)
-/// - `2624..2688` (`64B`): `bloom_filter: ContrastivePhaseBloomFilter` (128-bucket 4-bit Bloom filter)
-/// - `2688..2816` (`128B`): `thresholds` (`32B`) + `slot_weights` (`32B`) + `phase_steering` (`16B`) +
-///   control & telemetry registers (`48B`).
-#[repr(C, align(128))]
+/// # Memory Layout (2,816 Bytes = `44 x 64B` Cache Lines, Header-First, Zero Implicit Padding)
+/// - `CL0 (0..64)`: `thresholds` (`32B`) + `slot_weights` (`32B`)
+/// - `CL1 (64..128)`: control, dimension (`head_dim`, `num_heads`), & mask header (`64B`)
+/// - `CL2 (128..192)`: `ledger_slot: LedgerSlot` (`64B`)
+/// - `CL3 (192..256)`: `bloom_filter: ContrastivePhaseBloomFilter` (`64B`)
+/// - `CL4..11 (256..768)`: `slot_phase_bank: AlignedBuffer64<PhaseQ7, 512>` (`512B`)
+/// - `CL12..43 (768..2816)`: `trails: [PointerTrail; 16]` (`2,048B`)
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StigmergicSubstrate {
-    /// Inline L1D-resident Sidecar Pointer Table (`16 x 128B = 2,048` bytes).
-    pub trails: [gcso_pointer_trail_t; SUBSTRATE_INLINE_TRAILS],
-    /// 8-lane working phase cache window (`8 x 64B = 512` bytes, 64-byte aligned).
-    pub slot_phase_bank: AlignedBuffer64<gcso_q7_t, SUBSTRATE_SLOT_BANK_LEN>,
-    /// Dynamic Adaptive Extension Scratchpad (64 bytes, 64-byte aligned).
-    pub ledger_slot: gcso_ledger_slot_t,
-    /// Contrastive Phase Bloom Filter for $\mathcal{O}(1)$ anti-phase repulsion (64 bytes, 64-byte aligned).
-    pub bloom_filter: ContrastivePhaseBloomFilter,
-    /// Stigmergic threshold regime governing pheromone dynamics and next-action selection (32 bytes).
+    /// Stigmergic threshold regime governing pheromone dynamics and next-action selection (`offset 0..32`).
     pub thresholds: StigmergicThresholds,
-    /// Active gravitational weights for the 8 Attractor Working Lanes (`0..=7`, 32 bytes).
+    /// Active gravitational weights for the 8 Attractor Working Lanes (`0..=7`, `offset 32..64`).
     pub slot_weights: [f32; MAX_ATTRACTOR_DOMAINS],
-    /// Embedded 16-byte phase-steering kernel configuration (`head_dim`, `num_heads`, `ripa_clamp_max_rad`, `qdps_min_step_rad`).
-    pub phase_steering: PhaseSteeringEngine,
-    /// 64-bit ($8 \times 8$) cross-lane coupling bitmatrix.
+    /// 64-bit ($8 \times 8$) cross-lane coupling bitmatrix (`offset 64..72`).
     pub coupling_matrix_8x8: u64,
-    /// Total pointer transitions executed on this substrate.
+    /// Total pointer transitions executed on this substrate (`offset 72..80`).
     pub step_counter: u64,
-    /// Configured logical trail slot capacity (`>= 1`).
+    /// Configured logical trail slot capacity (`>= 1`, `offset 80..84`).
     pub capacity: u32,
-    /// Number of active trail slots currently populated (`0..=capacity`).
+    /// Number of active trail slots currently populated (`0..=capacity`, `offset 84..88`).
     pub active_count: u32,
-    /// Circular write cursor (`0..SUBSTRATE_INLINE_TRAILS`) into `self.trails`.
+    /// Circular write cursor (`0..SUBSTRATE_INLINE_TRAILS`) into `self.trails` (`offset 88..92`).
     pub write_cursor: u32,
-    /// Most recently selected candidate trail ID (`0..SUBSTRATE_INLINE_TRAILS`).
+    /// Most recently selected candidate trail ID (`0..SUBSTRATE_INLINE_TRAILS`, `offset 92..96`).
     pub last_selected_trail_id: u32,
-    /// Most recently observed `EntropyController` moving Z-score entropy $\tilde{H} \in [0, \ln 2]$.
+    /// Most recently observed `EntropyController` moving Z-score entropy $\tilde{H} \in [0, \ln 2]$ (`offset 96..100`).
     pub last_entropy_h_tilde: f32,
-    /// Most recently observed causal anomaly severity $\in [0.0, 1.0]$.
+    /// Most recently observed causal anomaly severity $\in [0.0, 1.0]$ (`offset 100..104`).
     pub last_anomaly_severity: f32,
-    /// Minimum Bloom filter counter density (`1..=15`) triggering anti-phase repulsion.
+    /// Configured Transformer head dimension (`offset 104..106`).
+    pub head_dim: u16,
+    /// Configured attention head count (`offset 106..108`).
+    pub num_heads: u16,
+    /// Minimum Bloom filter counter density (`1..=15`) triggering anti-phase repulsion (`offset 108`).
     pub repulsion_threshold: u8,
-    /// Q7 unit scale (`0..=128`, where `128 == 1.0`) applied during phase-conjugate repulsion.
+    /// Q7 unit scale (`0..=128`, where `128 == 1.0`) applied during phase-conjugate repulsion (`offset 109`).
     pub repulsion_scale_u7: u8,
-    /// 8-bit bitmask of enabled anonymous Workbench Lanes (`0x00` = all 8 lanes free by default).
+    /// 8-bit bitmask of enabled anonymous Workbench Lanes (`0x00` = all 8 lanes free by default, `offset 110`).
     pub slot_enabled_mask: u8,
-    /// Most recently selected [`StigmergicActionDecision`] discriminant (`0..=6`).
+    /// Most recently selected [`StigmergicActionDecision`] discriminant (`0..=6`, `offset 111`).
     pub last_decision: u8,
-    /// 8-bit bitmask of explicitly pinned Workbench Lanes exempt from automatic release or eviction.
+    /// 8-bit bitmask of explicitly pinned Workbench Lanes exempt from automatic release or eviction (`offset 112`).
     pub slot_pinned_mask: u8,
-    /// 8-bit bitmask of Workbench Lanes carrying phase-conjugate anti-hallucination repulsion profiles.
+    /// 8-bit bitmask of Workbench Lanes carrying phase-conjugate anti-hallucination repulsion profiles (`offset 113`).
     pub slot_repulsion_mask: u8,
-    /// 8-bit bitmask of Workbench Lanes acting as isolated exterior-only hypothesis sandboxes.
+    /// 8-bit bitmask of Workbench Lanes acting as isolated exterior-only hypothesis sandboxes (`offset 114`).
     pub slot_sandbox_mask: u8,
-    /// Explicit 1-byte padding preserving exact 2,816-byte (`22 x 128B`) `Pod` layout.
-    pub reserved_align128: u8,
+    /// Explicit header padding aligning `ledger_slot` to exact CL2 boundary (`offset 115..128`).
+    pub reserved_header: [u8; 13],
+    /// Dynamic Adaptive Extension Scratchpad (`offset 128..192`, 1 cache line).
+    pub ledger_slot: LedgerSlot,
+    /// Contrastive Phase Bloom Filter for $\mathcal{O}(1)$ anti-phase repulsion (`offset 192..256`, 1 cache line).
+    pub bloom_filter: ContrastivePhaseBloomFilter,
+    /// 8-lane working phase cache window (`offset 256..768`, 8 cache lines).
+    pub slot_phase_bank: AlignedBuffer64<PhaseQ7, SUBSTRATE_SLOT_BANK_LEN>,
+    /// Inline L1D-resident Sidecar Pointer Table (`offset 768..2816`, `16 x 128B = 2,048B`).
+    pub trails: [PointerTrail; SUBSTRATE_INLINE_TRAILS],
 }
 
-// SAFETY: `StigmergicSubstrate` is a `#[repr(C, align(128))]` composition of `Pod` structs and primitive
+// SAFETY: `StigmergicSubstrate` is a `#[repr(C, align(64))]` composition of `Pod` structs and primitive
 // arrays totaling exactly 2,816 bytes with zero implicit padding.
 unsafe impl Pod for StigmergicSubstrate {}
 
@@ -1113,15 +1114,40 @@ impl StigmergicSubstrate {
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
-        let phase_steering = match PhaseSteeringEngine::new(
-            DEFAULT_PHASE_STEER_HEAD_DIM,
-            DEFAULT_PHASE_STEER_NUM_HEADS,
-        ) {
-            Ok(d) => d,
-            Err(_) => unreachable!(),
-        };
         Self {
-            trails: [gcso_pointer_trail_t {
+            thresholds: StigmergicThresholds::new(),
+            slot_weights: [0.0; MAX_ATTRACTOR_DOMAINS],
+            coupling_matrix_8x8: DEFAULT_SLOT_COUPLING_MATRIX_8X8,
+            step_counter: 0,
+            capacity: DEFAULT_SUBSTRATE_CAPACITY,
+            active_count: 0,
+            write_cursor: 0,
+            last_selected_trail_id: 0,
+            last_entropy_h_tilde: 0.0,
+            last_anomaly_severity: 0.0,
+            head_dim: DEFAULT_PHASE_STEER_HEAD_DIM as u16,
+            num_heads: DEFAULT_PHASE_STEER_NUM_HEADS as u16,
+            repulsion_threshold: 2,
+            repulsion_scale_u7: 128,
+            slot_enabled_mask: 0x00,
+            last_decision: StigmergicActionDecision::PassiveSidecar as u8,
+            slot_pinned_mask: 0x00,
+            slot_repulsion_mask: 0x00,
+            slot_sandbox_mask: 0x00,
+            reserved_header: [0; 13],
+            ledger_slot: LedgerSlot {
+                mode: 0,
+                telemetry_ring_head: 0,
+                telemetry_ring_tail: 0,
+                cache_hit_count: 0,
+                auto_tune_flags: 0,
+                fast_path_bypass_mask: 0,
+                fast_path_shortcuts: [0; 4],
+                telemetry_mini_ledger: [0; 8],
+            },
+            bloom_filter: ContrastivePhaseBloomFilter::new(),
+            slot_phase_bank: AlignedBuffer64::new([0; SUBSTRATE_SLOT_BANK_LEN]),
+            trails: [PointerTrail {
                 current_ptr: 0,
                 prev_ptr: 0,
                 user_data: 0,
@@ -1133,51 +1159,20 @@ impl StigmergicSubstrate {
                 linked_trail_id: 0,
                 attractor_pull_force: 0.0,
                 flags: 0,
+                reserved_header: [0; 8],
                 accumulated_phase_delta: [0; MAX_ATTENTION_HEADS],
-                reserved_padding: [0; 8],
             }; SUBSTRATE_INLINE_TRAILS],
-            slot_phase_bank: AlignedBuffer64::new([0; SUBSTRATE_SLOT_BANK_LEN]),
-            ledger_slot: gcso_ledger_slot_t {
-                mode: 0,
-                telemetry_ring_head: 0,
-                telemetry_ring_tail: 0,
-                cache_hit_count: 0,
-                auto_tune_flags: 0,
-                fast_path_bypass_mask: 0,
-                fast_path_shortcuts: [0; 4],
-                telemetry_mini_ledger: [0; 8],
-            },
-            bloom_filter: ContrastivePhaseBloomFilter::new(),
-            thresholds: StigmergicThresholds::new(),
-            slot_weights: [0.0; MAX_ATTRACTOR_DOMAINS],
-            phase_steering,
-            coupling_matrix_8x8: DEFAULT_SLOT_COUPLING_MATRIX_8X8,
-            step_counter: 0,
-            capacity: DEFAULT_SUBSTRATE_CAPACITY,
-            active_count: 0,
-            write_cursor: 0,
-            last_selected_trail_id: 0,
-            last_entropy_h_tilde: 0.0,
-            last_anomaly_severity: 0.0,
-            repulsion_threshold: 2,
-            repulsion_scale_u7: 128,
-            slot_enabled_mask: 0x00,
-            last_decision: StigmergicActionDecision::PassiveSidecar as u8,
-            slot_pinned_mask: 0x00,
-            slot_repulsion_mask: 0x00,
-            slot_sandbox_mask: 0x00,
-            reserved_align128: 0,
         }
     }
 
     /// Creates a new [`StigmergicSubstrate`] configured with the specified logical `capacity`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `capacity == 0`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `capacity == 0`.
     #[inline]
-    pub const fn with_capacity(capacity: u32) -> GcsoResult<Self> {
+    pub const fn with_capacity(capacity: u32) -> LmnkResult<Self> {
         if capacity == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let mut substrate = Self::new();
         substrate.capacity = capacity;
@@ -1188,42 +1183,104 @@ impl StigmergicSubstrate {
     /// custom [`StigmergicThresholds`].
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `(head_dim, num_heads)` or `thresholds` are invalid,
-    /// or if `capacity == 0`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `(head_dim, num_heads)` or `thresholds` are invalid,
+    /// exceed `u16::MAX`, or if `capacity == 0`.
     #[inline]
     pub fn with_dimensions_and_thresholds(
         head_dim: u32,
         num_heads: u32,
         capacity: u32,
         thresholds: StigmergicThresholds,
-    ) -> GcsoResult<Self> {
-        if capacity == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    ) -> LmnkResult<Self> {
+        if capacity == 0 || head_dim > u16::MAX as u32 || num_heads > u16::MAX as u32 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         thresholds.validate()?;
-        let phase_steering = PhaseSteeringEngine::new(head_dim, num_heads)?;
+        let _phase_steering = PhaseSteeringEngine::new(head_dim, num_heads)?;
         let mut substrate = Self::new();
-        substrate.phase_steering = phase_steering;
+        substrate.head_dim = head_dim as u16;
+        substrate.num_heads = num_heads as u16;
         substrate.capacity = capacity;
         substrate.thresholds = thresholds;
         Ok(substrate)
     }
 
-    /// Creates a new [`StigmergicSubstrate`] initialized from a raw [`gcso_config_t`] descriptor.
+    /// Creates a new [`StigmergicSubstrate`] initialized from a raw [`RuntimeConfig`] descriptor.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `config` dimensions or capacities are invalid.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `config` dimensions or capacities are invalid.
     #[inline]
-    pub fn from_config(config: &gcso_config_t) -> GcsoResult<Self> {
-        if config.action_hub_capacity == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+    pub fn from_config(config: &RuntimeConfig) -> LmnkResult<Self> {
+        if config.substrate_capacity == 0
+            || config.head_dim > u16::MAX as u32
+            || config.num_heads > u16::MAX as u32
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let phase_steering = PhaseSteeringEngine::from_config(config)?;
+        let _phase_steering = PhaseSteeringEngine::from_config(config)?;
         let mut substrate = Self::new();
-        substrate.phase_steering = phase_steering;
-        substrate.capacity = config.action_hub_capacity;
+        substrate.head_dim = config.head_dim as u16;
+        substrate.num_heads = config.num_heads as u16;
+        substrate.capacity = config.substrate_capacity;
         substrate.ledger_slot.mode = u32::from(config.ledger_mode);
         Ok(substrate)
+    }
+
+    /// Initializes a zeroed `dst` allocation of [`StigmergicSubstrate`] in-place without
+    /// materializing the full 2,816-byte struct on the stack.
+    ///
+    /// # Safety
+    /// Caller must ensure `dst` points to writable, zero-initialized, properly aligned memory
+    /// for one `StigmergicSubstrate` matching the pre-validated config fields.
+    #[inline]
+    pub unsafe fn init_in_place_on_zeroed(
+        dst: *mut Self,
+        config: &RuntimeConfig,
+        repulsion_threshold: u8,
+        repulsion_scale_u7: u8,
+        coupling_matrix_8x8: u64,
+    ) {
+        // SAFETY: Caller guarantees `dst` is valid, writable, aligned, and zero-initialized.
+        // Zeroed bytes match empty `PointerTrail`s, zeroed `slot_phase_bank`, zeroed
+        // `ContrastivePhaseBloomFilter`, and zeroed `LedgerSlot` fields except `mode`.
+        unsafe {
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).thresholds),
+                StigmergicThresholds::new(),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).coupling_matrix_8x8),
+                coupling_matrix_8x8,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).capacity),
+                config.substrate_capacity,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).head_dim),
+                config.head_dim as u16,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).num_heads),
+                config.num_heads as u16,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).repulsion_threshold),
+                repulsion_threshold,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).repulsion_scale_u7),
+                repulsion_scale_u7,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).last_decision),
+                StigmergicActionDecision::PassiveSidecar as u8,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).ledger_slot.mode),
+                u32::from(config.ledger_mode),
+            );
+        }
     }
 
     /// Returns the number of populated inline trails in `self.trails` (`0..=SUBSTRATE_INLINE_TRAILS`).
@@ -1240,7 +1297,7 @@ impl StigmergicSubstrate {
     /// Returns an immutable 16-byte aligned slice view over the 8-lane Q7 working phase bank (`512` bytes).
     #[inline(always)]
     #[must_use]
-    pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, gcso_q7_t> {
+    pub const fn slot_phase_bank(&self) -> AlignedSlice16<'_, PhaseQ7> {
         self.slot_phase_bank.relax_slice::<16>()
     }
 
@@ -1249,13 +1306,13 @@ impl StigmergicSubstrate {
     /// zero-alloc time.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `spec.weight` is non-finite or an explicit lane
-    /// index `>= MAX_ATTRACTOR_DOMAINS`, or [`GCSO_ERROR_ACTION_HUB_FULL`] if `AutoFree` is
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `spec.weight` is non-finite or an explicit lane
+    /// index `>= MAX_ATTRACTOR_DOMAINS`, or [`LMNK_ERR_SUBSTRATE_FULL`] if `AutoFree` is
     /// requested while all 8 lanes are pinned.
     #[inline]
-    pub fn allocate_lane(&mut self, spec: &WorkbenchSlotSpec) -> GcsoResult<u8> {
+    pub fn allocate_lane(&mut self, spec: &WorkbenchSlotSpec) -> LmnkResult<u8> {
         if !branchless_is_finite_f32(spec.weight) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let lane = match spec.placement {
             WorkbenchLanePlacement::AutoFree => {
@@ -1265,7 +1322,7 @@ impl StigmergicSubstrate {
                 } else {
                     let evictable = active_cut.outside;
                     if evictable == 0 {
-                        return Err(GCSO_ERROR_ACTION_HUB_FULL);
+                        return Err(LMNK_ERR_SUBSTRATE_FULL);
                     }
                     let mut clean_weights = [0.0_f32; MAX_ATTRACTOR_DOMAINS];
                     for (dst, &w) in clean_weights.iter_mut().zip(self.slot_weights.iter()) {
@@ -1273,14 +1330,14 @@ impl StigmergicSubstrate {
                     }
                     let (best_lane, _) = branchless_argmin_f32_x8_masked(&clean_weights, evictable);
                     if usize::from(best_lane) >= MAX_ATTRACTOR_DOMAINS {
-                        return Err(GCSO_ERROR_ACTION_HUB_FULL);
+                        return Err(LMNK_ERR_SUBSTRATE_FULL);
                     }
                     best_lane
                 }
             }
             WorkbenchLanePlacement::Explicit { lane, .. } => {
                 if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
-                    return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
                 }
                 lane
             }
@@ -1309,12 +1366,12 @@ impl StigmergicSubstrate {
     /// Returns `Ok(true)` if the lane had been enabled prior to release.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    pub fn release_lane(&mut self, lane: u8) -> GcsoResult<bool> {
+    pub fn release_lane(&mut self, lane: u8) -> LmnkResult<bool> {
         let lane_idx = usize::from(lane);
         if lane_idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let lane_bit = 1u8 << lane;
         let was_active = (self.slot_enabled_mask & lane_bit) != 0;
@@ -1410,11 +1467,11 @@ impl StigmergicSubstrate {
     /// Sets or clears the explicit pin bit (`slot_pinned_mask`) for physical `lane` (`0..=7`).
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    pub fn pin_lane(&mut self, lane: u8, pin: bool) -> GcsoResult<()> {
+    pub fn pin_lane(&mut self, lane: u8, pin: bool) -> LmnkResult<()> {
         if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let lane_bit = 1u8 << lane;
         let bit_val = u8::from(pin).wrapping_neg() & lane_bit;
@@ -1428,11 +1485,11 @@ impl StigmergicSubstrate {
     /// Returns `Ok(true)` if `lane` was an active sandbox lane and is now settled.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `lane >= MAX_ATTRACTOR_DOMAINS`.
     #[inline]
-    pub fn settle_sandbox_lane(&mut self, lane: u8) -> GcsoResult<bool> {
+    pub fn settle_sandbox_lane(&mut self, lane: u8) -> LmnkResult<bool> {
         if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let lane_bit = 1u8 << lane;
         let active_sandbox = ((self.slot_enabled_mask & self.slot_sandbox_mask) & lane_bit) != 0;
@@ -1536,22 +1593,22 @@ impl StigmergicSubstrate {
     /// [`Self::allocate_lane`]. Returns the count of lanes loaded.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any spec has non-finite weight or an explicit
-    /// lane `>= MAX_ATTRACTOR_DOMAINS`, or [`GCSO_ERROR_ACTION_HUB_FULL`] if an `AutoFree` spec
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any spec has non-finite weight or an explicit
+    /// lane `>= MAX_ATTRACTOR_DOMAINS`, or [`LMNK_ERR_SUBSTRATE_FULL`] if an `AutoFree` spec
     /// cannot be satisfied because all 8 lanes are pinned.
     #[inline]
-    pub fn apply_preset_lanes(&mut self, specs: &[WorkbenchSlotSpec]) -> GcsoResult<u8> {
+    pub fn apply_preset_lanes(&mut self, specs: &[WorkbenchSlotSpec]) -> LmnkResult<u8> {
         let mut sim_pinned = self.slot_pinned_mask;
         let mut idx = 0usize;
         while idx < specs.len() {
             let spec = &specs[idx];
             if !branchless_is_finite_f32(spec.weight) {
-                return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
             match spec.placement {
                 WorkbenchLanePlacement::Explicit { lane, .. } => {
                     if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
-                        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+                        return Err(LMNK_ERR_INVALID_ARGUMENT);
                     }
                     let bit = 1u8 << lane;
                     if spec.is_pinned() {
@@ -1562,7 +1619,7 @@ impl StigmergicSubstrate {
                 }
                 WorkbenchLanePlacement::AutoFree => {
                     if sim_pinned == 0xFF {
-                        return Err(GCSO_ERROR_ACTION_HUB_FULL);
+                        return Err(LMNK_ERR_SUBSTRATE_FULL);
                     }
                     if spec.is_pinned() {
                         sim_pinned |= 1u8 << (!sim_pinned).trailing_zeros();
@@ -1593,7 +1650,7 @@ impl StigmergicSubstrate {
     #[inline]
     pub fn evaporate_and_deposit_pheromone(
         &mut self,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         phase_coherence: f32,
         contradiction_repulsed: bool,
     ) -> (u32, f32) {
@@ -1630,30 +1687,27 @@ impl StigmergicSubstrate {
     }
 
     /// Copies `src` and pre-loaded `phase_words` into `dst` using width-matched scalar writes and
-    /// 8-byte aligned 64-bit GPR stores (`*trail_phase_words_mut(dst) = *phase_words`) at byte
-    /// offset `56..120`, avoiding unaligned 256-bit `vmovdqu` cache-line splits, 64-bit-to-256-bit
+    /// 64-byte aligned 64-bit GPR stores (`*trail_phase_words_mut(dst) = *phase_words`) at byte
+    /// offset `64..128`, avoiding unaligned 256-bit `vmovdqu` cache-line splits, 64-bit-to-256-bit
     /// STLF stalls, and redundant 64-byte reloads from `src`.
     #[inline(always)]
     pub(crate) fn copy_trail_and_words_to_slot_fast(
-        dst: &mut gcso_pointer_trail_t,
-        src: &gcso_pointer_trail_t,
+        dst: &mut PointerTrail,
+        src: &PointerTrail,
         phase_words: &[u64; NUM_STIGMERGIC_GRANULES],
     ) {
         dst.copy_from_with_words_fast(src, phase_words);
     }
 
     #[inline(always)]
-    pub(crate) fn copy_trail_to_slot_fast(
-        dst: &mut gcso_pointer_trail_t,
-        src: &gcso_pointer_trail_t,
-    ) {
+    pub(crate) fn copy_trail_to_slot_fast(dst: &mut PointerTrail, src: &PointerTrail) {
         dst.copy_from_fast(src);
     }
 
     /// Clears a single inline trail slot in-place using width-matched 64-bit GPR stores (`0` YMM
     /// stores, `0` 256-bit-to-64-bit STLF stalls on subsequent trail reads/writes).
     #[inline(always)]
-    pub(crate) fn clear_trail_slot_fast(dst: &mut gcso_pointer_trail_t) {
+    pub(crate) fn clear_trail_slot_fast(dst: &mut PointerTrail) {
         dst.clear_fast();
     }
 
@@ -1663,7 +1717,7 @@ impl StigmergicSubstrate {
     #[inline(always)]
     fn evaporate_and_prepare_slot_without_copy(
         &mut self,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         phase_coherence: f32,
         contradiction_repulsed: bool,
     ) -> (u32, f32) {
@@ -1727,20 +1781,20 @@ impl StigmergicSubstrate {
     ///    telemetry into `self.ledger_slot`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias or have
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias or have
     /// fewer than `head_dim * num_heads` elements.
     #[inline]
     pub fn orchestrate_next_action_step(
         &mut self,
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         entropy_h_tilde: f32,
         dominant_slot: u8,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<SubstrateStepReport> {
+    ) -> LmnkResult<SubstrateStepReport> {
         self.orchestrate_next_action_step_core(
             input_ptr,
             entropy_h_tilde,
@@ -1752,26 +1806,30 @@ impl StigmergicSubstrate {
             logits_opt,
             true,
             None,
+            DEFAULT_PHASE_STEP_MIN_RAD,
+            DEFAULT_PHASE_CLAMP_MAX_RAD,
         )
     }
 
     #[inline]
     pub(crate) fn orchestrate_next_action_step_core(
         &mut self,
-        input_ptr: gcso_tagged_ptr_t,
+        input_ptr: TaggedPtr,
         entropy_h_tilde: f32,
         dominant_slot: u8,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
         accumulate_ptr_phase: bool,
         macro_centroid_words: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
-    ) -> GcsoResult<SubstrateStepReport> {
-        let phase_step_min_rad = self.phase_steering.phase_step_min_rad();
-        let phase_clamp_max = self.phase_steering.phase_clamp_max_rad();
+        phase_step_min_rad: f32,
+        phase_clamp_max: f32,
+    ) -> LmnkResult<SubstrateStepReport> {
         let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
+            u32::from(self.head_dim),
+            u32::from(self.num_heads),
             phase_step_min_rad,
             phase_clamp_max,
             query_tensor.as_deref(),
@@ -1880,12 +1938,12 @@ impl StigmergicSubstrate {
                 pref_slot,
             );
 
-        let base_evolved = gcso_tagged_ptr_t::pack(
+        let base_evolved = TaggedPtr::pack(
             eff_ptr.unpack_addr(),
             pack_action_slot_tag(target_slot, mode_flags),
             eff_ptr.unpack_phase(),
         );
-        let evolved_ptr = gcso_tagged_ptr_t(branchless_select_u64(
+        let evolved_ptr = TaggedPtr(branchless_select_u64(
             decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
             base_evolved.conjugate_phase().raw(),
             base_evolved.raw(),
@@ -1987,13 +2045,13 @@ impl StigmergicSubstrate {
     #[must_use]
     pub fn resolve_autonomous_rot_dim(
         &self,
-        provenance_bits: u32,
+        lineage_flags: u32,
         quorum_mask: u8,
         von_mises_kappa: f32,
     ) -> usize {
         resolve_autonomous_swarm_rot_dim(
-            self.phase_steering.head_dim() as usize,
-            provenance_bits,
+            usize::from(self.head_dim),
+            lineage_flags,
             quorum_mask,
             self.last_entropy_h_tilde,
             von_mises_kappa,
@@ -2014,7 +2072,7 @@ impl StigmergicSubstrate {
     /// Returns `(SubstrateStepReport, hops_traversed, terminal_trail_idx, terminal_anchor_id, mean_chain_coherence)`.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `start_trail_idx >= self.inline_active_len()` or
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `start_trail_idx >= self.inline_active_len()` or
     /// `max_hops == 0`.
     #[inline]
     pub fn traverse_pointer_chain_and_orchestrate(
@@ -2022,15 +2080,15 @@ impl StigmergicSubstrate {
         start_trail_idx: usize,
         max_hops: usize,
         entropy_h_tilde: f32,
-        trail_inout: &mut gcso_pointer_trail_t,
+        trail_inout: &mut PointerTrail,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> GcsoResult<(SubstrateStepReport, u32, usize, u32, f32)> {
+    ) -> LmnkResult<(SubstrateStepReport, u32, usize, u32, f32)> {
         let active_len = self.inline_active_len();
         if start_trail_idx >= active_len || max_hops == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let bounded_hops = branchless_select_usize(
             max_hops > SUBSTRATE_INLINE_TRAILS,
@@ -2043,7 +2101,7 @@ impl StigmergicSubstrate {
         let mut hops: u32 = 0;
         let mut coh_sum = 0.0_f32;
         let mut chain_w = *trail_phase_words_ref(&self.trails[start_trail_idx]);
-        let mut terminal_ptr = gcso_tagged_ptr_t(self.trails[start_trail_idx].current_ptr);
+        let mut terminal_ptr = TaggedPtr(self.trails[start_trail_idx].current_ptr);
         let mut terminal_anchor_id = self.trails[start_trail_idx].target_anchor_id;
         let mut max_chain_rho = self.trails[start_trail_idx].stigmergic_density;
         let mut max_chain_pull = self.trails[start_trail_idx].attractor_pull_force;
@@ -2086,7 +2144,7 @@ impl StigmergicSubstrate {
             max_chain_rho = branchless_max_f32(max_chain_rho, boosted_rho);
             max_chain_pull = branchless_max_f32(max_chain_pull, node.attractor_pull_force);
             if node.current_ptr != 0 {
-                terminal_ptr = gcso_tagged_ptr_t(node.current_ptr);
+                terminal_ptr = TaggedPtr(node.current_ptr);
             }
             if node.target_anchor_id != 0 {
                 terminal_anchor_id = node.target_anchor_id;
@@ -2129,6 +2187,8 @@ impl StigmergicSubstrate {
             logits_opt,
             false,
             Some(&chain_w),
+            DEFAULT_PHASE_STEP_MIN_RAD,
+            DEFAULT_PHASE_CLAMP_MAX_RAD,
         )?;
 
         Ok((report, hops, cur_idx, terminal_anchor_id, mean_coh))
@@ -2139,36 +2199,23 @@ impl StigmergicSubstrate {
 // 3. Trait Implementations for `StigmergicSubstrate`
 // ===================================================================
 
-impl PhaseSteering for StigmergicSubstrate {
-    #[inline(always)]
-    fn head_dim(&self) -> u32 {
-        self.phase_steering.head_dim()
-    }
-
-    #[inline(always)]
-    fn num_heads(&self) -> u32 {
-        self.phase_steering.num_heads()
-    }
-}
-
 impl FastPathLedger for StigmergicSubstrate {
     #[inline]
     fn evaluate_auto_tune(
         &self,
-        slot: &gcso_ledger_slot_t,
-        config_out: &mut gcso_config_t,
-    ) -> GcsoResult<()> {
+        slot: &LedgerSlot,
+        config_out: &mut RuntimeConfig,
+    ) -> LmnkResult<()> {
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
         let spike_count = (word & 0x8080_8080_8080_8080).count_ones();
-        let clamp_max = self.phase_steering.phase_clamp_max_rad();
+        let clamp_max = config_out.phase_clamp_max_rad;
         let base_clamp =
             branchless_select_f32(clamp_max > 0.0, clamp_max, DEFAULT_PHASE_CLAMP_MAX_RAD);
         let damping = 1.0 - 0.025 * (spike_count as f32);
-        config_out.head_dim = self.phase_steering.head_dim();
-        config_out.num_heads = self.phase_steering.num_heads();
-        config_out.ripa_clamp_max_rad = branchless_clamp_f32(base_clamp * damping, 0.01, 0.25);
-        config_out.qdps_min_step_rad = self.phase_steering.phase_step_min_rad();
-        config_out.action_hub_capacity = self.capacity;
+        config_out.head_dim = u32::from(self.head_dim);
+        config_out.num_heads = u32::from(self.num_heads);
+        config_out.phase_clamp_max_rad = branchless_clamp_f32(base_clamp * damping, 0.01, 0.25);
+        config_out.substrate_capacity = self.capacity;
         config_out.ledger_mode = (slot.mode & 0xFF) as u8;
         let _ = LEDGER_HISTORY_LEN;
         Ok(())
@@ -2177,7 +2224,7 @@ impl FastPathLedger for StigmergicSubstrate {
 
 impl PointerSubstrate for StigmergicSubstrate {
     #[inline]
-    fn reset(&mut self) -> GcsoResult<()> {
+    fn reset(&mut self) -> LmnkResult<()> {
         let active_len = self.inline_active_len();
         let mut i = 0usize;
         while i < active_len {
@@ -2196,12 +2243,8 @@ impl PointerSubstrate for StigmergicSubstrate {
     }
 
     #[inline]
-    fn step_pointer(
-        &mut self,
-        current_ptr: u64,
-        trail_out: &mut gcso_pointer_trail_t,
-    ) -> GcsoResult<()> {
-        let tp = gcso_tagged_ptr_t(current_ptr);
+    fn step_pointer(&mut self, current_ptr: u64, trail_out: &mut PointerTrail) -> LmnkResult<()> {
+        let tp = TaggedPtr(current_ptr);
         self.step_counter = self.step_counter.wrapping_add(1);
         trail_out.record_pointer_transition(current_ptr, 1, self.thresholds.reinforcement_gain);
         let embedded_phase = tp.unpack_phase();
@@ -2232,10 +2275,10 @@ impl PointerSubstrate for StigmergicSubstrate {
     fn update_cellular_state_express(
         &mut self,
         trail_id: u32,
-        phase_delta: gcso_q7_t,
-    ) -> GcsoResult<()> {
+        phase_delta: PhaseQ7,
+    ) -> LmnkResult<()> {
         if trail_id >= self.capacity {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let inline_idx = (trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         let min_active = ((inline_idx as u32) + 1).min(self.capacity);
@@ -2269,9 +2312,9 @@ impl PointerSubstrate for StigmergicSubstrate {
         trail_id: u32,
         anchor_id: u32,
         pull_force: f32,
-    ) -> GcsoResult<()> {
+    ) -> LmnkResult<()> {
         if trail_id >= self.capacity || !branchless_is_finite_f32(pull_force) {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let clean_pull =
             branchless_min_f32(branchless_relu_f32(pull_force), MAX_ATTRACTOR_PULL_FORCE);
@@ -2292,9 +2335,9 @@ impl PointerSubstrate for StigmergicSubstrate {
     }
 
     #[inline]
-    fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> GcsoResult<()> {
+    fn link_hallucinated_trails(&mut self, src_trail_id: u32, dst_trail_id: u32) -> LmnkResult<()> {
         if src_trail_id >= self.capacity || dst_trail_id >= self.capacity {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let src_idx = (src_trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
         let dst_idx = (dst_trail_id as usize) & (SUBSTRATE_INLINE_TRAILS - 1);
@@ -2362,11 +2405,11 @@ impl StigmergicSubstrate {
     /// Updates local cellular swarm cell state across PagedBlock token chunk boundaries.
     ///
     /// # Errors
-    /// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `chunk_len == 0`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `chunk_len == 0`.
     #[inline]
-    pub fn step_chunk(&mut self, _mask: &gcso_paged_bitmask_t, chunk_len: u32) -> GcsoResult<()> {
+    pub fn step_chunk(&mut self, _mask: &PagedBitmask, chunk_len: u32) -> LmnkResult<()> {
         if chunk_len == 0 {
-            return Err(GCSO_ERROR_INVALID_ARGUMENT);
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         self.step_counter = self.step_counter.wrapping_add(u64::from(chunk_len));
         Ok(())
@@ -2392,18 +2435,22 @@ const _: () = {
     assert!(offset_of!(SubstrateStepReport, target_slot) == 30);
     assert!(offset_of!(SubstrateStepReport, bloom_repulsion_density) == 31);
 
-    assert!(size_of::<StigmergicSubstrate>() == 2816 && align_of::<StigmergicSubstrate>() == 128);
-    assert!(offset_of!(StigmergicSubstrate, trails) == 0);
-    assert!(offset_of!(StigmergicSubstrate, slot_phase_bank) == 2048);
-    assert!(offset_of!(StigmergicSubstrate, ledger_slot) == 2560);
-    assert!(offset_of!(StigmergicSubstrate, bloom_filter) == 2624);
-    assert!(offset_of!(StigmergicSubstrate, thresholds) == 2688);
-    assert!(offset_of!(StigmergicSubstrate, slot_enabled_mask) == 2810);
-    assert!(offset_of!(StigmergicSubstrate, last_decision) == 2811);
-    assert!(offset_of!(StigmergicSubstrate, slot_pinned_mask) == 2812);
-    assert!(offset_of!(StigmergicSubstrate, slot_repulsion_mask) == 2813);
-    assert!(offset_of!(StigmergicSubstrate, slot_sandbox_mask) == 2814);
-    assert!(offset_of!(StigmergicSubstrate, reserved_align128) == 2815);
+    assert!(size_of::<StigmergicSubstrate>() == 2816 && align_of::<StigmergicSubstrate>() == 64);
+    assert!(offset_of!(StigmergicSubstrate, thresholds) == 0);
+    assert!(offset_of!(StigmergicSubstrate, slot_weights) == 32);
+    assert!(offset_of!(StigmergicSubstrate, coupling_matrix_8x8) == 64);
+    assert!(offset_of!(StigmergicSubstrate, head_dim) == 104);
+    assert!(offset_of!(StigmergicSubstrate, num_heads) == 106);
+    assert!(offset_of!(StigmergicSubstrate, slot_enabled_mask) == 110);
+    assert!(offset_of!(StigmergicSubstrate, last_decision) == 111);
+    assert!(offset_of!(StigmergicSubstrate, slot_pinned_mask) == 112);
+    assert!(offset_of!(StigmergicSubstrate, slot_repulsion_mask) == 113);
+    assert!(offset_of!(StigmergicSubstrate, slot_sandbox_mask) == 114);
+    assert!(offset_of!(StigmergicSubstrate, reserved_header) == 115);
+    assert!(offset_of!(StigmergicSubstrate, ledger_slot) == 128);
+    assert!(offset_of!(StigmergicSubstrate, bloom_filter) == 192);
+    assert!(offset_of!(StigmergicSubstrate, slot_phase_bank) == 256);
+    assert!(offset_of!(StigmergicSubstrate, trails) == 768);
 };
 
 #[cfg(test)]
@@ -2484,13 +2531,13 @@ mod tests {
         .unwrap();
 
         // Populate an inline candidate trail
-        let mut t0 = gcso_pointer_trail_t {
+        let mut t0 = PointerTrail {
             stigmergic_density: 1.2,
             target_anchor_id: 42,
             accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
             ..Default::default()
         };
-        let ptr0 = gcso_tagged_ptr_t::pack_action(
+        let ptr0 = TaggedPtr::pack_action(
             0x1000,
             ATTRACTOR_SLOT_PERSONA,
             ACTION_PRESET_EXPRESS_PHASE,
@@ -2503,7 +2550,7 @@ mod tests {
         let mut k_buf = AlignedBuffer32::new([1.0f32; 16]);
         let mut logits = AlignedBuffer32::new([2.0f32; 8]);
         let mut scores = AlignedBuffer32::new([0.0f32; 8]);
-        let mut active_trail = gcso_pointer_trail_t {
+        let mut active_trail = PointerTrail {
             stigmergic_density: 1.2,
             accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
             ..Default::default()
@@ -2540,7 +2587,7 @@ mod tests {
         substrate.trails[2].linked_trail_id = 2; // terminal self-link stops traversal cleanly
         substrate.trails[2].stigmergic_density = 1.6;
         substrate.trails[2].target_anchor_id = 777;
-        substrate.trails[2].current_ptr = gcso_tagged_ptr_t::pack(
+        substrate.trails[2].current_ptr = TaggedPtr::pack(
             0x2000,
             pack_action_slot_tag(ATTRACTOR_SLOT_PERSONA, ACTION_PRESET_FULL_ORCHESTRATION),
             12,
@@ -2549,7 +2596,7 @@ mod tests {
         substrate.trails[2].accumulated_phase_delta = [12i8; MAX_ATTENTION_HEADS];
         substrate.active_count = 3;
 
-        let mut chain_trail = gcso_pointer_trail_t::default();
+        let mut chain_trail = PointerTrail::default();
         let (chain_rep, hops, term_idx, term_aid, chain_coh) = substrate
             .traverse_pointer_chain_and_orchestrate(
                 0,
@@ -2611,13 +2658,13 @@ mod tests {
         assert_eq!(substrate.slot_phase_bank.data[0], 1);
         assert_eq!(substrate.slot_phase_bank.data[MAX_ATTENTION_HEADS], -12);
 
-        // Pin all 8 lanes -> AutoFree returns GCSO_ERROR_ACTION_HUB_FULL without mutating.
+        // Pin all 8 lanes -> AutoFree returns LMNK_ERR_SUBSTRATE_FULL without mutating.
         for lane in 0..MAX_ATTRACTOR_DOMAINS as u8 {
             substrate.pin_lane(lane, true).unwrap();
         }
         assert_eq!(
             substrate.allocate_lane(&WorkbenchSlotSpec::auto_free(1.0, [4; MAX_ATTENTION_HEADS])),
-            Err(GCSO_ERROR_ACTION_HUB_FULL)
+            Err(LMNK_ERR_SUBSTRATE_FULL)
         );
 
         // Unpin lanes 1..=7, keep lane 0 pinned, then release_unpinned_lanes keeps only lane 0.
@@ -2716,7 +2763,7 @@ mod tests {
     #[test]
     fn test_substrate_bitcut8_quadrants_layout_and_eviction() {
         assert_eq!(size_of::<StigmergicSubstrate>(), 2816);
-        assert_eq!(align_of::<StigmergicSubstrate>(), 128);
+        assert_eq!(align_of::<StigmergicSubstrate>(), 64);
 
         let mut substrate = StigmergicSubstrate::new();
         // Lane 0: standard attractive (unpinned)

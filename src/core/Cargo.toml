@@ -11,7 +11,7 @@ authors.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-description = "Core execution engine library for the Geometric Cellular Sheaf Orchestrator (GCSO)"
+description = "Environment-agnostic zero-allocation core execution engine for LiminiKa"
 readme.workspace = true
 
 [package.metadata.docs.rs]
@@ -32,9 +32,6 @@ avx512 = ["simd", "avx2"]
 neon = ["simd"]
 sve = ["simd"]
 rvv = ["simd"]
-cuda = []
-metal = []
-vulkan = []
 
 [dev-dependencies]
 criterion = { workspace = true }

@@ -16,7 +16,7 @@ use crate::foundation::simd_stats::{
 };
 use crate::foundation::swar_simd::branchless_hysteresis_quantize_depth;
 use crate::liminal::{
-    branchless_select_f32, GcsoResult, GCSO_ERROR_EDBC_SINGULARITY, GCSO_ERROR_INVALID_ARGUMENT,
+    branchless_select_f32, LmnkResult, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
 };
 
 /// Polynomial degree of the Cold-Path Chebyshev spectral filter (`3`).
@@ -28,11 +28,11 @@ pub const CHEBYSHEV_COEFF_LEN: usize = 4;
 /// Evaluates the Gershgorin upper bound $\hat{\lambda}_{\max} = 2 \cdot \max_i D_{ii}$ in $\mathcal{O}(\vert V \vert)$ time (Section 1.2).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `node_degrees` is empty.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `node_degrees` is empty.
 #[inline]
-pub fn eval_gershgorin_lambda_max(node_degrees: &AlignedSlice32<'_, f32>) -> GcsoResult<f32> {
+pub fn eval_gershgorin_lambda_max(node_degrees: &AlignedSlice32<'_, f32>) -> LmnkResult<f32> {
     if node_degrees.is_empty() {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     Ok(branchless_flush_subnormal_f32(
         2.0 * max_pos_f32_unrolled4(node_degrees.as_slice()),
@@ -43,18 +43,18 @@ pub fn eval_gershgorin_lambda_max(node_degrees: &AlignedSlice32<'_, f32>) -> Gcs
 /// using Gauss-Chebyshev nodes and division-free (`0 fdiv`) 4-way Montgomery inversion (Section 1.2).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lambda_max <= 0.0`, `epsilon <= 0.0`, or either is non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `lambda_max <= 0.0`, `epsilon <= 0.0`, or either is non-finite.
 #[inline]
 pub fn compute_tikhonov_chebyshev_coeffs_deg3(
     lambda_max: f32,
     epsilon: f32,
-) -> GcsoResult<[f32; CHEBYSHEV_COEFF_LEN]> {
+) -> LmnkResult<[f32; CHEBYSHEV_COEFF_LEN]> {
     if !branchless_is_finite_f32(lambda_max)
         || !branchless_is_finite_f32(epsilon)
         || lambda_max <= 0.0
         || epsilon <= 0.0
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     const T1: [f32; 4] = [0.923_879_5, 0.382_683_43, -0.382_683_43, -0.923_879_5];
@@ -97,7 +97,7 @@ pub fn compute_tikhonov_chebyshev_coeffs_deg3(
 /// using `0-fdiv` affine scaling and Horner-nested evaluation.
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `lambda_max <= 0.0`, `lambda_max` is non-finite,
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `lambda_max <= 0.0`, `lambda_max` is non-finite,
 /// `eigenvalues_in` is empty, or `eigenvalues_in.len() != filtered_out.len()`.
 #[inline]
 pub fn eval_chebyshev_spectral_filter_deg3(
@@ -105,13 +105,13 @@ pub fn eval_chebyshev_spectral_filter_deg3(
     filtered_out: &mut AlignedSliceMut32<'_, f32>,
     lambda_max: f32,
     cheb_coeffs: &[f32; CHEBYSHEV_COEFF_LEN],
-) -> GcsoResult<()> {
+) -> LmnkResult<()> {
     if !branchless_is_finite_f32(lambda_max)
         || lambda_max <= 0.0
         || eigenvalues_in.is_empty()
         || eigenvalues_in.len() != filtered_out.len()
     {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let inv_half_lmax = 2.0 * branchless_inv_pos_f32(lambda_max);
     let k0 = cheb_coeffs[0] - cheb_coeffs[2];
@@ -143,24 +143,24 @@ pub fn eval_pseudo_ultrametric_distance(l_lca: u32, l_max: u32, w_key: f32) -> f
 /// Evaluates the cohomological obstruction residual $\mathbf{r}_{\mathrm{obs}} = \mathbf{r} - \delta_0 \boldsymbol{\phi} \in \mathrm{im}(\delta_0)^\perp$ (Section 1.1).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if `cochain_residual_r` is empty or slice lengths differ.
-/// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if the squared residual norm overflows or is non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `cochain_residual_r` is empty or slice lengths differ.
+/// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if the squared residual norm overflows or is non-finite.
 #[inline]
 pub fn evaluate_cohomological_obstruction(
     cochain_residual_r: &AlignedSlice32<'_, f32>,
     exact_projection_delta0_phi: &AlignedSlice32<'_, f32>,
     obstruction_threshold: f32,
-) -> GcsoResult<(f32, bool)> {
+) -> LmnkResult<(f32, bool)> {
     let n = cochain_residual_r.len();
     if n == 0 || n != exact_projection_delta0_phi.len() {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     let norm_sq = diff_norm_sq_f32_unrolled4(
         cochain_residual_r.as_slice(),
         exact_projection_delta0_phi.as_slice(),
     );
     if !branchless_is_finite_f32(norm_sq) {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
     }
     let mean_obs = branchless_flush_subnormal_f32(norm_sq * fast_inv_len_f32(n));
     Ok((mean_obs, mean_obs > obstruction_threshold))
@@ -170,18 +170,18 @@ pub fn evaluate_cohomological_obstruction(
 /// and normalized dual Cellular Sheaf Homology pairing $\frac{\vert\langle \mathbf{r}_{\mathrm{obs}}, \boldsymbol{\gamma} \rangle\vert}{\|\mathbf{r}_{\mathrm{obs}}\|_2 \|\boldsymbol{\gamma}\|_2} \in [0, 1]$ (Section 1.1).
 ///
 /// # Errors
-/// Returns [`GCSO_ERROR_INVALID_ARGUMENT`] if any slice is empty or lengths differ.
-/// Returns [`GCSO_ERROR_EDBC_SINGULARITY`] if any accumulated norm or pairing inner product is non-finite.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slice is empty or lengths differ.
+/// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if any accumulated norm or pairing inner product is non-finite.
 #[inline]
 pub fn evaluate_hodge_obstruction_and_dual_pairing(
     cochain_residual_r: &AlignedSlice32<'_, f32>,
     exact_projection_delta0_phi: &AlignedSlice32<'_, f32>,
     dual_homology_cycle_gamma: &AlignedSlice32<'_, f32>,
     obstruction_threshold: f32,
-) -> GcsoResult<(f32, f32, bool)> {
+) -> LmnkResult<(f32, f32, bool)> {
     let n = cochain_residual_r.len();
     if n == 0 || exact_projection_delta0_phi.len() != n || dual_homology_cycle_gamma.len() != n {
-        return Err(GCSO_ERROR_INVALID_ARGUMENT);
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let (obs_sq, pair_dot, gam_sq) = hodge_obstruction_and_dual_pairing_f32(
@@ -194,7 +194,7 @@ pub fn evaluate_hodge_obstruction_and_dual_pairing(
         || !branchless_is_finite_f32(pair_dot)
         || !branchless_is_finite_f32(gam_sq)
     {
-        return Err(GCSO_ERROR_EDBC_SINGULARITY);
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
     }
 
     let mean_obs = branchless_flush_subnormal_f32(obs_sq * fast_inv_len_f32(n));

@@ -38,7 +38,7 @@ pub struct TextAttractorEntry {
     /// Lightweight natural-language source text (reproducible source of truth).
     pub text: String,
     /// Per-layer 64-head Q7 phase signatures (`num_layers` entries).
-    pub per_layer_q7: Vec<[gcso_q7_t; MAX_ATTENTION_HEADS]>,
+    pub per_layer_q7: Vec<[lmnk_q7_t; MAX_ATTENTION_HEADS]>,
     /// Base gravitational pull energy for gateway composition.
     pub energy: f32,
     /// L2-normalized centered residual Q signature across steered layers for high-resolution semantic recall.
@@ -122,7 +122,7 @@ pub struct DynamicAttractorRecall<'a> {
     /// Top-K recalled Persona entries (suppressed only on Guard repulsion).
     pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
     /// Branchless 4-region Venn partition (`S & O`, `S \ O`, `O \ S`, True Void) for this query.
-    pub venn_partition: EpistemicPartition,
+    pub venn_partition: LacunaPartition8,
     /// Non-copy exterior Known Unknown ($O \setminus S$) pointers routed strictly through sandbox staging.
     pub exterior_sandbox_facts: Vec<(&'a TextAttractorEntry, f32)>,
     /// True when a validated Known Unknown ($O \setminus S$) exterior pointer was staged via $S \cap O$ bridge.
@@ -136,7 +136,7 @@ impl<'a> DynamicAttractorRecall<'a> {
     pub fn build_fact_anchors_per_layer(
         &self,
         num_layers: usize,
-    ) -> Vec<Vec<ObjectiveFact<[gcso_q7_t; MAX_ATTENTION_HEADS]>>> {
+    ) -> Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
         (0..num_layers)
             .map(|l| {
                 self.recalled_facts
@@ -158,7 +158,7 @@ impl<'a> DynamicAttractorRecall<'a> {
     pub fn build_persona_anchors_per_layer(
         &self,
         num_layers: usize,
-    ) -> Vec<Vec<SubjectivePersona<[gcso_q7_t; MAX_ATTENTION_HEADS]>>> {
+    ) -> Vec<Vec<SubjectivePersona<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
         (0..num_layers)
             .map(|l| {
                 self.recalled_personas
@@ -1106,7 +1106,7 @@ impl TextAttractorCorpus {
             .core_primitive_state()
             .stigmergy
             .granule_noise_tolerance_q7;
-        let venn_partition = evaluate_epistemic_partition_branchless(
+        let venn_partition = evaluate_lacuna_partition_branchless(
             self_mask,
             &other_granule_density_q7,
             &substrate_tol,
@@ -1154,7 +1154,7 @@ impl TextAttractorCorpus {
             && signal.boundary_metrics.guard_conflict_margin <= 0.0
             && !signal.telemetry.channel_disagreement
             && signal.boundary_metrics.top1_fact_score >= signal.boundary_metrics.top1_persona_score
-            && venn_partition.sandbox_eligible != 0
+            && venn_partition.is_sandbox_eligible()
             && venn_partition.bridge_count >= 2
         {
             if let Some((entry, score)) = top1_fact_candidate {
