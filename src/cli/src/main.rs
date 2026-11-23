@@ -156,7 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let path = args
             .next()
-            .ok_or("usage: liminika-cli inspect <file.lmnkc|file.lmnkp> [seek_frame]")?;
+            .ok_or("usage: liminika inspect <file.lmnkc|file.lmnkp> [seek_frame]")?;
         let seek_frame: Option<u64> = args.next().map(|s| s.parse::<u64>()).transpose()?;
         let is_pkg = std::path::Path::new(&path)
             .extension()
@@ -314,10 +314,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let src_path = args.next().ok_or(
-            "usage: liminika-cli rebake <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> [phi4-mini|alt-128]",
+            "usage: liminika rebake <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> [phi4-mini|alt-128]",
         )?;
         let dst_path = args.next().ok_or(
-            "usage: liminika-cli rebake <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> [phi4-mini|alt-128]",
+            "usage: liminika rebake <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> [phi4-mini|alt-128]",
         )?;
         let profile = args.next().unwrap_or_else(|| "alt-128".to_string());
         let dst_is_pkg = std::path::Path::new(&dst_path)

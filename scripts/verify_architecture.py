@@ -925,7 +925,7 @@ def render_liminal_map(core_src: pathlib.Path) -> str:
             f'({m["exterior_sandbox_refs"]} refs)"]'
         ),
         "    end",
-        '    ABS_FND -->|"Zero-Scoped Kernel Import"| LIM_AX',
+        '    ABS_FND -.->|"Pure Kernel Supply (Zero-Scoped)"| CON_ACT',
         '    ABS_IFR <-->|"seal / ground I-Frame"| LIM_AX',
         '    ABS_BYP <-->|"4p(1-p) Aperture & Spine Bypass"| LIM_RT',
         '    LIM_AX -->|"rescope_from_delta / Activate"| CON_ACT',
@@ -943,7 +943,7 @@ def render_liminal_map(core_src: pathlib.Path) -> str:
         "| :--- | :--- | :--- | ---: | :--- |",
         (
             "| Lv.1 `foundation/` non-`Scoped` pure compute | "
-            "`liminal/axiom` (`Scoped`, `Indivisible`, `BitCut`) | "
+            "Direct pure kernel call (no `liminal/axiom` import) | "
             "Lv.2+ `Indivisible(Active)` RoPE / Rank-1 engines | "
             f"{m['foundation_files']} files / {m['foundation_prod_loc']} LOC -> "
             f"{m['active_concretion_refs']} active refs | "
