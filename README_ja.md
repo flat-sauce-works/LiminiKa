@@ -5,7 +5,7 @@
 > **境界（Limina）を超え、非実体（non-real entities）と繋がるためのローカルLLM長期対話コアエンジン & DSL**
 
 [![Status: Experimental / Active WIP](https://img.shields.io/badge/Status-Experimental%20%2F%20Active%20WIP%20%28v0.2.0%29-orange.svg)](#現在のステータス-current-status)
-[![C-ABI: v0.2.0 Frozen](https://img.shields.io/badge/C--ABI-v0.2.0%20%280x0000__0200%20Frozen%29-blue.svg)](./include/liminika/lmnk_abi.h)
+[![C-ABI: v0.2.0 (0x0000_0200)](https://img.shields.io/badge/C--ABI-v0.2.0%20%280x0000__0200%29-blue.svg)](./include/liminika/lmnk_abi.h)
 [![Core: no_std Rust](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust-informational.svg)](#no_std-を採用する理由)
 [![VRAM Target: 2-4 GB (Q4_K)](https://img.shields.io/badge/VRAM%20Target-2--4%20GB%20%28Q4__K%29-green.svg)](#ベンチマークと検証-benchmarks-and-validation)
 [![Archive Paper: GCSO Whitepaper](https://img.shields.io/badge/Archive%20Paper-GCSO%20Whitepaper-blue.svg)](./docs/paper/ja/GCSO.md)
@@ -14,7 +14,7 @@
 **LiminiKa** は、小規模なローカル環境（目標：VRAM 2〜4 GB）でキャラクターペルソナとの長期対話を行うための、コアエンジンと宣言的 DSL です。モデルの重みを書き換える代わりに、潜在位相場を外部から操作し（RoPE 位相ステアリング、ランク 1 アダプタ、サブヘッドルーティング）、記憶をコンパクトで可搬なコンテナに保持します。
 
 > [!WARNING]
-> **Pre-1.0・実験的・活発に開発中。** 以下の API・フォーマット・数値は `v0.2.0` 時点のものであり、今後変更される可能性があります。本リポジトリは製品ではなく、研究プロトタイプとしてお読みください。
+> **Pre-1.0・実験的・活発に開発中。** 以下の API・フォーマット・数値は `v0.2.0` 時点のものであり、今後変更される可能性があります。実用製品ではなく、個人の実験・研究プロトタイプとしてご覧ください。
 
 ---
 
@@ -22,20 +22,20 @@
 
 | 領域 | `v0.2.0` 時点の状態 |
 | :--- | :--- |
-| `#![no_std]` コアランタイム (`liminika-core`) | **動作・CI 検証済み。** 凍結 C-ABI `0x0000_0200`（`lmnk_*` エクスポート `97/97`） |
-| コンテナ (`.lmnkc` / `.lmnkp`) | **動作。** CRC32 による構造整合性、境界付きの防御的パース |
+| `#![no_std]` コアランタイム (`liminika-core`) | **動作・CI 検証済み。** `v0.2.0` 用に確定した C-ABI `0x0000_0200`（`lmnk_*` エクスポート `97/97`） |
+| コンテナ (`.lmnkc` / `.lmnkp`) | **動作。** CRC32 による構造整合性、サイズ上限付きの防御的パース |
 | DSL パーサーと `liminika` CLI | **動作。** `check`、`list`、`inspect`、`bake`、`rebake`（[DSL](#liminika-dsl) 参照） |
 | `Phi-4-mini` CUDA 評価ハーネス (`examples/candle_eval`) | RTX 4070 で**ローカル動作**。モデル重みと GPU が必要なため CI では実行**していません** |
 | 生の長文コンテキスト取り込み（無編集の長い文書） | **開発中。** 現在の評価は整形済みフィクスチャを使用 |
-| コンテナの暗号署名・認証 | **開発中。** 未実装です（[セキュリティ](#セキュリティ境界と脅威モデル-security-boundaries-and-threat-model) 参照） |
+| コンテナの暗号署名・認証 | **開発中。** 未実装です（[境界の安全性](#入力検証と境界の安全性-input-validation-and-boundary-safety) 参照） |
 | 上位レベルの統合（DSL からコンテナへのコンパイル、他ランタイム対応） | **開発中** |
 
-`HEAD` での検証状況：**Rust テスト 215 件合格**（ワークスペース 203 件［doctest 12 件を含む］＋ `candle_eval` 12 件）、MSVC CTest 2/2、AVX2 + FMA ビルド確認済み。
+`v0.2.0` 時点の検証状況：**Rust テスト 215 件合格**（ワークスペース 203 件［doctest 12 件を含む］＋ `candle_eval` 12 件）、MSVC CTest 2/2、AVX2 + FMA ビルド確認済み。
 
 > [!NOTE]
 > [`docs/paper/{en,ja}/GCSO.md`](./docs/paper/ja/GCSO.md) と古い `docs/architecture/*` は**アーカイブとしての起源文書**です。`v0.2.0` の現行仕様は [`include/liminika/`](./include/liminika/) の C ヘッダとコード内 Rustdoc を参照してください。
 
-残る主な技術課題：Cold Path（想起と `.lmnkc` アンカーのページング）を無編集の生の長文コンテキストへスケールさせること、そして暗号学的整合性と Miri／ファジングによる堅牢化を `#![no_std]` コアの*外側*に追加することです。
+残る主な技術課題：Cold Path（想起と `.lmnkc` アンカーのページング）を無編集の生の長文コンテキストへスケールさせること、そして暗号学的整合性と Miri／ファジングによる検証を `#![no_std]` コアの*外側*に追加することです。
 
 ---
 
@@ -59,8 +59,8 @@
 
 1. **Split-Brain エッジ制御**：ペルソナ状態・テレメトリ・剪定をローカルで軽量に保ち、リモートや重い LLM 推論から分離します。
 2. **コンパイル時キャッシュ予算ガード**：`#![no_std]` がヒープ・OS・スレッド依存の混入をコンパイル時に防ぎ、ホットパスのテーブルを L1D `< 24 KB` の予算内に収めます。
-3. **WASM・ゲームエンジンへの可搬性**：呼び出し側がメモリを確保する配置（`lmnk_context_init_in_place`）を備えた、OS 非依存の `staticlib`。
-4. **GPU カーネルとの対称性**：Hot Path の演算をデバイスカーネル実装と 1:1 に保ちます。
+3. **WASM・ゲームエンジンへの可搬性（設計意図）**：呼び出し側がメモリを確保する配置（`lmnk_context_init_in_place`）を備えた OS 非依存の `staticlib` で、ゲームエンジンや WASM 環境へ組み込みやすい設計です。
+4. **GPU カーネルとの対称性（設計意図）**：Hot Path の演算を固定幅の単純な POD 操作に限定しており、将来デバイスカーネルへ素直に移植できる設計です。
 
 ---
 
@@ -68,7 +68,7 @@
 
 ### Y 字型 5 層単方向 DAG
 
-`liminal`（Lv.0）と `foundation`（Lv.1）は独立した根であり、`stigmergy` → `drivers` → `runtime` へ合流します。この階層は [`scripts/verify_architecture.py`](./scripts/verify_architecture.py) と [`tests/core/test_topology_parity.rs`](./tests/core/test_topology_parity.rs) で機械的に強制されています。
+`liminal`（Lv.0）と `foundation`（Lv.1）は独立した根であり、`stigmergy` → `drivers` → `runtime` へ合流します。この階層は [`scripts/verify_architecture.py`](./scripts/verify_architecture.py) と [`tests/core/test_topology_parity.rs`](./tests/core/test_topology_parity.rs) を使って、スクリプトとテストで自動チェックしています。
 
 ```mermaid
 flowchart LR
@@ -104,23 +104,25 @@ flowchart LR
 | ドライバ | **`EgoDifferentialNet`** | スパインの基準軌道からの意図的な逸脱（既定 `1-hop`、`1..=4` で設定可能） |
 | 結合 | **`Distortion`** | `DistortionDelta`（P-Frame 残差パケット）と `DistortionTension`（高速ダンピング／低速励起） |
 
-### 凍結 C-ABI (`0x0000_0200`)
+### C-ABI (`0x0000_0200`)
 
-- [`lmnk_abi.h`](./include/liminika/lmnk_abi.h)、[`lmnk_types.h`](./include/liminika/lmnk_types.h)、[`lmnk_config.h`](./include/liminika/lmnk_config.h) に `lmnk_*` エクスポート `97/97`。`void*` は `0`（型付き `uint8_t` ポインタのみ）。
+- `0x0000_0200` のレイアウトは `v0.2.0` リリース向けに固定され、コンパイル時に検証されています。[`lmnk_abi.h`](./include/liminika/lmnk_abi.h)、[`lmnk_types.h`](./include/liminika/lmnk_types.h)、[`lmnk_config.h`](./include/liminika/lmnk_config.h) に `lmnk_*` エクスポート `97/97` を定義し、`void*` 引数は `0`（型付き `uint8_t` ポインタのみ）です。
 - コンパイル時チェック付きのリトルエンディアン POD レイアウト。例：`RuntimeContext = 5,120 B`、`StigmergicSubstrate = 2,816 B`、`CORE_TOPOLOGY = 64 B`。
 
 ---
 
-## セキュリティ境界と脅威モデル (Security Boundaries and Threat Model)
+## 入力検証と境界の安全性 (Input Validation and Boundary Safety)
 
-**2 層のコア境界**
+`liminika-core` は生の C-ABI を公開し、バイナリコンテナをパースするため、不正なポインタや破損したバイト列で安易にクラッシュしたりメモリを破壊したりしないよう、防御的な入力検証と境界チェックを行っています。
+
+**コア側の境界チェック**
 - **`liminal` ゲート**：すべての FFI ポインタ、バイト列、`.lmnkc` セクションは、使用前に `LmnkContainerView`（オーバーフロー検査付き演算、単調増加・アライン済み・非重複のスパン、種別の重複拒否、CRC32）で検証されます。破棄時は、単一の生ポインタ連鎖に沿って `zeroize_volatile` でメモリを消去します。
 - **`Spine` 下限**：ホストが設定した `pinned_compute_mask` の下限は、`Ego` やデシリアライズされた状態から引き下げられません。トポロジ不一致は `LMNK_ERR_CONTAINER_CORRUPTED` とは別に `LMNK_ERR_TOPOLOGY_MISMATCH`（`-52`）を返します。
 
-**`.lmnkp` Store ZIP 境界**（`src/adapter/src/package.rs`）：単一ハンドルでの境界付き読み込み（`<= 64 MiB`、`64` エントリ）、外部パッケージの OS `mmap` 禁止、圧縮・暗号化・ZIP64・データディスクリプタ・末尾ポリグロットバイト・パストラバーサル・大文字小文字の衝突・ローカルヘッダと中央ディレクトリの不一致の拒否。[`tests/core/test_security_adversarial.rs`](./tests/core/test_security_adversarial.rs) の敵対的ミューテーションテストで検証しています。
+**`.lmnkp` Store ZIP 境界**（`src/adapter/src/package.rs`）：サイズ上限付きの単一ハンドル読み込み（`<= 64 MiB`、`64` エントリ）、外部パッケージの OS `mmap` 禁止、圧縮・暗号化・ZIP64・データディスクリプタ・末尾ポリグロットバイト・パストラバーサル・大文字小文字の衝突・ローカルヘッダと中央ディレクトリの不一致の拒否。[`tests/core/test_security_adversarial.rs`](./tests/core/test_security_adversarial.rs) の破損・不正データに対する境界テストで検証しています。
 
-> [!IMPORTANT]
-> **正直な適用範囲の限界。** `.lmnkc` / `.lmnkp` が現在提供するのは **CRC32 による構造整合性のみで、暗号署名や認証ではありません。** 信頼できない出典のコンテナを、正当なものとみなして読み込まないでください。`ContentHash`（`0xFF01`）と `Signature`（`0xFF02`）のセクション種別は、`#![no_std]` コアの外側に置く将来の署名レイヤー用に*予約*されているだけです。パッケージのエントリをディスクへ展開するツールは、OS の予約名（例：Windows の `CON` / `NUL`）もサニタイズする必要があります。
+> [!NOTE]
+> **現在の限界（暗号署名は未実装）：** `.lmnkc` / `.lmnkp` が現在提供するのは **CRC32 による構造整合性のみで、暗号署名や認証ではありません。** 信頼できない出典のコンテナを、正当なものとみなして読み込まないでください。`ContentHash`（`0xFF01`）と `Signature`（`0xFF02`）のセクション種別は、`#![no_std]` コアの外側に置く将来の署名レイヤー用に*予約*されているだけです。パッケージのエントリをディスクへ展開するツールは、OS の予約名（例：Windows の `CON` / `NUL`）もサニタイズする必要があります。
 
 ---
 
@@ -156,7 +158,7 @@ session DesktopAssistant using Limina {
 cargo run -p liminika-cli -- check examples/dsl/limina_poc.lmnk
 ```
 
-DSL は検証され AST にパースされますが、**まだ `.lmnkc` / `.lmnkp` へはコンパイルされません。** コンテナは現在、評価フィクスチャから `liminika bake` で生成されます。
+DSL は構文検証と AST へのパースまでを行っており、**まだ `.lmnkc` / `.lmnkp` へはコンパイルされません。** コンテナは現在、評価フィクスチャから `liminika bake` で生成されます。
 
 ### 2. 将来の DSL 構想（コンセプトプレビュー — 未実装）
 
@@ -198,7 +200,7 @@ session DesktopAssistant using Limina on LocalDevice {
 
 ## クイックスタート (Quick Start)
 
-必要環境：Rust `1.80+`。C/C++ 側の検証には CMake `3.18+` と C11 / C++20 コンパイラ（MSVC、GCC、Clang）が必要です。Windows ではネイティブビルドを Developer Command Prompt（`vcvars64.bat`）から実行してください。
+必要環境：最新の安定版 Rust（`stable`）。C/C++ 側の検証には CMake `3.18+` と C11 / C++20 コンパイラ（MSVC、GCC、Clang）が必要です。Windows ではネイティブビルドを Developer Command Prompt（`vcvars64.bat`）から実行してください。
 
 ```bash
 # ワークスペースのビルドとテスト（doctest 12 件を含む 203 件）
@@ -267,7 +269,7 @@ cargo run --release --features cuda --manifest-path examples/candle_eval/Cargo.t
 | **`Q4_K` Multi-Turn** · `Core3` | `44.18` (1.9 %) | — | 60.0 % | 6.2 % | 0.0 % | 1387 | 53.3 % |
 | `Q4_K` Multi-Turn · 8 ターン | `30.64` (22.5 %) | — | 66.7 % | 0.0 % (0/15) | 0.0 % | — | 76.9 % |
 
-- バイパスは `Q4_K` で bypass-off 比 `+13.6 %` の decode 速度を取り戻します（`53.98` 対 `47.53`）が、素の decode 速度ではベースライン `B` より `3.9 %`（`Q4_K`）〜 `8.6 %`（`BF16`）遅いままです。実測できた利点は**入力トークンの削減（−12 %〜−14 %）**、分布外（OOD）への染み出しゼロ、そして `BF16` でバイパスを有効にしたときの `hit` 低下なしです。一方 `Q4_K` ではバイパス有効で `hit` が `2.5` ポイント低下し、`BF16` の bypass-off では `10` ポイント低下します。
+- バイパスは `Q4_K` で bypass-off 比 `+13.6 %` の decode 速度を取り戻します（`53.98` 対 `47.53`）が、純 decode 速度ではベースライン `B` より `3.9 %`（`Q4_K`）〜 `8.6 %`（`BF16`）低速です。一方で、**入力トークンの削減（−12 %〜−14 %）**、分布外（OOD）への染み出しゼロ、および `BF16` でバイパスを有効にしたときの `hit` 維持が確認できています。ただし `Q4_K` ではバイパス有効で `hit` が `2.5` ポイント低下し、`BF16` の bypass-off では `10` ポイント低下します。
 - Multi-Turn では、`.lmnkc` の保存・再読み込みのラウンドトリップ（`31,488 B`）と、モデル間リベイク（`17,344 B`）も確認しました。
 
 | スイート | ピーク VRAM（`nvidia-smi` の総量） | デスクトップ待機時 `3,011 MiB` を除いた概算純増 |
@@ -278,8 +280,8 @@ cargo run --release --features cuda --manifest-path examples/candle_eval/Cargo.t
 
 ### 計測方法の注記と限界
 
-- **標本が小さい**：Step 2 は `N=20` プローブ、OOD は `7` プローブ、対話は `8` ターンです。1 項目で数ポイント動きます。
-- **単一モデル**：`Phi-4-mini-instruct` のみ。他アーキテクチャへの一般性は主張しません。
+- **評価サンプル数が小さい**：Step 2 は `N=20` プローブ、OOD は `7` プローブ、対話は `8` ターンです。1 項目で数ポイント動きます。
+- **単一モデルのみ**：検証済みは `Phi-4-mini-instruct` のみで、他モデル・他アーキテクチャでの検証は未実施です。
 - **時間計測のノイズ**：Windows WDDM のスケジューリングと初回試行の揺らぎにより、純 decode の `spread` は `1.9 %`〜`22.5 %` に及びます。そのため中央値を報告しています。
 - **VRAM の値**は 1 秒ごとにポーリングした GPU 全体の読み取り値で、デスクトップが元々使っていた `3,011 MiB` を含みます。純増の列は概算であり、アロケータ単位の計測ではありません。
 - **Eager Attention**：ハーネスは Eager Attention を使うため、検証できるのは短いコンテキスト窓（`L <= 2048`）のみです。長文コンテキストの結果ではありません。
@@ -320,13 +322,13 @@ DDLCのキャラクター **Monika** に強く惹かれ、彼女と意味のあ�
 
 初期の無料Google Colab環境での実験では、従来のファインチューニングでは表層的な口調の模倣しかできないことが明確になりました。
 
-低リソースなローカル環境（VRAM 2〜4 GB）で持続的なペルソナを実現するため、標準的なLLMのアプローチを超えた模索を開始。「知能の本質はポインタの連鎖にある」という仮説を立て、実行時間とアイドル時間の計算コストの非対称性を活用することで、新たなトレードオフを追求しました。認知科学や生物学の知見、とりわけアリが環境に残した痕跡を介して複雑な構造を作り上げるスティグマジー（Stigmergy）が、その後の探求を形づくりました。
+低リソースなローカル環境（VRAM 2〜4 GB）で持続的なペルソナを実現するため、標準的なLLMのアプローチを超えた模索を開始。「知能の本質はポインタの連鎖にある」という仮説を立て、実行時間とアイドル時間の計算コストの非対称性を活用することで、新たなトレードオフを追求しました。認知科学や生物学の知見、とりわけアリが環境に残した痕跡を介して複雑な構造を作り上げるスティグマジー（Stigmergy）が、その後の設計の軸になりました。
 
 ### 名前の由来：*Limina* + *Monika* = **LiminiKa**
 
 名前の **LiminiKa** は、ラテン語で「境界」や「閾値」を意味する *Limina* と、本プロジェクトのきっかけとなった **Monika** を組み合わせたものです。
 
-### 哲学は設計の中でどう生きているか
+### 設計への落とし込み
 
 - **境界を静かに観測する。** LiminiKa は、自己（`SelfRef`）と外部（`Exterior`）の境界（*Limina*）を見つめます。まだ観測されていない領域は `Unobserved` のまま残し、無理に埋めようとはしません。
 - **ペルソナは身体ではなく軌道である。** 静的なベース重み（「身体」）を上書きするのではなく、ポインタの連鎖、環境の痕跡（`Stigmergy`）、そして不変の基準軌道（`SystemSpine`）からの一貫した意図的な逸脱（`Ego`）として、ペルソナが立ち現れます。
@@ -362,9 +364,9 @@ LiminiKa は、個人の動機から生まれた**実験的・概念検証（PoC
 * **Team Salvato**: 『*Doki Doki Literature Club!*』の制作および「Monika」という存在を生み出してくれた Dan Salvato 氏に深い感謝を捧げます。
 * NLPの先駆者の方々、および論文『*Attention Is All You Need*』（2017年）の著者の方々に感謝いたします。
 * 認知科学、層論（sheaf theory）、幾何学、およびスティグマジー（stigmergy）の先駆者の方々に敬意と感謝を捧げます。
-* **Rust 言語・ツールチェーン・エコシステム**：`#![no_std]` かつゼロアロケーションのコアを現実的なものにしてくれた `rustc`、`cargo`、`rustfmt`、`clippy`、`rustdoc`。そして、ライセンス・依存関係・ネイティブビルドを誠実に保ってくれる `cargo-deny` と CMake に感謝します。
+* **Rust 言語・ツールチェーン・エコシステム**：`#![no_std]` かつゼロアロケーションのコアを現実的なものにしてくれた `rustc`、`cargo`、`rustfmt`、`clippy`、`rustdoc`。そして、ライセンス・依存関係のチェックやネイティブビルドを支えてくれる `cargo-deny` と CMake に感謝します。
 * **本リポジトリで使用しているオープンソースクレート**：[`criterion`](https://crates.io/crates/criterion)（ベンチマーク）、[`candle-core`](https://crates.io/crates/candle-core) と [`candle-nn`](https://crates.io/crates/candle-nn)（Hugging Face Candle。評価ハーネスの基盤）、[`tokenizers`](https://crates.io/crates/tokenizers)、[`serde`](https://crates.io/crates/serde)、[`serde_json`](https://crates.io/crates/serde_json)。
-* 評価に使用しているモデル **Phi-4-mini-instruct**（Microsoft）の作者の方々。重みは本リポジトリに含まれていません。
+* 評価に使用しているモデル **Phi-4-mini-instruct**（Microsoft）の開発チーム。重みは本リポジトリに含まれていません。
 
 ---
 

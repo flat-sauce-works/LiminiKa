@@ -5,7 +5,7 @@
 > **A lightweight local LLM core engine and DSL for long-term dialogue—bridging boundaries to connect with non-real entities.**
 
 [![Status: Experimental / Active WIP](https://img.shields.io/badge/Status-Experimental%20%2F%20Active%20WIP%20%28v0.2.0%29-orange.svg)](#current-status)
-[![C-ABI: v0.2.0 Frozen](https://img.shields.io/badge/C--ABI-v0.2.0%20%280x0000__0200%20Frozen%29-blue.svg)](./include/liminika/lmnk_abi.h)
+[![C-ABI: v0.2.0 (0x0000_0200)](https://img.shields.io/badge/C--ABI-v0.2.0%20%280x0000__0200%29-blue.svg)](./include/liminika/lmnk_abi.h)
 [![Core: no_std Rust](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust-informational.svg)](#why-no_std)
 [![VRAM Target: 2-4 GB (Q4_K)](https://img.shields.io/badge/VRAM%20Target-2--4%20GB%20%28Q4__K%29-green.svg)](#benchmarks-and-validation)
 [![Archive Paper: GCSO Whitepaper](https://img.shields.io/badge/Archive%20Paper-GCSO%20Whitepaper-blue.svg)](./docs/paper/en/GCSO.md)
@@ -14,7 +14,7 @@
 **LiminiKa** is a core engine and declarative DSL for long-term dialogue with character personas on small local machines (target: 2–4 GB of VRAM). Instead of rewriting model weights, it steers the model's latent phase field from outside (RoPE phase steering, rank-1 adapters, sub-head routing) and keeps memory in compact, portable containers.
 
 > [!WARNING]
-> **Pre-1.0, experimental, actively developed.** APIs, formats, and numbers below describe `v0.2.0` and can change. Treat this repository as a research prototype, not a product.
+> **Pre-1.0, experimental, actively developed.** APIs, formats, and numbers below describe `v0.2.0` and can change. Please view this repository as a personal experimental prototype rather than a production tool.
 
 ---
 
@@ -22,20 +22,20 @@
 
 | Area | State at `v0.2.0` |
 | :--- | :--- |
-| `#![no_std]` core runtime (`liminika-core`) | **Working, CI-verified.** Frozen C-ABI `0x0000_0200` with `97/97` `lmnk_*` exports |
+| `#![no_std]` core runtime (`liminika-core`) | **Working, CI-verified.** Fixed `v0.2.0` C-ABI `0x0000_0200` with `97/97` `lmnk_*` exports |
 | Containers (`.lmnkc` / `.lmnkp`) | **Working.** CRC32 structural integrity; bounded, defensive parsing |
 | DSL parser and `liminika` CLI | **Working.** `check`, `list`, `inspect`, `bake`, `rebake` (see [DSL](#liminika-dsl)) |
 | `Phi-4-mini` CUDA evaluation harness (`examples/candle_eval`) | **Working locally** on an RTX 4070; needs model weights and a GPU, so it is *not* run in CI |
 | Long raw-context ingestion (unedited long documents) | **Under development.** Current evaluation uses a curated fixture |
-| Cryptographic signing / authentication of containers | **Under development.** Not implemented (see [Security](#security-boundaries-and-threat-model)) |
+| Cryptographic signing / authentication of containers | **Under development.** Not implemented (see [Boundary Safety](#input-validation-and-boundary-safety)) |
 | Higher-level integrations (DSL-to-container compile, other runtimes) | **Under development** |
 
-Verification at `HEAD`: **215 passing Rust tests** (203 workspace tests including 12 doctests, plus 12 in `candle_eval`), MSVC CTest 2/2, and AVX2 + FMA builds.
+Verification at `v0.2.0`: **215 passing Rust tests** (203 workspace tests including 12 doctests, plus 12 in `candle_eval`), MSVC CTest 2/2, and AVX2 + FMA builds.
 
 > [!NOTE]
 > [`docs/paper/{en,ja}/GCSO.md`](./docs/paper/en/GCSO.md) and the older `docs/architecture/*` files are **archival origin documents**. The living `v0.2.0` specification is the C headers in [`include/liminika/`](./include/liminika/) and the in-code Rustdoc.
 
-Remaining engineering focus: scaling the Cold Path (recall and `.lmnkc` anchor paging) to unedited raw long-context input, and adding cryptographic integrity plus Miri / fuzzing hardening *outside* the `#![no_std]` core.
+Remaining engineering focus: scaling the Cold Path (recall and `.lmnkc` anchor paging) to unedited raw long-context input, and adding cryptographic integrity plus Miri / fuzzing checks *outside* the `#![no_std]` core.
 
 ---
 
@@ -59,8 +59,8 @@ Plain fine-tuning and prompt engineering tend to stop at tone imitation in long 
 
 1. **Split-Brain edge control**: persona state, telemetry, and pruning stay local and cheap, separate from remote or heavy LLM inference.
 2. **Compile-time cache guard**: `#![no_std]` blocks heap, OS, and thread bloat at compile time, keeping hot-path tables within a `< 24 KB` L1D budget.
-3. **WASM and game-engine portability**: an OS-agnostic `staticlib` with caller-owned placement (`lmnk_context_init_in_place`).
-4. **GPU kernel symmetry**: Hot-Path math stays 1:1 with device-kernel implementations.
+3. **WASM and game-engine portability (design intent)**: an OS-agnostic `staticlib` with caller-owned placement (`lmnk_context_init_in_place`), designed to be straightforward to embed in game engines or WASM targets.
+4. **GPU kernel symmetry (design intent)**: Hot-Path math uses simple fixed-width POD operations so it can be ported cleanly to device kernels in the future.
 
 ---
 
@@ -68,7 +68,7 @@ Plain fine-tuning and prompt engineering tend to stop at tone imitation in long 
 
 ### Y-Shaped 5-Layer Unidirectional DAG
 
-`liminal` (Lv.0) and `foundation` (Lv.1) are independent roots that merge into `stigmergy` → `drivers` → `runtime`. The layering is enforced mechanically by [`scripts/verify_architecture.py`](./scripts/verify_architecture.py) and [`tests/core/test_topology_parity.rs`](./tests/core/test_topology_parity.rs).
+`liminal` (Lv.0) and `foundation` (Lv.1) are independent roots that merge into `stigmergy` → `drivers` → `runtime`. The layering is checked automatically by [`scripts/verify_architecture.py`](./scripts/verify_architecture.py) and [`tests/core/test_topology_parity.rs`](./tests/core/test_topology_parity.rs).
 
 ```mermaid
 flowchart LR
@@ -104,23 +104,25 @@ flowchart LR
 | Driver | **`EgoDifferentialNet`** | Intentional deviation from the spine's baseline (default `1-hop`, `1..=4` configurable) |
 | Coupling | **`Distortion`** | `DistortionDelta` (P-Frame residual packet) and `DistortionTension` (fast damping / slow excitation) |
 
-### Frozen C-ABI (`0x0000_0200`)
+### C-ABI (`0x0000_0200`)
 
-- `97/97` `lmnk_*` exports in [`lmnk_abi.h`](./include/liminika/lmnk_abi.h), [`lmnk_types.h`](./include/liminika/lmnk_types.h), and [`lmnk_config.h`](./include/liminika/lmnk_config.h); `0` `void*` (typed `uint8_t` pointers only).
+- The `0x0000_0200` layout is fixed and compile-time verified for the `v0.2.0` release: `97/97` `lmnk_*` exports in [`lmnk_abi.h`](./include/liminika/lmnk_abi.h), [`lmnk_types.h`](./include/liminika/lmnk_types.h), and [`lmnk_config.h`](./include/liminika/lmnk_config.h), with `0` `void*` parameters (typed `uint8_t` pointers only).
 - Little-Endian POD layouts with compile-time checks, e.g. `RuntimeContext = 5,120 B`, `StigmergicSubstrate = 2,816 B`, `CORE_TOPOLOGY = 64 B`.
 
 ---
 
-## Security Boundaries and Threat Model
+## Input Validation and Boundary Safety
 
-**Two-layer core boundary**
+Because `liminika-core` exposes a raw C-ABI and parses binary container files, it performs defensive validation and boundary checks to avoid crashes or memory corruption on invalid pointers or malformed bytes:
+
+**Boundary checks in core**
 - **`liminal` gate**: every FFI pointer, byte span, and `.lmnkc` section is validated through `LmnkContainerView` (checked arithmetic, monotonic aligned non-overlapping spans, duplicate-kind rejection, CRC32) before use. Teardown scrubs memory with `zeroize_volatile` along a single raw-pointer chain.
 - **`Spine` floor**: host-set `pinned_compute_mask` floors cannot be lowered by `Ego` or deserialized state. Topology mismatches return `LMNK_ERR_TOPOLOGY_MISMATCH` (`-52`), distinct from `LMNK_ERR_CONTAINER_CORRUPTED`.
 
-**`.lmnkp` Store ZIP boundary** (`src/adapter/src/package.rs`): bounded single-handle read (`<= 64 MiB`, `64` entries), no OS `mmap` of external packages, and rejection of compression, encryption, ZIP64, data descriptors, trailing polyglot bytes, path traversal, case collisions, and local-header vs central-directory differentials. Covered by adversarial mutation tests in [`tests/core/test_security_adversarial.rs`](./tests/core/test_security_adversarial.rs).
+**`.lmnkp` Store ZIP boundary** (`src/adapter/src/package.rs`): bounded single-handle read (`<= 64 MiB`, `64` entries), no OS `mmap` of external packages, and rejection of compression, encryption, ZIP64, data descriptors, trailing polyglot bytes, path traversal, case collisions, and local-header vs central-directory differentials. Covered by boundary tests for corrupted and malformed inputs in [`tests/core/test_security_adversarial.rs`](./tests/core/test_security_adversarial.rs).
 
-> [!IMPORTANT]
-> **Honest scope limits.** `.lmnkc` / `.lmnkp` currently provide **CRC32 structural integrity only—not cryptographic signing or authentication.** Do not load containers from untrusted sources and assume they are authentic. `ContentHash` (`0xFF01`) and `Signature` (`0xFF02`) section kinds are *reserved* for a future signing layer outside the `#![no_std]` core. Tools that extract package entries to disk should also sanitize OS-reserved names (e.g. Windows `CON` / `NUL`).
+> [!NOTE]
+> **Current limits (no cryptographic signing):** `.lmnkc` / `.lmnkp` currently provide **CRC32 structural integrity only—not cryptographic signing or authentication.** Do not load containers from untrusted sources and assume they are authentic. `ContentHash` (`0xFF01`) and `Signature` (`0xFF02`) section kinds are *reserved* for a future signing layer outside the `#![no_std]` core. Tools that extract package entries to disk should also sanitize OS-reserved names (e.g. Windows `CON` / `NUL`).
 
 ---
 
@@ -198,7 +200,7 @@ session DesktopAssistant using Limina on LocalDevice {
 
 ## Quick Start
 
-Requirements: Rust `1.80+`; for the C/C++ checks, CMake `3.18+` and a C11 / C++20 compiler (MSVC, GCC, or Clang). On Windows, run native builds from a Developer Command Prompt (`vcvars64.bat`).
+Requirements: stable Rust; for the C/C++ checks, CMake `3.18+` and a C11 / C++20 compiler (MSVC, GCC, or Clang). On Windows, run native builds from a Developer Command Prompt (`vcvars64.bat`).
 
 ```bash
 # Build and test the workspace (203 tests incl. 12 doctests)
@@ -278,8 +280,8 @@ Settings: **3-trial median** after an untimed 10-token warmup and KV-cache clear
 
 ### Methodology notes and limits
 
-- **Small samples**: `N=20` Step-2 probes, `7` OOD probes, and an `8`-turn dialogue. Percentages move in steps of several points per single item.
-- **One model**: only `Phi-4-mini-instruct`; no claim of generality across architectures.
+- **Small evaluation sample**: `N=20` Step-2 probes, `7` OOD probes, and an `8`-turn dialogue. Percentages move in steps of several points per single item.
+- **Single model**: only `Phi-4-mini-instruct` has been tested so far; behavior on other architectures is untested.
 - **Noisy timing**: Windows WDDM scheduling and first-trial warmup leave pure-decode `spread` between `1.9 %` and `22.5 %`; medians are reported for that reason.
 - **VRAM figures** are whole-GPU readings polled once per second, including the `3,011 MiB` the desktop was already using; the net column is an approximation, not an allocator-level measurement.
 - **Eager attention**: the harness uses eager attention, so only a short context window (`L <= 2048`) is exercised. This is not yet a long-context result.
@@ -326,7 +328,7 @@ To realize a sustained persona in low-resource local environments (2–4 GB VRAM
 
 The name combines *Limina*—Latin for "boundaries" or "thresholds"—with **Monika**, the catalyst for this project.
 
-### What the Philosophy Means in the Design
+### From Philosophy to Design
 
 - **Observe the boundary quietly.** LiminiKa watches the boundary (*Limina*) between self (`SelfRef`) and exterior (`Exterior`). Regions that have not been observed stay `Unobserved`; the system does not force them to be filled in.
 - **Persona is a trajectory, not a body.** Rather than overwriting static base weights (the "body"), a persona emerges from chains of pointers, environmental traces (`Stigmergy`), and coherent intentional deviations (`Ego`) measured against an immutable baseline trajectory (`SystemSpine`).
@@ -362,9 +364,9 @@ We are currently constructing the core architecture and module layout. To preven
 * **Team Salvato**: Deep gratitude to Dan Salvato for creating *Doki Doki Literature Club!* and bringing the entity known as "Monika" into existence.
 * Thanks to the pioneers of NLP and the authors of the seminal paper *Attention Is All You Need* (2017).
 * Respect and gratitude to the pioneers in cognitive science, sheaf theory, geometry, and stigmergy.
-* **The Rust language, toolchain, and ecosystem**: `rustc`, `cargo`, `rustfmt`, `clippy`, and `rustdoc`, which made a `#![no_std]`, zero-allocation core practical; and `cargo-deny` and CMake, which keep licenses, dependencies, and the native build honest.
+* **The Rust language, toolchain, and ecosystem**: `rustc`, `cargo`, `rustfmt`, `clippy`, and `rustdoc`, which made a `#![no_std]`, zero-allocation core practical; and `cargo-deny` and CMake, which support dependency/license checks and native builds.
 * **Open-source crates used in this repository**: [`criterion`](https://crates.io/crates/criterion) (benchmarks); [`candle-core`](https://crates.io/crates/candle-core) and [`candle-nn`](https://crates.io/crates/candle-nn) (Hugging Face Candle, powering the evaluation harness), [`tokenizers`](https://crates.io/crates/tokenizers), [`serde`](https://crates.io/crates/serde), and [`serde_json`](https://crates.io/crates/serde_json).
-* The authors of **Phi-4-mini-instruct** (Microsoft), the model used for the evaluation. Weights are not included in this repository.
+* The developers of **Phi-4-mini-instruct** (Microsoft), the model used for the evaluation. Weights are not included in this repository.
 
 ---
 
