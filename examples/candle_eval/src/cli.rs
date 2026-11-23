@@ -7,10 +7,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::eval::{
-    parse_circuit_mode, parse_d2h_heartbeat, parse_ego_max_hops, parse_ego_mode,
-    parse_fair_bench_conditions, parse_horizon_mode, parse_kv_min_res, parse_pressure_sim_mode,
-    parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode,
-    EgoProfileMode, FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
+    parse_circuit_mode, parse_ego_max_hops, parse_ego_mode, parse_fair_bench_conditions,
+    parse_guard_hold_tokens, parse_horizon_mode, parse_kv_min_res, parse_logits_observe_stride,
+    parse_pressure_sim_mode, parse_quant_mode, parse_reflect_mode, parse_rng_seed,
+    parse_temperature, CircuitProfileMode, EgoProfileMode, FairBenchCondition, HorizonAblationMode,
+    PressureSimMode, ReflectMode,
 };
 use candle_core::quantized::GgmlDType;
 use liminika_core::abi::lmnk_q7_t;
@@ -26,7 +27,8 @@ pub(crate) struct EvalCliConfig {
     pub(crate) ego_max_hops: u8,
     pub(crate) temperature: f32,
     pub(crate) rng_seed: u64,
-    pub(crate) d2h_heartbeat_max: usize,
+    pub(crate) logits_observe_stride: usize,
+    pub(crate) guard_hold_tokens: u8,
     pub(crate) multi_turn: bool,
     pub(crate) quant_mode: Option<GgmlDType>,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
@@ -54,7 +56,9 @@ impl EvalCliConfig {
         let ego_max_hops = parse_ego_max_hops(cli_args.iter().map(String::as_str));
         let temperature = parse_temperature(cli_args.iter().map(String::as_str));
         let rng_seed = parse_rng_seed(cli_args.iter().map(String::as_str));
-        let d2h_heartbeat_max = parse_d2h_heartbeat(cli_args.iter().map(String::as_str));
+        let logits_observe_stride =
+            parse_logits_observe_stride(cli_args.iter().map(String::as_str));
+        let guard_hold_tokens = parse_guard_hold_tokens(cli_args.iter().map(String::as_str));
         let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
         let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
@@ -90,7 +94,8 @@ impl EvalCliConfig {
             ego_max_hops,
             temperature,
             rng_seed,
-            d2h_heartbeat_max,
+            logits_observe_stride,
+            guard_hold_tokens,
             multi_turn,
             quant_mode,
             kv_min_res,

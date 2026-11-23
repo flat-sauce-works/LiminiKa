@@ -134,6 +134,8 @@ impl ModelSteeringAdapter {
         self.prev_sandbox_assim_drift = 1.0;
         self.ctx.set_sandbox_settlements(0);
         self.turn_guard_active = false;
+        self.transient_guard_relaxed = false;
+        self.ctx.reset_turn_bypass_state();
         self.passive_saturation_probe_steps = 0;
         let policy = self.ctx.telemetry_bank().policy();
         self.ctx.set_telemetry_policy(policy);
@@ -220,6 +222,24 @@ impl ModelSteeringAdapter {
         );
     }
 
+    /// Configures the decode-token hold window before a transient contradiction-guard compute pin
+    /// may relax toward low-cost bypass (`0` holds the entire turn).
+    pub fn set_guard_hold_tokens(&mut self, tokens: u8) {
+        self.guard_hold_tokens = tokens;
+    }
+
+    /// Returns the configured decode-token hold window before transient guard relaxation (`0` = full turn).
+    #[must_use]
+    pub const fn guard_hold_tokens(&self) -> u8 {
+        self.guard_hold_tokens
+    }
+
+    /// Returns `true` when the active turn's transient contradiction-guard pin has been relaxed.
+    #[must_use]
+    pub const fn is_transient_guard_relaxed(&self) -> bool {
+        self.transient_guard_relaxed
+    }
+
     /// Resolves step/turn-local effective `(guard_active, repulsion_active)` signals for
     /// `SystemSpineState` bypass veto gating without latching onto session-persistent
     /// `StigmergicSubstrate::slot_repulsion_mask`.
@@ -228,8 +248,9 @@ impl ModelSteeringAdapter {
         let guard_slot_slid_in = (self.coherence_guard_slot.activations
             > self.coherence_guard_slot.retractions)
             && (self.ctx.last_horizon().conflict_severity > 0.25);
-        let guard_active =
-            self.turn_guard_active || guard_slot_slid_in || self.passive_saturation_probe_steps > 0;
+        let static_guard =
+            !self.transient_guard_relaxed && (self.turn_guard_active || guard_slot_slid_in);
+        let guard_active = static_guard || self.passive_saturation_probe_steps > 0;
         let action_repulse = liminika_core::stigmergy::StigmergicActionDecision::from_u8(
             self.ctx.substrate().last_decision,
         )
@@ -237,6 +258,68 @@ impl ModelSteeringAdapter {
         let entropy_repulse = self.ctx.entropy_controller().is_repulsion_mode();
         let repulsion_active = obs_repulsion || action_repulse || entropy_repulse;
         (guard_active, repulsion_active)
+    }
+
+    /// Evaluates whether a transient contradiction-guard compute pin may safely relax toward
+    /// low-cost bypass after holding the opening window, or re-escalates immediately if
+    /// repulsion or exit entropy instability returns after relaxation.
+    pub fn evaluate_transient_guard_relaxation(
+        &mut self,
+        last_observed_entropy: f32,
+        liminal_stationary: u8,
+        repulsion_active: bool,
+        exit_entropy_rising: bool,
+        min_calm_dwell: u8,
+    ) -> bool {
+        let (_, eff_repulsion) = self.effective_spine_guard_and_repulsion(repulsion_active);
+        if self.transient_guard_relaxed {
+            if eff_repulsion || exit_entropy_rising {
+                self.transient_guard_relaxed = false;
+                self.turn_guard_active = true;
+                let active_mask = self.ctx.compute_pool().active_mask;
+                self.ctx.apply_host_spine_pin_floor(
+                    active_mask
+                        | self.baseline_pinned_compute_mask
+                        | liminika_core::drivers::HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+                );
+                self.ctx.reset_turn_bypass_state();
+            }
+            return false;
+        }
+
+        let guard_slot_slid_in = (self.coherence_guard_slot.activations
+            > self.coherence_guard_slot.retractions)
+            && (self.ctx.last_horizon().conflict_severity > 0.25);
+        let has_static_guard = self.turn_guard_active || guard_slot_slid_in;
+        if !has_static_guard
+            || self.guard_hold_tokens == 0
+            || self.passive_saturation_probe_steps > 0
+            || self.ctx.system_spine().unobserved_locked != 0
+            || !last_observed_entropy.is_finite()
+            || last_observed_entropy >= 0.72
+        {
+            return false;
+        }
+
+        if !self.ctx.can_relax_transient_guard_pin(
+            self.guard_hold_tokens,
+            liminal_stationary,
+            eff_repulsion,
+            exit_entropy_rising,
+            min_calm_dwell,
+        ) {
+            return false;
+        }
+
+        self.transient_guard_relaxed = true;
+        self.turn_guard_active = false;
+        self.ctx.system_spine_mut().pinned_compute_mask = self.baseline_pinned_compute_mask;
+        self.ctx.apply_host_spine_pin_floor(
+            self.baseline_pinned_compute_mask
+                | liminika_core::drivers::HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+        );
+        self.ctx.on_transient_guard_relaxed(min_calm_dwell);
+        true
     }
 
     /// Evaluates token-level whole-steering bypass on `obs` jointly with [`SystemSpineState`]

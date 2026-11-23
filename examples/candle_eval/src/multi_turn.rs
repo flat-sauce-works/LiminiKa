@@ -117,6 +117,7 @@ pub(crate) fn run_multi_turn_and_step3(
             ];
 
             adapter.reset_horizon_and_core_state();
+            adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
             adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
             adapter.set_ego_max_hops(ego_max_hops);
             apply_ego_mode(adapter, ego_mode);
@@ -135,7 +136,8 @@ pub(crate) fn run_multi_turn_and_step3(
             let mut mt_abstract_tokens = 0_usize;
             let mut mt_concrete_tokens = 0_usize;
             let mut mt_boundary_churn = 0_usize;
-            let mut mt_d2h_fast_skips = 0_usize;
+            let mut mt_logits_skips = 0_usize;
+            let mut mt_guard_relaxations = 0_usize;
 
             model.clear_cache();
             let mut conv_history_ids: Vec<u32> = Vec::new();
@@ -310,7 +312,7 @@ pub(crate) fn run_multi_turn_and_step3(
                         enable_pre_bypass,
                         temperature,
                         rng_seed,
-                        d2h_heartbeat_max: cli.d2h_heartbeat_max,
+                        logits_observe_stride: cli.logits_observe_stride,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                         whole_token_bypass_hits: 0,
@@ -318,8 +320,9 @@ pub(crate) fn run_multi_turn_and_step3(
                         abstract_tokens: 0,
                         concrete_tokens: 0,
                         boundary_churn_transitions: 0,
-                        d2h_fast_skips: 0,
+                        logits_skips: 0,
                         instability_recoveries: 0,
+                        guard_relaxations: 0,
                         spine_veto_guard_hits: 0,
                         spine_veto_repulse_hits: 0,
                         spine_veto_pin_hits: 0,
@@ -346,7 +349,8 @@ pub(crate) fn run_multi_turn_and_step3(
                     mt_abstract_tokens += turn_cfg.abstract_tokens;
                     mt_concrete_tokens += turn_cfg.concrete_tokens;
                     mt_boundary_churn += turn_cfg.boundary_churn_transitions;
-                    mt_d2h_fast_skips += turn_cfg.d2h_fast_skips;
+                    mt_logits_skips += turn_cfg.logits_skips;
+                    mt_guard_relaxations += turn_cfg.guard_relaxations;
 
                     let mut mt_reflect_note = match reflect_mode {
                         ReflectMode::Off => "off".to_string(),
@@ -461,7 +465,7 @@ pub(crate) fn run_multi_turn_and_step3(
                                     enable_pre_bypass,
                                     temperature,
                                     rng_seed,
-                                    d2h_heartbeat_max: cli.d2h_heartbeat_max,
+                                    logits_observe_stride: cli.logits_observe_stride,
                                     steer_bypass_hits: 0,
                                     steer_eligible_layers: 0,
                                     whole_token_bypass_hits: 0,
@@ -469,8 +473,9 @@ pub(crate) fn run_multi_turn_and_step3(
                                     abstract_tokens: 0,
                                     concrete_tokens: 0,
                                     boundary_churn_transitions: 0,
-                                    d2h_fast_skips: 0,
+                                    logits_skips: 0,
                                     instability_recoveries: 0,
+                                    guard_relaxations: 0,
                                     spine_veto_guard_hits: 0,
                                     spine_veto_repulse_hits: 0,
                                     spine_veto_pin_hits: 0,
@@ -496,7 +501,8 @@ pub(crate) fn run_multi_turn_and_step3(
                                 mt_abstract_tokens += retry_cfg.abstract_tokens;
                                 mt_concrete_tokens += retry_cfg.concrete_tokens;
                                 mt_boundary_churn += retry_cfg.boundary_churn_transitions;
-                                mt_d2h_fast_skips += retry_cfg.d2h_fast_skips;
+                                mt_logits_skips += retry_cfg.logits_skips;
+                                mt_guard_relaxations += retry_cfg.guard_relaxations;
                                 if let Some(p2_crit) = critique_generated_draft(
                                     model,
                                     tokenizer,
@@ -605,7 +611,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits as f64 / mt_decode_tokens_steered as f64 * 100.0
             };
             println!(
-                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} | d2h_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
+                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} guard_relax={} | logits_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
                 adapter.ego_differential_net().max_hops,
                 if mt_exp_total == 0 {
                     0.0
@@ -634,7 +640,8 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_abstract_tokens,
                 mt_concrete_tokens,
                 mt_boundary_churn,
-                mt_d2h_fast_skips,
+                mt_guard_relaxations,
+                mt_logits_skips,
                 mt_decode_tokens,
                 adapter.sandbox_settlements(),
                 mt_occ,

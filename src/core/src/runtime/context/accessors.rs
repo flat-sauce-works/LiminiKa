@@ -291,6 +291,40 @@ impl RuntimeContext {
             .commit_exit_reward(executed_mask, reward_q7);
     }
 
+    /// Resets per-turn bypass dwell, cooldown, and concrete streak counters on the compute pool.
+    #[inline(always)]
+    pub const fn reset_turn_bypass_state(&mut self) {
+        self.compute_pool.reset_turn_bypass_state();
+    }
+
+    /// Returns `true` when the embedded [`AnonymousComputePool`] allows relaxing a transient
+    /// contradiction-guard compute pin back toward bypass.
+    #[inline(always)]
+    #[must_use]
+    pub const fn can_relax_transient_guard_pin(
+        &self,
+        guard_hold_tokens: u8,
+        liminal_stationary: u8,
+        repulsion_active: bool,
+        exit_entropy_rising: bool,
+        min_calm_dwell: u8,
+    ) -> bool {
+        self.compute_pool.can_relax_transient_guard_pin(
+            guard_hold_tokens,
+            liminal_stationary,
+            repulsion_active,
+            exit_entropy_rising,
+            min_calm_dwell,
+        )
+    }
+
+    /// Clears transient guard-induced cooldown lag and seeds `whole_token_calm_dwell` once
+    /// post-hold relaxation is authorized.
+    #[inline(always)]
+    pub const fn on_transient_guard_relaxed(&mut self, min_calm_dwell: u8) {
+        self.compute_pool.on_transient_guard_relaxed(min_calm_dwell);
+    }
+
     /// Updates the [`TelemetryCapturePolicy`] governing verbosity transitions (`Coarse` / `Standard` / `Detailed`).
     #[inline(always)]
     pub fn set_telemetry_policy(&mut self, policy: TelemetryCapturePolicy) {

@@ -79,6 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let persona_lmnk_in = &cli.persona_lmnk_in;
 
     adapter.set_ego_max_hops(ego_max_hops);
+    adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
     apply_ego_mode(&mut adapter, ego_mode);
     if adapter.ego_state().is_active() {
         println!(

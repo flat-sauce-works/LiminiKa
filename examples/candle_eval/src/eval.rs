@@ -213,8 +213,9 @@ pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64
     42
 }
 
-pub(crate) const HEARTBEAT_MIN_STRIDE: usize = 2;
-pub(crate) const DEFAULT_D2H_HEARTBEAT_MAX: usize = 0;
+pub(crate) const LOGITS_OBSERVE_MIN_DYNAMIC_STRIDE: usize = 2;
+pub(crate) const DEFAULT_LOGITS_OBSERVE_STRIDE: usize = 1;
+pub(crate) const DEFAULT_GUARD_HOLD_TOKENS: u8 = ModelSteeringAdapter::DEFAULT_GUARD_HOLD_TOKENS;
 
 /// Per-prompt / per-turn residency and boundary churn tracker between
 /// abstract residency (`whole_token_bypass == true`) and concrete residency
@@ -262,48 +263,60 @@ impl LiminalDecodeChurnTracker {
     }
 }
 
-pub(crate) fn parse_d2h_heartbeat<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
+pub(crate) fn parse_logits_observe_stride<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--d2h-heartbeat=") {
+        if let Some(val) = arg.strip_prefix("--logits-observe-stride=") {
             if let Ok(parsed) = val.parse::<usize>() {
+                return parsed.max(1);
+            }
+        }
+    }
+    DEFAULT_LOGITS_OBSERVE_STRIDE
+}
+
+pub(crate) fn parse_guard_hold_tokens<'a>(args: impl IntoIterator<Item = &'a str>) -> u8 {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--guard-hold-tokens=") {
+            if let Ok(parsed) = val.parse::<u8>() {
                 return parsed;
             }
         }
     }
-    DEFAULT_D2H_HEARTBEAT_MAX
+    DEFAULT_GUARD_HOLD_TOKENS
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LiminalD2hApertureGate {
-    pub(crate) heartbeat_max: usize,
+pub(crate) struct LogitsObserveStrideGate {
+    pub(crate) max_stride: usize,
     pub(crate) unobserved_bypass_run: usize,
-    pub(crate) d2h_fast_skips: usize,
+    pub(crate) logits_skips: usize,
 }
 
-impl LiminalD2hApertureGate {
-    pub(crate) const fn new(heartbeat_max: usize) -> Self {
+impl LogitsObserveStrideGate {
+    pub(crate) const fn new(max_stride: usize) -> Self {
+        let clamped_stride = if max_stride == 0 { 1 } else { max_stride };
         Self {
-            heartbeat_max,
+            max_stride: clamped_stride,
             unobserved_bypass_run: 0,
-            d2h_fast_skips: 0,
+            logits_skips: 0,
         }
     }
 
     #[must_use]
-    pub(crate) fn compute_heartbeat_stride(
-        heartbeat_max: usize,
+    pub(crate) fn compute_effective_stride(
+        max_stride: usize,
         sens_q7: u8,
         last_observed_entropy: f32,
     ) -> usize {
-        if heartbeat_max <= 1 {
-            return heartbeat_max;
+        if max_stride <= 1 {
+            return 1;
         }
         let p_ent_q7 = ((last_observed_entropy / (2.0 * 0.78)) * 127.0).clamp(0.0, 64.0) as u8;
         let ent_sens_q7 = liminika_core::liminal::threshold::sensitivity_4p1mp_q7(p_ent_q7);
         let eff_sens_q7 = sens_q7.max(ent_sens_q7);
-        let span = heartbeat_max - HEARTBEAT_MIN_STRIDE;
+        let span = max_stride - LOGITS_OBSERVE_MIN_DYNAMIC_STRIDE;
         let shrink = ((span * usize::from(eff_sens_q7) + 64) >> 7).min(span);
-        heartbeat_max - shrink
+        max_stride - shrink
     }
 
     #[must_use]
@@ -315,11 +328,11 @@ impl LiminalD2hApertureGate {
         sens_q7: u8,
         last_observed_entropy: f32,
     ) -> LogitsFetchMode {
-        if self.heartbeat_max == 0 || temperature > 1e-6 || step_idx == 0 || !tok_was_whole_bypass {
+        if self.max_stride <= 1 || temperature > 1e-6 || step_idx == 0 || !tok_was_whole_bypass {
             return LogitsFetchMode::FullLogits;
         }
         let stride =
-            Self::compute_heartbeat_stride(self.heartbeat_max, sens_q7, last_observed_entropy);
+            Self::compute_effective_stride(self.max_stride, sens_q7, last_observed_entropy);
         if self.unobserved_bypass_run + 1 < stride {
             LogitsFetchMode::DeviceArgmaxOnly
         } else {
@@ -333,7 +346,7 @@ impl LiminalD2hApertureGate {
 
     pub(crate) fn record_unobserved_skip(&mut self) {
         self.unobserved_bypass_run = self.unobserved_bypass_run.saturating_add(1);
-        self.d2h_fast_skips = self.d2h_fast_skips.saturating_add(1);
+        self.logits_skips = self.logits_skips.saturating_add(1);
     }
 }
 
@@ -915,7 +928,7 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) enable_pre_bypass: bool,
     pub(crate) temperature: f32,
     pub(crate) rng_seed: u64,
-    pub(crate) d2h_heartbeat_max: usize,
+    pub(crate) logits_observe_stride: usize,
     pub(crate) steer_bypass_hits: usize,
     pub(crate) steer_eligible_layers: usize,
     pub(crate) whole_token_bypass_hits: usize,
@@ -923,8 +936,9 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) abstract_tokens: usize,
     pub(crate) concrete_tokens: usize,
     pub(crate) boundary_churn_transitions: usize,
-    pub(crate) d2h_fast_skips: usize,
+    pub(crate) logits_skips: usize,
     pub(crate) instability_recoveries: usize,
+    pub(crate) guard_relaxations: usize,
     pub(crate) spine_veto_guard_hits: usize,
     pub(crate) spine_veto_repulse_hits: usize,
     pub(crate) spine_veto_pin_hits: usize,
@@ -960,8 +974,10 @@ pub(crate) fn generate_steered_reply_with_offset(
         steer_eligible_layers: 0,
     };
     let t_dec = Instant::now();
-    steer.adapter.compute_pool_mut().whole_token_calm_dwell = 0;
-    steer.adapter.compute_pool_mut().re_bypass_cooldown = 0;
+    steer
+        .adapter
+        .runtime_context_mut()
+        .reset_turn_bypass_state();
     steer.adapter.substrate_mut().last_entropy_h_tilde = 0.0;
     let mut prefill_dispatch = steer.adapter.step_compute_dispatch_with_spine(
         SystemPressureReading {
@@ -998,7 +1014,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         }
         LogitsOutcome::UnobservedDeviceArgmax(_) => 0.0_f32,
     };
-    let mut gate = LiminalD2hApertureGate::new(cfg.d2h_heartbeat_max);
+    let mut gate = LogitsObserveStrideGate::new(cfg.logits_observe_stride);
     let mut churn_tracker = LiminalDecodeChurnTracker::new();
     churn_tracker.reset_prompt();
 
@@ -1100,13 +1116,27 @@ pub(crate) fn generate_steered_reply_with_offset(
                 surge
             }
             None => {
-                // `Lacuna::Unobserved`: skip D2H entropy update strictly without polluting
+                // `Lacuna::Unobserved`: skip logits observation strictly without polluting
                 // `entropy_sum`, `entropy_count`, or distortion tension statistics.
                 gate.record_unobserved_skip();
-                cfg.d2h_fast_skips += 1;
+                cfg.logits_skips += 1;
                 false
             }
         };
+
+        let liminal_stationary = u8::from(last_observed_entropy < 0.78 && sens_q7 < 80);
+        if cfg.use_steer
+            && cfg.enable_pre_bypass
+            && steer.adapter.evaluate_transient_guard_relaxation(
+                last_observed_entropy,
+                liminal_stationary,
+                repulsion_active,
+                entropy_surge,
+                2,
+            )
+        {
+            cfg.guard_relaxations += 1;
+        }
 
         let mut tok_dispatch = steer.adapter.step_compute_dispatch_with_spine(
             SystemPressureReading {
@@ -1122,7 +1152,7 @@ pub(crate) fn generate_steered_reply_with_offset(
             let ego_active_boundary = steer.adapter.ego_state().is_active() && sens_q7 >= 80;
             let obs = TokenBypassObservation {
                 irreversible_step: 0,
-                liminal_stationary: u8::from(last_observed_entropy < 0.78 && sens_q7 < 80),
+                liminal_stationary,
                 boundary_sensitivity_q7: sens_q7,
                 repulsion_active: u8::from(repulsion_active),
                 exit_entropy_rising: u8::from(entropy_surge),
@@ -1294,34 +1324,66 @@ mod tests {
     }
 
     #[test]
-    fn d2h_aperture_gate_tightens_monotonically_from_8_to_2_and_disables_when_gated() {
-        assert_eq!(parse_d2h_heartbeat(["candle_eval"]), 0);
-        assert_eq!(parse_d2h_heartbeat(["candle_eval", "--d2h-heartbeat=0"]), 0);
-        assert_eq!(parse_d2h_heartbeat(["candle_eval", "--d2h-heartbeat=5"]), 5);
+    fn logits_observe_stride_gate_tightens_monotonically_from_8_to_2_and_observes_every_token_by_default(
+    ) {
+        assert_eq!(parse_logits_observe_stride(["candle_eval"]), 1);
+        assert_eq!(
+            parse_logits_observe_stride(["candle_eval", "--logits-observe-stride=0"]),
+            1
+        );
+        assert_eq!(
+            parse_logits_observe_stride(["candle_eval", "--logits-observe-stride=1"]),
+            1
+        );
+        assert_eq!(
+            parse_logits_observe_stride(["candle_eval", "--logits-observe-stride=5"]),
+            5
+        );
+        assert_eq!(
+            parse_guard_hold_tokens(["candle_eval"]),
+            DEFAULT_GUARD_HOLD_TOKENS
+        );
+        assert_eq!(
+            parse_guard_hold_tokens(["candle_eval", "--guard-hold-tokens=0"]),
+            0
+        );
+        assert_eq!(
+            parse_guard_hold_tokens(["candle_eval", "--guard-hold-tokens=12"]),
+            12
+        );
 
         let mut prev_stride = usize::MAX;
         for &(sens_q7, entropy) in &[(0u8, 0.0f32), (24, 0.25), (48, 0.50), (64, 0.78)] {
-            let stride = LiminalD2hApertureGate::compute_heartbeat_stride(8, sens_q7, entropy);
+            let stride = LogitsObserveStrideGate::compute_effective_stride(8, sens_q7, entropy);
             assert!((2..=8).contains(&stride));
             assert!(stride <= prev_stride);
             prev_stride = stride;
         }
         assert_eq!(
-            LiminalD2hApertureGate::compute_heartbeat_stride(8, 0, 0.0),
+            LogitsObserveStrideGate::compute_effective_stride(8, 0, 0.0),
             8
         );
         assert_eq!(
-            LiminalD2hApertureGate::compute_heartbeat_stride(8, 126, 0.78),
+            LogitsObserveStrideGate::compute_effective_stride(8, 126, 0.78),
             2
         );
-
-        let off_gate = LiminalD2hApertureGate::new(0);
         assert_eq!(
-            off_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
+            LogitsObserveStrideGate::compute_effective_stride(1, 0, 0.0),
+            1
+        );
+
+        let clamped_gate = LogitsObserveStrideGate::new(0);
+        assert_eq!(
+            clamped_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
+            LogitsFetchMode::FullLogits
+        );
+        let default_gate = LogitsObserveStrideGate::new(1);
+        assert_eq!(
+            default_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
             LogitsFetchMode::FullLogits
         );
 
-        let active_gate = LiminalD2hApertureGate::new(8);
+        let active_gate = LogitsObserveStrideGate::new(8);
         assert_eq!(
             active_gate.select_fetch_mode(1, 0.7, true, 0, 0.0),
             LogitsFetchMode::FullLogits
@@ -1341,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    fn unobserved_d2h_skips_preserve_observed_mean_entropy_purity() {
+    fn unobserved_logits_skips_preserve_observed_mean_entropy_purity() {
         let sharp = vec![12.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0];
         let warm = vec![2.5_f32, 2.0, 1.8, 1.5, 0.2, 0.1];
         let h1 = compute_top_k_logit_entropy(&sharp, 16);
@@ -1350,7 +1412,7 @@ mod tests {
         let mut entropy_sum = 0.0f32;
         let mut entropy_count = 0u32;
         let mut last_obs = 0.0f32;
-        let mut gate = LiminalD2hApertureGate::new(4);
+        let mut gate = LogitsObserveStrideGate::new(4);
 
         let o1 = LogitsOutcome::ObservedFull(sharp);
         assert!(update_observed_entropy_stats(
@@ -1384,7 +1446,7 @@ mod tests {
         gate.record_observed();
 
         assert_eq!(entropy_count, 2);
-        assert_eq!(gate.d2h_fast_skips, 2);
+        assert_eq!(gate.logits_skips, 2);
         assert_eq!(gate.unobserved_bypass_run, 0);
         assert!(((entropy_sum / entropy_count as f32) - ((h1 + h2) * 0.5)).abs() < 1e-6);
         assert!((last_obs - h2).abs() < 1e-6);

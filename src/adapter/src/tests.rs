@@ -3072,3 +3072,183 @@ fn liminal_boundary_flow_summary_is_zero_safe_and_reflects_live_counters() {
         }
     }
 }
+
+#[test]
+fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
+    use liminika_core::drivers::{
+        SystemPressureReading, TokenBypassObservation, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+        SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_NONE,
+    };
+
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let expected_baseline_pins = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
+    assert_eq!(
+        adapter.guard_hold_tokens(),
+        ModelSteeringAdapter::DEFAULT_GUARD_HOLD_TOKENS
+    );
+
+    let fact = TextAttractorEntry {
+        anchor_id: 1,
+        role: AttractorRole::Fact,
+        text: "LiminiKa does not fine-tune PyTorch weights or require 24 GB VRAM.".to_string(),
+        per_layer_q7: vec![[24i8; MAX_ATTENTION_HEADS]],
+        energy: 2.0,
+        residual_sig: vec![1.0, 0.0],
+    };
+    let guard_recall = DynamicAttractorRecall {
+        lacuna_state: LacunaBoundaryState::LiminalBoundary,
+        top1_fact_score: 0.70,
+        top2_fact_score: 0.55,
+        top1_persona_score: 0.20,
+        min_local_lacuna_depth: 0.0,
+        guard_conflict_margin: 0.35,
+        action_decision: StigmergicActionDecision::FullOrchestration,
+        gateway_frame: GatewayFrame::default(),
+        telemetry: StratumProbeTelemetry::default(),
+        recalled_facts: vec![(&fact, 0.70)],
+        recalled_personas: Vec::new(),
+        lacuna_partition: LacunaPartition8::default(),
+        exterior_sandbox_facts: Vec::new(),
+        is_known_unknown_exterior: false,
+    };
+
+    // Slide in CoherenceHorizonGuardSlot so static `guard_slot_slid_in && conflict_severity > 0.25`
+    // is active alongside `turn_guard_active` without activating `RepulsionEscape` (verifies Trap-2 resolution).
+    let _ = adapter.sync_core_layers_from_recall(&guard_recall, None);
+    let mut trail = lmnk_pointer_trail_t::default();
+    let sig = ObjectiveFact::new([18i8; 64], 1.5, 0, 1);
+    let mut q_rot = vec![0.25_f32; adapter.geometry().q_rot_len()];
+    let _ = adapter
+        .orchestrate_layer_rope_with_substrate(
+            0,
+            &sig,
+            &mut trail,
+            Some(0.35),
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("slide-in guard slot");
+    assert!(
+        adapter.coherence_guard_slot().activations > adapter.coherence_guard_slot().retractions
+    );
+    assert!(adapter.runtime_context().last_horizon().conflict_severity > 0.25);
+    assert!(!adapter.effective_spine_guard_and_repulsion(false).1);
+
+    let surge = SystemPressureReading {
+        frame_time_pressure_q15: 8192,
+        bandwidth_pressure_q15: 8192,
+        l3_load_pressure_q15: 4096,
+        irreversible_step: 0,
+        _pad: 0,
+    };
+    let calm_obs = TokenBypassObservation {
+        irreversible_step: 0,
+        liminal_stationary: 1,
+        boundary_sensitivity_q7: 16,
+        repulsion_active: 0,
+        exit_entropy_rising: 0,
+        ego_active_boundary: 0,
+        min_calm_dwell: 2,
+        _pad: 0,
+    };
+
+    // (a) Held during `0..guard_hold_tokens` (`W = 4`).
+    adapter.set_guard_hold_tokens(4);
+    for _ in 0..4 {
+        assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
+        assert!(!adapter.is_transient_guard_relaxed());
+        assert_eq!(
+            adapter.system_spine().pinned_compute_mask,
+            adapter.compute_pool().active_mask
+        );
+        assert!(adapter.effective_spine_guard_and_repulsion(false).0);
+        let mut d = adapter.step_compute_dispatch(surge);
+        let veto = adapter.evaluate_whole_token_bypass_with_spine(calm_obs, &mut d);
+        assert_ne!(veto & SPINE_BYPASS_VETO_GUARD_ACTIVE, 0);
+        assert_eq!(d.whole_token_steering_bypass, 0);
+    }
+
+    // (d) Guarded gates block relaxation when entropy >= 0.72, NaN, repulsion active, or unobserved_locked.
+    assert!(!adapter.evaluate_transient_guard_relaxation(0.72, 1, false, false, 2));
+    assert!(!adapter.evaluate_transient_guard_relaxation(f32::NAN, 1, false, false, 2));
+    assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, true, false, 2));
+    adapter
+        .runtime_context_mut()
+        .system_spine_mut()
+        .unobserved_locked = 1;
+    assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
+    adapter
+        .runtime_context_mut()
+        .system_spine_mut()
+        .unobserved_locked = 0;
+
+    // (c) `guard_hold_tokens == 0` disables relaxation for the entire turn.
+    adapter.set_guard_hold_tokens(0);
+    assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
+
+    // (b) Re-enabling `guard_hold_tokens = 4` relaxes cleanly, clears both static guard clauses,
+    // preserves `expected_baseline_pins` & `HOST_IMMUTABLE_PINNED_COMPUTE_MASK`, and enters
+    // whole-token bypass on the very next step without extra cooldown lag.
+    adapter.set_guard_hold_tokens(4);
+    assert!(adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
+    assert!(adapter.is_transient_guard_relaxed());
+    assert_eq!(
+        adapter.system_spine().pinned_compute_mask,
+        expected_baseline_pins
+    );
+    assert_ne!(
+        adapter.system_spine().pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+        0
+    );
+    assert!(!adapter.effective_spine_guard_and_repulsion(false).0);
+    let mut d_relaxed = adapter.step_compute_dispatch(surge);
+    let veto_relaxed = adapter.evaluate_whole_token_bypass_with_spine(calm_obs, &mut d_relaxed);
+    assert_eq!(veto_relaxed, SPINE_BYPASS_VETO_NONE);
+    assert_eq!(d_relaxed.whole_token_steering_bypass, 1);
+
+    // (e) Post-relaxation `exit_entropy_rising` or `repulsion_active` re-escalates immediately.
+    assert!(!adapter.evaluate_transient_guard_relaxation(0.50, 1, false, true, 2));
+    assert!(!adapter.is_transient_guard_relaxed());
+    assert_eq!(
+        adapter.system_spine().pinned_compute_mask,
+        adapter.compute_pool().active_mask
+    );
+    assert!(adapter.effective_spine_guard_and_repulsion(false).0);
+    let mut d_re_esc = adapter.step_compute_dispatch(surge);
+    let veto_re_esc = adapter.evaluate_whole_token_bypass_with_spine(calm_obs, &mut d_re_esc);
+    assert_ne!(veto_re_esc & SPINE_BYPASS_VETO_GUARD_ACTIVE, 0);
+    assert_eq!(d_re_esc.whole_token_steering_bypass, 0);
+
+    // Syncing a new recall clears `transient_guard_relaxed` and resets turn counters while keeping
+    // the configured `guard_hold_tokens` across `reset_horizon_and_core_state`.
+    adapter.reset_horizon_and_core_state();
+    assert_eq!(adapter.guard_hold_tokens(), 4);
+    assert!(!adapter.is_transient_guard_relaxed());
+
+    // Strong conflict (`guard_conflict_margin: 0.75`) triggering `RepulsionEscape` raises
+    // effective repulsion and strictly blocks transient guard relaxation.
+    let repulse_recall = DynamicAttractorRecall {
+        guard_conflict_margin: 0.75,
+        ..guard_recall
+    };
+    let _ = adapter.sync_core_layers_from_recall(&repulse_recall, None);
+    let _ = adapter
+        .orchestrate_layer_rope_with_substrate(
+            0,
+            &sig,
+            &mut trail,
+            Some(0.35),
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("repulse slide-in");
+    assert!(adapter.effective_spine_guard_and_repulsion(false).1);
+    for _ in 0..6 {
+        assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
+        let mut d = adapter.step_compute_dispatch(surge);
+        let _ = adapter.evaluate_whole_token_bypass_with_spine(calm_obs, &mut d);
+    }
+    assert!(!adapter.is_transient_guard_relaxed());
+}

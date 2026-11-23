@@ -211,8 +211,10 @@ pub struct AnonymousComputePool {
     pub re_bypass_cooldown: u8,
     /// Consecutive calm decode steps observed before token-level whole-steering bypass engages (CL0 `61`).
     pub whole_token_calm_dwell: u8,
-    /// Explicit zero-padding aligning CL1 arrays to byte offset `64` (CL0 `62..64`).
-    pub reserved_cl0: [u8; 2],
+    /// Consecutive concrete (`whole_token_steering_bypass == 0`) decode steps in the active turn (CL0 `62`).
+    pub concrete_run_steps: u8,
+    /// Consecutive calm concrete decode steps eligible for transient guard pin relaxation (CL0 `63`).
+    pub calm_concrete_streak: u8,
     /// Per-slot contribution pheromone in Q0.7 (`0..=127`), updated only from exit scalar reward (CL1 `64..128`).
     pub slot_pheromone_q7: [u8; MAX_ANONYMOUS_COMPUTE_SLOTS],
     /// Current anonymous execution lane assignment (`0..=7`) per slot (CL2 `128..192`).
@@ -223,6 +225,8 @@ const _: () = {
     assert!(size_of::<ComputePoolConfig>() == 16);
     assert!(size_of::<AnonymousComputePool>() == 192);
     assert!(align_of::<AnonymousComputePool>() == 64);
+    assert!(offset_of!(AnonymousComputePool, concrete_run_steps) == 62);
+    assert!(offset_of!(AnonymousComputePool, calm_concrete_streak) == 63);
     assert!(offset_of!(AnonymousComputePool, slot_pheromone_q7) == 64);
     assert!(offset_of!(AnonymousComputePool, slot_lane) == 128);
 };
@@ -253,10 +257,107 @@ impl AnonymousComputePool {
             regime: ComputePressureRegime::Quiescent,
             re_bypass_cooldown: 0,
             whole_token_calm_dwell: 0,
-            reserved_cl0: [0; 2],
+            concrete_run_steps: 0,
+            calm_concrete_streak: 0,
             slot_pheromone_q7: [64; MAX_ANONYMOUS_COMPUTE_SLOTS],
             slot_lane: [0; MAX_ANONYMOUS_COMPUTE_SLOTS],
         }
+    }
+
+    /// Resets per-turn bypass dwell, cooldown, and concrete streak counters at turn/prompt boundaries.
+    #[inline(always)]
+    pub const fn reset_turn_bypass_state(&mut self) {
+        self.re_bypass_cooldown = 0;
+        self.whole_token_calm_dwell = 0;
+        self.concrete_run_steps = 0;
+        self.calm_concrete_streak = 0;
+    }
+
+    /// Returns `true` when a transient contradiction-guard compute pin may safely relax toward
+    /// low-cost bypass (`guard_hold_tokens == 0` disables relaxation and holds the entire turn).
+    #[inline(always)]
+    #[must_use]
+    pub const fn can_relax_transient_guard_pin(
+        &self,
+        guard_hold_tokens: u8,
+        liminal_stationary: u8,
+        repulsion_active: bool,
+        exit_entropy_rising: bool,
+        min_calm_dwell: u8,
+    ) -> bool {
+        let req_calm = if min_calm_dwell < 2 {
+            2
+        } else {
+            min_calm_dwell
+        };
+        (guard_hold_tokens > 0)
+            & !repulsion_active
+            & !exit_entropy_rising
+            & (liminal_stationary != 0)
+            & (self.concrete_run_steps >= guard_hold_tokens)
+            & (self.calm_concrete_streak >= req_calm)
+    }
+
+    /// Clears transient guard-induced cooldown lag and seeds `whole_token_calm_dwell` once
+    /// post-hold guard pin relaxation is authorized so bypass engages smoothly.
+    #[inline(always)]
+    pub const fn on_transient_guard_relaxed(&mut self, min_calm_dwell: u8) {
+        let req_calm = if min_calm_dwell < 2 {
+            2
+        } else {
+            min_calm_dwell
+        };
+        self.re_bypass_cooldown = 0;
+        if self.whole_token_calm_dwell < req_calm {
+            self.whole_token_calm_dwell = req_calm;
+        }
+    }
+
+    #[inline]
+    fn evaluate_whole_token_steering_bypass_inner(
+        &mut self,
+        obs: TokenBypassObservation,
+        spine_vetoed: bool,
+        dispatch: &mut ComputeDispatchMask,
+    ) -> bool {
+        let raw_irreversible = obs.irreversible_step != 0;
+        let unsafe_or_boundary = raw_irreversible
+            | spine_vetoed
+            | (obs.repulsion_active != 0)
+            | (obs.exit_entropy_rising != 0)
+            | (obs.boundary_sensitivity_q7 >= 80)
+            | (obs.ego_active_boundary != 0);
+
+        let ready = if unsafe_or_boundary {
+            self.whole_token_calm_dwell = 0;
+            self.re_bypass_cooldown = self.config.min_re_bypass_dwell.max(2);
+            false
+        } else if obs.liminal_stationary == 0 {
+            self.whole_token_calm_dwell = 0;
+            false
+        } else {
+            self.whole_token_calm_dwell = self.whole_token_calm_dwell.saturating_add(1);
+            let req_dwell = obs.min_calm_dwell.max(2);
+            (self.re_bypass_cooldown == 0) & (self.whole_token_calm_dwell >= req_dwell)
+        };
+        dispatch.whole_token_steering_bypass = u8::from(ready);
+
+        // Track concrete decode streaks independently of spine-vetoed `whole_token_calm_dwell`
+        // so transient guard pins can relax after holding the opening window.
+        let is_concrete = !ready;
+        self.concrete_run_steps =
+            branchless_select_u8(is_concrete, self.concrete_run_steps.saturating_add(1), 0);
+        let is_calm_concrete = is_concrete
+            & !raw_irreversible
+            & (obs.repulsion_active == 0)
+            & (obs.exit_entropy_rising == 0)
+            & (obs.liminal_stationary != 0);
+        self.calm_concrete_streak = branchless_select_u8(
+            is_calm_concrete,
+            self.calm_concrete_streak.saturating_add(1),
+            0,
+        );
+        ready
     }
 
     /// Evaluates token-level whole-steering bypass (`dispatch.whole_token_steering_bypass`) without
@@ -272,30 +373,7 @@ impl AnonymousComputePool {
         obs: TokenBypassObservation,
         dispatch: &mut ComputeDispatchMask,
     ) -> bool {
-        let unsafe_or_boundary = (obs.irreversible_step != 0)
-            | (obs.repulsion_active != 0)
-            | (obs.exit_entropy_rising != 0)
-            | (obs.boundary_sensitivity_q7 >= 80)
-            | (obs.ego_active_boundary != 0);
-
-        if unsafe_or_boundary {
-            self.whole_token_calm_dwell = 0;
-            self.re_bypass_cooldown = self.config.min_re_bypass_dwell.max(2);
-            dispatch.whole_token_steering_bypass = 0;
-            return false;
-        }
-
-        if obs.liminal_stationary == 0 {
-            self.whole_token_calm_dwell = 0;
-            dispatch.whole_token_steering_bypass = 0;
-            return false;
-        }
-
-        self.whole_token_calm_dwell = self.whole_token_calm_dwell.saturating_add(1);
-        let req_dwell = obs.min_calm_dwell.max(2);
-        let ready = (self.re_bypass_cooldown == 0) & (self.whole_token_calm_dwell >= req_dwell);
-        dispatch.whole_token_steering_bypass = u8::from(ready);
-        ready
+        self.evaluate_whole_token_steering_bypass_inner(obs, false, dispatch)
     }
 
     /// Evaluates token-level whole-steering bypass jointly with [`SystemSpineState`] physical
@@ -308,7 +386,7 @@ impl AnonymousComputePool {
     #[inline]
     pub fn evaluate_whole_token_steering_bypass_with_spine(
         &mut self,
-        mut obs: TokenBypassObservation,
+        obs: TokenBypassObservation,
         spine: &mut SystemSpineState,
         guard_active: bool,
         dispatch: &mut ComputeDispatchMask,
@@ -319,11 +397,10 @@ impl AnonymousComputePool {
             guard_active,
             repulsion_active,
         );
-        if veto_mask != SPINE_BYPASS_VETO_NONE {
-            obs.irreversible_step = 1;
-        }
-        let candidate = self.evaluate_whole_token_steering_bypass(obs, dispatch);
-        let allow = candidate & (veto_mask == SPINE_BYPASS_VETO_NONE);
+        let spine_vetoed = veto_mask != SPINE_BYPASS_VETO_NONE;
+        let candidate =
+            self.evaluate_whole_token_steering_bypass_inner(obs, spine_vetoed, dispatch);
+        let allow = candidate & !spine_vetoed;
         dispatch.whole_token_steering_bypass = u8::from(allow);
         let masked_bypass = spine.mask_layer_bypass_with_pinned(dispatch.bypass_mask, veto_mask);
         let restored_slots = BitCut64::split(dispatch.bypass_mask, masked_bypass).outside;
@@ -987,5 +1064,134 @@ mod tests {
             [127, 127, 96, 64, 127, 110, 127, 127],
         );
         assert_eq!(pool.select_fallback_lane(), 5);
+    }
+
+    #[test]
+    fn transient_guard_relaxation_tracks_calm_concrete_streak_independently_of_dwell() {
+        let active = (1_u64 << 32) - 1;
+        let pinned_base = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
+        let rev = BitCut64::split(active, pinned_base).outside;
+        let calm_obs = TokenBypassObservation {
+            irreversible_step: 0,
+            liminal_stationary: 1,
+            boundary_sensitivity_q7: 16,
+            repulsion_active: 0,
+            exit_entropy_rising: 0,
+            ego_active_boundary: 0,
+            min_calm_dwell: 2,
+            _pad: 0,
+        };
+        let pressure = SystemPressureReading {
+            frame_time_pressure_q15: 8192,
+            bandwidth_pressure_q15: 8192,
+            l3_load_pressure_q15: 4096,
+            irreversible_step: 0,
+            _pad: 0,
+        };
+
+        let mut pool = AnonymousComputePool::default();
+        pool.reanchor_baseline_pressure(8192);
+        pool.set_slot_masks(active, pinned_base, 0, rev);
+        let mut spine = SystemSpineState::new();
+        spine.pin_compute_slots(active);
+
+        // Under guard veto, whole_token_calm_dwell stays 0 while concrete streaks accumulate.
+        for step in 0..8_u8 {
+            let mut dispatch = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
+                calm_obs,
+                &mut spine,
+                true,
+                &mut dispatch,
+            );
+            assert_eq!(dispatch.whole_token_steering_bypass, 0);
+            assert_eq!(pool.whole_token_calm_dwell, 0);
+            assert_eq!(pool.concrete_run_steps, step + 1);
+            assert_eq!(pool.calm_concrete_streak, step + 1);
+        }
+
+        // guard_hold_tokens == 0 never relaxes even after many calm concrete steps.
+        assert!(!pool.can_relax_transient_guard_pin(0, 1, false, false, 2));
+        // Below hold threshold (12 > 8) must not relax yet.
+        assert!(!pool.can_relax_transient_guard_pin(12, 1, false, false, 2));
+
+        // Instability conditions must block relaxation and reset calm_concrete_streak.
+        assert!(!pool.can_relax_transient_guard_pin(8, 0, false, false, 2));
+        assert!(!pool.can_relax_transient_guard_pin(8, 1, true, false, 2));
+        assert!(!pool.can_relax_transient_guard_pin(8, 1, false, true, 2));
+        assert!(pool.can_relax_transient_guard_pin(8, 1, false, false, 2));
+
+        // Non-stationary step resets calm_concrete_streak while preserving concrete_run_steps.
+        let non_stat_obs = TokenBypassObservation {
+            liminal_stationary: 0,
+            ..calm_obs
+        };
+        let mut d_ns = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+        let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
+            non_stat_obs,
+            &mut spine,
+            true,
+            &mut d_ns,
+        );
+        assert_eq!(pool.concrete_run_steps, 9);
+        assert_eq!(pool.calm_concrete_streak, 0);
+        assert!(!pool.can_relax_transient_guard_pin(8, 1, false, false, 2));
+
+        // Irreversible / repulsion / entropy-rising steps also reset calm_concrete_streak.
+        for bad_obs in [
+            TokenBypassObservation {
+                irreversible_step: 1,
+                ..calm_obs
+            },
+            TokenBypassObservation {
+                repulsion_active: 1,
+                ..calm_obs
+            },
+            TokenBypassObservation {
+                exit_entropy_rising: 1,
+                ..calm_obs
+            },
+        ] {
+            let mut d_cal = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
+                calm_obs, &mut spine, true, &mut d_cal,
+            );
+            assert_eq!(pool.calm_concrete_streak, 1);
+
+            let mut d_bad = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
+                bad_obs, &mut spine, true, &mut d_bad,
+            );
+            assert_eq!(pool.calm_concrete_streak, 0);
+        }
+
+        // Accumulate 2 calm concrete steps -> relaxation unlocks, cooldown lag clears, and next
+        // unguarded calm step immediately enters whole-token bypass and resets both counters.
+        for _ in 0..2 {
+            let mut d_ok = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
+                calm_obs, &mut spine, true, &mut d_ok,
+            );
+        }
+        assert!(pool.can_relax_transient_guard_pin(8, 1, false, false, 2));
+        pool.on_transient_guard_relaxed(2);
+        assert_eq!(pool.re_bypass_cooldown, 0);
+        assert!(pool.whole_token_calm_dwell >= 2);
+
+        spine.pinned_compute_mask = pinned_base;
+        let mut d_byp = pool.step_dispatch_with_spine(pressure, &spine, false, false);
+        let veto = pool.evaluate_whole_token_steering_bypass_with_spine(
+            calm_obs, &mut spine, false, &mut d_byp,
+        );
+        assert_eq!(veto, SPINE_BYPASS_VETO_NONE);
+        assert_eq!(d_byp.whole_token_steering_bypass, 1);
+        assert_eq!(pool.concrete_run_steps, 0);
+        assert_eq!(pool.calm_concrete_streak, 0);
+
+        pool.reset_turn_bypass_state();
+        assert_eq!(pool.re_bypass_cooldown, 0);
+        assert_eq!(pool.whole_token_calm_dwell, 0);
+        assert_eq!(pool.concrete_run_steps, 0);
+        assert_eq!(pool.calm_concrete_streak, 0);
     }
 }

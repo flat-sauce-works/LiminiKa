@@ -216,6 +216,7 @@ pub(crate) fn run_step2_evaluation(
         };
         timeline = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
         adapter.reset_horizon_and_core_state();
+        adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
         adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
         adapter.set_ego_max_hops(run.ego_max_hops);
         apply_ego_mode(adapter, run_ego_mode);
@@ -256,8 +257,9 @@ pub(crate) fn run_step2_evaluation(
         let mut step2_abstract_tokens = 0_usize;
         let mut step2_concrete_tokens = 0_usize;
         let mut step2_boundary_churn = 0_usize;
-        let mut step2_d2h_fast_skips = 0_usize;
+        let mut step2_logits_skips = 0_usize;
         let mut step2_instability_recoveries = 0_usize;
+        let mut step2_guard_relaxations = 0_usize;
         let mut step2_spine_veto_guard = 0_usize;
         let mut step2_spine_veto_repulse = 0_usize;
         let mut step2_spine_veto_pin = 0_usize;
@@ -529,7 +531,7 @@ pub(crate) fn run_step2_evaluation(
                     enable_pre_bypass: run.enable_pre_bypass,
                     temperature: run.temperature,
                     rng_seed: run.rng_seed,
-                    d2h_heartbeat_max: cli.d2h_heartbeat_max,
+                    logits_observe_stride: cli.logits_observe_stride,
                     steer_bypass_hits: 0,
                     steer_eligible_layers: 0,
                     whole_token_bypass_hits: 0,
@@ -537,8 +539,9 @@ pub(crate) fn run_step2_evaluation(
                     abstract_tokens: 0,
                     concrete_tokens: 0,
                     boundary_churn_transitions: 0,
-                    d2h_fast_skips: 0,
+                    logits_skips: 0,
                     instability_recoveries: 0,
+                    guard_relaxations: 0,
                     spine_veto_guard_hits: 0,
                     spine_veto_repulse_hits: 0,
                     spine_veto_pin_hits: 0,
@@ -560,8 +563,9 @@ pub(crate) fn run_step2_evaluation(
                 step2_abstract_tokens += pass1_cfg.abstract_tokens;
                 step2_concrete_tokens += pass1_cfg.concrete_tokens;
                 step2_boundary_churn += pass1_cfg.boundary_churn_transitions;
-                step2_d2h_fast_skips += pass1_cfg.d2h_fast_skips;
+                step2_logits_skips += pass1_cfg.logits_skips;
                 step2_instability_recoveries += pass1_cfg.instability_recoveries;
+                step2_guard_relaxations += pass1_cfg.guard_relaxations;
                 step2_spine_veto_guard += pass1_cfg.spine_veto_guard_hits;
                 step2_spine_veto_repulse += pass1_cfg.spine_veto_repulse_hits;
                 step2_spine_veto_pin += pass1_cfg.spine_veto_pin_hits;
@@ -675,7 +679,7 @@ pub(crate) fn run_step2_evaluation(
                                 enable_pre_bypass: run.enable_pre_bypass,
                                 temperature: run.temperature,
                                 rng_seed: run.rng_seed,
-                                d2h_heartbeat_max: cli.d2h_heartbeat_max,
+                                logits_observe_stride: cli.logits_observe_stride,
                                 steer_bypass_hits: 0,
                                 steer_eligible_layers: 0,
                                 whole_token_bypass_hits: 0,
@@ -683,8 +687,9 @@ pub(crate) fn run_step2_evaluation(
                                 abstract_tokens: 0,
                                 concrete_tokens: 0,
                                 boundary_churn_transitions: 0,
-                                d2h_fast_skips: 0,
+                                logits_skips: 0,
                                 instability_recoveries: 0,
+                                guard_relaxations: 0,
                                 spine_veto_guard_hits: 0,
                                 spine_veto_repulse_hits: 0,
                                 spine_veto_pin_hits: 0,
@@ -707,8 +712,9 @@ pub(crate) fn run_step2_evaluation(
                             step2_abstract_tokens += retry_cfg.abstract_tokens;
                             step2_concrete_tokens += retry_cfg.concrete_tokens;
                             step2_boundary_churn += retry_cfg.boundary_churn_transitions;
-                            step2_d2h_fast_skips += retry_cfg.d2h_fast_skips;
+                            step2_logits_skips += retry_cfg.logits_skips;
                             step2_instability_recoveries += retry_cfg.instability_recoveries;
+                            step2_guard_relaxations += retry_cfg.guard_relaxations;
                             step2_spine_veto_guard += retry_cfg.spine_veto_guard_hits;
                             step2_spine_veto_repulse += retry_cfg.spine_veto_repulse_hits;
                             step2_spine_veto_pin += retry_cfg.spine_veto_pin_hits;
@@ -908,7 +914,7 @@ pub(crate) fn run_step2_evaluation(
         };
         let vram_pass = query_nvidia_smi_vram().unwrap_or_else(|| "n/a".to_string());
         let summary_line = format!(
-        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_settle={} d2h_skip={}/{} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
+        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_settle={} logits_skip={}/{} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -943,7 +949,7 @@ pub(crate) fn run_step2_evaluation(
         reflect_gate_skipped,
         ext_rescue_hits,
         adapter.sandbox_settlements(),
-        step2_d2h_fast_skips,
+        step2_logits_skips,
         step2_decode_tokens,
         adapter.threshold_state().adaptation_epochs,
         adapter.stigmergic_granule_state().adaptation_epochs,
@@ -1055,7 +1061,7 @@ pub(crate) fn run_step2_evaluation(
             step2_steer_bypass_hits as f64 / step2_steer_eligible_layers as f64 * 100.0
         };
         let compute_pool_line = format!(
-            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} recov={} spine_veto=(g={},r={},p={})",
+            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} recov={} guard_relax={} spine_veto=(g={},r={},p={})",
             cp.regime,
             cp.ema_pressure_q15,
             cp.baseline_pressure_q15,
@@ -1074,6 +1080,7 @@ pub(crate) fn run_step2_evaluation(
             step2_concrete_tokens,
             step2_boundary_churn,
             step2_instability_recoveries,
+            step2_guard_relaxations,
             step2_spine_veto_guard,
             step2_spine_veto_repulse,
             step2_spine_veto_pin,

@@ -85,6 +85,8 @@ impl ModelSteeringAdapter {
                 liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape
             );
         self.turn_guard_active = guard_turn;
+        self.transient_guard_relaxed = false;
+        self.ctx.reset_turn_bypass_state();
         if guard_turn {
             let active_mask = self.ctx.compute_pool().active_mask;
             self.ctx.apply_host_spine_pin_floor(active_mask);
@@ -555,6 +557,9 @@ impl ModelSteeringAdapter {
         *self.ctx.escalated_workbench_lane_mut() = None;
         self.escalation_boundary_dirty = true;
         self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
+        self.turn_guard_active = false;
+        self.transient_guard_relaxed = false;
+        self.ctx.reset_turn_bypass_state();
         self.baseline_pinned_compute_mask = pinned_slots;
         self.ctx
             .compute_pool_mut()

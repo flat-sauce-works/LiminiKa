@@ -393,11 +393,15 @@ pub struct ModelSteeringAdapter {
     prev_sandbox_coherence: f32,
     prev_sandbox_assim_drift: f32,
     turn_guard_active: bool,
+    transient_guard_relaxed: bool,
+    guard_hold_tokens: u8,
     passive_saturation_probe_steps: u8,
 }
 
 impl Drop for ModelSteeringAdapter {
     fn drop(&mut self) {
+        self.turn_guard_active = false;
+        self.transient_guard_relaxed = false;
         self.ctx.zeroize_in_place();
         self.configured_ego = LiminalEgoState::new();
         self.residual_adapter = ResidualAdapterEngine::default();
@@ -409,6 +413,9 @@ impl Drop for ModelSteeringAdapter {
 }
 
 impl ModelSteeringAdapter {
+    /// Default decode-token hold window before a transient contradiction-guard compute pin may
+    /// relax toward low-cost bypass (`0` holds the entire turn; opt-in via `--guard-hold-tokens=<N>`).
+    pub const DEFAULT_GUARD_HOLD_TOKENS: u8 = 0;
     pub(super) fn compute_steered_layer_count(geometry: &RopeGeometry) -> u16 {
         let mut count = 0u16;
         for l in 0..geometry.num_layers.min(64) {
@@ -502,6 +509,8 @@ impl ModelSteeringAdapter {
             prev_sandbox_coherence: 0.0,
             prev_sandbox_assim_drift: 1.0,
             turn_guard_active: false,
+            transient_guard_relaxed: false,
+            guard_hold_tokens: Self::DEFAULT_GUARD_HOLD_TOKENS,
             passive_saturation_probe_steps: 0,
         })
     }
