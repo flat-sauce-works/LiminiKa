@@ -139,7 +139,7 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
 /// Per-angle summary row produced by [`run_angle_sweep`].
 #[derive(Debug, Clone)]
 pub struct AngleSweepRow {
-    /// Maximum phase rotation bound applied (`ripa_clamp_max_rad`).
+    /// Maximum phase rotation bound applied (`phase_clamp_max_rad`).
     pub max_rad: f32,
     /// Mean `D_KL(baseline || steered)` across all probes.
     pub mean_kl_div: f32,

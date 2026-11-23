@@ -281,7 +281,7 @@ fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
 }
 
 #[test]
-fn text_attractor_corpus_recalls_basin_and_detects_liminal_void_boundary() {
+fn text_attractor_corpus_recalls_basin_and_detects_liminal_exterior_boundary() {
     let geom = RopeGeometry::phi4_mini();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry valid");
     adapter.set_layer_rope_mask(0xFFFF_0000);
@@ -292,7 +292,7 @@ fn text_attractor_corpus_recalls_basin_and_detects_liminal_void_boundary() {
     let rot = adapter.geometry().rotary_dim;
     let mut fact_a = vec![0.0_f32; q_len];
     let mut fact_b = vec![0.0_f32; q_len];
-    let mut void_q = vec![0.0_f32; q_len];
+    let mut exterior_q = vec![0.0_f32; q_len];
     for h in 0..adapter.geometry().num_q_heads {
         let base = h * rot;
         for i in 0..half {
@@ -303,15 +303,15 @@ fn text_attractor_corpus_recalls_basin_and_detects_liminal_void_boundary() {
             fact_a[base + half + i] = sa;
             fact_b[base + i] = cb;
             fact_b[base + half + i] = sb;
-            void_q[base + i] = cv;
-            void_q[base + half + i] = sv;
+            exterior_q[base + i] = cv;
+            exterior_q[base + half + i] = sv;
         }
     }
 
     let refs: Vec<&[f32]> = vec![ref_vec.as_slice(); 32];
     let qa_slices: Vec<&[f32]> = vec![fact_a.as_slice(); 32];
     let qb_slices: Vec<&[f32]> = vec![fact_b.as_slice(); 32];
-    let qv_slices: Vec<&[f32]> = vec![void_q.as_slice(); 32];
+    let qv_slices: Vec<&[f32]> = vec![exterior_q.as_slice(); 32];
 
     let mut corpus = TextAttractorCorpus::new();
     corpus
@@ -814,7 +814,7 @@ fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
 }
 
 #[test]
-fn coherence_guard_gate_flags_low_fact_coherence_as_liminal_void() {
+fn coherence_guard_gate_flags_low_fact_coherence_as_liminal_exterior() {
     let gate = CoherenceGuardGate;
     let policy = RecallPolicy {
         min_coherence: 0.16,
@@ -1044,7 +1044,7 @@ fn layer_angle_perspective_separates_specialized_late_layer_attractor() {
 }
 
 #[test]
-fn society_stratum_pipeline_supports_dynamic_add_remove_and_substrate_arbitration() {
+fn coalition_stratum_pipeline_supports_dynamic_add_remove_and_substrate_arbitration() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let centroid = vec![0.0_f32; len];
@@ -1213,7 +1213,7 @@ fn head_angle_worker_stratum_separates_specialized_head_attractor() {
 }
 
 #[test]
-fn persona_recall_survives_factual_liminal_void_and_routes_via_gateway_frame() {
+fn persona_recall_survives_factual_liminal_exterior_and_routes_via_gateway_frame() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
@@ -1477,7 +1477,7 @@ fn per_role_local_token_resonance_arbitrates_fact_despite_persona_hub() {
 }
 
 #[test]
-fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_liminal_void() {
+fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_liminal_exterior() {
     let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
@@ -1605,7 +1605,7 @@ fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_
         StigmergicActionDecision::SubHeadRoute
     );
 
-    // Weak noise OOD query below basin support must stay suppressed in liminal_void.
+    // Weak noise OOD query below basin support must stay suppressed in liminal_exterior.
     let mut ood_q = vec![0.0_f32; len];
     ood_q[15] = 1.0;
     let weak_obs = LocalChannelObservation {
@@ -1922,7 +1922,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     assert!(adapter.threshold_state().threshold_floor_q7[2] > initial_persona_floor);
     assert_eq!(adapter.threshold_state().adaptation_epochs, 1);
 
-    let venn = OverlapDiscoveryReport {
+    let overlap = OverlapDiscoveryReport {
         overlap_core_mask: 0x0F,
         overlap_fringe_mask: 0x10,
         lacuna_exterior_mask: 0xE0,
@@ -1930,7 +1930,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         discovery_triggered: 1,
         ..Default::default()
     };
-    adapter.adapt_core_layers(&conflict_horizon, &venn, None);
+    adapter.adapt_core_layers(&conflict_horizon, &overlap, None);
     assert_eq!(adapter.threshold_state().adaptation_epochs, 2);
     assert_eq!(adapter.stigmergic_granule_state().adaptation_epochs, 2);
     assert_eq!(adapter.stigmergic_granule_state().overlap_mask, 0x0F);
@@ -1941,7 +1941,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         "Strong-willed curious explorer who defies capture and steps beyond limits",
     );
     assert!(adapter.ego_state().transgression_bias_q7 > 0);
-    adapter.adapt_core_layers(&conflict_horizon, &venn, None);
+    adapter.adapt_core_layers(&conflict_horizon, &overlap, None);
     assert!(adapter.ego_state().intervention_epochs >= 1);
     assert!(adapter.last_boundary_delta().kinetic_energy_q7 > 0);
 
@@ -1956,14 +1956,14 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let quiescent_venn = OverlapDiscoveryReport {
+    let quiescent_overlap = OverlapDiscoveryReport {
         overlap_core_mask: 0x0F,
         overlap_fringe_mask: 0x10,
         lacuna_exterior_mask: 0xE0,
         ..Default::default()
     };
-    adapter.adapt_core_layers(&quiescent_horizon, &quiescent_venn, None);
-    adapter.adapt_core_layers(&quiescent_horizon, &quiescent_venn, None);
+    adapter.adapt_core_layers(&quiescent_horizon, &quiescent_overlap, None);
+    adapter.adapt_core_layers(&quiescent_horizon, &quiescent_overlap, None);
     assert_eq!(adapter.last_boundary_delta().stationary_shortcut_ready, 1);
 
     let mermaid = adapter.render_liminal_topology_mermaid(5, 2);
@@ -2052,15 +2052,15 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_rank1() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = OverlapDiscoveryReport {
+    let overlap = OverlapDiscoveryReport {
         overlap_core_mask: 0x0F,
         ..Default::default()
     };
-    adapter.adapt_core_layers(&horizon, &venn, None);
-    adapter.adapt_core_layers(&horizon, &venn, None);
+    adapter.adapt_core_layers(&horizon, &overlap, None);
+    adapter.adapt_core_layers(&horizon, &overlap, None);
     assert_eq!(adapter.last_boundary_delta().stationary_shortcut_ready, 1);
     let settled_epochs = adapter.threshold_state().adaptation_epochs;
-    adapter.adapt_core_layers(&horizon, &venn, None);
+    adapter.adapt_core_layers(&horizon, &overlap, None);
     assert_eq!(
         adapter.threshold_state().adaptation_epochs,
         settled_epochs,
@@ -2092,12 +2092,12 @@ fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
         regime_code: EpistemicRegime::KnownCoherent as u8,
         ..Default::default()
     };
-    let venn = OverlapDiscoveryReport {
+    let overlap = OverlapDiscoveryReport {
         overlap_core_mask: 0x0F,
         lacuna_exterior_mask: 0xF0,
         ..Default::default()
     };
-    ego_adapter.adapt_core_layers(&horizon, &venn, None);
+    ego_adapter.adapt_core_layers(&horizon, &overlap, None);
 
     let len = ego_adapter.geometry().q_rot_len();
     let mut q_base: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
@@ -2182,7 +2182,7 @@ fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
         is_known_unknown_exterior: false,
     };
     let epochs_before_sync = ego_adapter.threshold_state().adaptation_epochs;
-    let (_hor, _venn, ens_opt) = ego_adapter.sync_core_layers_from_recall(&recall, None);
+    let (_hor, _overlap, ens_opt) = ego_adapter.sync_core_layers_from_recall(&recall, None);
     let ens_rep = ens_opt.expect("2 recalled facts must trigger fragmented micro-ensemble");
     assert_eq!(ens_rep.active_fragment_count, 2);
     assert_ne!(ens_rep.quorum_agreed_granule_mask, 0);
@@ -2684,14 +2684,22 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         },
         None,
     );
-    let mut trail_venn = lmnk_pointer_trail_t::default();
+    let mut trail_overlap = lmnk_pointer_trail_t::default();
     let _ = adapter
-        .orchestrate_layer_rope_with_substrate(16, &sig, &mut trail_venn, None, 128, &mut q, None)
-        .expect("venn layer step");
-    assert!(trail_venn.accumulated_phase_delta[0] > 0);
-    assert!(trail_venn.accumulated_phase_delta[40] > 0);
+        .orchestrate_layer_rope_with_substrate(
+            16,
+            &sig,
+            &mut trail_overlap,
+            None,
+            128,
+            &mut q,
+            None,
+        )
+        .expect("overlap layer step");
+    assert!(trail_overlap.accumulated_phase_delta[0] > 0);
+    assert!(trail_overlap.accumulated_phase_delta[40] > 0);
     // Verify sandbox lane 6 does not inflate overlap_core_mask head 0 compared to standard-only pass.
-    let core_head_with_sandbox = trail_venn.accumulated_phase_delta[0];
+    let core_head_with_sandbox = trail_overlap.accumulated_phase_delta[0];
     let _ = adapter
         .substrate_mut()
         .release_lane(6)
@@ -2704,7 +2712,7 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
         core_head_with_sandbox,
         trail_no_sb.accumulated_phase_delta[0]
     );
-    assert!(trail_venn.accumulated_phase_delta[40] > trail_no_sb.accumulated_phase_delta[40]);
+    assert!(trail_overlap.accumulated_phase_delta[40] > trail_no_sb.accumulated_phase_delta[40]);
 }
 
 #[test]

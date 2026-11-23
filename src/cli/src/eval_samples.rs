@@ -6,7 +6,7 @@
 //! Parses sectioned text fixtures (such as `tests/fixtures/gcso_eval_samples.txt`) into
 //! in-memory attractor seeds (`facts`, `persona`, `guards`) and scored evaluation probes
 //! (`probes`) so external model harnesses can run 3-way comparisons (Baseline vs. Oracle vs.
-//! Steered) before finalizing `.gcso` v1.0 persistence.
+//! Steered) before finalizing `.lmnkc` container persistence.
 
 /// Target slot category for an evaluation probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

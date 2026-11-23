@@ -9,9 +9,6 @@
 *.cmd text eol=crlf
 
 # Binary containers, model weights, shaders, and images
-*.gcso binary
-*.gcsopack binary
-*.gcsocore binary
 *.lmnkc binary
 *.lmnkp binary
 *.safetensors binary
