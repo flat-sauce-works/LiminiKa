@@ -10,6 +10,8 @@ mod recall_sync;
 mod steering;
 mod telemetry;
 
+pub use telemetry::LiminalBoundaryFlowSummary;
+
 /// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RopeLayout {

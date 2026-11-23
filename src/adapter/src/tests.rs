@@ -2993,3 +2993,82 @@ fn adapter_embeds_boxed_runtime_context_with_drop_and_spine_pin_floor() {
     // Verify explicit `drop` executes cleanly (scrubbing the embedded `RuntimeContext`).
     drop(adapter);
 }
+
+#[test]
+fn liminal_boundary_flow_summary_is_zero_safe_and_reflects_live_counters() {
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+
+    // Zero-step safety: no NaN or division-by-zero on fresh adapter.
+    let zero_summary: LiminalBoundaryFlowSummary = adapter.liminal_boundary_flow_summary();
+    assert_eq!(zero_summary.total_steps, 0);
+    assert_eq!(zero_summary.continuous_standard_steps, 0);
+    assert_eq!(zero_summary.abstract_residency_ratio, 0.0);
+    assert_eq!(zero_summary.settlement_ratio, 0.0);
+    assert_eq!(zero_summary.tension_balance_ratio, 0.0);
+    assert_eq!(zero_summary.ego_excitation_ratio, 0.0);
+    assert!(zero_summary.abstract_residency_ratio.is_finite());
+    assert!(zero_summary.settlement_ratio.is_finite());
+    assert!(zero_summary.tension_balance_ratio.is_finite());
+    assert!(zero_summary.ego_excitation_ratio.is_finite());
+
+    // Drive real adapter steps so `CoreTelemetryBank` accumulates live counters.
+    let mut trail = lmnk_pointer_trail_t::default();
+    let fact = ObjectiveFact::new([20i8; 64], 2.5, 0, 42);
+    let len = adapter.geometry().q_rot_len();
+    let mut q_rot = vec![0.25_f32; len];
+    let mut logits = vec![2.5_f32, 1.0, 0.2, -0.5];
+    let _ = adapter
+        .steer_layer_with_gateway(0, &fact, &mut trail, 64, &mut q_rot, Some(&mut logits))
+        .expect("gateway step");
+
+    // Exercise whole-token bypass telemetry counter on the live adapter.
+    let mut dispatch = ComputeDispatchMask::default();
+    let obs = TokenBypassObservation {
+        irreversible_step: 0,
+        liminal_stationary: 1,
+        boundary_sensitivity_q7: 16,
+        repulsion_active: 0,
+        exit_entropy_rising: 0,
+        ego_active_boundary: 0,
+        min_calm_dwell: 1,
+        _pad: 0,
+    };
+    let _ = adapter.evaluate_whole_token_bypass_with_spine(obs, &mut dispatch);
+
+    let live = adapter.liminal_boundary_flow_summary();
+    let snap = adapter.telemetry_snapshot();
+    assert_eq!(live.total_steps, snap.spine.total_steps);
+    assert_eq!(
+        live.continuous_standard_steps,
+        snap.spine.continuous_standard_steps
+    );
+    assert_eq!(
+        live.whole_token_bypass_events,
+        snap.whole_token_bypass_events
+    );
+    assert_eq!(live.ego_interventions, snap.ego.intervention_count);
+    assert_eq!(live.sandbox_settlements, adapter.sandbox_settlements());
+    assert!((0.0..=1.0).contains(&live.abstract_residency_ratio));
+    assert!((0.0..=1.0).contains(&live.settlement_ratio));
+    assert!((0.0..=1.0).contains(&live.tension_balance_ratio));
+    assert!((0.0..=1.0).contains(&live.ego_excitation_ratio));
+
+    // Render Mermaid + Markdown table and verify GitHub Mermaid parser safety
+    // (zero raw `<` or `>` inside quoted node labels `["..."]`).
+    let rendered = adapter.render_liminal_flow_mermaid();
+    assert!(rendered.contains("```mermaid"));
+    assert!(rendered.contains("flowchart LR"));
+    assert!(rendered.contains("| Boundary Axis |"));
+    for line in rendered.lines() {
+        if let Some(start) = line.find("[\"") {
+            let label = &line[start + 2..];
+            if let Some(end) = label.find("\"]") {
+                let inner = &label[..end];
+                assert!(
+                    !inner.contains('<') && !inner.contains('>'),
+                    "Mermaid node label must not contain raw angle brackets: {inner}"
+                );
+            }
+        }
+    }
+}

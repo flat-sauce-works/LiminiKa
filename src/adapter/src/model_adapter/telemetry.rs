@@ -6,6 +6,67 @@
 use super::super::*;
 use super::ModelSteeringAdapter;
 
+/// Runtime observability summary projecting [`CoreTelemetrySnapshot`] counters onto
+/// the `liminal` Abstraction <-> Concretion coordinate system.
+///
+/// Every counter maps directly onto existing `v0.2.0` [`CoreTelemetryBank`] fields
+/// without modifying the frozen core ABI or POD layouts.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct LiminalBoundaryFlowSummary {
+    /// Total monotonic runtime steps (`spine.total_steps`).
+    pub total_steps: u64,
+    /// Continuous `Standard`/`Detailed` steps (`spine.continuous_standard_steps`).
+    pub continuous_standard_steps: u64,
+    /// Abstract ground-state steps: whole-token pre-inference bypass (`whole_token_bypass_events`).
+    pub whole_token_bypass_events: u64,
+    /// Abstract ground-state steps: Layer 0 stationary shortcut eligibility (`liminal.stationary_shortcut_hits`).
+    pub stationary_shortcut_hits: u64,
+    /// Abstract ground-state steps: `Lacuna::Unobserved` zero-aperture locks (`unobserved_aperture_zeros`).
+    pub unobserved_aperture_zeros: u64,
+    /// Boundary gate transitions: dynamic horizon slide-ins (`liminal.slide_in_count`).
+    pub slide_in_count: u64,
+    /// Boundary gate transitions: dynamic horizon slide-outs (`liminal.slide_out_count`).
+    pub slide_out_count: u64,
+    /// Boundary gate transitions: chatter events (`liminal.chatter_events`).
+    pub chatter_events: u64,
+    /// Concrete excited-state steps: Layer 2 Ego interventions (`ego.intervention_count`).
+    pub ego_interventions: u64,
+    /// Concrete excited-state steps: P-Frame differential chain evaluations (`pframe_chain_evals`).
+    pub pframe_chain_evals: u64,
+    /// Concrete excited-state steps: cumulative P-Frame hops traversed (`pframe_total_hops`).
+    pub pframe_total_hops: u64,
+    /// Concrete excited-state steps: `Lacuna::Exterior` sandbox lane stagings (`exterior_sandbox_stages`).
+    pub exterior_sandbox_stages: u64,
+    /// Concrete-to-Abstract settlements: verified sandbox settlements (`sandbox_settlements()`).
+    pub sandbox_settlements: u64,
+    /// Homeostatic pull toward abstraction: Hot-Path immediate tension damps (`immediate_tension_damps`).
+    pub immediate_tension_damps: u64,
+    /// Homeostatic push toward concretion: Slow-Loop stagnation excitations (`slow_tension_excites`).
+    pub slow_tension_excites: u64,
+    /// Active phase anchor population (`topology.active_anchors`).
+    pub active_anchors: u8,
+    /// Ratio of abstract ground-state hits (`stationary_shortcut_hits + unobserved_aperture_zeros`)
+    /// to `continuous_standard_steps` (clamped to `[0.0, 1.0]`, `0.0` when denominator is `0`).
+    pub abstract_residency_ratio: f32,
+    /// Ratio of verified `sandbox_settlements` to `exterior_sandbox_stages`
+    /// (clamped to `[0.0, 1.0]`, `0.0` when denominator is `0`).
+    pub settlement_ratio: f32,
+    /// Homeostatic balance ratio `immediate_tension_damps / (immediate_tension_damps + slow_tension_excites)`
+    /// (`0.0` when denominator is `0`).
+    pub tension_balance_ratio: f32,
+    /// Ratio of `ego_interventions` to `continuous_standard_steps` (`0.0` when denominator is `0`).
+    pub ego_excitation_ratio: f32,
+}
+
+#[inline]
+fn safe_clamped_ratio(numerator: u64, denominator: u64) -> f32 {
+    if denominator == 0 {
+        0.0
+    } else {
+        (numerator as f64 / denominator as f64).clamp(0.0, 1.0) as f32
+    }
+}
+
 impl ModelSteeringAdapter {
     /// Returns a shared reference to the embedded 5,120-byte [`RuntimeContext`].
     #[must_use]
@@ -693,5 +754,175 @@ impl ModelSteeringAdapter {
             self.residual_spillover.cache_evictions,
         );
         res
+    }
+
+    /// Captures a read-only [`LiminalBoundaryFlowSummary`] projecting live [`CoreTelemetrySnapshot`]
+    /// counters onto the `liminal` Abstraction <-> Concretion coordinate system.
+    #[must_use]
+    pub fn liminal_boundary_flow_summary(&self) -> LiminalBoundaryFlowSummary {
+        let snap = self.telemetry_snapshot();
+        let settlements = self.sandbox_settlements();
+        let abstract_hits = snap
+            .liminal
+            .stationary_shortcut_hits
+            .saturating_add(snap.unobserved_aperture_zeros);
+        let tension_total = snap
+            .immediate_tension_damps
+            .saturating_add(snap.slow_tension_excites);
+
+        LiminalBoundaryFlowSummary {
+            total_steps: snap.spine.total_steps,
+            continuous_standard_steps: snap.spine.continuous_standard_steps,
+            whole_token_bypass_events: snap.whole_token_bypass_events,
+            stationary_shortcut_hits: snap.liminal.stationary_shortcut_hits,
+            unobserved_aperture_zeros: snap.unobserved_aperture_zeros,
+            slide_in_count: snap.liminal.slide_in_count,
+            slide_out_count: snap.liminal.slide_out_count,
+            chatter_events: snap.liminal.chatter_events,
+            ego_interventions: snap.ego.intervention_count,
+            pframe_chain_evals: snap.pframe_chain_evals,
+            pframe_total_hops: snap.pframe_total_hops,
+            exterior_sandbox_stages: snap.exterior_sandbox_stages,
+            sandbox_settlements: settlements,
+            immediate_tension_damps: snap.immediate_tension_damps,
+            slow_tension_excites: snap.slow_tension_excites,
+            active_anchors: snap.topology.active_anchors,
+            abstract_residency_ratio: safe_clamped_ratio(
+                abstract_hits,
+                snap.spine.continuous_standard_steps,
+            ),
+            settlement_ratio: safe_clamped_ratio(settlements, snap.exterior_sandbox_stages),
+            tension_balance_ratio: safe_clamped_ratio(snap.immediate_tension_damps, tension_total),
+            ego_excitation_ratio: safe_clamped_ratio(
+                snap.ego.intervention_count,
+                snap.spine.continuous_standard_steps,
+            ),
+        }
+    }
+
+    /// Renders a live Mermaid `flowchart LR` diagram and Markdown correspondence table
+    /// overlaying runtime [`LiminalBoundaryFlowSummary`] counters onto the `liminal`
+    /// Abstraction <-> Concretion boundary.
+    ///
+    /// Node labels strictly avoid raw `<` and `>` characters for GitHub Mermaid parser safety.
+    #[must_use]
+    pub fn render_liminal_flow_mermaid(&self) -> String {
+        use std::fmt::Write as _;
+
+        let s = self.liminal_boundary_flow_summary();
+        let mut out = String::with_capacity(1400);
+        let _ = writeln!(out, "```mermaid");
+        let _ = writeln!(out, "flowchart LR");
+        let _ = writeln!(out, "    subgraph ABS[\"Abstract Realm (Ground State)\"]");
+        let _ = writeln!(
+            out,
+            "        ABS_BYP[\"SelfRef Bypass: whole_byp={} shortcut={} unobs={} (residency={:.1}%)\"]",
+            s.whole_token_bypass_events,
+            s.stationary_shortcut_hits,
+            s.unobserved_aperture_zeros,
+            s.abstract_residency_ratio * 100.0
+        );
+        let _ = writeln!(
+            out,
+            "        ABS_IFR[\"Indivisible(Grounded) I-Frame Anchors: active={} settled={}\"]",
+            s.active_anchors, s.sandbox_settlements
+        );
+        let _ = writeln!(out, "    end");
+        let _ = writeln!(out, "    subgraph LIM[\"liminal Boundary Gate\"]");
+        let _ = writeln!(
+            out,
+            "        LIM_GATE[\"steps={} (std={}) slide_in={} slide_out={} chatter={}\"]",
+            s.total_steps,
+            s.continuous_standard_steps,
+            s.slide_in_count,
+            s.slide_out_count,
+            s.chatter_events
+        );
+        let _ = writeln!(out, "    end");
+        let _ = writeln!(out, "    subgraph CON[\"Concrete Realm (Excited State)\"]");
+        let _ = writeln!(
+            out,
+            "        CON_EGO[\"Ego P-Frame: interv={} ({:.1}%) evals={} hops={}\"]",
+            s.ego_interventions,
+            s.ego_excitation_ratio * 100.0,
+            s.pframe_chain_evals,
+            s.pframe_total_hops
+        );
+        let _ = writeln!(
+            out,
+            "        CON_EXT[\"Exterior Sandbox: staged={} settled={} ({:.1}%)\"]",
+            s.exterior_sandbox_stages,
+            s.sandbox_settlements,
+            s.settlement_ratio * 100.0
+        );
+        let _ = writeln!(out, "    end");
+        let _ = writeln!(
+            out,
+            "    ABS_BYP <-->|\"damp={} / excite={} (bal={:.1}%)\"| LIM_GATE",
+            s.immediate_tension_damps,
+            s.slow_tension_excites,
+            s.tension_balance_ratio * 100.0
+        );
+        let _ = writeln!(
+            out,
+            "    LIM_GATE -->|\"Ego Excitation ({})\"| CON_EGO",
+            s.ego_interventions
+        );
+        let _ = writeln!(
+            out,
+            "    LIM_GATE <-->|\"Exterior Stage ({}) / Settle ({})\"| CON_EXT",
+            s.exterior_sandbox_stages, s.sandbox_settlements
+        );
+        let _ = writeln!(
+            out,
+            "    CON_EXT -->|\"settle_sandbox_lane ({})\"| ABS_IFR",
+            s.sandbox_settlements
+        );
+        let _ = writeln!(out, "```");
+        let _ = writeln!(out);
+        let _ = writeln!(
+            out,
+            "| Boundary Axis | `CoreTelemetryBank` Counter | Live Value | Derived Ratio |"
+        );
+        let _ = writeln!(out, "| :--- | :--- | ---: | ---: |");
+        let _ = writeln!(
+            out,
+            "| Abstract Residency | `stationary_shortcut_hits` + `unobserved_aperture_zeros` (`whole_token_bypass_events={}`) | {} + {} / {} | {:.1}% |",
+            s.whole_token_bypass_events,
+            s.stationary_shortcut_hits,
+            s.unobserved_aperture_zeros,
+            s.continuous_standard_steps,
+            s.abstract_residency_ratio * 100.0
+        );
+        let _ = writeln!(
+            out,
+            "| Boundary Gate Flux | `liminal.slide_in_count` / `slide_out_count` / `chatter_events` | {} / {} / {} | - |",
+            s.slide_in_count, s.slide_out_count, s.chatter_events
+        );
+        let _ = writeln!(
+            out,
+            "| Concrete Ego P-Frame | `ego.intervention_count` (`pframe_chain_evals={}`, `pframe_total_hops={}`) | {} / {} | {:.1}% |",
+            s.pframe_chain_evals,
+            s.pframe_total_hops,
+            s.ego_interventions,
+            s.continuous_standard_steps,
+            s.ego_excitation_ratio * 100.0
+        );
+        let _ = writeln!(
+            out,
+            "| Exterior Settlement | `sandbox_settlements` / `exterior_sandbox_stages` | {} / {} | {:.1}% |",
+            s.sandbox_settlements,
+            s.exterior_sandbox_stages,
+            s.settlement_ratio * 100.0
+        );
+        let _ = writeln!(
+            out,
+            "| Tension Balance | `immediate_tension_damps` / (`damps` + `slow_tension_excites`) | {} / ({} + {}) | {:.1}% |",
+            s.immediate_tension_damps,
+            s.immediate_tension_damps,
+            s.slow_tension_excites,
+            s.tension_balance_ratio * 100.0
+        );
+        out
     }
 }

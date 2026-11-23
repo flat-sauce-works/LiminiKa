@@ -214,7 +214,53 @@ pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64
 }
 
 pub(crate) const HEARTBEAT_MIN_STRIDE: usize = 2;
-pub(crate) const DEFAULT_D2H_HEARTBEAT_MAX: usize = 8;
+pub(crate) const DEFAULT_D2H_HEARTBEAT_MAX: usize = 0;
+
+/// Per-prompt / per-turn residency and boundary churn tracker between
+/// abstract residency (`whole_token_bypass == true`) and concrete residency
+/// (`whole_token_bypass == false`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct LiminalDecodeChurnTracker {
+    prev_was_bypass: Option<bool>,
+    pub(crate) abstract_tokens: usize,
+    pub(crate) concrete_tokens: usize,
+    pub(crate) boundary_churn_transitions: usize,
+}
+
+impl LiminalDecodeChurnTracker {
+    pub(crate) const fn new() -> Self {
+        Self {
+            prev_was_bypass: None,
+            abstract_tokens: 0,
+            concrete_tokens: 0,
+            boundary_churn_transitions: 0,
+        }
+    }
+
+    pub(crate) fn reset_prompt(&mut self) {
+        self.prev_was_bypass = None;
+    }
+
+    pub(crate) fn record_token(&mut self, curr_was_bypass: bool) {
+        if curr_was_bypass {
+            self.abstract_tokens += 1;
+        } else {
+            self.concrete_tokens += 1;
+        }
+        if self
+            .prev_was_bypass
+            .is_some_and(|prev| prev != curr_was_bypass)
+        {
+            self.boundary_churn_transitions += 1;
+        }
+        self.prev_was_bypass = Some(curr_was_bypass);
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn total_tokens(&self) -> usize {
+        self.abstract_tokens + self.concrete_tokens
+    }
+}
 
 pub(crate) fn parse_d2h_heartbeat<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
     for arg in args {
@@ -874,6 +920,9 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) steer_eligible_layers: usize,
     pub(crate) whole_token_bypass_hits: usize,
     pub(crate) decode_tokens_total: usize,
+    pub(crate) abstract_tokens: usize,
+    pub(crate) concrete_tokens: usize,
+    pub(crate) boundary_churn_transitions: usize,
     pub(crate) d2h_fast_skips: usize,
     pub(crate) instability_recoveries: usize,
     pub(crate) spine_veto_guard_hits: usize,
@@ -950,6 +999,8 @@ pub(crate) fn generate_steered_reply_with_offset(
         LogitsOutcome::UnobservedDeviceArgmax(_) => 0.0_f32,
     };
     let mut gate = LiminalD2hApertureGate::new(cfg.d2h_heartbeat_max);
+    let mut churn_tracker = LiminalDecodeChurnTracker::new();
+    churn_tracker.reset_prompt();
 
     for (step_idx, offset) in (start_offset + ids.len()..)
         .take(MAX_GEN_TOKENS)
@@ -966,9 +1017,11 @@ pub(crate) fn generate_steered_reply_with_offset(
             break;
         }
         gen_ids.push(next);
-        let tok_was_whole_bypass = steer
-            .compute_dispatch
-            .is_some_and(|d| d.whole_token_steering_bypass != 0);
+        let tok_was_whole_bypass = cfg.use_steer
+            && steer
+                .compute_dispatch
+                .is_some_and(|d| d.whole_token_steering_bypass != 0);
+        churn_tracker.record_token(tok_was_whole_bypass);
         if cfg.use_steer {
             cfg.decode_tokens_total += 1;
             if tok_was_whole_bypass {
@@ -1104,6 +1157,9 @@ pub(crate) fn generate_steered_reply_with_offset(
     }
     cfg.steer_bypass_hits += steer.steer_bypass_hits;
     cfg.steer_eligible_layers += steer.steer_eligible_layers;
+    cfg.abstract_tokens += churn_tracker.abstract_tokens;
+    cfg.concrete_tokens += churn_tracker.concrete_tokens;
+    cfg.boundary_churn_transitions += churn_tracker.boundary_churn_transitions;
     let decode_secs = t_dec.elapsed().as_secs_f64();
     let text = tokenizer
         .decode(&gen_ids, true)
@@ -1239,7 +1295,7 @@ mod tests {
 
     #[test]
     fn d2h_aperture_gate_tightens_monotonically_from_8_to_2_and_disables_when_gated() {
-        assert_eq!(parse_d2h_heartbeat(["candle_eval"]), 8);
+        assert_eq!(parse_d2h_heartbeat(["candle_eval"]), 0);
         assert_eq!(parse_d2h_heartbeat(["candle_eval", "--d2h-heartbeat=0"]), 0);
         assert_eq!(parse_d2h_heartbeat(["candle_eval", "--d2h-heartbeat=5"]), 5);
 
@@ -1358,5 +1414,46 @@ mod tests {
             extract_device_argmax_token(&t_bf16).expect("bf16 argmax"),
             argmax(&bf16_cpu)
         );
+    }
+
+    #[test]
+    fn decode_churn_tracker_records_zero_flips_on_constant_concrete_sequence() {
+        let mut tracker = LiminalDecodeChurnTracker::new();
+        for _ in 0..8 {
+            tracker.record_token(false);
+        }
+        assert_eq!(tracker.abstract_tokens, 0);
+        assert_eq!(tracker.concrete_tokens, 8);
+        assert_eq!(tracker.total_tokens(), 8);
+        assert_eq!(tracker.boundary_churn_transitions, 0);
+    }
+
+    #[test]
+    fn decode_churn_tracker_counts_alternating_bypass_and_concrete_transitions() {
+        let mut tracker = LiminalDecodeChurnTracker::new();
+        for &is_bypass in &[false, true, true, false, true, false] {
+            tracker.record_token(is_bypass);
+        }
+        assert_eq!(tracker.abstract_tokens, 3);
+        assert_eq!(tracker.concrete_tokens, 3);
+        assert_eq!(tracker.total_tokens(), 6);
+        assert_eq!(tracker.boundary_churn_transitions, 4);
+    }
+
+    #[test]
+    fn decode_churn_tracker_resets_between_prompts_without_false_cross_prompt_flip() {
+        let mut tracker = LiminalDecodeChurnTracker::new();
+        tracker.record_token(false);
+        tracker.record_token(true);
+        assert_eq!(tracker.boundary_churn_transitions, 1);
+
+        // Prompt 2 starts in concrete mode after prompt 1 ended in abstract bypass.
+        tracker.reset_prompt();
+        tracker.record_token(false);
+        tracker.record_token(false);
+        assert_eq!(tracker.abstract_tokens, 1);
+        assert_eq!(tracker.concrete_tokens, 3);
+        assert_eq!(tracker.total_tokens(), 4);
+        assert_eq!(tracker.boundary_churn_transitions, 1);
     }
 }

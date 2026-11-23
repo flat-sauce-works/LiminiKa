@@ -19,21 +19,30 @@ DAG_AND_AXIOM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
         "Lv.0 liminal -> Lv.1..4",
         "liminal",
         re.compile(
-            r"\b(?:crate::|(?:super::)+)(?:(foundation|stigmergy|drivers|runtime)\b|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)"
+            r"\b(?:crate::|(?:super::)+)"
+            r"(?:(foundation|stigmergy|drivers|runtime)\b"
+            r"|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)"
         ),
     ),
     (
         "Lv.1 foundation -> Lv.2..4",
         "foundation",
         re.compile(
-            r"\b(?:crate::|(?:super::)+)(?:(stigmergy|drivers|runtime)\b|\{[^}]*\b(stigmergy|drivers|runtime)\b)"
+            r"\b(?:crate::|(?:super::)+)"
+            r"(?:(stigmergy|drivers|runtime)\b"
+            r"|\{[^}]*\b(stigmergy|drivers|runtime)\b)"
         ),
     ),
     (
         "Lv.1 foundation -> liminal::axiom / Scoped",
         "foundation",
         re.compile(
-            r"\b(?:liminal::axiom\b|liminal::bitcut\b|BitCut(?:8|32|64)?\b|Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|Indivisible\b|IndivisiblePhase\b|\bAbstractDomain\b|Activatable\b|Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|BridgedDiscovery\b)"
+            r"\b(?:liminal::axiom\b|liminal::bitcut\b|BitCut(?:8|32|64)?\b|"
+            r"Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|"
+            r"Indivisible\b|IndivisiblePhase\b|\bAbstractDomain\b|Activatable\b|"
+            r"Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|"
+            r"SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|"
+            r"BridgedDiscovery\b)"
         ),
     ),
     (
@@ -72,7 +81,10 @@ DAG_AND_AXIOM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
         "Lv.0 axiom/lacuna -> axiom/cut",
         "liminal/axiom/lacuna.rs",
         re.compile(
-            r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|Indivisible|IndivisiblePhase|Activatable|Groundable|ActiveScope|GroundedScope|Cuttable|Definite|BoundaryViolation|SpeculativeDiscovery)\b"
+            r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|"
+            r"Indivisible|IndivisiblePhase|Activatable|Groundable|ActiveScope|"
+            r"GroundedScope|Cuttable|Definite|BoundaryViolation|"
+            r"SpeculativeDiscovery)\b"
         ),
     ),
 ]
@@ -166,7 +178,8 @@ ALLOWED_SUBSTRATE_DECLS: dict[str, tuple[str, ...]] = {
 }
 
 SCOPED_BOUNDARY_TYPE_RE = re.compile(
-    r"\b(?:Scoped\s*<|ScopedCut\b|VerifiedAligned\s*<|BoundaryViolation\s*<|SpeculativeDiscovery\s*<|BridgedDiscovery\s*<)"
+    r"\b(?:Scoped\s*<|ScopedCut\b|VerifiedAligned\s*<|BoundaryViolation\s*<"
+    r"|SpeculativeDiscovery\s*<|BridgedDiscovery\s*<)"
 )
 PUB_TRAIT_START_RE = re.compile(
     r"pub(?:\s*\([^)]*\))?\s+(?:(?:unsafe|auto)\s+)*trait\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
@@ -361,7 +374,8 @@ def check_abstract_domain_invariant(core_src: pathlib.Path) -> list[str]:
         violations.append(f"AbstractDomain check: could not locate `pub struct Indivisible` in {cut_rs.as_posix()}")
     elif "AbstractDomain" in struct_match.group(1):
         violations.append(
-            f"AbstractDomain check: `Indivisible<C, T>` itself must not require `T: AbstractDomain` ({cut_rs.as_posix()})"
+            "AbstractDomain check: `Indivisible<C, T>` itself must not require "
+            f"`T: AbstractDomain` ({cut_rs.as_posix()})"
         )
     return violations
 
@@ -610,7 +624,8 @@ def check_topology_matrix_parity(core_src: pathlib.Path) -> list[str]:
             parsed_edges = []
         if parsed_edges != expected_edges:
             violations.append(
-                f"Topology parity: LMNK_TOPOLOGY_DAG_EDGE_MATRIX expected {expected_edges}, got {parsed_edges} ({topo_rs.as_posix()})"
+                f"Topology parity: LMNK_TOPOLOGY_DAG_EDGE_MATRIX expected "
+                f"{expected_edges}, got {parsed_edges} ({topo_rs.as_posix()})"
             )
 
     return violations
@@ -798,9 +813,170 @@ def format_hotspots(core_src: pathlib.Path, top_n: int = 12) -> str:
     total_unsafe = sum(r[2] for r in rows)
     header.append("-" * 92)
     header.append(
-        f"Summary: {total_files} prod files | {total_prod} prod LOC ({total_all} total LOC) | {total_unsafe} non-test unsafe tokens"
+        f"Summary: {total_files} prod files | {total_prod} prod LOC "
+        f"({total_all} total LOC) | {total_unsafe} non-test unsafe tokens"
     )
     return "\n".join(header) + "\n"
+
+
+def collect_liminal_map_metrics(core_src: pathlib.Path) -> dict[str, int]:
+    """Scan live `src/core/src` production files for Abstraction <-> Concretion metrics."""
+    metrics: dict[str, int] = {
+        "foundation_files": 0,
+        "foundation_prod_loc": 0,
+        "axiom_files": 0,
+        "axiom_gate_refs": 0,
+        "grounded_iframe_refs": 0,
+        "active_concretion_refs": 0,
+        "abstract_bypass_refs": 0,
+        "exterior_sandbox_refs": 0,
+        "pframe_ego_refs": 0,
+        "runtime_gate_refs": 0,
+    }
+    patterns = {
+        "axiom_gate_refs": re.compile(
+            r"\b(?:Scoped|Indivisible|rescope_from_|cut_by_lacuna|"
+            r"bridge_to_shared|BitCut(?:8|32|64)?)\b"
+        ),
+        "grounded_iframe_refs": re.compile(
+            r"\b(?:Grounded|PhaseAnchorRecord|PhaseProfile64|PhaseProfileRef64|"
+            r"PhaseWordsRef64)\b"
+        ),
+        "active_concretion_refs": re.compile(
+            r"\b(?:ActiveScope|PhaseSteeringEngine|ResidualAdapterEngine|"
+            r"PhaseDeltaSlice|ResidualScale|Indivisible\s*<\s*Active)\b"
+        ),
+        "abstract_bypass_refs": re.compile(
+            r"\b(?:Lacuna::Unobserved|Lacuna::SelfRef|"
+            r"stationary_shortcut_ready|whole_token_steering_bypass)\b"
+        ),
+        "exterior_sandbox_refs": re.compile(
+            r"\b(?:Lacuna::Exterior|slot_sandbox_mask|settle_sandbox_lane|"
+            r"SandboxLifecycleEvent)\b"
+        ),
+        "pframe_ego_refs": re.compile(
+            r"\b(?:DistortionDelta|EgoDifferentialNet|DistortionTension)\b"
+        ),
+        "runtime_gate_refs": re.compile(
+            r"\b(?:LmnkContainerView|SystemSpineState|pinned_compute_mask|"
+            r"CORE_TOPOLOGY)\b"
+        ),
+    }
+
+    for rs_file in sorted(core_src.rglob("*.rs")):
+        if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
+            continue
+        rel = rs_file.relative_to(core_src).parts
+        non_test = strip_cfg_test_tail(rs_file.read_text(encoding="utf-8").splitlines())
+        if rel and rel[0] == "foundation":
+            metrics["foundation_files"] += 1
+            metrics["foundation_prod_loc"] += len(non_test)
+        if len(rel) >= 2 and rel[0] == "liminal" and rel[1] == "axiom":
+            metrics["axiom_files"] += 1
+        for _lineno, line in non_test:
+            code = line.split("//", 1)[0]
+            for key, pat in patterns.items():
+                metrics[key] += len(pat.findall(code))
+
+    return metrics
+
+
+def render_liminal_map(core_src: pathlib.Path) -> str:
+    """Render the static `liminal` Abstraction <-> Concretion Mermaid map and table."""
+    m = collect_liminal_map_metrics(core_src)
+    lines = [
+        "```mermaid",
+        "flowchart LR",
+        '    subgraph ABS["Abstract Realm (Low-Cost Ground State)"]',
+        (
+            '        ABS_FND["Lv.1 foundation/ Pure Compute '
+            f'({m["foundation_files"]} files, {m["foundation_prod_loc"]} prod LOC)"]'
+        ),
+        (
+            '        ABS_IFR["Indivisible(Grounded) I-Frame PhaseAnchorRecord '
+            f'({m["grounded_iframe_refs"]} refs)"]'
+        ),
+        (
+            '        ABS_BYP["Lacuna::Unobserved and SelfRef Bypass '
+            f'({m["abstract_bypass_refs"]} refs)"]'
+        ),
+        "    end",
+        '    subgraph LIM["liminal Boundary Gates (Lv.0 Axiom + Lv.4 Runtime)"]',
+        (
+            '        LIM_AX["Lv.0 liminal/axiom seal / rescope / BitCut '
+            f'({m["axiom_files"]} files, {m["axiom_gate_refs"]} refs)"]'
+        ),
+        (
+            '        LIM_RT["Lv.4 LmnkContainerView + SystemSpineState '
+            f'({m["runtime_gate_refs"]} refs)"]'
+        ),
+        "    end",
+        '    subgraph CON["Concrete Realm (High-Cost Excited State)"]',
+        (
+            '        CON_ACT["Scoped + Indivisible(Active) RoPE / Rank-1 '
+            f'({m["active_concretion_refs"]} refs)"]'
+        ),
+        (
+            '        CON_EGO["EgoDifferentialNet P-Frame + DistortionTension '
+            f'({m["pframe_ego_refs"]} refs)"]'
+        ),
+        (
+            '        CON_EXT["Lacuna::Exterior Isolated Sandbox Lanes '
+            f'({m["exterior_sandbox_refs"]} refs)"]'
+        ),
+        "    end",
+        '    ABS_FND -->|"Zero-Scoped Kernel Import"| LIM_AX',
+        '    ABS_IFR <-->|"seal / ground I-Frame"| LIM_AX',
+        '    ABS_BYP <-->|"4p(1-p) Aperture & Spine Bypass"| LIM_RT',
+        '    LIM_AX -->|"rescope_from_delta / Activate"| CON_ACT',
+        '    LIM_RT <-->|"Host Pin Floor & Tension Damping"| CON_EGO',
+        '    LIM_AX <-->|"cut_by_lacuna / settle_sandbox_lane"| CON_EXT',
+        "```",
+        "",
+        "## Static `liminal` Abstraction <-> Concretion Correspondence Table",
+        "",
+        (
+            "| Abstract Realm (Ground State) | `liminal` Boundary Gate / Op | "
+            "Concrete Realm (Excited State) | Live `src/core/src` Counts | "
+            "`CoreTelemetryBank` Counter |"
+        ),
+        "| :--- | :--- | :--- | ---: | :--- |",
+        (
+            "| Lv.1 `foundation/` non-`Scoped` pure compute | "
+            "`liminal/axiom` (`Scoped`, `Indivisible`, `BitCut`) | "
+            "Lv.2+ `Indivisible(Active)` RoPE / Rank-1 engines | "
+            f"{m['foundation_files']} files / {m['foundation_prod_loc']} LOC -> "
+            f"{m['active_concretion_refs']} active refs | "
+            "`stigmergy.decision_counts[0..7]` |"
+        ),
+        (
+            "| `Indivisible(Grounded)` I-Frame `PhaseAnchorRecord` | "
+            "`seal` / `rescope_from_boundary` / `CORE_TOPOLOGY` | "
+            "`EgoDifferentialNet` P-Frame `DistortionDelta` | "
+            f"{m['grounded_iframe_refs']} grounded refs <-> "
+            f"{m['pframe_ego_refs']} P-Frame/tension refs | "
+            "`pframe_chain_evals`, `pframe_total_hops`, `ego.intervention_count` |"
+        ),
+        (
+            "| `Lacuna::SelfRef` stationary bypass | "
+            "`SystemSpineState` + `pinned_compute_mask` | "
+            "`DistortionTension` damped/excited steering | "
+            f"{m['abstract_bypass_refs']} bypass refs <-> "
+            f"{m['runtime_gate_refs']} spine/container refs | "
+            "`whole_token_bypass_events`, `liminal.stationary_shortcut_hits`, "
+            "`immediate_tension_damps`, `slow_tension_excites` |"
+        ),
+        (
+            "| `Lacuna::Unobserved` zero-aperture | "
+            "`cut_by_lacuna` / `LacunaPartition8` | "
+            "`Lacuna::Exterior` sandbox (`slot_sandbox_mask`) | "
+            f"{m['axiom_gate_refs']} axiom gate refs <-> "
+            f"{m['exterior_sandbox_refs']} sandbox refs | "
+            "`unobserved_aperture_zeros`, `exterior_sandbox_stages`, "
+            "`liminal.slide_in_count`, `liminal.slide_out_count` |"
+        ),
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -822,10 +998,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Emit a Mermaid flowchart TD representation of the live core dependency graph.",
     )
     parser.add_argument(
+        "--liminal-map",
+        action="store_true",
+        help="Emit the static liminal Abstraction <-> Concretion Mermaid map and correspondence table.",
+    )
+    parser.add_argument(
         "--output",
         type=pathlib.Path,
         default=None,
-        help="Optional output file path for --mermaid diagram text.",
+        help="Optional output file path for --mermaid or --liminal-map output.",
     )
     parser.add_argument(
         "--hotspots",
@@ -833,7 +1014,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print top core source files by LOC, unsafe tokens, raw bitmask operations, and axiom surface.",
     )
     args = parser.parse_args(argv)
-    if not (args.check or args.mermaid or args.hotspots):
+    if not (args.check or args.mermaid or args.hotspots or args.liminal_map):
         args.check = True
     return args
 
@@ -856,7 +1037,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(
                 "All 5-layer DAG, spine/ego isolation, axiom orthogonality, "
-                "AbstractDomain, Scoped boundary, legacy declared-identifier bans, and Substrate ownership invariants passed (0 violations)."
+                "AbstractDomain, Scoped boundary, legacy declared-identifier bans, "
+                "and Substrate ownership invariants passed (0 violations)."
             )
 
     if args.hotspots:
@@ -866,7 +1048,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.mermaid:
         diagram = render_mermaid(CORE_SRC)
-        if args.output is not None:
+        if args.output is not None and not args.liminal_map:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(diagram.encode("utf-8"))
             print(f"\nWrote Mermaid diagram to {args.output.as_posix()}")
@@ -874,6 +1056,17 @@ def main(argv: list[str] | None = None) -> int:
             if args.check or args.hotspots:
                 print()
             print(diagram, end="")
+
+    if args.liminal_map:
+        liminal_doc = render_liminal_map(CORE_SRC)
+        if args.output is not None and not args.mermaid:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(liminal_doc.encode("utf-8"))
+            print(f"\nWrote liminal boundary map to {args.output.as_posix()}")
+        else:
+            if args.check or args.hotspots or args.mermaid:
+                print()
+            print(liminal_doc, end="")
 
     return exit_code
 

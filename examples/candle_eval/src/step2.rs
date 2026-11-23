@@ -253,6 +253,9 @@ pub(crate) fn run_step2_evaluation(
         let mut step2_steer_eligible_layers = 0_usize;
         let mut step2_whole_token_bypass_hits = 0_usize;
         let mut step2_decode_tokens_steered = 0_usize;
+        let mut step2_abstract_tokens = 0_usize;
+        let mut step2_concrete_tokens = 0_usize;
+        let mut step2_boundary_churn = 0_usize;
         let mut step2_d2h_fast_skips = 0_usize;
         let mut step2_instability_recoveries = 0_usize;
         let mut step2_spine_veto_guard = 0_usize;
@@ -531,6 +534,9 @@ pub(crate) fn run_step2_evaluation(
                     steer_eligible_layers: 0,
                     whole_token_bypass_hits: 0,
                     decode_tokens_total: 0,
+                    abstract_tokens: 0,
+                    concrete_tokens: 0,
+                    boundary_churn_transitions: 0,
                     d2h_fast_skips: 0,
                     instability_recoveries: 0,
                     spine_veto_guard_hits: 0,
@@ -551,6 +557,9 @@ pub(crate) fn run_step2_evaluation(
                 step2_steer_eligible_layers += pass1_cfg.steer_eligible_layers;
                 step2_whole_token_bypass_hits += pass1_cfg.whole_token_bypass_hits;
                 step2_decode_tokens_steered += pass1_cfg.decode_tokens_total;
+                step2_abstract_tokens += pass1_cfg.abstract_tokens;
+                step2_concrete_tokens += pass1_cfg.concrete_tokens;
+                step2_boundary_churn += pass1_cfg.boundary_churn_transitions;
                 step2_d2h_fast_skips += pass1_cfg.d2h_fast_skips;
                 step2_instability_recoveries += pass1_cfg.instability_recoveries;
                 step2_spine_veto_guard += pass1_cfg.spine_veto_guard_hits;
@@ -671,6 +680,9 @@ pub(crate) fn run_step2_evaluation(
                                 steer_eligible_layers: 0,
                                 whole_token_bypass_hits: 0,
                                 decode_tokens_total: 0,
+                                abstract_tokens: 0,
+                                concrete_tokens: 0,
+                                boundary_churn_transitions: 0,
                                 d2h_fast_skips: 0,
                                 instability_recoveries: 0,
                                 spine_veto_guard_hits: 0,
@@ -692,6 +704,9 @@ pub(crate) fn run_step2_evaluation(
                             step2_steer_eligible_layers += retry_cfg.steer_eligible_layers;
                             step2_whole_token_bypass_hits += retry_cfg.whole_token_bypass_hits;
                             step2_decode_tokens_steered += retry_cfg.decode_tokens_total;
+                            step2_abstract_tokens += retry_cfg.abstract_tokens;
+                            step2_concrete_tokens += retry_cfg.concrete_tokens;
+                            step2_boundary_churn += retry_cfg.boundary_churn_transitions;
                             step2_d2h_fast_skips += retry_cfg.d2h_fast_skips;
                             step2_instability_recoveries += retry_cfg.instability_recoveries;
                             step2_spine_veto_guard += retry_cfg.spine_veto_guard_hits;
@@ -1040,7 +1055,7 @@ pub(crate) fn run_step2_evaluation(
             step2_steer_bypass_hits as f64 / step2_steer_eligible_layers as f64 * 100.0
         };
         let compute_pool_line = format!(
-            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) recov={} spine_veto=(g={},r={},p={})",
+            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} recov={} spine_veto=(g={},r={},p={})",
             cp.regime,
             cp.ema_pressure_q15,
             cp.baseline_pressure_q15,
@@ -1055,6 +1070,9 @@ pub(crate) fn run_step2_evaluation(
             step2_whole_token_bypass_hits,
             step2_decode_tokens_steered,
             whole_bypass_pct,
+            step2_abstract_tokens,
+            step2_concrete_tokens,
+            step2_boundary_churn,
             step2_instability_recoveries,
             step2_spine_veto_guard,
             step2_spine_veto_repulse,

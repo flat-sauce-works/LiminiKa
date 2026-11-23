@@ -132,6 +132,9 @@ pub(crate) fn run_multi_turn_and_step3(
             let mut mt_decode_secs = 0.0_f64;
             let mut mt_whole_bypass_hits = 0_usize;
             let mut mt_decode_tokens_steered = 0_usize;
+            let mut mt_abstract_tokens = 0_usize;
+            let mut mt_concrete_tokens = 0_usize;
+            let mut mt_boundary_churn = 0_usize;
             let mut mt_d2h_fast_skips = 0_usize;
 
             model.clear_cache();
@@ -312,6 +315,9 @@ pub(crate) fn run_multi_turn_and_step3(
                         steer_eligible_layers: 0,
                         whole_token_bypass_hits: 0,
                         decode_tokens_total: 0,
+                        abstract_tokens: 0,
+                        concrete_tokens: 0,
+                        boundary_churn_transitions: 0,
                         d2h_fast_skips: 0,
                         instability_recoveries: 0,
                         spine_veto_guard_hits: 0,
@@ -337,6 +343,9 @@ pub(crate) fn run_multi_turn_and_step3(
                     mt_decode_secs += dec_secs;
                     mt_whole_bypass_hits += turn_cfg.whole_token_bypass_hits;
                     mt_decode_tokens_steered += turn_cfg.decode_tokens_total;
+                    mt_abstract_tokens += turn_cfg.abstract_tokens;
+                    mt_concrete_tokens += turn_cfg.concrete_tokens;
+                    mt_boundary_churn += turn_cfg.boundary_churn_transitions;
                     mt_d2h_fast_skips += turn_cfg.d2h_fast_skips;
 
                     let mut mt_reflect_note = match reflect_mode {
@@ -457,6 +466,9 @@ pub(crate) fn run_multi_turn_and_step3(
                                     steer_eligible_layers: 0,
                                     whole_token_bypass_hits: 0,
                                     decode_tokens_total: 0,
+                                    abstract_tokens: 0,
+                                    concrete_tokens: 0,
+                                    boundary_churn_transitions: 0,
                                     d2h_fast_skips: 0,
                                     instability_recoveries: 0,
                                     spine_veto_guard_hits: 0,
@@ -481,6 +493,9 @@ pub(crate) fn run_multi_turn_and_step3(
                                 mt_decode_secs += p2_secs;
                                 mt_whole_bypass_hits += retry_cfg.whole_token_bypass_hits;
                                 mt_decode_tokens_steered += retry_cfg.decode_tokens_total;
+                                mt_abstract_tokens += retry_cfg.abstract_tokens;
+                                mt_concrete_tokens += retry_cfg.concrete_tokens;
+                                mt_boundary_churn += retry_cfg.boundary_churn_transitions;
                                 mt_d2h_fast_skips += retry_cfg.d2h_fast_skips;
                                 if let Some(p2_crit) = critique_generated_draft(
                                     model,
@@ -590,7 +605,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits as f64 / mt_decode_tokens_steered as f64 * 100.0
             };
             println!(
-                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) | d2h_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
+                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} | d2h_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
                 adapter.ego_differential_net().max_hops,
                 if mt_exp_total == 0 {
                     0.0
@@ -616,6 +631,9 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits,
                 mt_decode_tokens_steered,
                 mt_wbyp_pct,
+                mt_abstract_tokens,
+                mt_concrete_tokens,
+                mt_boundary_churn,
                 mt_d2h_fast_skips,
                 mt_decode_tokens,
                 adapter.sandbox_settlements(),
