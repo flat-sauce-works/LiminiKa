@@ -38,9 +38,9 @@ Running checks locally before opening a PR is completely optional—CI handles v
 ### Rust Workspace
 
 ```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo deny check licenses
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo deny check
 python scripts/verify_architecture.py --check
 ```
 
@@ -49,7 +49,7 @@ python scripts/verify_architecture.py --check
 Build `liminika-core` in release mode first so CMake can link the static library (on Windows, run from a Developer Command Prompt / `vcvars64.bat`):
 
 ```bash
-cargo build --release -p liminika-core
+cargo build --locked --release -p liminika-core
 cmake -B build -S .
 cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure

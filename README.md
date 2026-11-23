@@ -12,7 +12,7 @@
 **LiminiKa** is a core engine and declarative DSL for long-term dialogue with character personas on small local machines (target: 2–4 GB of VRAM). Instead of rewriting base weights, it steers the model's latent phase field from outside (RoPE phase steering, rank-1 adapters, sub-head routing) and stores memory in compact, portable containers.
 
 > [!WARNING]
-> **Pre-1.0, experimental, actively developed.** APIs, formats, and results below describe `v0.2.0` and may change. Please view this repository as a personal experimental prototype rather than a production tool.
+> **Pre-1.0 experimental prototype.** APIs, formats, and results below describe `v0.2.0` and may change without notice, with no commitment to ongoing maintenance or updates. Please view this repository as a personal experiment rather than a production tool.
 
 ---
 
