@@ -1,0 +1,18 @@
+# name: .gitattributes
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+# Normalize all text files to LF across Windows, macOS, and Linux CI
+* text=auto eol=lf
+
+# Windows batch scripts require CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary containers, model weights, shaders, and images
+*.lmnkc binary
+*.lmnkp binary
+*.safetensors binary
+*.gguf binary
+*.bin binary
+*.spv binary
+*.png binary

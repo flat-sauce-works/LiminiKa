@@ -1,3 +1,6 @@
+# name: CITATION.cff
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
 cff-version: 1.2.0
 message: "If you use or reference this work, please cite it as below."
 authors:
@@ -6,6 +9,7 @@ title: "LiminiKa"
 version: "0.1.1"
 date-released: "2026-09-25"
 url: "https://github.com/flat-sauce-works/LiminiKa"
+repository-code: "https://github.com/flat-sauce-works/LiminiKa"
 license:
   - "MIT"
   - "Apache-2.0"

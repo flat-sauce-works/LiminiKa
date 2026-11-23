@@ -5,21 +5,62 @@
 name = "liminika-core"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "Environment-agnostic zero-allocation core execution engine for LiminiKa"
+readme.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [lib]
 name = "liminika_core"
-crate-type = ["lib", "cdylib", "staticlib"]
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [features]
 default = ["std"]
-std = []
-cuda = []
-metal = []
-vulkan = []
+std = ["alloc"]
+alloc = []
+simd = []
+avx2 = ["simd"]
+avx512 = ["simd", "avx2"]
+neon = ["simd"]
+sve = ["simd"]
+rvv = ["simd"]
 
-[dependencies]
+[dev-dependencies]
+criterion = { workspace = true }
 
-[build-dependencies]
-cc = "1.0"
-cmake = "0.1"
+[lints]
+workspace = true
+
+[[bench]]
+name = "bench_phase_steering"
+harness = false
+path = "../../benches/bench_phase_steering.rs"
+
+[[bench]]
+name = "bench_entropy_control"
+harness = false
+path = "../../benches/bench_entropy_control.rs"
+
+[[test]]
+name = "test_zero_alloc"
+path = "../../tests/core/test_zero_alloc.rs"
+
+[[test]]
+name = "test_abi_layout"
+path = "../../tests/ffi/test_abi_layout.rs"
+
+[[test]]
+name = "test_topology_parity"
+path = "../../tests/core/test_topology_parity.rs"
+
+[[test]]
+name = "test_security_adversarial"
+path = "../../tests/core/test_security_adversarial.rs"

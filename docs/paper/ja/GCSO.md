@@ -1,6 +1,6 @@
 # Geometric Cellular Sheaf Orchestrator (GCSO): Swarm-Attractor Stigmergic Architecture に基づくローカル LLM 向け RoPE 位相変調・層論的記憶制御ランタイムの設計構想
 
-> Note: 本ドキュメントは、システムアーキテクチャと数理的定式化を提示する技術提案書 (Architecture Proposal / Whitepaper) である。
+> 本ドキュメントは概念的なアーキテクチャ提案書です。登場する数学的概念（セルラー層や力学系など）は、厳密な形式証明としてではなく、「局所的なハルシネーションと事実状態がいかに1つの同じ位相空間の上で繋がっているか」をモデル化するためのメタファーとして使用されています。
 
 ---
 
@@ -151,7 +151,13 @@ $$\mathbf{G} _ {\epsilon} = (\Delta _ 0 + \epsilon \mathbf{I})^{-1}: C^0(K; \mat
 
 $$\mathbf{P} _ {\mathrm{im}(\delta _ 0)} = \delta _ 0 \mathbf{G} _ {\epsilon} \delta _ 0^* : C^1(K; \mathcal{F}) \to C^1(K; \mathcal{F})$$
 
-本分解において $\boldsymbol{\phi} \in C^0(K; \mathcal{F})$ は平滑化可能な可溶成分（完全余鎖 $\mathrm{im}(\delta _ 0)$ ）を与えるスカラーポテンシャルであり、補空間成分 $\mathbf{r} _ {\mathrm{obs}} \in \mathrm{im}(\delta _ 0)^\perp$ （添字 $\mathrm{obs}$ は **obstruction（障害類）** を指す）は、正則化パラメータ $\epsilon > 0$ の下では Tikhonov 正則化に伴う擬似直交成分（極限 $\epsilon \to 0^+$ で完全直交成分）として定式化される。 これはソレノイダル成分 $\delta _ 1^* \boldsymbol{\psi} \in \mathrm{im}(\delta _ 1^*)$ （局所的回転ノイズ）および調和成分 $\mathbf{r} _ {\mathrm{harm}} \in \mathrm{ker}(\Delta _ 1)$ （大域的障害）に一括分解される（1-Laplacian は $\Delta _ 1 = \delta _ 1^* \delta _ 1 + \delta _ 0 \delta _ 0^* : C^1(K; \mathcal{F}) \to C^1(K; \mathcal{F})$ ）。
+本分解において $\boldsymbol{\phi} \in C^0(K; \mathcal{F})$ は平滑化可能な可溶成分（完全余鎖 $\mathrm{im}(\delta _ 0)$ ）を与えるスカラーポテンシャルであり、補空間成分 $\mathbf{r} _ {\mathrm{obs}} \in \mathrm{im}(\delta _ 0)^\perp$ （添字 $\mathrm{obs}$ は **obstruction（障害類）** を指す）は、正則化パラメータ $\epsilon > 0$ の下では Tikhonov 正則化に伴う擬似直交成分（極限 $\epsilon \to 0^+$ で完全直交成分）として定式化される。 
+
+これはソレノイダル成分 
+
+```math
+$\delta _ 1^* \boldsymbol{\psi} \in \mathrm{im}(\delta _ 1^*)$ （局所的回転ノイズ）および調和成分 $\mathbf{r} _ {\mathrm{harm}} \in \mathrm{ker}(\Delta _ 1)$ （大域的障害）に一括分解される（1-Laplacian は $\Delta _ 1 = \delta _ 1^* \delta _ 1 + \delta _ 0 \delta _ 0^* : C^1(K; \mathcal{F}) \to C^1(K; \mathcal{F})$ ）。
+```
 
 特に、局所的閉性条件（ $\delta _ 1 \mathbf{r} \approx \mathbf{0}$ ）を満たしつつも可溶成分へ還元できない残差成分は、1-Cohomology 障害空間：
 

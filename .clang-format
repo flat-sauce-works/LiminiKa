@@ -1,5 +1,6 @@
+# name: .clang-format
 # SPDX-License-Identifier: MIT OR Apache-2.0
----
+
 Language: Cpp
 BasedOnStyle: LLVM
 AccessModifierOffset: -2
@@ -21,23 +22,7 @@ AlwaysBreakBeforeMultilineStrings: false
 AlwaysBreakTemplateDeclarations: Yes
 BinPackArguments: true
 BinPackParameters: true
-BraceWrapping:
-  AfterCaseLabel: false
-  AfterClass: false
-  AfterControlStatement: Never
-  AfterEnum: false
-  AfterFunction: false
-  AfterNamespace: false
-  AfterObjCDeclaration: false
-  AfterStruct: false
-  AfterUnion: false
-  AfterExternBlock: false
-  BeforeCatch: false
-  BeforeElse: false
-  IndentBraces: false
-  SplitEmptyFunction: true
-  SplitEmptyRecord: true
-  SplitEmptyNamespace: true
+
 BreakBeforeBinaryOperators: None
 BreakBeforeBraces: Attach
 BreakBeforeInheritanceComma: false
@@ -56,25 +41,24 @@ PointerAlignment: Left
 DisableFormat: false
 ExperimentalAutoDetectBinPacking: false
 FixNamespaceComments: true
-ForEachMacros:
-  - 'foreach'
-  - 'Q_FOREACH'
-  - 'BOOST_FOREACH'
-IncludeBlocks: Regroup
-IncludeCategories:
-  - Regex: '^["<]liminika/.*'
-    Priority: 1
-  - Regex: '^<.*\.h>'
-    Priority: 2
-  - Regex: '^<.*'
-    Priority: 3
-  - Regex: '.*'
-    Priority: 4
+ForEachMacros: ['foreach', 'Q_FOREACH', 'BOOST_FOREACH']
+IncludeBlocks: Preserve
+
+IncludeCategories: [
+  { Regex: '^["<]liminika/lmnk_config\.h[">]', Priority: 1 },
+  { Regex: '^["<]liminika/lmnk_types\.h[">]', Priority: 2 },
+  { Regex: '^["<]liminika/lmnk_abi\.h[">]', Priority: 3 },
+  { Regex: '^["<]liminika/.*', Priority: 4 },
+  { Regex: '^<.*\.h>', Priority: 5 },
+  { Regex: '^<.*', Priority: 6 },
+  { Regex: '.*', Priority: 7 }
+]
+
 IndentCaseLabels: true
 IndentExternBlock: NoIndent
 IndentPPDirectives: BeforeHash
 IndentWidth: 4
-KeepEmptyLinesAtTheStartOfBlocks: false
+# KeepEmptyLinesAtTheStartOfBlocks is deprecated in LLVM 19+ and already defaults to false in BasedOnStyle: LLVM.
 MacroBlockBegin: ''
 MacroBlockEnd: ''
 MaxEmptyLinesToKeep: 1
@@ -88,7 +72,8 @@ PenaltyBreakTemplateDeclaration: 10
 PenaltyExcessCharacter: 1000000
 PenaltyReturnTypeOnItsOwnLine: 60
 ReflowComments: true
-SortIncludes: true
+
+SortIncludes: CaseSensitive
 SortUsingDeclarations: true
 SpaceAfterCStyleCast: false
 SpaceAfterTemplateKeyword: true

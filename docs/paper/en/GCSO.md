@@ -1,6 +1,6 @@
 # Geometric Cellular Sheaf Orchestrator (GCSO): Design Concept of a RoPE Phase-Modulated Sheaf-Theoretic Memory Control Runtime for Local LLMs Based on Swarm-Attractor Stigmergic Architecture
 
-> Note: This document is an architecture proposal/whitepaper presenting a system architecture and mathematical formulation.
+> Note: This document is a conceptual architecture proposal. Mathematical concepts (such as cellular sheaves and dynamical systems) are used here as **heuristic design metaphors** to model how local hallucinations and factual states connect across a single unified phase space, rather than as strict formal proofs.
 
 ---
 
@@ -151,7 +151,11 @@ The spectral response of this operator follows $g _ \epsilon(\lambda) = \frac{1}
 
 $$\mathbf{P} _ {\mathrm{im}(\delta _ 0)} = \delta _ 0 \mathbf{G} _ {\epsilon} \delta _ 0^* : C^1(K; \mathcal{F}) \to C^1(K; \mathcal{F})$$
 
-In this decomposition, $\boldsymbol{\phi} \in C^0(K; \mathcal{F})$ is a scalar potential providing a smoothable solvable component (exact cochain $\mathrm{im}(\delta _ 0)$), while the complementary component $\mathbf{r} _ {\mathrm{obs}} \in \mathrm{im}(\delta _ 0)^\perp$ (the subscript $\mathrm{obs}$ indicates **obstruction**) is formulated under regularization parameter $\epsilon > 0$ as a quasi-orthogonal component (a completely orthogonal component in the limit $\epsilon \to 0^+$). It is collectively decomposed into a solenoidal component $\delta _ 1^* \boldsymbol{\psi} \in \mathrm{im}(\delta _ 1^*)$ (local rotational noise) and a harmonic component $\mathbf{r} _ {\mathrm{harm}} \in \mathrm{ker}(\Delta _ 1)$ (global obstruction) (the 1-Laplacian is $\Delta _ 1 = \delta _ 1^* \delta _ 1 + \delta _ 0 \delta _ 0^* : C^1(K; \mathcal{F}) \to C^1(K; \mathcal{F})$).
+In this decomposition, $\boldsymbol{\phi} \in C^0(K; \mathcal{F})$ is a scalar potential providing a smoothable solvable component (exact cochain $\mathrm{im}(\delta _ 0)$), while the complementary component $\mathbf{r} _ {\mathrm{obs}} \in \mathrm{im}(\delta _ 0)^\perp$ (the subscript $\mathrm{obs}$ indicates **obstruction**) is formulated under regularization parameter $\epsilon > 0$ as a quasi-orthogonal component (a completely orthogonal component in the limit $\epsilon \to 0^+$). It is collectively decomposed into a solenoidal component 
+
+```math
+$\delta _ 1^* \boldsymbol{\psi} \in \mathrm{im}(\delta _ 1^*)$ (local rotational noise) and a harmonic component $\mathbf{r} _ {\mathrm{harm}} \in \mathrm{ker}(\Delta _ 1)$ (global obstruction) (the 1-Laplacian is $\Delta _ 1 = \delta _ 1^* \delta _ 1 + \delta _ 0 \delta _ 0^* : C^1(K; \mathcal{F}) \to C^1(K; \mathcal{F})$).
+```
 
 In particular, a residual component that satisfies the local closedness condition ($\delta _ 1 \mathbf{r} \approx \mathbf{0}$) yet cannot be reduced to a solvable component is uniquely identified as the harmonic component $\mathbf{r} _ {\mathrm{harm}}$, which is an element of the 1-cohomology obstruction space:
 

@@ -1,25 +1,60 @@
+# name: .gitignore
 # SPDX-License-Identifier: MIT OR Apache-2.0
-# ===================================================================
-# LiminiKa Project .gitignore
-# Core Engine: Geometric Cellular Sheaf Orchestrator (GCSO)
-# ===================================================================
 
-# -------------------------------------------------------------------
+# =============================================================================
+# LiminiKa - Git Ignore Rules
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# AI Coding Agents, Google Antigravity & Local Skill Workspaces
+# -----------------------------------------------------------------------------
+.agent/
+.agents/
+.antigravity/
+.gemini/
+.idx/
+*.antigravity*
+.cursor/
+.windsurf/
+.clinerules
+.continuerules
+SESSION_STATE.md
+
+# -----------------------------------------------------------------------------
+# VSCodeCounter Output
+# -----------------------------------------------------------------------------
+.VSCodeCounter/
+.VSCodeCounter*/
+
+# -----------------------------------------------------------------------------
 # Rust Build Artifacts & Cargo
-# -------------------------------------------------------------------
-/target/
+# -----------------------------------------------------------------------------
+target/
+**/target/
+examples/*/Cargo.lock
+!examples/candle_eval/Cargo.lock
 **/*.rs.bk
+
+# Profiling, coverage, and benchmark outputs
 *.profraw
 *.profdata
+*.lprof
+/coverage/
+*.gcov
+cargo-timing*.html
 
-# -------------------------------------------------------------------
-# C / C++ / CUDA / GPU Build Artifacts, CMake & Toolchains
-# -------------------------------------------------------------------
-/build/
-/build*/
-/cmake-build-*/
+# -----------------------------------------------------------------------------
+# C / C++ / CUDA / GPU Kernel Build Artifacts
+# -----------------------------------------------------------------------------
+build/
+**/build/
+build-*/
+cmake-build-*/
+_build/
 /bin/
 /lib/
+
+# Object files and libraries
 *.o
 *.obj
 *.so
@@ -28,36 +63,57 @@
 *.a
 *.lib
 *.exp
+*.pdb
+*.ilk
 *.exe
 
-# GPU Compute Artifacts (CUDA / Vulkan / Metal)
+# GPU Compiled Shaders & Kernels (CUDA / Metal / Vulkan)
 *.ptx
 *.cubin
 *.fatbin
 *.spv
 *.air
 *.metallib
+*.bc
+.nv/
+.metal-cache/
+.vk-cache/
+.hip-cache/
 
-# CMake Generated Files
+# CMake & Ninja artifacts
 CMakeCache.txt
 CMakeFiles/
 CMakeAutoGen/
 cmake_install.cmake
 CTestTestfile.cmake
 Testing/
-
-# Ninja Build Files
 .ninja_deps
 .ninja_log
 build.ninja
-
-# Build Caches & Tooling
 .ccache/
 compile_commands.json
 
-# -------------------------------------------------------------------
-# LLM Model Weights, Datasets, & Adapters (Large Files)
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Python Tooling, Scripts & Virtual Environments
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+/dist/
+/sdist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+ENV/
+env/
+
+# -----------------------------------------------------------------------------
+# LLM Model Weights, Checkpoints & Large Datasets
+# -----------------------------------------------------------------------------
 *.bin
 *.safetensors
 *.gguf
@@ -65,28 +121,36 @@ compile_commands.json
 *.pt
 *.pth
 *.onnx
+*.ot
+*.tflite
+
+# Keep directory structures via .gitkeep, ignore actual model/adapter contents
 models/*
 !models/.gitkeep
 weights/*
 !weights/.gitkeep
 adapters/*
 !adapters/.gitkeep
+datasets/*
+!datasets/.gitkeep
 
-# -------------------------------------------------------------------
-# LiminiKa / GCSO Runtime State & Binary Containers
-# -------------------------------------------------------------------
-*.gcso
-*.gcsopack
-*.gcsocore
+# -----------------------------------------------------------------------------
+# LiminiKa Runtime State & Binary Containers
+# -----------------------------------------------------------------------------
+*.lmnkc
+*.lmnkp
 *.sta
+
 containers/*
 !containers/.gitkeep
 deployments/*
 !deployments/.gitkeep
+snapshots/*
+!snapshots/.gitkeep
 
-# -------------------------------------------------------------------
-# Environment Variables & Secret Configuration
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Environment Variables, Secrets & Local Configs
+# -----------------------------------------------------------------------------
 .env
 .env.*
 !.env.example
@@ -94,17 +158,22 @@ deployments/*
 *.key
 *.crt
 
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Logs & Temporary Files
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 *.log
+*.tmp
+*.bak
+nul
 /logs/
 /tmp/
 /temp/
+# Local untracked scratchpad for interim benchmark reports and experimental logs
+/.scratch/
 
-# -------------------------------------------------------------------
-# OS, IDEs & Language Server Caches
-# -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# OS & Editor / IDE Specific Files
+# -----------------------------------------------------------------------------
 # macOS
 .DS_Store
 .AppleDouble
@@ -115,14 +184,18 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# IDEs, Editors & LSP Caches
-.vscode/
+# IDEs & Editors
+.vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
+!.vscode/extensions.json
 .idea/
 .clangd/
 .cache/
+.zed/
+.helix/
+.fleet/
 *.swp
 *.swo
 *~

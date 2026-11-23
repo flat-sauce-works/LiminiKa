@@ -1,3 +1,4 @@
+# name: src/cli/Cargo.toml
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 [package]
@@ -13,10 +14,11 @@ path = "src/main.rs"
 
 [features]
 default = []
-cuda = ["liminika-core/cuda"]
-metal = ["liminika-core/metal"]
-vulkan = ["liminika-core/vulkan"]
 
 [dependencies]
+liminika-adapter = { path = "../adapter" }
 liminika-core = { path = "../core" }
 liminika-dsl = { path = "../dsl" }
+
+[lints]
+workspace = true
