@@ -74,7 +74,7 @@ session DesktopAssistant using Limina {
 
 ```text
 target LocalDevice {
-    model = "models/Phi-4-mini-instruct"  vram_budget_mb = 3072  export = "containers/limina.lmnkp"
+    model = "models/local-llm"  vram_budget_mb = 3072  export = "containers/limina.lmnkp"
 }
 persona Limina extends "presets/persona/limina_base" {
     spine     { pin = [system_prompt]  bypass = whole_token }
