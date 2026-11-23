@@ -43,7 +43,7 @@ flowchart LR
 ```
 
 - **Non-invasive steering & Hot/Cold split**: `PhaseSteering`, `SubheadRouter`, and `Rank1Adapter` modulate inference without touching base weights; a zero-allocation Hot Path runs per token while recall and container writes stay on the Cold Path.
-- **`#![no_std]` core & C-ABI (`v0.2.0` / `0x0000_0200`)**: `liminika-core` is strictly `#![no_std]` with a fixed `v0.2.0` C-ABI in [`include/liminika/`](./include/liminika/) (living spec alongside Rustdoc; [`docs/paper/`](./docs/paper/en/GCSO.md) and older `docs/architecture/` are archival origin notes).
+- **`#![no_std]` core & C-ABI (`v0.2.0` / `0x0000_0200`)**: `liminika-core` is strictly `#![no_std]` with a fixed `v0.2.0` C-ABI in [`include/liminika/`](./include/liminika/) (living spec alongside Rustdoc; [`docs/paper/`](./docs/paper/en/GCSO.md) and older `docs/architecture/` are archival documents).
 - **2 Primitives × 2 Drivers**: `Liminal` (boundary types and 4-state `Lacuna`) and `Stigmergy` (environmental traces) pair with `SystemSpine` (baseline & whole-token bypass) and `Ego` (coherent intentional deviation).
 - **Container stack**: `.lmnk` (declarative DSL) → `.lmnkc` (64 B-aligned compiled cache) → `.lmnkp` (64 B-aligned uncompressed Store ZIP package).
 
@@ -107,14 +107,14 @@ cargo build --release -p liminika-core
 cmake -B build -S . && cmake --build build --config Release && ctest --test-dir build -C Release --output-on-failure
 ```
 
-For optional local GPU evaluation (requires model weights), see `cargo run --manifest-path examples/candle_eval/Cargo.toml -- --help`.
+For optional local GPU evaluation (requires model weights separately), see [`examples/candle_eval/`](./examples/candle_eval/).
 
 ---
 
 ## Current Status and Early Notes
 
-- **What works today (`v0.2.0`)**: `#![no_std]` core + `v0.2.0` C-ABI, `.lmnkc`/`.lmnkp` containers, DSL parser + `liminika` CLI, CMake/CTest, and **215 passing Rust tests** (workspace + `candle_eval`).
-- **Early local evaluation**: Short-window 3-trial median checks on a single model (`Phi-4-mini-instruct`, `Q4_K`, RTX 4070) over a small curated fixture showed **~12–14 % fewer input tokens** and **0 % out-of-distribution (OOD) bleed** (with pure decode ~4 % slower than the vanilla baseline on `Q4_K`, and `BF16` plus multi-turn `.lmnkc` round-trips verified). Sample size is small and raw long-context ingestion is not done yet.
+- **What works today (`v0.2.0`)**: `#![no_std]` core + `v0.2.0` C-ABI, `.lmnkc`/`.lmnkp` containers, DSL parser + `liminika` CLI, CMake/CTest, and the Rust test suites (workspace and evaluation harness).
+- **Early local evaluation**: Small-scale local GPU checks on a curated short-context fixture showed reduced input token counts, suppressed out-of-distribution (OOD) bleed, and working multi-turn `.lmnkc` round-trips, with a modest decode-speed overhead relative to the baseline. Sample size is small and raw long-context ingestion is still under development.
 - **Boundary safety & current limits**: Defensive pointer/span checks and CRC32 structural integrity are implemented, but **cryptographic signing/authentication is not implemented**—do not load untrusted containers.
 - **Still in progress**: Raw unedited long-context Cold-Path scaling, DSL-to-container compilation, and external signing/verification layers.
 

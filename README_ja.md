@@ -43,7 +43,7 @@ flowchart LR
 ```
 
 - **非侵襲ステアリングと Hot / Cold 分離**：`PhaseSteering`、`SubheadRouter`、`Rank1Adapter` がベース重みに触れず推論を変調します。トークンごとにはゼロアロケーションの Hot Path のみが動き、想起やコンテナ書き込みは Cold Path で行います。
-- **`#![no_std]` コアと C-ABI (`v0.2.0` / `0x0000_0200`)**：`liminika-core` は厳密に `#![no_std]` で、`v0.2.0` 向けに固定した C-ABI は [`include/liminika/`](./include/liminika/) にあります（Rustdoc とともに現行仕様を構成し、[`docs/paper/`](./docs/paper/ja/GCSO.md) や古い `docs/architecture/` はアーカイブとしての起源文書です）。
+- **`#![no_std]` コアと C-ABI (`v0.2.0` / `0x0000_0200`)**：`liminika-core` は厳密に `#![no_std]` で、`v0.2.0` 向けに固定した C-ABI は [`include/liminika/`](./include/liminika/) にあります（Rustdoc とともに現行仕様を構成し、[`docs/paper/`](./docs/paper/ja/GCSO.md) や古い `docs/architecture/` はアーカイブ文書です）。
 - **2 つのプリミティブ × 2 つのドライバ**：`Liminal`（境界型と 4 状態 `Lacuna`）と `Stigmergy`（環境の痕跡）が、`SystemSpine`（基準軌道と全トークンバイパス）および `Ego`（一貫した意図的逸脱）と組み合わさります。
 - **コンテナスタック**：`.lmnk`（宣言的 DSL）→ `.lmnkc`（64 B アライン済みキャッシュ）→ `.lmnkp`（64 B アラインの非圧縮 Store ZIP パッケージ）。
 
@@ -107,14 +107,14 @@ cargo build --release -p liminika-core
 cmake -B build -S . && cmake --build build --config Release && ctest --test-dir build -C Release --output-on-failure
 ```
 
-任意のローカル GPU 評価（モデル重みが必要）については `cargo run --manifest-path examples/candle_eval/Cargo.toml -- --help` を参照してください。
+任意のローカル GPU 評価（別途モデル重みが必要）については [`examples/candle_eval/`](./examples/candle_eval/) を参照してください。
 
 ---
 
 ## 現在の状況と初期検証メモ (Current Status and Early Notes)
 
-- **`v0.2.0` で動作するもの**：`#![no_std]` コアと `v0.2.0` C-ABI、`.lmnkc` / `.lmnkp` コンテナ、DSL パーサーと `liminika` CLI、CMake / CTest、および **Rust テスト 215 件合格**（ワークスペース + `candle_eval`）。
-- **初期のローカル評価**：単一モデル（`Phi-4-mini-instruct`、`Q4_K`、RTX 4070）と小規模な整形済み短文フィクスチャによる 3 試行中央値では、**入力トークン約 12〜14 % 削減**と **分布外（OOD）染み出し 0 %** を確認しました（`Q4_K` の純 decode 速度はバニラ比で約 4 % 低速。`BF16` およびマルチターンの `.lmnkc` ラウンドトリップも確認済み）。サンプル数は小さく、生の長文コンテキスト取り込みは未完了です。
+- **`v0.2.0` で動作するもの**：`#![no_std]` コアと `v0.2.0` C-ABI、`.lmnkc` / `.lmnkp` コンテナ、DSL パーサーと `liminika` CLI、CMake / CTest、および Rust テスト群（ワークスペースおよび評価ハーネス）。
+- **初期のローカル評価**：整形済みの短文フィクスチャを使った小規模なローカル GPU 検証では、入力トークン数の削減、分布外（OOD）への染み出し抑制、およびマルチターンの `.lmnkc` ラウンドトリップを確認しています（ベースライン比でわずかな decode 速度のオーバーヘッドあり）。サンプル数は小さく、生の長文コンテキスト取り込みはまだ開発中です。
 - **境界の安全性と現在の限界**：防御的なポインタ／スパン検証と CRC32 による構造整合性チェックは実装済みですが、**暗号署名・認証は未実装**のため、信頼できない出典のコンテナは読み込まないでください。
 - **開発中の課題**：無編集の生の長文コンテキストに対する Cold Path スケーリング、DSL からコンテナへのコンパイル、および外部の署名・検証レイヤー。
 
