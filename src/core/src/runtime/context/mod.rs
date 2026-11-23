@@ -649,42 +649,62 @@ impl RuntimeContext {
         }
     }
 
-    /// Scrubs all 5,120 bytes of this [`RuntimeContext`] via volatile zeroization and restores valid
-    /// empty enum discriminants so the reference remains structurally valid without drop glue.
-    pub fn zeroize_in_place(&mut self) {
-        // SAFETY: `self` is a uniquely borrowed, valid 5,120-byte `RuntimeContext` with `!needs_drop`;
-        // volatile zeroization scrubs all fields and padding, and the three enum fields are
-        // immediately re-initialized to valid empty variants before returning.
+    /// Scrubs all 5,120 bytes of a raw [`RuntimeContext`] pointer via volatile zeroization without
+    /// creating any intermediate Rust reference (preserving Stacked Borrows provenance for FFI teardown).
+    ///
+    /// # Safety
+    /// Caller must ensure `ptr` is non-null, properly aligned (`align_of::<RuntimeContext>() == 64`),
+    /// writable for `size_of::<RuntimeContext>()` bytes, not aliased, and never subsequently read as
+    /// a live Rust [`RuntimeContext`] without re-initializing non-zero-guaranteed enum fields.
+    #[inline]
+    pub(crate) unsafe fn zeroize_raw(ptr: *mut Self) {
+        // SAFETY: Caller upholds non-nullness, 64B alignment, exclusive writability, and `!needs_drop`.
         unsafe {
-            zeroize_volatile(self as *mut Self);
-            core::ptr::write(core::ptr::addr_of_mut!(self.escalated_workbench_lane), None);
-            core::ptr::write(core::ptr::addr_of_mut!(self.sandbox_workbench_lane), None);
-            core::ptr::write(
-                core::ptr::addr_of_mut!(self.last_sandbox_event),
-                SandboxLifecycleEvent::Idle,
-            );
+            zeroize_volatile(ptr);
         }
     }
 
-    /// Returns the internal allocation provenance tag (`CTX_ALLOC_*`).
-    #[inline(always)]
+    /// Reads [`RuntimeContext::allocation_mode`] directly via raw pointer projection without forming
+    /// an intermediate `&RuntimeContext` reference that could invalidate teardown write provenance.
+    ///
+    /// # Safety
+    /// Caller must ensure `ptr` is non-null, naturally aligned, and points to an initialized
+    /// [`RuntimeContext`] allocation.
+    #[inline]
     #[must_use]
-    pub(crate) const fn allocation_mode(&self) -> u8 {
-        self.allocation_mode
+    pub(crate) unsafe fn read_allocation_mode_raw(ptr: *const Self) -> u8 {
+        // SAFETY: `allocation_mode` is a `u8` field inside a valid initialized `RuntimeContext`.
+        unsafe { core::ptr::addr_of!((*ptr).allocation_mode).read() }
+    }
+
+    /// Scrubs all 5,120 bytes of this [`RuntimeContext`] via volatile zeroization and restores valid
+    /// empty enum discriminants so the reference remains structurally valid without drop glue.
+    pub fn zeroize_in_place(&mut self) {
+        let raw = core::ptr::from_mut(self);
+        // SAFETY: `raw` derives from a uniquely borrowed 5,120-byte `RuntimeContext` with `!needs_drop`
+        // and is never re-borrowed through `self` after `zeroize_raw`. Recursive field audit confirms
+        // `EntropyController.is_active: bool` (`false`), `CoreTelemetryBank.ema_initialized: bool`
+        // (`false`), `ComputePressureRegime::Quiescent = 0`, `TelemetryVerbosityMode::Coarse = 0`,
+        // `TelemetryCapturePolicy::Pinned(Coarse)` (discriminant `0`), and `SandboxLifecycleEvent::Idle = 0`
+        // are all zero-valid; `Option<u8>` and `SandboxLifecycleEvent` are explicitly re-written via `raw`.
+        unsafe {
+            Self::zeroize_raw(raw);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*raw).escalated_workbench_lane),
+                None,
+            );
+            core::ptr::write(core::ptr::addr_of_mut!((*raw).sandbox_workbench_lane), None);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*raw).last_sandbox_event),
+                SandboxLifecycleEvent::Idle,
+            );
+        }
     }
 
     /// Updates the internal allocation provenance tag (`CTX_ALLOC_*`).
     #[inline(always)]
     pub(crate) fn set_allocation_mode(&mut self, mode: u8) {
         self.allocation_mode = mode;
-    }
-
-    /// Resets transient runtime state before caller-managed deinitialization and marks
-    /// `allocation_mode` back to [`CTX_ALLOC_UNINIT`].
-    #[inline]
-    pub(crate) fn deinit_hot_state(&mut self) {
-        let _ = self.reset();
-        self.allocation_mode = CTX_ALLOC_UNINIT;
     }
 }
 

@@ -23,7 +23,7 @@ use liminika_core::stigmergy::{CognitiveCircuitBankOps, StigmergicActionDecision
 use tokenizers::Tokenizer;
 
 use crate::bake::{format_phi4_prompt, query_nvidia_smi_vram};
-use crate::cli::{EvalCliConfig, EvalRuntime};
+use crate::cli::{EvalCliConfig, EvalRuntime, TrialPassMetrics};
 use crate::eval::{
     apply_ego_mode, count_semantic_forbid_hits, critique_generated_draft,
     generate_steered_reply_with_offset, HorizonAblationMode, KvTraceStats, ReflectMode,
@@ -36,7 +36,8 @@ pub(crate) fn run_multi_turn_and_step3(
     cli: &EvalCliConfig,
     rt: &mut EvalRuntime<'_>,
     step2: &mut Step2Output,
-) -> Result<(), Box<dyn std::error::Error>> {
+    run_step3: bool,
+) -> Result<Option<TrialPassMetrics>, Box<dyn std::error::Error>> {
     let cfg = rt.cfg;
     let tokenizer = rt.tokenizer;
     let model = &mut *rt.model;
@@ -61,6 +62,7 @@ pub(crate) fn run_multi_turn_and_step3(
     let cut_detector: &AdaptiveGopCutDetector = &step2.cut_detector;
     let kv_policy: &AdaptiveThresholdPolicy = &step2.kv_policy;
     let reflection_policy: &ReflectionPolicy = &step2.reflection_policy;
+    let mut mt_metrics: Option<TrialPassMetrics> = None;
 
     if multi_turn && (recall_only || baked_opt.is_some()) {
         {
@@ -129,8 +131,12 @@ pub(crate) fn run_multi_turn_and_step3(
             let mut mt_raw_forb_hits = 0_usize;
             let mut mt_sem_forb_hits = 0_usize;
             let mut mt_forb_total = 0_usize;
+            let mut mt_ood_bleed_hits = 0_usize;
+            let mut mt_ood_total = 0_usize;
             let mut mt_decode_tokens = 0_usize;
+            let mut mt_prefill_secs = 0.0_f64;
             let mut mt_decode_secs = 0.0_f64;
+            let mut mt_prompts_timed = 0_usize;
             let mut mt_whole_bypass_hits = 0_usize;
             let mut mt_decode_tokens_steered = 0_usize;
             let mut mt_abstract_tokens = 0_usize;
@@ -327,7 +333,7 @@ pub(crate) fn run_multi_turn_and_step3(
                         spine_veto_repulse_hits: 0,
                         spine_veto_pin_hits: 0,
                     };
-                    let (mut reply_text, mut turn_ids, dec_secs) =
+                    let (mut reply_text, mut turn_ids, dec_timing) =
                         generate_steered_reply_with_offset(
                             model,
                             tokenizer,
@@ -336,14 +342,16 @@ pub(crate) fn run_multi_turn_and_step3(
                             conv_offset,
                             &mut turn_cfg,
                         )?;
-                    let mut prompt_tok_len = tokenizer
+                    let prompt_tok_len = tokenizer
                         .encode(formatted_turn.as_str(), false)
                         .map_err(|e| format!("mt prompt len error: {e}"))?
                         .get_ids()
                         .len();
-                    let mut gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
+                    let gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
                     mt_decode_tokens += gen_tok_len;
-                    mt_decode_secs += dec_secs;
+                    mt_prefill_secs += dec_timing.prefill_secs;
+                    mt_decode_secs += dec_timing.decode_secs;
+                    mt_prompts_timed += 1;
                     mt_whole_bypass_hits += turn_cfg.whole_token_bypass_hits;
                     mt_decode_tokens_steered += turn_cfg.decode_tokens_total;
                     mt_abstract_tokens += turn_cfg.abstract_tokens;
@@ -480,7 +488,7 @@ pub(crate) fn run_multi_turn_and_step3(
                                     spine_veto_repulse_hits: 0,
                                     spine_veto_pin_hits: 0,
                                 };
-                                let (p2_text, p2_ids, p2_secs) =
+                                let (p2_text, p2_ids, p2_timing) =
                                     generate_steered_reply_with_offset(
                                         model,
                                         tokenizer,
@@ -495,7 +503,9 @@ pub(crate) fn run_multi_turn_and_step3(
                                     .get_ids()
                                     .len();
                                 mt_decode_tokens += p2_ids.len().saturating_sub(p2_prompt_len);
-                                mt_decode_secs += p2_secs;
+                                mt_prefill_secs += p2_timing.prefill_secs;
+                                mt_decode_secs += p2_timing.decode_secs;
+                                mt_prompts_timed += 1;
                                 mt_whole_bypass_hits += retry_cfg.whole_token_bypass_hits;
                                 mt_decode_tokens_steered += retry_cfg.decode_tokens_total;
                                 mt_abstract_tokens += retry_cfg.abstract_tokens;
@@ -522,8 +532,6 @@ pub(crate) fn run_multi_turn_and_step3(
                                     ) {
                                         reply_text = p2_text;
                                         turn_ids = p2_ids;
-                                        prompt_tok_len = p2_prompt_len;
-                                        gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
                                         mt_reflect_note = format!(
                                             "{:?}->{:?}(P2)",
                                             p1_crit.trigger, p2_crit.trigger
@@ -540,7 +548,6 @@ pub(crate) fn run_multi_turn_and_step3(
                             }
                         }
                     }
-                    let _ = gen_tok_len;
                     conv_history_ids.extend_from_slice(&turn_ids);
                     conv_offset = conv_history_ids.len();
                     (reply_text, mt_reflect_note)
@@ -572,6 +579,14 @@ pub(crate) fn run_multi_turn_and_step3(
                     mt_raw_forb_hits += t_raw_forb;
                     mt_sem_forb_hits += t_sem_forb;
                     mt_forb_total += forbidden.len();
+                } else {
+                    mt_ood_total += 1;
+                    if !matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
+                        || recall.is_known_unknown_exterior
+                        || t_sem_forb > 0
+                    {
+                        mt_ood_bleed_hits += 1;
+                    }
                 }
                 let mt_tlm = recall.telemetry;
                 println!(
@@ -600,8 +615,20 @@ pub(crate) fn run_multi_turn_and_step3(
             }
             let mt_occ = mt_kv_cache.occupied_slot_count();
             let mt_hits = mt_kv_stats.exact_hits + mt_kv_stats.res_hits;
-            let mt_tps = if mt_decode_secs > 1e-6 {
+            let mt_pure_tps = if mt_decode_secs > 1e-6 {
                 mt_decode_tokens as f64 / mt_decode_secs
+            } else {
+                0.0
+            };
+            let mt_e2e_secs = mt_prefill_secs + mt_decode_secs;
+            let mt_e2e_tps = if mt_e2e_secs > 1e-6 {
+                mt_decode_tokens as f64 / mt_e2e_secs
+            } else {
+                0.0
+            };
+            let mt_prefill_total_ms = mt_prefill_secs * 1000.0;
+            let mt_prefill_mean_ms = if mt_prompts_timed > 0 {
+                mt_prefill_total_ms / mt_prompts_timed as f64
             } else {
                 0.0
             };
@@ -611,7 +638,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits as f64 / mt_decode_tokens_steered as f64 * 100.0
             };
             println!(
-                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} guard_relax={} | logits_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | decode={:.2} tok/s",
+                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} guard_relax={} | logits_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | pure_decode={:.2} tok/s e2e={:.2} tok/s prefill={:.1}ms ({:.2}ms/t)",
                 adapter.ego_differential_net().max_hops,
                 if mt_exp_total == 0 {
                     0.0
@@ -650,15 +677,33 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_kv_stats.res_hits,
                 mt_kv_stats.pframes_appended,
                 mt_kv_stats.pframe_seeks,
-                mt_tps,
+                mt_pure_tps,
+                mt_e2e_tps,
+                mt_prefill_total_ms,
+                mt_prefill_mean_ms,
             );
+            mt_metrics = Some(TrialPassMetrics {
+                label: "8-Turn".to_string(),
+                pure_decode_tps: mt_pure_tps,
+                e2e_tps: mt_e2e_tps,
+                prefill_total_ms: mt_prefill_total_ms,
+                prefill_mean_ms: mt_prefill_mean_ms,
+                exp_hits: mt_exp_hits,
+                exp_total: mt_exp_total,
+                sem_forb_hits: mt_sem_forb_hits,
+                forb_total: mt_forb_total,
+                ood_bleed_hits: mt_ood_bleed_hits,
+                ood_total: mt_ood_total,
+                whole_bypass_hits: mt_whole_bypass_hits,
+                decode_tokens_steered: mt_decode_tokens_steered,
+            });
             if let Some(vram_end) = query_nvidia_smi_vram() {
                 println!("[VRAM  ] end=[{vram_end}]");
             }
         }
     }
 
-    if !recall_only {
+    if !recall_only && run_step3 {
         // Step 3: Repository-Contained .lmnkc Persistence, Zero-Forward Seek & Cross-Model Re-Bake
         println!("\n=== Step 3: Dual-Track .lmnkc GOP Seek & Cross-Model Re-Bake ===");
         let containers_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -837,5 +882,5 @@ pub(crate) fn run_multi_turn_and_step3(
         }
     }
 
-    Ok(())
+    Ok(mt_metrics)
 }

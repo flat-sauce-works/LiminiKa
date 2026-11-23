@@ -1169,7 +1169,11 @@ impl LmnkTimeline {
                 p.display()
             )));
         }
-        if bytes.starts_with(b"PK\x03\x04") || p.extension().is_some_and(|e| e == "lmnkp") {
+        if bytes.starts_with(b"PK\x03\x04")
+            || p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("lmnkp"))
+        {
             Self::import_lmnkp_bytes(&bytes)
         } else {
             Self::from_bytes(&bytes)

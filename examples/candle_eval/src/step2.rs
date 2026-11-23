@@ -11,7 +11,7 @@ use crate::bake::{
 };
 use crate::cli::{
     build_step2_run_specs, mean_reply_bigram_jaccard, EvalCliConfig, EvalRuntime, Step2PassResult,
-    Step2RunSpec,
+    Step2RunSpec, TrialPassMetrics,
 };
 use crate::eval::{
     apply_ego_mode, count_semantic_forbid_hits, critique_generated_draft, generate_steered_reply,
@@ -38,6 +38,7 @@ pub(crate) struct Step2Output {
     pub(crate) cut_detector: AdaptiveGopCutDetector,
     pub(crate) kv_policy: AdaptiveThresholdPolicy,
     pub(crate) reflection_policy: ReflectionPolicy,
+    pub(crate) pass_metrics: Vec<TrialPassMetrics>,
 }
 
 pub(crate) fn run_step2_evaluation(
@@ -196,6 +197,7 @@ pub(crate) fn run_step2_evaluation(
     let kv_policy = AdaptiveThresholdPolicy::default();
     let mut step2_ablation_summaries: Vec<String> = Vec::new();
     let mut pass_results: Vec<Step2PassResult> = Vec::new();
+    let mut pass_metrics: Vec<TrialPassMetrics> = Vec::new();
     let mut prompt_q_cache: HashMap<String, Vec<Vec<f32>>> = HashMap::new();
     let cut_detector = AdaptiveGopCutDetector::default();
     let mut timeline = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
@@ -249,7 +251,9 @@ pub(crate) fn run_step2_evaluation(
         let mut step2_recall_ms_sum = 0.0_f64;
         let mut step2_input_tokens = 0_usize;
         let mut step2_decode_tokens = 0_usize;
+        let mut step2_prefill_secs = 0.0_f64;
         let mut step2_decode_secs = 0.0_f64;
+        let mut step2_prompts_timed = 0_usize;
         let mut step2_steer_bypass_hits = 0_usize;
         let mut step2_steer_eligible_layers = 0_usize;
         let mut step2_whole_token_bypass_hits = 0_usize;
@@ -546,7 +550,7 @@ pub(crate) fn run_step2_evaluation(
                     spine_veto_repulse_hits: 0,
                     spine_veto_pin_hits: 0,
                 };
-                let (mut text, p1_in_tokens, p1_tokens, p1_secs) = generate_steered_reply(
+                let (mut text, p1_in_tokens, p1_tokens, p1_timing) = generate_steered_reply(
                     model,
                     tokenizer,
                     adapter,
@@ -555,7 +559,9 @@ pub(crate) fn run_step2_evaluation(
                 )?;
                 step2_input_tokens += p1_in_tokens;
                 step2_decode_tokens += p1_tokens;
-                step2_decode_secs += p1_secs;
+                step2_prefill_secs += p1_timing.prefill_secs;
+                step2_decode_secs += p1_timing.decode_secs;
+                step2_prompts_timed += 1;
                 step2_steer_bypass_hits += pass1_cfg.steer_bypass_hits;
                 step2_steer_eligible_layers += pass1_cfg.steer_eligible_layers;
                 step2_whole_token_bypass_hits += pass1_cfg.whole_token_bypass_hits;
@@ -694,7 +700,7 @@ pub(crate) fn run_step2_evaluation(
                                 spine_veto_repulse_hits: 0,
                                 spine_veto_pin_hits: 0,
                             };
-                            let (p2_text, p2_in_tokens, p2_tokens, p2_secs) =
+                            let (p2_text, p2_in_tokens, p2_tokens, p2_timing) =
                                 generate_steered_reply(
                                     model,
                                     tokenizer,
@@ -704,7 +710,9 @@ pub(crate) fn run_step2_evaluation(
                                 )?;
                             step2_input_tokens += p2_in_tokens;
                             step2_decode_tokens += p2_tokens;
-                            step2_decode_secs += p2_secs;
+                            step2_prefill_secs += p2_timing.prefill_secs;
+                            step2_decode_secs += p2_timing.decode_secs;
+                            step2_prompts_timed += 1;
                             step2_steer_bypass_hits += retry_cfg.steer_bypass_hits;
                             step2_steer_eligible_layers += retry_cfg.steer_eligible_layers;
                             step2_whole_token_bypass_hits += retry_cfg.whole_token_bypass_hits;
@@ -907,6 +915,18 @@ pub(crate) fn run_step2_evaluation(
         } else {
             0.0
         };
+        let e2e_secs = step2_prefill_secs + step2_decode_secs;
+        let e2e_tps = if e2e_secs > 1e-6 {
+            step2_decode_tokens as f64 / e2e_secs
+        } else {
+            0.0
+        };
+        let prefill_total_ms = step2_prefill_secs * 1000.0;
+        let prefill_mean_ms = if step2_prompts_timed > 0 {
+            prefill_total_ms / step2_prompts_timed as f64
+        } else {
+            0.0
+        };
         let whole_bypass_pct = if step2_decode_tokens_steered == 0 {
             0.0
         } else {
@@ -914,7 +934,7 @@ pub(crate) fn run_step2_evaluation(
         };
         let vram_pass = query_nvidia_smi_vram().unwrap_or_else(|| "n/a".to_string());
         let summary_line = format!(
-        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_settle={} logits_skip={}/{} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms decode={:.2} tok/s | vram={}",
+        "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_settle={} logits_skip={}/{} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms pure_decode={:.2} tok/s e2e={:.2} tok/s prefill={:.1}ms ({:.2}ms/p) | vram={}",
         if step2_exp_total == 0 {
             0.0
         } else {
@@ -959,6 +979,9 @@ pub(crate) fn run_step2_evaluation(
         compile_ms,
         mean_recall_ms,
         decode_tps,
+        e2e_tps,
+        prefill_total_ms,
+        prefill_mean_ms,
         vram_pass,
     );
         println!("{summary_line}");
@@ -1094,15 +1117,26 @@ pub(crate) fn run_step2_evaluation(
         step2_ablation_summaries.push(format!(
             "{summary_line}\n  {stratified_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}\n  {compute_pool_line}"
         ));
+        pass_metrics.push(TrialPassMetrics {
+            label: run.label.clone(),
+            pure_decode_tps: decode_tps,
+            e2e_tps,
+            prefill_total_ms,
+            prefill_mean_ms,
+            exp_hits: step2_exp_hits,
+            exp_total: step2_exp_total,
+            sem_forb_hits: step2_sem_forb_hits,
+            forb_total: step2_forb_total,
+            ood_bleed_hits,
+            ood_total,
+            whole_bypass_hits: step2_whole_token_bypass_hits,
+            decode_tokens_steered: step2_decode_tokens_steered,
+        });
         pass_results.push(Step2PassResult {
             label: run.label.clone(),
             axis: run.axis,
-            ego_mode: run.ego_mode.clone(),
             ego_max_hops: run.ego_max_hops,
             cond: run.cond,
-            reflect_mode: run.reflect_mode,
-            enable_pre_bypass: run.enable_pre_bypass,
-            temperature: run.temperature,
             exp_hits: step2_exp_hits,
             exp_total: step2_exp_total,
             fact_exp_hits,
@@ -1120,13 +1154,9 @@ pub(crate) fn run_step2_evaluation(
             decode_tps,
             whole_bypass_pct,
             passive_pct: dist_report.passive_distortion_ratio * 100.0,
-            active_pct: dist_report.active_distortion_ratio * 100.0,
             ego_delta_norm_q7: step2_ego_delta_norm_max_q7,
-            reflect_triggers,
-            reflect_adopted,
             reflect_skipped: reflect_gate_skipped,
             ext_rescues: ext_rescue_hits,
-            sandbox_settlements: adapter.sandbox_settlements(),
             replies: pass_replies,
         });
         if adapter.ego_state().is_active() {
@@ -1309,5 +1339,6 @@ pub(crate) fn run_step2_evaluation(
         cut_detector,
         kv_policy,
         reflection_policy,
+        pass_metrics,
     })
 }

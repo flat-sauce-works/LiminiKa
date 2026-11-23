@@ -348,16 +348,17 @@ impl WorkbenchSlotSpec {
 }
 
 /// Outcome emitted by `StigmergicSubstrate::step_sandbox_hypothesis_lifecycle`.
+#[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SandboxLifecycleEvent {
     /// No sandbox state transition occurred on this step.
-    Idle,
+    Idle = 0,
     /// A new isolated sandbox lane was leased from the free pool.
-    Nucleated(u8),
+    Nucleated(u8) = 1,
     /// An active sandbox lane settled in-place into standard full-aperture participation.
-    Settled(u8),
+    Settled(u8) = 2,
     /// Unpinned active sandbox lanes were released immediately due to repulsion or overdrive.
-    Released(u8),
+    Released(u8) = 3,
 }
 
 /// 32-byte (`#[repr(C, align(32))]`) [`Pod`] report summarizing the outcome of a single

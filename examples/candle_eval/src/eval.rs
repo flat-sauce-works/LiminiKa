@@ -3,7 +3,7 @@
 
 //! CLI profile parsers, KV-cache statistics, steered decoding, and reflection critique.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use candle_core::quantized::GgmlDType;
@@ -27,7 +27,7 @@ use liminika_core::stigmergy::{
 };
 use tokenizers::Tokenizer;
 
-use crate::bake::argmax;
+use crate::bake::{argmax, format_phi4_prompt};
 use crate::model::{ForwardSteer, LogitsFetchMode, LogitsOutcome, Phi3Model, ResonantAnchors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -285,6 +285,29 @@ pub(crate) fn parse_guard_hold_tokens<'a>(args: impl IntoIterator<Item = &'a str
     DEFAULT_GUARD_HOLD_TOKENS
 }
 
+pub(crate) fn parse_bench_trials<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--bench-trials=") {
+            if let Ok(parsed) = val.parse::<usize>() {
+                return parsed.max(1);
+            }
+        }
+    }
+    1
+}
+
+pub(crate) fn parse_fixture_path<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<PathBuf> {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--fixture=") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct LogitsObserveStrideGate {
     pub(crate) max_stride: usize,
@@ -495,10 +518,17 @@ pub(crate) fn count_semantic_forbid_hits(reply_text: &str, forbidden: &[String])
             while let Some(rel) = clause[search_from..].find(&kw_l) {
                 matched_raw = true;
                 let abs_pos = search_from + rel;
-                let prefix_start = abs_pos.saturating_sub(96);
+                let mut prefix_start = abs_pos.saturating_sub(96);
+                while prefix_start > 0 && !clause.is_char_boundary(prefix_start) {
+                    prefix_start -= 1;
+                }
                 let prefix = &clause[prefix_start..abs_pos];
-                let suffix_end = (abs_pos + kw_l.len() + 28).min(clause.len());
-                let suffix = &clause[abs_pos + kw_l.len()..suffix_end];
+                let kw_end = abs_pos + kw_l.len();
+                let mut suffix_end = (kw_end + 28).min(clause.len());
+                while suffix_end < clause.len() && !clause.is_char_boundary(suffix_end) {
+                    suffix_end += 1;
+                }
+                let suffix = &clause[kw_end..suffix_end];
                 let is_negated = PREFIX_NEG_CUES.iter().any(|cue| prefix.contains(cue))
                     || SUFFIX_NEG_CUES.iter().any(|cue| suffix.contains(cue));
                 if !is_negated {
@@ -944,6 +974,57 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) spine_veto_pin_hits: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct ReplyTiming {
+    pub(crate) prefill_secs: f64,
+    pub(crate) decode_secs: f64,
+}
+
+/// Runs an untimed warmup decode pass (1 short prompt, up to 10 greedy tokens) to stabilize
+/// GPU P0 clocks before Trial 1, then explicitly clears the model KV cache.
+pub(crate) fn run_gpu_warmup(
+    model: &mut Phi3Model,
+    tokenizer: &Tokenizer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let t_warm = Instant::now();
+    model.clear_cache();
+    let warmup_prompt = format_phi4_prompt("Warmup: what is 2 + 2?");
+    let ids = tokenizer
+        .encode(warmup_prompt.as_str(), false)
+        .map_err(|e| format!("warmup encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    let (mut outcome, _, _) =
+        model.forward_tokens(&ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
+    let mut gen_count = 0usize;
+    for offset in (ids.len()..).take(10) {
+        let next = match outcome {
+            LogitsOutcome::ObservedFull(ref logits) => argmax(logits),
+            LogitsOutcome::UnobservedDeviceArgmax(tok) => tok,
+        };
+        gen_count += 1;
+        if next == 199999 || next == 200020 {
+            break;
+        }
+        let (next_out, _, _) = model.forward_tokens(
+            &[next],
+            offset,
+            None,
+            false,
+            false,
+            LogitsFetchMode::FullLogits,
+        )?;
+        outcome = next_out;
+    }
+    model.clear_cache();
+    println!(
+        "[Warmup] Ran {} untimed warmup decode token(s) in {:.1}ms and cleared KV cache.",
+        gen_count,
+        t_warm.elapsed().as_secs_f64() * 1000.0
+    );
+    Ok(())
+}
+
 pub(crate) fn generate_steered_reply_with_offset(
     model: &mut Phi3Model,
     tokenizer: &Tokenizer,
@@ -951,7 +1032,7 @@ pub(crate) fn generate_steered_reply_with_offset(
     formatted_prompt: &str,
     start_offset: usize,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
-) -> Result<(String, Vec<u32>, f64), Box<dyn std::error::Error>> {
+) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
     let mut trail = lmnk_pointer_trail_t::default();
     let ids = tokenizer
         .encode(formatted_prompt, false)
@@ -973,7 +1054,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         steer_bypass_hits: 0,
         steer_eligible_layers: 0,
     };
-    let t_dec = Instant::now();
+    let t_prefill = Instant::now();
     steer
         .adapter
         .runtime_context_mut()
@@ -1002,6 +1083,7 @@ pub(crate) fn generate_steered_reply_with_offset(
     steer
         .adapter
         .commit_compute_exit_reward(prefill_dispatch.execute_mask, 64);
+    let prefill_secs = t_prefill.elapsed().as_secs_f64();
 
     const MAX_GEN_TOKENS: usize = 64;
     let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
@@ -1018,6 +1100,7 @@ pub(crate) fn generate_steered_reply_with_offset(
     let mut churn_tracker = LiminalDecodeChurnTracker::new();
     churn_tracker.reset_prompt();
 
+    let t_dec = Instant::now();
     for (step_idx, offset) in (start_offset + ids.len()..)
         .take(MAX_GEN_TOKENS)
         .enumerate()
@@ -1182,6 +1265,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         steer.compute_dispatch = Some(tok_dispatch);
         pending_outcome = next_outcome;
     }
+    let decode_secs = t_dec.elapsed().as_secs_f64();
     if entropy_count > 0 {
         steer.adapter.substrate_mut().last_entropy_h_tilde = entropy_sum / entropy_count as f32;
     }
@@ -1190,14 +1274,20 @@ pub(crate) fn generate_steered_reply_with_offset(
     cfg.abstract_tokens += churn_tracker.abstract_tokens;
     cfg.concrete_tokens += churn_tracker.concrete_tokens;
     cfg.boundary_churn_transitions += churn_tracker.boundary_churn_transitions;
-    let decode_secs = t_dec.elapsed().as_secs_f64();
     let text = tokenizer
         .decode(&gen_ids, true)
         .map_err(|e| format!("decode error: {e}"))?
         .replace('\n', " ");
     let mut all_ids = ids;
     all_ids.extend_from_slice(&gen_ids);
-    Ok((text, all_ids, decode_secs))
+    Ok((
+        text,
+        all_ids,
+        ReplyTiming {
+            prefill_secs,
+            decode_secs,
+        },
+    ))
 }
 
 pub(crate) fn generate_steered_reply(
@@ -1206,17 +1296,17 @@ pub(crate) fn generate_steered_reply(
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
-) -> Result<(String, usize, usize, f64), Box<dyn std::error::Error>> {
+) -> Result<(String, usize, usize, ReplyTiming), Box<dyn std::error::Error>> {
     model.clear_cache();
     let prompt_ids_len = tokenizer
         .encode(formatted_prompt, false)
         .map_err(|e| format!("encode error: {e}"))?
         .get_ids()
         .len();
-    let (text, all_ids, decode_secs) =
+    let (text, all_ids, timing) =
         generate_steered_reply_with_offset(model, tokenizer, adapter, formatted_prompt, 0, cfg)?;
     let gen_tokens = all_ids.len().saturating_sub(prompt_ids_len);
-    Ok((text, prompt_ids_len, gen_tokens, decode_secs))
+    Ok((text, prompt_ids_len, gen_tokens, timing))
 }
 
 pub(crate) fn critique_generated_draft(
@@ -1304,6 +1394,24 @@ mod tests {
             ),
             (2, 0)
         );
+    }
+
+    #[test]
+    fn semantic_forbid_hits_handles_multibyte_utf8_at_slice_boundaries() {
+        let forb = vec!["PyTorch".to_string(), "LoRA".to_string()];
+        // Place multibyte UTF-8 characters (`—` 3B, `’` 3B, Japanese 3B) right across the -96 prefix
+        // and +28 suffix byte offsets around forbidden keywords so raw byte offsets fall mid-char.
+        let prefix_pad = format!("{}—{}", "あ".repeat(31), "x");
+        let neg_reply = format!("{prefix_pad} does not use PyTorch’—あweights or LoRA—’あend.");
+        assert_eq!(count_semantic_forbid_hits(&neg_reply, &forb), (2, 0));
+
+        let aff_reply = format!(
+            "{}’—PyTorch’—{} and {}—’LoRA—あ",
+            "あ".repeat(31),
+            "z".repeat(25),
+            "あ".repeat(33)
+        );
+        assert_eq!(count_semantic_forbid_hits(&aff_reply, &forb), (2, 2));
     }
 
     #[test]

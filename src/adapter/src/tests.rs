@@ -3252,3 +3252,71 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
     }
     assert!(!adapter.is_transient_guard_relaxed());
 }
+
+#[test]
+fn load_from_path_recognizes_uppercase_lmnkp_extension() {
+    let dir = std::env::temp_dir().join(format!("liminika_upper_lmnkp_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+
+    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let mut tl = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
+    let cut = AdaptiveGopCutDetector::default();
+    let policy = RecallPolicy::default();
+    let mut corpus = TextAttractorCorpus::new();
+    let q_vecs = vec![vec![0.1_f32; adapter.geometry().q_rot_len()]; adapter.geometry().num_layers];
+    let ref_vecs =
+        vec![vec![0.0_f32; adapter.geometry().q_rot_len()]; adapter.geometry().num_layers];
+    let q_refs: Vec<&[f32]> = q_vecs.iter().map(Vec::as_slice).collect();
+    let ref_refs: Vec<&[f32]> = ref_vecs.iter().map(Vec::as_slice).collect();
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "LiminiKa uppercase extension check.",
+            &q_refs,
+            &ref_refs,
+            2.0,
+        )
+        .expect("ingest");
+    tl.record_step(
+        &TimelineStepContext {
+            adapter: &adapter,
+            corpus: &corpus,
+            policy: &policy,
+            detector: &cut,
+        },
+        SourceTextRecord {
+            frame_index: 0,
+            timestamp_epoch_sec: 1_700_000_000,
+            role: AttractorRole::Fact,
+            text: "LiminiKa uppercase extension check.".to_string(),
+            energy: 2.0,
+        },
+        &FrameTransitionMetrics {
+            phase_l1_delta: 0.0,
+            lacuna_state: LacunaBoundaryState::InsideBasin,
+            frames_since_keyframe: 0,
+            new_cluster_spawned: true,
+        },
+    )
+    .expect("record step");
+
+    let upper_valid = dir.join("package_upper.LMNKP");
+    tl.save_lmnkp_to_path(&upper_valid, None)
+        .expect("save uppercase .LMNKP");
+    let loaded = LmnkTimeline::load_from_path(&upper_valid).expect("load uppercase .LMNKP");
+    assert_eq!(loaded, tl);
+
+    // Without PK magic, `.LMNKP` must still route through the package parser (returning `Package`).
+    let upper_corrupt = dir.join("corrupt_upper.LMNKP");
+    std::fs::write(&upper_corrupt, b"NOTAZIP").expect("write corrupt .LMNKP");
+    let err = LmnkTimeline::load_from_path(&upper_corrupt)
+        .expect_err("corrupt .LMNKP must fail inside package parser");
+    assert!(
+        matches!(err, LmnkTimelineError::Package(_)),
+        "expected LmnkTimelineError::Package for .LMNKP, got {err:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

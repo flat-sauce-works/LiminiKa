@@ -5,7 +5,6 @@
 //! context lifecycle, and unified `.lmnk` zero-copy container FFI.
 
 use super::*;
-use crate::runtime::context::zeroize_volatile;
 use crate::runtime::storage::{LmnkContainerView, LMNK_CONTAINER_FLAG_COMPILED_CACHE};
 
 // ===================================================================
@@ -261,15 +260,13 @@ pub unsafe extern "C" fn lmnk_context_deinit_in_place(context: LmnkContextHandle
     }
     ffi_boundary!({
         // SAFETY: `typed` is verified non-null and aligned to `align_of::<RuntimeContext>()`.
-        let ctx_ref = unsafe { &mut *typed };
-        if ctx_ref.allocation_mode() != CTX_ALLOC_IN_PLACE {
-            return Err(LMNK_ERR_INVALID_STATE);
-        }
-        ctx_ref.deinit_hot_state();
-        // SAFETY: `RuntimeContext` has zero drop glue; scrub caller buffer via volatile zeroization
-        // so dead-store elimination cannot leave runtime state resident in RAM.
+        // Reading `allocation_mode` and scrubbing through the same raw pointer avoids forming an
+        // intermediate `&mut RuntimeContext` reference whose Stacked Borrows tag would be invalidated.
         unsafe {
-            zeroize_volatile(typed);
+            if RuntimeContext::read_allocation_mode_raw(typed) != CTX_ALLOC_IN_PLACE {
+                return Err(LMNK_ERR_INVALID_STATE);
+            }
+            RuntimeContext::zeroize_raw(typed);
         }
         Ok(LMNK_OK)
     })
@@ -319,16 +316,14 @@ pub unsafe extern "C" fn lmnk_context_destroy(context: LmnkContextHandle) -> Lmn
         return LMNK_ERR_ALIGNMENT;
     }
     ffi_boundary!({
-        // SAFETY: Verify provenance tag before transferring ownership into `Box::from_raw`.
-        if unsafe { (&*typed).allocation_mode() } != CTX_ALLOC_HEAP_BOXED {
-            return Err(LMNK_ERR_INVALID_STATE);
-        }
-        // SAFETY: `context` was verified `CTX_ALLOC_HEAP_BOXED` and naturally aligned;
-        // unwrap into `Box<MaybeUninit<RuntimeContext>>` so volatile scrubbing preserves drop validity.
+        // SAFETY: Verify provenance tag via raw pointer before transferring ownership into
+        // `Box<MaybeUninit<RuntimeContext>>` and scrubbing in-place without `&mut RuntimeContext`.
         unsafe {
+            if RuntimeContext::read_allocation_mode_raw(typed) != CTX_ALLOC_HEAP_BOXED {
+                return Err(LMNK_ERR_INVALID_STATE);
+            }
             let mut boxed = Box::from_raw(typed.cast::<core::mem::MaybeUninit<RuntimeContext>>());
-            boxed.assume_init_mut().deinit_hot_state();
-            zeroize_volatile(boxed.as_mut_ptr());
+            RuntimeContext::zeroize_raw(boxed.as_mut_ptr());
             drop(boxed);
         }
         Ok(LMNK_OK)

@@ -7,11 +7,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::eval::{
-    parse_circuit_mode, parse_ego_max_hops, parse_ego_mode, parse_fair_bench_conditions,
-    parse_guard_hold_tokens, parse_horizon_mode, parse_kv_min_res, parse_logits_observe_stride,
-    parse_pressure_sim_mode, parse_quant_mode, parse_reflect_mode, parse_rng_seed,
-    parse_temperature, CircuitProfileMode, EgoProfileMode, FairBenchCondition, HorizonAblationMode,
-    PressureSimMode, ReflectMode,
+    parse_bench_trials, parse_circuit_mode, parse_ego_max_hops, parse_ego_mode,
+    parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens, parse_horizon_mode,
+    parse_kv_min_res, parse_logits_observe_stride, parse_pressure_sim_mode, parse_quant_mode,
+    parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode, EgoProfileMode,
+    FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
 };
 use candle_core::quantized::GgmlDType;
 use liminika_core::abi::lmnk_q7_t;
@@ -29,6 +29,8 @@ pub(crate) struct EvalCliConfig {
     pub(crate) rng_seed: u64,
     pub(crate) logits_observe_stride: usize,
     pub(crate) guard_hold_tokens: u8,
+    pub(crate) bench_trials: usize,
+    pub(crate) fixture_path: Option<PathBuf>,
     pub(crate) multi_turn: bool,
     pub(crate) quant_mode: Option<GgmlDType>,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
@@ -44,9 +46,100 @@ pub(crate) struct EvalCliConfig {
     pub(crate) persona_lmnk_out: Option<PathBuf>,
 }
 
+pub(crate) fn wants_help<'a>(args: impl IntoIterator<Item = &'a str>) -> bool {
+    args.into_iter().any(|a| a == "--help" || a == "-h")
+}
+
+pub(crate) fn print_help() {
+    println!("LiminiKa Candle Eval v{}", env!("CARGO_PKG_VERSION"));
+    println!("Usage: candle_eval [OPTIONS]");
+    println!("Options:");
+    println!("  -h, --help                         Print this help message and exit");
+    println!("  --fixture=<path>                   Override evaluation fixture file (default: tests/fixtures/gcso_eval_samples.txt)");
+    println!("  --bench-trials=<N>                 Run N independent benchmark trials after warmup and report median/spread (default: 1)");
+    println!("  --step2-only                       Skip Step 1 sweeps and run Step 2 (+ Step 3) directly");
+    println!("  --recall-only                      Run recall/timeline evaluation without LLM weight inference");
+    println!("  --base-prior                       Sample neutral base-model prior before corpus compilation");
+    println!("  --no-reflect                       Disable reflection critique retries");
+    println!("  --reflect-mode=<off|conditional|always>");
+    println!("  --no-pre-bypass                    Disable whole-token pre-inference bypass");
+    println!("  --logits-observe-stride=<N>        Dynamic GPU->CPU logits observe max stride (default: 1, clamp 0->1)");
+    println!("  --guard-hold-tokens=<N>            Transient contradiction-guard hold window before relaxation (default: 0 = full turn)");
+    println!("  --multi-turn                       Run 8-turn persistent KV dialogue evaluation (Step 2B)");
+    println!(
+        "  --quant=<bf16|q4_0|q4k|q8_0>       Model quantization mode (default: bf16 on CUDA)"
+    );
+    println!(
+        "  --kv-min-res=<i8>                  Override RAM Phase-KV minimum resonance Q7 threshold"
+    );
+    println!("  --circuit=<analytical|integrative|hybrid[:N]>");
+    println!("  --ego=<off|low|medium|high|desc:...>");
+    println!("  --ego-max-hops=<1..4>              Maximum Ego P-Frame hop count (default: 1)");
+    println!("  --temp=<f32>                       Sampling temperature (default: 0.0 greedy)");
+    println!(
+        "  --seed=<u64>                       PRNG seed for non-greedy sampling (default: 42)"
+    );
+    println!(
+        "  --ablate-dual-axis                 Run full Dual-Axis SystemSpine + Ego ablation matrix"
+    );
+    println!("  --ablate-ego                       Run NoEgo vs Ego ablation");
+    println!("  --ablate-horizon                   Run Core3 vs Spillover vs SlowLoop ablation");
+    println!("  --horizon-mode=<core3|spillover|slow-loop>");
+    println!("  --fair-bench                       Run all Fair Benchmark conditions (A, B, C-off, C-on, D)");
+    println!("  --bench-cond=<list>                Comma-separated conditions: a,b,c,c-byp-off,c-byp-on,c-reflect,d,all");
+    println!("  --pressure-sim=<off|elevated|surge>");
+    println!(
+        "  --persona-lmnk=<path>              Load persona cognitive circuit from .lmnkc/.lmnkp"
+    );
+    println!(
+        "  --save-persona-lmnk=<path>         Save updated persona cognitive circuit to .lmnkc"
+    );
+}
+
+pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    const BOOL_FLAGS: &[&str] = &[
+        "--help",
+        "-h",
+        "--recall-only",
+        "--base-prior",
+        "--no-reflect",
+        "--no-pre-bypass",
+        "--ablate-dual-axis",
+        "--multi-turn",
+        "--ablate-ego",
+        "--ablate-horizon",
+        "--fair-bench",
+        "--step2-only",
+    ];
+    const PREFIX_FLAGS: &[&str] = &[
+        "--reflect-mode=",
+        "--ego-max-hops=",
+        "--temp=",
+        "--seed=",
+        "--logits-observe-stride=",
+        "--guard-hold-tokens=",
+        "--bench-trials=",
+        "--fixture=",
+        "--quant=",
+        "--kv-min-res=",
+        "--circuit=",
+        "--ego=",
+        "--horizon-mode=",
+        "--bench-cond=",
+        "--pressure-sim=",
+        "--persona-lmnk=",
+        "--save-persona-lmnk=",
+    ];
+    args.into_iter()
+        .filter(|arg| {
+            !BOOL_FLAGS.contains(arg) && !PREFIX_FLAGS.iter().any(|pref| arg.starts_with(pref))
+        })
+        .map(ToString::to_string)
+        .collect()
+}
+
 impl EvalCliConfig {
-    pub(crate) fn parse_from_env() -> Self {
-        let cli_args: Vec<String> = std::env::args().collect();
+    pub(crate) fn parse_from_args(cli_args: &[String]) -> Self {
         let recall_only = cli_args.iter().any(|a| a == "--recall-only");
         let use_base_prior = cli_args.iter().any(|a| a == "--base-prior");
         let no_reflect = cli_args.iter().any(|a| a == "--no-reflect");
@@ -59,6 +152,8 @@ impl EvalCliConfig {
         let logits_observe_stride =
             parse_logits_observe_stride(cli_args.iter().map(String::as_str));
         let guard_hold_tokens = parse_guard_hold_tokens(cli_args.iter().map(String::as_str));
+        let bench_trials = parse_bench_trials(cli_args.iter().map(String::as_str));
+        let fixture_path = parse_fixture_path(cli_args.iter().map(String::as_str));
         let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
         let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
@@ -96,6 +191,8 @@ impl EvalCliConfig {
             rng_seed,
             logits_observe_stride,
             guard_hold_tokens,
+            bench_trials,
+            fixture_path,
             multi_turn,
             quant_mode,
             kv_min_res,
@@ -110,6 +207,14 @@ impl EvalCliConfig {
             persona_lmnk_in,
             persona_lmnk_out,
         }
+    }
+
+    pub(crate) fn parse_from_env() -> Self {
+        let cli_args: Vec<String> = std::env::args().collect();
+        for unknown in find_unrecognized_args(cli_args.iter().skip(1).map(String::as_str)) {
+            eprintln!("Warning: unrecognized argument: {unknown}");
+        }
+        Self::parse_from_args(&cli_args)
     }
 }
 
@@ -127,16 +232,11 @@ pub(crate) struct Step2RunSpec {
     pub(crate) rng_seed: u64,
 }
 
-#[allow(dead_code)]
 pub(crate) struct Step2PassResult {
     pub(crate) label: String,
     pub(crate) axis: u8,
-    pub(crate) ego_mode: EgoProfileMode,
     pub(crate) ego_max_hops: u8,
     pub(crate) cond: FairBenchCondition,
-    pub(crate) reflect_mode: ReflectMode,
-    pub(crate) enable_pre_bypass: bool,
-    pub(crate) temperature: f32,
     pub(crate) exp_hits: usize,
     pub(crate) exp_total: usize,
     pub(crate) fact_exp_hits: usize,
@@ -154,14 +254,173 @@ pub(crate) struct Step2PassResult {
     pub(crate) decode_tps: f64,
     pub(crate) whole_bypass_pct: f64,
     pub(crate) passive_pct: f32,
-    pub(crate) active_pct: f32,
     pub(crate) ego_delta_norm_q7: u8,
-    pub(crate) reflect_triggers: usize,
-    pub(crate) reflect_adopted: usize,
     pub(crate) reflect_skipped: usize,
     pub(crate) ext_rescues: usize,
-    pub(crate) sandbox_settlements: u64,
     pub(crate) replies: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub(crate) struct TrialAggregateStats {
+    pub(crate) median: f64,
+    pub(crate) min: f64,
+    pub(crate) max: f64,
+    pub(crate) spread_pct: f64,
+}
+
+pub(crate) fn compute_trial_stats(values: &[f64]) -> TrialAggregateStats {
+    if values.is_empty() {
+        return TrialAggregateStats::default();
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let min = sorted[0];
+    let max = sorted[sorted.len() - 1];
+    let mid = sorted.len() / 2;
+    let median = if sorted.len().is_multiple_of(2) {
+        0.5 * (sorted[mid - 1] + sorted[mid])
+    } else {
+        sorted[mid]
+    };
+    let spread_pct = if median > 1e-12 {
+        (max - min) / median * 100.0
+    } else {
+        0.0
+    };
+    TrialAggregateStats {
+        median,
+        min,
+        max,
+        spread_pct,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TrialPassMetrics {
+    pub(crate) label: String,
+    pub(crate) pure_decode_tps: f64,
+    pub(crate) e2e_tps: f64,
+    pub(crate) prefill_total_ms: f64,
+    pub(crate) prefill_mean_ms: f64,
+    pub(crate) exp_hits: usize,
+    pub(crate) exp_total: usize,
+    pub(crate) sem_forb_hits: usize,
+    pub(crate) forb_total: usize,
+    pub(crate) ood_bleed_hits: usize,
+    pub(crate) ood_total: usize,
+    pub(crate) whole_bypass_hits: usize,
+    pub(crate) decode_tokens_steered: usize,
+}
+
+pub(crate) fn print_bench_trials_summary(trials: &[Vec<TrialPassMetrics>]) {
+    if trials.is_empty() || trials[0].is_empty() {
+        return;
+    }
+    let n_trials = trials.len();
+    println!("\n=== [Bench Trials Summary (N={n_trials})] ===");
+    let mut b_med_pure: Option<f64> = None;
+    let mut b_med_e2e: Option<f64> = None;
+    let mut c_rows: Vec<(String, f64, f64)> = Vec::new();
+
+    for (cond_idx, first) in trials[0].iter().enumerate() {
+        let mut pure_vals = Vec::with_capacity(n_trials);
+        let mut e2e_vals = Vec::with_capacity(n_trials);
+        let mut pf_tot_vals = Vec::with_capacity(n_trials);
+        let mut pf_mean_vals = Vec::with_capacity(n_trials);
+        let mut det_ok = true;
+        for trial in trials {
+            if let Some(m) = trial.get(cond_idx) {
+                pure_vals.push(m.pure_decode_tps);
+                e2e_vals.push(m.e2e_tps);
+                pf_tot_vals.push(m.prefill_total_ms);
+                pf_mean_vals.push(m.prefill_mean_ms);
+                if (
+                    m.exp_hits,
+                    m.exp_total,
+                    m.sem_forb_hits,
+                    m.forb_total,
+                    m.ood_bleed_hits,
+                    m.ood_total,
+                    m.whole_bypass_hits,
+                    m.decode_tokens_steered,
+                ) != (
+                    first.exp_hits,
+                    first.exp_total,
+                    first.sem_forb_hits,
+                    first.forb_total,
+                    first.ood_bleed_hits,
+                    first.ood_total,
+                    first.whole_bypass_hits,
+                    first.decode_tokens_steered,
+                ) {
+                    det_ok = false;
+                }
+            }
+        }
+        let pure_st = compute_trial_stats(&pure_vals);
+        let e2e_st = compute_trial_stats(&e2e_vals);
+        let pf_tot_st = compute_trial_stats(&pf_tot_vals);
+        let pf_mean_st = compute_trial_stats(&pf_mean_vals);
+        let exp_pct = if first.exp_total == 0 {
+            0.0
+        } else {
+            first.exp_hits as f64 / first.exp_total as f64 * 100.0
+        };
+        let forb_pct = if first.forb_total == 0 {
+            0.0
+        } else {
+            first.sem_forb_hits as f64 / first.forb_total as f64 * 100.0
+        };
+        let ood_pct = if first.ood_total == 0 {
+            0.0
+        } else {
+            first.ood_bleed_hits as f64 / first.ood_total as f64 * 100.0
+        };
+        let byp_pct = if first.decode_tokens_steered == 0 {
+            0.0
+        } else {
+            first.whole_bypass_hits as f64 / first.decode_tokens_steered as f64 * 100.0
+        };
+        println!(
+            "  {:<26} | pure_med={:6.2} [{:6.2}..{:6.2}] ({:4.1}%) | e2e_med={:6.2} [{:6.2}..{:6.2}] ({:4.1}%) | prefill_med={:6.1}ms ({:5.2}ms/req) | hit={:5.1}% sem_forb={:4.1}% ood={:4.1}% byp={:4.1}% det={}",
+            first.label,
+            pure_st.median,
+            pure_st.min,
+            pure_st.max,
+            pure_st.spread_pct,
+            e2e_st.median,
+            e2e_st.min,
+            e2e_st.max,
+            e2e_st.spread_pct,
+            pf_tot_st.median,
+            pf_mean_st.median,
+            exp_pct,
+            forb_pct,
+            ood_pct,
+            byp_pct,
+            det_ok,
+        );
+        if first.label.starts_with("B:Vanilla") {
+            b_med_pure = Some(pure_st.median);
+            b_med_e2e = Some(e2e_st.median);
+        } else if first.label.starts_with("C:Hybrid") {
+            c_rows.push((first.label.clone(), pure_st.median, e2e_st.median));
+        }
+    }
+
+    if let (Some(b_pure), Some(b_e2e)) = (b_med_pure, b_med_e2e) {
+        for (lbl, c_pure, c_e2e) in c_rows {
+            if b_pure > 1e-6 && b_e2e > 1e-6 {
+                println!(
+                    "  [Calibrated C/B Median] {lbl} vs B:Vanilla+MinRAG | pure_decode={:.3}x ({:+.2}%) | e2e={:.3}x ({:+.2}%)",
+                    c_pure / b_pure,
+                    (c_pure - b_pure) / b_pure * 100.0,
+                    c_e2e / b_e2e,
+                    (c_e2e - b_e2e) / b_e2e * 100.0,
+                );
+            }
+        }
+    }
 }
 
 pub(crate) fn text_bigram_jaccard(a: &str, b: &str) -> f32 {
@@ -553,4 +812,70 @@ pub(crate) struct EvalRuntime<'a> {
     pub(crate) adapter: &'a mut ModelSteeringAdapter,
     pub(crate) baked_opt: Option<&'a BakedModelProfile>,
     pub(crate) active_persona_bank: &'a mut Option<StandardCognitiveBank>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_help_fixture_bench_trials_and_unknown_flag_detection() {
+        assert!(wants_help(["--help"]));
+        assert!(wants_help(["--quant=q4k", "-h"]));
+        assert!(!wants_help(["--step2-only", "--multi-turn"]));
+
+        let args = vec![
+            "candle_eval".to_string(),
+            "--step2-only".to_string(),
+            "--bench-trials=0".to_string(),
+            "--fixture=tests/fixtures/custom.txt".to_string(),
+            "--quant=q4k".to_string(),
+        ];
+        assert!(find_unrecognized_args(args.iter().skip(1).map(String::as_str)).is_empty());
+        let parsed = EvalCliConfig::parse_from_args(&args);
+        assert_eq!(parsed.bench_trials, 1);
+        assert_eq!(
+            parsed.fixture_path,
+            Some(PathBuf::from("tests/fixtures/custom.txt"))
+        );
+
+        let args_3 = vec!["candle_eval".to_string(), "--bench-trials=3".to_string()];
+        assert_eq!(EvalCliConfig::parse_from_args(&args_3).bench_trials, 3);
+        assert_eq!(
+            EvalCliConfig::parse_from_args(&["candle_eval".to_string()]).bench_trials,
+            1
+        );
+
+        let bad = find_unrecognized_args([
+            "--step2-only",
+            "--unknown-flag",
+            "--bench-trials=3",
+            "stray_positional",
+        ]);
+        assert_eq!(
+            bad,
+            vec!["--unknown-flag".to_string(), "stray_positional".to_string()]
+        );
+    }
+
+    #[test]
+    fn trial_aggregate_stats_computes_median_min_max_and_spread() {
+        let single = compute_trial_stats(&[42.0]);
+        assert!((single.median - 42.0).abs() < 1e-9);
+        assert!((single.min - 42.0).abs() < 1e-9);
+        assert!((single.max - 42.0).abs() < 1e-9);
+        assert!((single.spread_pct - 0.0).abs() < 1e-9);
+
+        let odd = compute_trial_stats(&[55.0, 40.0, 50.0]);
+        assert!((odd.median - 50.0).abs() < 1e-9);
+        assert!((odd.min - 40.0).abs() < 1e-9);
+        assert!((odd.max - 55.0).abs() < 1e-9);
+        assert!((odd.spread_pct - 30.0).abs() < 1e-9);
+
+        let even = compute_trial_stats(&[30.0, 50.0, 42.0, 38.0]);
+        assert!((even.median - 40.0).abs() < 1e-9);
+        assert!((even.min - 30.0).abs() < 1e-9);
+        assert!((even.max - 50.0).abs() < 1e-9);
+        assert!((even.spread_pct - 50.0).abs() < 1e-9);
+    }
 }
