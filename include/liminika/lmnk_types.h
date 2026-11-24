@@ -1103,8 +1103,7 @@ LMNK_STATIC_ASSERT(offsetof(lmnk_spine_decode_input_t, exit_entropy_lacuna_code)
 LMNK_STATIC_ASSERT(offsetof(lmnk_spine_decode_input_t, flags) == 15,
                    "lmnk_spine_decode_input_t flags offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_spine_step_plan_t) == 48,
-                   "lmnk_spine_step_plan_t must be 48 bytes");
+LMNK_STATIC_ASSERT(sizeof(lmnk_spine_step_plan_t) == 48, "lmnk_spine_step_plan_t must be 48 bytes");
 LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_spine_step_plan_t) == 16,
                    "lmnk_spine_step_plan_t must be 16-byte aligned");
 LMNK_STATIC_ASSERT(offsetof(lmnk_spine_step_plan_t, dispatch) == 0,
