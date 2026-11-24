@@ -20,6 +20,20 @@ use serde::Deserialize;
 use crate::eval::HorizonAblationMode;
 use crate::LayerResonantSlices;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum KvCacheMode {
+    #[default]
+    Append,
+    IsolatedProbe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ProbeCoordinateFrame {
+    #[default]
+    PreRope,
+    PostRope,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LogitsFetchMode {
     FullLogits,
@@ -96,6 +110,7 @@ pub(crate) struct LayerSteer<'a, 'c, 'e> {
     pub(crate) trail: &'a mut lmnk_pointer_trail_t,
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
+    pub(crate) probe_frame: ProbeCoordinateFrame,
 }
 
 pub(crate) struct ForwardSteer<'a, 'c, 'e> {
@@ -109,6 +124,8 @@ pub(crate) struct ForwardSteer<'a, 'c, 'e> {
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
     pub(crate) compute_dispatch: Option<liminika_adapter::ComputeDispatchMask>,
+    pub(crate) layer_steer_mask: Option<u64>,
+    pub(crate) probe_frame: ProbeCoordinateFrame,
     pub(crate) steer_bypass_hits: usize,
     pub(crate) steer_eligible_layers: usize,
 }
@@ -237,18 +254,14 @@ impl RotaryCache {
         })
     }
 
-    /// Applies HalfSplit RoPE on `0..rotary_dim` and delegates steering to `ModelSteeringAdapter`.
-    fn apply_with_adapter(
+    /// Applies HalfSplit RoPE (`cos`/`sin`) to the rotary slice `[b, num_heads, seq_len, rot]`.
+    fn apply_half_split_rope(
         &self,
-        x: &Tensor,
+        x_rot: &Tensor,
         offset: usize,
-        steer: Option<LayerSteer<'_, '_, '_>>,
+        seq_len: usize,
     ) -> CResult<Tensor> {
-        let (b, num_heads, seq_len, head_dim) = x.dims4()?;
-        let rot = self.rotary_dim;
-        let half = rot / 2;
-
-        let x_rot = x.narrow(D::Minus1, 0, rot)?;
+        let half = self.rotary_dim / 2;
         let x1 = x_rot.narrow(D::Minus1, 0, half)?;
         let x2 = x_rot.narrow(D::Minus1, half, half)?;
 
@@ -265,9 +278,20 @@ impl RotaryCache {
 
         let r1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
         let r2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
-        let mut q_rot = Tensor::cat(&[&r1, &r2], D::Minus1)?;
+        Tensor::cat(&[&r1, &r2], D::Minus1)
+    }
 
-        if let Some(LayerSteer {
+    /// Steers a rotary query slice `[1, num_heads, seq_len, rotary_dim]` via `ModelSteeringAdapter`.
+    fn steer_rotary_slice(
+        &self,
+        rot_tensor: Tensor,
+        num_heads: usize,
+        seq_len: usize,
+        out_dtype: DType,
+        steer: LayerSteer<'_, '_, '_>,
+    ) -> CResult<Tensor> {
+        let rot = self.rotary_dim;
+        let LayerSteer {
             adapter,
             layer_idx,
             q7_deltas,
@@ -277,109 +301,134 @@ impl RotaryCache {
             trail,
             horizon_mode,
             mut escalation_provider,
-        }) = steer
-        {
-            if max_rad != 0.0 && b == 1 {
-                let mut flat = q_rot
-                    .transpose(1, 2)?
-                    .contiguous()?
-                    .flatten_all()?
-                    .to_dtype(DType::F32)?
-                    .to_vec1::<f32>()?;
-                let tok_stride = num_heads * rot;
-                if max_rad < 0.0 {
-                    if let Some((fact_anchors, persona_anchors, guard_anchors, neg_ref, _pos_ref)) =
-                        resonant_opt
-                    {
-                        for tok in 0..seq_len {
-                            let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
-                            let probe = adapter
-                                .bake_layer_procrustes_q7(neg_ref, slice)
-                                .map_err(candle_core::Error::Msg)?;
-                            let fact_res = ResonantSignalSlice::from_q7_probe(fact_anchors, &probe);
-                            if max_rad <= -1.5 {
-                                let persona_res =
-                                    ResonantSignalSlice::from_q7_probe(persona_anchors, &probe);
-                                if guard_anchors.is_empty() {
-                                    let composite = (fact_res, persona_res);
-                                    dispatch_rope_orchestration(
-                                        adapter,
-                                        horizon_mode,
-                                        escalation_provider.as_deref_mut(),
-                                        layer_idx,
-                                        &composite,
-                                        trail,
-                                        slice,
-                                    )
-                                    .map_err(candle_core::Error::Msg)?;
-                                } else {
-                                    let guard_res =
-                                        ResonantSignalSlice::from_q7_probe(guard_anchors, &probe);
-                                    let sys_res = *adapter.system_constraint();
-                                    let composite = (sys_res, fact_res, persona_res, guard_res);
-                                    dispatch_rope_orchestration(
-                                        adapter,
-                                        horizon_mode,
-                                        escalation_provider.as_deref_mut(),
-                                        layer_idx,
-                                        &composite,
-                                        trail,
-                                        slice,
-                                    )
-                                    .map_err(candle_core::Error::Msg)?;
-                                }
-                            } else {
-                                adapter
-                                    .steer_layer_with_gateway(
-                                        layer_idx, &fact_res, trail, 128, slice, None,
-                                    )
-                                    .map_err(candle_core::Error::Msg)?;
-                            }
+            probe_frame: _,
+        } = steer;
+
+        let mut flat = rot_tensor
+            .transpose(1, 2)?
+            .contiguous()?
+            .flatten_all()?
+            .to_dtype(DType::F32)?
+            .to_vec1::<f32>()?;
+        let tok_stride = num_heads * rot;
+        if max_rad < 0.0 {
+            if let Some((fact_anchors, persona_anchors, guard_anchors, neg_ref, _pos_ref)) =
+                resonant_opt
+            {
+                for tok in 0..seq_len {
+                    let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                    let probe = adapter
+                        .bake_layer_procrustes_q7(neg_ref, slice)
+                        .map_err(candle_core::Error::Msg)?;
+                    let fact_res = ResonantSignalSlice::from_q7_probe(fact_anchors, &probe);
+                    if max_rad <= -1.5 {
+                        let persona_res =
+                            ResonantSignalSlice::from_q7_probe(persona_anchors, &probe);
+                        if guard_anchors.is_empty() {
+                            let composite = (fact_res, persona_res);
+                            dispatch_rope_orchestration(
+                                adapter,
+                                horizon_mode,
+                                escalation_provider.as_deref_mut(),
+                                layer_idx,
+                                &composite,
+                                trail,
+                                slice,
+                            )
+                            .map_err(candle_core::Error::Msg)?;
+                        } else {
+                            let guard_res =
+                                ResonantSignalSlice::from_q7_probe(guard_anchors, &probe);
+                            let sys_res = *adapter.system_constraint();
+                            let composite = (sys_res, fact_res, persona_res, guard_res);
+                            dispatch_rope_orchestration(
+                                adapter,
+                                horizon_mode,
+                                escalation_provider.as_deref_mut(),
+                                layer_idx,
+                                &composite,
+                                trail,
+                                slice,
+                            )
+                            .map_err(candle_core::Error::Msg)?;
                         }
                     } else {
-                        let mut fact_arr = [0i8; 64];
-                        let n = q7_deltas.len().min(64);
-                        fact_arr[..n].copy_from_slice(&q7_deltas[..n]);
-                        let fact = ObjectiveFact::new(fact_arr, 2.5, 0, layer_idx as u32 + 1);
-                        if let Some(p_deltas) = persona_opt {
-                            let mut persona_arr = [0i8; 64];
-                            let pn = p_deltas.len().min(64);
-                            persona_arr[..pn].copy_from_slice(&p_deltas[..pn]);
-                            let persona =
-                                SubjectivePersona::new(persona_arr, 1.5, 0, layer_idx as u32 + 101);
-                            let composite = (fact, persona);
-                            for tok in 0..seq_len {
-                                let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
-                                adapter
-                                    .steer_layer_with_gateway(
-                                        layer_idx, &composite, trail, 128, slice, None,
-                                    )
-                                    .map_err(candle_core::Error::Msg)?;
-                            }
-                        } else {
-                            for tok in 0..seq_len {
-                                let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
-                                adapter
-                                    .steer_layer_with_gateway(
-                                        layer_idx, &fact, trail, 128, slice, None,
-                                    )
-                                    .map_err(candle_core::Error::Msg)?;
-                            }
-                        }
+                        adapter
+                            .steer_layer_with_gateway(layer_idx, &fact_res, trail, 128, slice, None)
+                            .map_err(candle_core::Error::Msg)?;
+                    }
+                }
+            } else {
+                let mut fact_arr = [0i8; 64];
+                let n = q7_deltas.len().min(64);
+                fact_arr[..n].copy_from_slice(&q7_deltas[..n]);
+                let fact = ObjectiveFact::new(fact_arr, 2.5, 0, layer_idx as u32 + 1);
+                if let Some(p_deltas) = persona_opt {
+                    let mut persona_arr = [0i8; 64];
+                    let pn = p_deltas.len().min(64);
+                    persona_arr[..pn].copy_from_slice(&p_deltas[..pn]);
+                    let persona =
+                        SubjectivePersona::new(persona_arr, 1.5, 0, layer_idx as u32 + 101);
+                    let composite = (fact, persona);
+                    for tok in 0..seq_len {
+                        let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                        adapter
+                            .steer_layer_with_gateway(
+                                layer_idx, &composite, trail, 128, slice, None,
+                            )
+                            .map_err(candle_core::Error::Msg)?;
                     }
                 } else {
                     for tok in 0..seq_len {
                         let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
                         adapter
-                            .steer_layer_q_rot(layer_idx, slice, q7_deltas, max_rad)
+                            .steer_layer_with_gateway(layer_idx, &fact, trail, 128, slice, None)
                             .map_err(candle_core::Error::Msg)?;
                     }
                 }
-                q_rot = Tensor::from_vec(flat, (1, seq_len, num_heads, rot), x.device())?
-                    .transpose(1, 2)?
-                    .to_dtype(x.dtype())?;
+            }
+        } else {
+            for tok in 0..seq_len {
+                let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
+                adapter
+                    .steer_layer_q_rot(layer_idx, slice, q7_deltas, max_rad)
+                    .map_err(candle_core::Error::Msg)?;
             }
         }
+        Tensor::from_vec(flat, (1, seq_len, num_heads, rot), rot_tensor.device())?
+            .transpose(1, 2)?
+            .to_dtype(out_dtype)
+    }
+
+    /// Applies HalfSplit RoPE on `0..rotary_dim` and delegates steering to `ModelSteeringAdapter`.
+    ///
+    /// In `ProbeCoordinateFrame::PreRope` (default), probing (`bake_layer_procrustes_q7`) and
+    /// SO(2) phase steering run on `x_rot` before RoPE `cos/sin` so probes share the exact
+    /// pre-RoPE coordinate frame as baked anchors with zero extra D2H/H2D transfers.
+    fn apply_with_adapter(
+        &self,
+        x: &Tensor,
+        offset: usize,
+        steer: Option<LayerSteer<'_, '_, '_>>,
+    ) -> CResult<Tensor> {
+        let (b, num_heads, seq_len, head_dim) = x.dims4()?;
+        let rot = self.rotary_dim;
+        let x_rot = x.narrow(D::Minus1, 0, rot)?;
+
+        let q_rot = match steer {
+            Some(st) if st.max_rad != 0.0 && b == 1 => match st.probe_frame {
+                ProbeCoordinateFrame::PreRope => {
+                    let steered_pre =
+                        self.steer_rotary_slice(x_rot, num_heads, seq_len, x.dtype(), st)?;
+                    self.apply_half_split_rope(&steered_pre, offset, seq_len)?
+                }
+                ProbeCoordinateFrame::PostRope => {
+                    let roped = self.apply_half_split_rope(&x_rot, offset, seq_len)?;
+                    self.steer_rotary_slice(roped, num_heads, seq_len, x.dtype(), st)?
+                }
+            },
+            _ => self.apply_half_split_rope(&x_rot, offset, seq_len)?,
+        };
 
         if rot < head_dim {
             let x_pass = x.narrow(D::Minus1, rot, head_dim - rot)?;
@@ -477,6 +526,32 @@ impl Phi3Attention {
         self.kv_cache = None;
     }
 
+    pub(crate) fn kv_len(&self) -> usize {
+        self.kv_cache
+            .as_ref()
+            .and_then(|(k, _)| k.dim(2).ok())
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn truncate_cache(&mut self, target_len: usize) -> CResult<()> {
+        if target_len == 0 {
+            self.kv_cache = None;
+            return Ok(());
+        }
+        let cur = self.kv_len();
+        if target_len > cur {
+            return Err(candle_core::Error::Msg(format!(
+                "truncate_cache target_len {target_len} exceeds current kv_len {cur}"
+            )));
+        }
+        if target_len < cur {
+            if let Some((ref k, ref v)) = self.kv_cache {
+                self.kv_cache = Some((k.narrow(2, 0, target_len)?, v.narrow(2, 0, target_len)?));
+            }
+        }
+        Ok(())
+    }
+
     fn forward(
         &mut self,
         x: &Tensor,
@@ -484,7 +559,11 @@ impl Phi3Attention {
         offset: usize,
         steer: Option<LayerSteer<'_, '_, '_>>,
         collect_q_heads: bool,
+        kv_mode: KvCacheMode,
     ) -> CResult<(Tensor, Option<Vec<f32>>)> {
+        if kv_mode == KvCacheMode::Append {
+            debug_assert_eq!(self.kv_len(), offset);
+        }
         let (b, seq_len, _) = x.dims3()?;
         let qkv = self.qkv_proj.forward(x)?;
         let q_dim = self.num_heads * self.head_dim;
@@ -524,14 +603,20 @@ impl Phi3Attention {
         let q = rope.apply_with_adapter(&q, offset, steer)?;
         let k = rope.apply_with_adapter(&k, offset, None)?;
 
-        let (k, v) = match &self.kv_cache {
-            Some((prev_k, prev_v)) => (
-                Tensor::cat(&[prev_k, &k], 2)?,
-                Tensor::cat(&[prev_v, &v], 2)?,
-            ),
-            None => (k, v),
+        let (k, v, mask_offset) = match kv_mode {
+            KvCacheMode::Append => {
+                let (k, v) = match &self.kv_cache {
+                    Some((prev_k, prev_v)) => (
+                        Tensor::cat(&[prev_k, &k], 2)?,
+                        Tensor::cat(&[prev_v, &v], 2)?,
+                    ),
+                    None => (k, v),
+                };
+                self.kv_cache = Some((k.clone(), v.clone()));
+                (k, v, offset)
+            }
+            KvCacheMode::IsolatedProbe => (k, v, 0),
         };
-        self.kv_cache = Some((k.clone(), v.clone()));
 
         let k = repeat_kv(k, self.num_heads / self.num_kv_heads)?;
         let v = repeat_kv(v, self.num_heads / self.num_kv_heads)?;
@@ -541,7 +626,7 @@ impl Phi3Attention {
         let k_t = k.transpose(D::Minus2, D::Minus1)?.contiguous()?;
         let mut att = (q.matmul(&k_t)? * scale)?;
         if seq_len > 1 {
-            let mask = causal_mask(seq_len, offset, x.dtype(), x.device())?;
+            let mask = causal_mask(seq_len, mask_offset, x.dtype(), x.device())?;
             att = att.broadcast_add(&mask)?;
         }
         let probs = candle_nn::ops::softmax_last_dim(&att)?;
@@ -762,6 +847,24 @@ impl Phi3Model {
         }
     }
 
+    pub(crate) fn kv_len(&self) -> usize {
+        self.layers
+            .first()
+            .map_or(0, |layer| layer.self_attn.kv_len())
+    }
+
+    pub(crate) fn truncate_cache(&mut self, target_len: usize) -> CResult<()> {
+        if target_len == 0 {
+            self.clear_cache();
+            return Ok(());
+        }
+        for layer in &mut self.layers {
+            layer.self_attn.truncate_cache(target_len)?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward_tokens(
         &mut self,
         tokens: &[u32],
@@ -770,7 +873,11 @@ impl Phi3Model {
         use_entropy_gate: bool,
         collect_bake_data: bool,
         fetch_mode: LogitsFetchMode,
+        kv_mode: KvCacheMode,
     ) -> CResult<ForwardTokensOutput> {
+        if kv_mode == KvCacheMode::Append {
+            debug_assert_eq!(self.kv_len(), offset);
+        }
         let mut h = if self.embed_on_cpu {
             let input_cpu = Tensor::from_slice(tokens, (1, tokens.len()), &Device::Cpu)?;
             self.embed_tokens
@@ -794,35 +901,44 @@ impl Phi3Model {
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
             let steer_ref = match steer.as_deref_mut() {
                 Some(st) if st.rope_rad != 0.0 => {
-                    let bypassed = whole_bypass
-                        || st.compute_dispatch.is_some_and(|d| {
-                            layer_idx < 64 && (d.bypass_mask & (1_u64 << layer_idx)) != 0
-                        });
-                    if st.q7s.is_some() {
-                        st.steer_eligible_layers += 1;
-                        if bypassed {
-                            st.steer_bypass_hits += 1;
+                    let layer_enabled = st.layer_steer_mask.map_or_else(
+                        || st.adapter.geometry().is_rope_layer(layer_idx),
+                        |mask| layer_idx < 64 && ((mask >> layer_idx) & 1) != 0,
+                    );
+                    if !layer_enabled {
+                        None
+                    } else {
+                        let bypassed = whole_bypass
+                            || st.compute_dispatch.is_some_and(|d| {
+                                layer_idx < 64 && (d.bypass_mask & (1_u64 << layer_idx)) != 0
+                            });
+                        if st.q7s.is_some() {
+                            st.steer_eligible_layers += 1;
+                            if bypassed {
+                                st.steer_bypass_hits += 1;
+                            }
                         }
-                    }
-                    st.q7s.filter(|_| !bypassed).and_then(|qs| {
-                        qs.get(layer_idx).map(|q7| LayerSteer {
-                            adapter: &mut *st.adapter,
-                            layer_idx,
-                            q7_deltas: q7.as_slice(),
-                            persona_opt: st
-                                .persona_q7s
-                                .and_then(|ps| ps.get(layer_idx))
-                                .map(Vec::as_slice),
-                            resonant_opt: st
-                                .resonant_ctx
-                                .as_ref()
-                                .and_then(|r| r.layer_slices(layer_idx)),
-                            max_rad: st.rope_rad,
-                            trail: &mut *st.trail,
-                            horizon_mode: st.horizon_mode,
-                            escalation_provider: st.escalation_provider.as_deref_mut(),
+                        st.q7s.filter(|_| !bypassed).and_then(|qs| {
+                            qs.get(layer_idx).map(|q7| LayerSteer {
+                                adapter: &mut *st.adapter,
+                                layer_idx,
+                                q7_deltas: q7.as_slice(),
+                                persona_opt: st
+                                    .persona_q7s
+                                    .and_then(|ps| ps.get(layer_idx))
+                                    .map(Vec::as_slice),
+                                resonant_opt: st
+                                    .resonant_ctx
+                                    .as_ref()
+                                    .and_then(|r| r.layer_slices(layer_idx)),
+                                max_rad: st.rope_rad,
+                                trail: &mut *st.trail,
+                                horizon_mode: st.horizon_mode,
+                                escalation_provider: st.escalation_provider.as_deref_mut(),
+                                probe_frame: st.probe_frame,
+                            })
                         })
-                    })
+                    }
                 }
                 _ => None,
             };
@@ -833,6 +949,7 @@ impl Phi3Model {
                 offset,
                 steer_ref,
                 collect_bake_data,
+                kv_mode,
             )?;
             if let Some(q) = q_opt {
                 per_layer_q.push(q);
@@ -953,5 +1070,288 @@ impl Phi3Model {
             }
         };
         Ok((outcome, per_layer_q, last_hidden))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiny_config() -> Phi3Config {
+        Phi3Config {
+            hidden_size: 16,
+            intermediate_size: 32,
+            num_hidden_layers: 2,
+            num_attention_heads: 2,
+            num_key_value_heads: 2,
+            vocab_size: 32,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            partial_rotary_factor: 1.0,
+            tie_word_embeddings: true,
+        }
+    }
+
+    fn deterministic_attention(cfg: &Phi3Config) -> Phi3Attention {
+        let h = cfg.hidden_size;
+        let qkv_out = 3 * h;
+        let qkv_w: Vec<f32> = (0..qkv_out * h)
+            .map(|i| (((i * 37 + 13) % 29) as f32 - 14.0) * 0.04)
+            .collect();
+        let o_w: Vec<f32> = (0..h * h)
+            .map(|i| (((i * 23 + 7) % 31) as f32 - 15.0) * 0.04)
+            .collect();
+        let qkv_t = Tensor::from_vec(qkv_w, (qkv_out, h), &Device::Cpu).expect("qkv_w");
+        let o_t = Tensor::from_vec(o_w, (h, h), &Device::Cpu).expect("o_w");
+        Phi3Attention {
+            qkv_proj: LinearLayer::Dense(Linear::new(qkv_t, None)),
+            o_proj: LinearLayer::Dense(Linear::new(o_t, None)),
+            num_heads: cfg.num_attention_heads,
+            num_kv_heads: cfg.num_key_value_heads,
+            head_dim: cfg.head_dim(),
+            kv_cache: None,
+        }
+    }
+
+    fn tensor_flat_f32(t: &Tensor) -> Vec<f32> {
+        t.contiguous()
+            .expect("contiguous")
+            .flatten_all()
+            .expect("flatten")
+            .to_vec1::<f32>()
+            .expect("to_vec1")
+    }
+
+    #[test]
+    fn isolated_probe_preserves_kv_cache_and_truncate_rewinds_exact_prefix() {
+        let cfg = tiny_config();
+        let rope = RotaryCache::new(&cfg, 64, DType::F32, &Device::Cpu).expect("rope");
+        let mut attn = deterministic_attention(&cfg);
+        let mut ref_attn = deterministic_attention(&cfg);
+
+        let x_init: Vec<f32> = (0..3 * cfg.hidden_size)
+            .map(|i| ((i % 17) as f32 - 8.0) * 0.1)
+            .collect();
+        let x_init_t = Tensor::from_vec(x_init, (1, 3, cfg.hidden_size), &Device::Cpu).expect("x0");
+
+        let _ = attn
+            .forward(&x_init_t, &rope, 0, None, false, KvCacheMode::Append)
+            .expect("append init");
+        let _ = ref_attn
+            .forward(&x_init_t, &rope, 0, None, false, KvCacheMode::Append)
+            .expect("ref append init");
+        assert_eq!(attn.kv_len(), 3);
+
+        let (k0, v0) = attn.kv_cache.as_ref().expect("kv populated");
+        let k0_vec = tensor_flat_f32(k0);
+        let v0_vec = tensor_flat_f32(v0);
+
+        let x_probe: Vec<f32> = (0..2 * cfg.hidden_size)
+            .map(|i| ((i * 5 + 3) % 19) as f32 * 0.08 - 0.6)
+            .collect();
+        let x_probe_t =
+            Tensor::from_vec(x_probe, (1, 2, cfg.hidden_size), &Device::Cpu).expect("x_probe");
+        let (_, q_probe) = attn
+            .forward(&x_probe_t, &rope, 0, None, true, KvCacheMode::IsolatedProbe)
+            .expect("isolated probe offset 0");
+        assert_eq!(
+            q_probe.expect("q_heads captured").len(),
+            2 * cfg.num_attention_heads * cfg.rotary_dim()
+        );
+        // Non-zero offset probe must also respect local causal mask shape without touching KV.
+        let _ = attn
+            .forward(
+                &x_probe_t,
+                &rope,
+                5,
+                None,
+                false,
+                KvCacheMode::IsolatedProbe,
+            )
+            .expect("isolated probe offset 5");
+
+        assert_eq!(attn.kv_len(), 3);
+        let (k_after_probe, v_after_probe) = attn.kv_cache.as_ref().expect("kv intact");
+        assert_eq!(tensor_flat_f32(k_after_probe), k0_vec);
+        assert_eq!(tensor_flat_f32(v_after_probe), v0_vec);
+
+        let x_step: Vec<f32> = (0..cfg.hidden_size)
+            .map(|i| (i as f32 - 7.5) * 0.12)
+            .collect();
+        let x_step_t =
+            Tensor::from_vec(x_step, (1, 1, cfg.hidden_size), &Device::Cpu).expect("x_step");
+        let (out_with_probe, _) = attn
+            .forward(&x_step_t, &rope, 3, None, false, KvCacheMode::Append)
+            .expect("append step");
+        let (out_ref, _) = ref_attn
+            .forward(&x_step_t, &rope, 3, None, false, KvCacheMode::Append)
+            .expect("ref append step");
+        assert_eq!(attn.kv_len(), 4);
+        assert_eq!(tensor_flat_f32(&out_with_probe), tensor_flat_f32(&out_ref));
+
+        // Truncating back to 3 restores the exact initial KV prefix; over-truncation fails closed.
+        attn.truncate_cache(3).expect("truncate to 3");
+        assert_eq!(attn.kv_len(), 3);
+        let (k_trunc, v_trunc) = attn.kv_cache.as_ref().expect("kv truncated");
+        assert_eq!(tensor_flat_f32(k_trunc), k0_vec);
+        assert_eq!(tensor_flat_f32(v_trunc), v0_vec);
+        assert!(attn.truncate_cache(5).is_err());
+
+        attn.truncate_cache(0).expect("truncate to 0");
+        assert_eq!(attn.kv_len(), 0);
+        assert!(attn.kv_cache.is_none());
+    }
+
+    #[test]
+    fn pre_rope_commutes_with_fixed_angle_and_keeps_resonant_probe_position_invariant() {
+        let cfg = tiny_config();
+        let rope = RotaryCache::new(&cfg, 64, DType::F32, &Device::Cpu).expect("rope");
+        let mut adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry()).expect("adapter");
+
+        let q_pre_vec: Vec<f32> = (0..cfg.num_attention_heads * cfg.head_dim())
+            .map(|i| ((i * 11 + 5) % 13) as f32 * 0.15 - 0.8)
+            .collect();
+        let q_pre = Tensor::from_vec(
+            q_pre_vec.clone(),
+            (1, cfg.num_attention_heads, 1, cfg.head_dim()),
+            &Device::Cpu,
+        )
+        .expect("q_pre");
+
+        // 1. Fixed-angle SO(2) commutativity: steering before vs after HalfSplit RoPE agrees.
+        let fixed_q7: [lmnk_q7_t; 2] = [64, -48];
+        let mut trail_a = lmnk_pointer_trail_t::default();
+        let mut trail_b = lmnk_pointer_trail_t::default();
+        let out_pre = rope
+            .apply_with_adapter(
+                &q_pre,
+                19,
+                Some(LayerSteer {
+                    adapter: &mut adapter,
+                    layer_idx: 1,
+                    q7_deltas: &fixed_q7,
+                    persona_opt: None,
+                    resonant_opt: None,
+                    max_rad: 0.20,
+                    trail: &mut trail_a,
+                    horizon_mode: HorizonAblationMode::Core3,
+                    escalation_provider: None,
+                    probe_frame: ProbeCoordinateFrame::PreRope,
+                }),
+            )
+            .expect("pre-rope fixed steer");
+        let out_post = rope
+            .apply_with_adapter(
+                &q_pre,
+                19,
+                Some(LayerSteer {
+                    adapter: &mut adapter,
+                    layer_idx: 1,
+                    q7_deltas: &fixed_q7,
+                    persona_opt: None,
+                    resonant_opt: None,
+                    max_rad: 0.20,
+                    trail: &mut trail_b,
+                    horizon_mode: HorizonAblationMode::Core3,
+                    escalation_provider: None,
+                    probe_frame: ProbeCoordinateFrame::PostRope,
+                }),
+            )
+            .expect("post-rope fixed steer");
+        for (a, b) in tensor_flat_f32(&out_pre)
+            .iter()
+            .zip(tensor_flat_f32(&out_post).iter())
+        {
+            assert!(
+                (a - b).abs() < 1e-5,
+                "HalfSplit SO(2) commutativity mismatch: pre={a} vs post={b}"
+            );
+        }
+
+        // 2. Resonant Procrustes probe invariance in `PreRope` vs position drift in `PostRope`.
+        let neg_ref: Vec<f32> = q_pre_vec
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| if i % 2 == 0 { -v } else { v * 0.5 + 0.3 })
+            .collect();
+        let anchor_q7_vec = adapter
+            .bake_layer_procrustes_q7(&neg_ref, &q_pre_vec)
+            .expect("bake pre-rope anchor");
+        let mut arr64 = [0_i8; 64];
+        arr64[..anchor_q7_vec.len()].copy_from_slice(&anchor_q7_vec);
+        let facts = [ObjectiveFact::new(arr64, 2.5, 0, 1)];
+        let personas: [SubjectivePersona<[i8; 64]>; 0] = [];
+        let guards: [GuardPhaseAnchor; 0] = [];
+        let res_slice: LayerResonantSlices<'_> = (&facts, &personas, &guards, &neg_ref, &q_pre_vec);
+
+        let mut trail_off0 = lmnk_pointer_trail_t::default();
+        let steered_at_0 = rope
+            .apply_with_adapter(
+                &q_pre,
+                0,
+                Some(LayerSteer {
+                    adapter: &mut adapter,
+                    layer_idx: 1,
+                    q7_deltas: &fixed_q7,
+                    persona_opt: None,
+                    resonant_opt: Some(res_slice),
+                    max_rad: -1.0,
+                    trail: &mut trail_off0,
+                    horizon_mode: HorizonAblationMode::Core3,
+                    escalation_provider: None,
+                    probe_frame: ProbeCoordinateFrame::PreRope,
+                }),
+            )
+            .expect("pre-rope resonant off=0");
+        // Rotating the `offset=0` steered vector by RoPE(25) must match `PreRope` at `offset=25`.
+        let expected_at_25 = rope
+            .apply_half_split_rope(&steered_at_0, 25, 1)
+            .expect("rope shift");
+
+        let mut trail_off25 = lmnk_pointer_trail_t::default();
+        let pre_at_25 = rope
+            .apply_with_adapter(
+                &q_pre,
+                25,
+                Some(LayerSteer {
+                    adapter: &mut adapter,
+                    layer_idx: 1,
+                    q7_deltas: &fixed_q7,
+                    persona_opt: None,
+                    resonant_opt: Some(res_slice),
+                    max_rad: -1.0,
+                    trail: &mut trail_off25,
+                    horizon_mode: HorizonAblationMode::Core3,
+                    escalation_provider: None,
+                    probe_frame: ProbeCoordinateFrame::PreRope,
+                }),
+            )
+            .expect("pre-rope resonant off=25");
+        for (a, b) in tensor_flat_f32(&expected_at_25)
+            .iter()
+            .zip(tensor_flat_f32(&pre_at_25).iter())
+        {
+            assert!(
+                (a - b).abs() < 1e-5,
+                "PreRope resonant probe must be position-invariant: expected={a} got={b}"
+            );
+        }
+
+        // Verify `PostRope` mixes pre-RoPE `neg_ref` with RoPE-rotated `q` at `offset=25`.
+        let post_roped_25 = tensor_flat_f32(
+            &rope
+                .apply_half_split_rope(&q_pre, 25, 1)
+                .expect("post roped 25"),
+        );
+        let probe_pre = adapter
+            .bake_layer_procrustes_q7(&neg_ref, &q_pre_vec)
+            .expect("probe pre");
+        let probe_post = adapter
+            .bake_layer_procrustes_q7(&neg_ref, &post_roped_25)
+            .expect("probe post");
+        assert_ne!(
+            probe_pre, probe_post,
+            "PostRope probe at offset=25 should diverge from pre-RoPE anchor frame"
+        );
     }
 }

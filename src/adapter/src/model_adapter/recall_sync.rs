@@ -578,12 +578,14 @@ impl ModelSteeringAdapter {
     }
 
     /// Returns a mutable reference to the embedded [`EntropyController`].
-    pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
+    #[cfg(test)]
+    pub(crate) fn entropy_controller_mut(&mut self) -> &mut EntropyController {
         self.ctx.entropy_controller_mut()
     }
 
     /// Returns a mutable reference to the embedded [`ResidualAdapterEngine`] (Rank-1 residual).
-    pub fn residual_adapter_mut(&mut self) -> &mut ResidualAdapterEngine {
+    #[cfg(test)]
+    pub(crate) fn residual_adapter_mut(&mut self) -> &mut ResidualAdapterEngine {
         &mut self.residual_adapter
     }
 }

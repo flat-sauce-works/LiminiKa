@@ -34,15 +34,17 @@ mod multi_turn;
 mod step2;
 
 use bake::{
-    argmax, bake_via_adapter, format_phi4_prompt, kl_div, load_fixture, print_runtime_profile,
-    query_nvidia_smi_vram, token_logprob, BakedModelProfile,
+    argmax, capture_and_build_shared_corpus, format_phi4_prompt, kl_div, load_fixture,
+    print_runtime_profile, query_nvidia_smi_vram, token_logprob, BakedModelProfile,
 };
 use cli::{EvalCliConfig, EvalRuntime};
 use eval::{
     apply_ego_mode, build_preset_circuit, resolve_persona_circuit, CircuitProfileMode,
     HorizonAblationMode,
 };
-use model::{ForwardSteer, LogitsFetchMode, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors};
+use model::{
+    ForwardSteer, KvCacheMode, LogitsFetchMode, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors,
+};
 
 fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
     match cli.fixture_path.as_ref() {
@@ -197,17 +199,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             circuit_mode, cons.steps
         );
     }
-    let (baked_opt, base_entropies): (Option<BakedModelProfile>, Vec<f32>) = if !recall_only {
-        let t_bake = Instant::now();
-        let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, &suite)?;
+    let shared = capture_and_build_shared_corpus(
+        &mut model,
+        &tokenizer,
+        &mut adapter,
+        &suite,
+        recall_only,
+        cli.use_base_prior,
+    )?;
+    if let Some(ref baked) = shared.baked_opt {
         println!(
             "Baked {} x {} Q7 phase deltas + {}-dim Rank-1 residual vectors via ModelSteeringAdapter in {:.2?}.",
             baked.per_layer_q7.len(),
             adapter.geometry().num_q_heads,
             cfg.hidden_size,
-            t_bake.elapsed(),
+            shared.bake_elapsed,
         );
+    }
+    println!(
+        "Compiled {} natural-language attractors (single-pass shared capture, two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}",
+        shared.compiled.corpus.entries().len(),
+        shared.used_base_prior,
+        shared.compile_ms,
+        shared.compiled.recall_policy.min_coherence,
+        shared.compiled.recall_policy.boundary_margin,
+    );
 
+    let baked_opt = shared.baked_opt;
+    let compiled = shared.compiled;
+    let compile_ms = shared.compile_ms;
+
+    let base_entropies: Vec<f32> = if let Some(ref baked) = baked_opt {
         let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
         for (_, _, expected, _) in &suite.probes {
             let tok = expected.first().and_then(|kw| {
@@ -222,22 +244,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
         let mut base_entropies: Vec<f32> = Vec::with_capacity(suite.probes.len());
         for (_, prompt, _, _) in &suite.probes {
-            model.clear_cache();
             let formatted = format_phi4_prompt(prompt);
             let ids = tokenizer
                 .encode(formatted.as_str(), false)
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (logits_out, _, _) =
-                model.forward_tokens(&ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
+            let (logits_out, _, _) = model.forward_tokens(
+                &ids,
+                0,
+                None,
+                false,
+                false,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::IsolatedProbe,
+            )?;
             let logits = logits_out.into_full_logits()?;
             let h_t = adapter.measure_entropy_state(&logits)?.moving_z_entropy;
             base_entropies.push(h_t);
             baselines.push(logits);
         }
 
-        let probe_res = calibrate_trial_adapter(&mut adapter, &baked, &base_entropies)?;
+        let probe_res = calibrate_trial_adapter(&mut adapter, baked, &base_entropies)?;
         println!(
             "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} rank1_rho={:.3}",
             probe_res.probe_epoch,
@@ -332,6 +360,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
+                        layer_steer_mask: Some(layer_mask),
+                        probe_frame: cli.probe_frame,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
@@ -342,6 +372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         use_entropy_gate,
                         false,
                         LogitsFetchMode::FullLogits,
+                        KvCacheMode::Append,
                     )?;
                     let mut logits = prefill_out.into_full_logits()?;
                     sum_kl += kl_div(base_logits, &logits);
@@ -367,6 +398,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             use_entropy_gate,
                             false,
                             LogitsFetchMode::FullLogits,
+                            KvCacheMode::Append,
                         )?;
                         logits = next_out.into_full_logits()?;
                     }
@@ -582,6 +614,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
+                        layer_steer_mask: Some(layer_mask),
+                        probe_frame: cli.probe_frame,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
@@ -592,6 +626,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         use_entropy_gate,
                         false,
                         LogitsFetchMode::FullLogits,
+                        KvCacheMode::Append,
                     )?;
                     let mut logits = mt_prefill_out.into_full_logits()?;
                     offset += ids.len();
@@ -606,6 +641,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             use_entropy_gate,
                             false,
                             LogitsFetchMode::FullLogits,
+                            KvCacheMode::Append,
                         )?;
                         logits = next_out.into_full_logits()?;
                         offset += 1;
@@ -632,9 +668,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        (Some(baked), base_entropies)
+        base_entropies
     } else {
-        (None, Vec::new())
+        Vec::new()
     };
 
     if !recall_only {
@@ -662,6 +698,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             model: &mut model,
             adapter: &mut trial_adapter,
             baked_opt: baked_opt.as_ref(),
+            compiled: &compiled,
+            compile_ms,
             active_persona_bank: &mut trial_persona_bank,
         };
         let mut step2_out = step2::run_step2_evaluation(&cli, &suite, &mut rt)?;

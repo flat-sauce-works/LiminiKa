@@ -192,14 +192,147 @@ FN_START_RE = re.compile(
 CRATE_DEP_RE = re.compile(r"\bcrate::(liminal|foundation|stigmergy|drivers(?:::(?:spine|ego))?|runtime)\b")
 
 
-def strip_cfg_test_tail(lines: list[str]) -> list[tuple[int, str]]:
-    """Return `(1-based lineno, line)` pairs excluding `#[cfg(test)]` module tails."""
-    kept: list[tuple[int, str]] = []
-    for idx, line in enumerate(lines, 1):
-        if line.split("//", 1)[0].strip() == "#[cfg(test)]":
+CFG_TEST_ATTR_RE = re.compile(r"^#\[\s*cfg\s*\(\s*test\s*\)\s*\]$")
+MOD_DECL_RE = re.compile(r"^(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\b")
+OUTER_ATTR_START_RE = re.compile(r"^#\[")
+
+ADAPTER_MUT_BACKDOOR_RE = re.compile(
+    r"\.\s*(?:runtime_context_mut|substrate_mut|compute_pool_mut|"
+    r"entropy_controller_mut|residual_adapter_mut)\s*\("
+)
+CORE_MUTABLE_ENGINE_RE = re.compile(
+    r"\bliminika_core::(?:runtime::RuntimeContext\b|"
+    r"runtime::CoreStateStack\b|"
+    r"drivers::(?:SystemSpineState|AnonymousComputePool|EntropyController|"
+    r"EgoDifferentialNet|DistortionTension)\b|"
+    r"stigmergy::(?:PhaseSteeringEngine|ResidualAdapterEngine)\b)"
+    r"|\b(?:RuntimeContext|CoreStateStack|SystemSpineState|AnonymousComputePool|"
+    r"EntropyController|EgoDifferentialNet|DistortionTension|"
+    r"PhaseSteeringEngine|ResidualAdapterEngine|StigmergicSubstrate)::(?:new|new_boxed|new_empty)\b"
+    r"|\.\s*(?:reanchor_baseline_pressure|reset_turn_bypass_state|"
+    r"begin_turn_spine_policy|step_hot_path_branchless|"
+    r"evaluate_whole_token_steering_bypass_with_spine|"
+    r"apply_preset_lanes|allocate_lane|release_all_lanes)\s*\("
+)
+RAW_C_ABI_CALL_RE = re.compile(r"\blmnk_[a-z0-9_]+\s*\(")
+CORE_ABI_FN_PATH_RE = re.compile(r"\bliminika_core::abi::(lmnk_[a-z0-9_]+)\b")
+DSL_CORE_REF_RE = re.compile(r"\bliminika_core\b")
+ADAPTER_MUT_GATE_CALL_RE = re.compile(
+    r"\b(?:TurnOrchestrator::(?:prepare_turn|commit_turn_circuit)|"
+    r"ModelSteeringAdapter::new|"
+    r"LmnkTimeline::(?:new|load_from_path|from_bytes|save_to_path|record_step|resume_or_rebake)|"
+    r"LmnkPackageOwned::load_from_path|"
+    r"CompiledTokenCorpus::(?:capture_entries|compile|compile_with_base_prior)|"
+    r"ContrastiveAnchorBank::from_entries)\b"
+    r"|\.\s*(?:step_decode_control|reanchor_compute_pressure|reset_turn_decode_state|"
+    r"orchestrate_layer_rope_with_substrate|orchestrate_layer_rope_with_spillover|"
+    r"steer_layer_with_gateway|steer_layer_q_rot|apply_rank1_with_gateway_mut|"
+    r"apply_rank1_hidden_fused|orchestrate_layer_rank1_with_substrate|"
+    r"calibrate_manifold_probe|apply_slow_loop_telemetry_epoch|"
+    r"commit_spillover_experience|reset_horizon_and_core_state|"
+    r"step_compute_dispatch_with_spine|commit_compute_exit_reward|"
+    r"measure_entropy_state|step_entropy_logits|set_layer_rope_mask|"
+    r"set_ego_max_hops|set_guard_hold_tokens|set_max_observe_stride|"
+    r"set_pre_bypass_enabled|configure_ego_from_preset|configure_ego_from_natural_language|"
+    r"bake_logical_pframe_topology)\s*\("
+)
+CORE_CRATE_LAYER_RE = re.compile(
+    r"\bliminika_core::(liminal|foundation|stigmergy|drivers|runtime|abi)\b"
+)
+
+
+def _find_cfg_test_module_lines(lines: list[str]) -> set[int]:
+    """Return 0-based line indices belonging exclusively to `#[cfg(test)] mod ...` items."""
+    if not lines or not any("cfg" in line and "test" in line for line in lines):
+        return set()
+    clean_text = strip_literals_preserve_lines(strip_comments_preserve_lines("\n".join(lines)))
+    clean_lines = clean_text.splitlines()
+    while len(clean_lines) < len(lines):
+        clean_lines.append("")
+
+    excluded: set[int] = set()
+    n = len(clean_lines)
+    i = 0
+    while i < n:
+        if not CFG_TEST_ATTR_RE.match(clean_lines[i].strip()):
+            i += 1
+            continue
+
+        # Look past blank lines and stacked attributes (e.g. `#[allow(...)]`) for a `mod ` item.
+        j = i + 1
+        while j < n:
+            stripped = clean_lines[j].strip()
+            if not stripped:
+                j += 1
+                continue
+            if OUTER_ATTR_START_RE.match(stripped):
+                bracket_depth = stripped.count("[") - stripped.count("]")
+                j += 1
+                while j < n and bracket_depth > 0:
+                    bracket_depth += clean_lines[j].count("[") - clean_lines[j].count("]")
+                    j += 1
+                continue
             break
-        kept.append((idx, line))
-    return kept
+
+        if j >= n or not MOD_DECL_RE.match(clean_lines[j].lstrip()):
+            # Item-level `#[cfg(test)]` (e.g. helper `fn`) — do NOT discard subsequent prod code.
+            i += 1
+            continue
+
+        # Exclude either `mod foo;` (single declaration) or `mod foo { ... }` (brace-balanced block).
+        brace_depth = 0
+        saw_open_brace = False
+        k = j
+        while k < n:
+            line_clean = clean_lines[k]
+            if not saw_open_brace:
+                brace_pos = line_clean.find("{")
+                semi_pos = line_clean.find(";")
+                if semi_pos != -1 and (brace_pos == -1 or semi_pos < brace_pos):
+                    excluded.update(range(i, k + 1))
+                    k += 1
+                    break
+                if brace_pos != -1:
+                    saw_open_brace = True
+                    for ch in line_clean[brace_pos:]:
+                        if ch == "{":
+                            brace_depth += 1
+                        elif ch == "}":
+                            brace_depth -= 1
+                    if brace_depth <= 0:
+                        excluded.update(range(i, k + 1))
+                        k += 1
+                        break
+            else:
+                for ch in line_clean:
+                    if ch == "{":
+                        brace_depth += 1
+                    elif ch == "}":
+                        brace_depth -= 1
+                if brace_depth <= 0:
+                    excluded.update(range(i, k + 1))
+                    k += 1
+                    break
+            k += 1
+        else:
+            excluded.update(range(i, n))
+            k = n
+        i = k
+
+    return excluded
+
+
+def strip_cfg_test_tail(lines: list[str]) -> list[tuple[int, str]]:
+    """Return `(1-based lineno, line)` pairs excluding `#[cfg(test)] mod ...` blocks/declarations."""
+    excluded = _find_cfg_test_module_lines(lines)
+    return [(idx, line) for idx, line in enumerate(lines, 1) if (idx - 1) not in excluded]
+
+
+def _blank_cfg_test_modules(source: str) -> str:
+    """Replace `#[cfg(test)] mod ...` lines with empty lines to preserve 1-based line numbers."""
+    lines = source.splitlines()
+    excluded = _find_cfg_test_module_lines(lines)
+    return "\n".join("" if idx in excluded else line for idx, line in enumerate(lines))
 
 
 def advance_past_literal(text: str, idx: int) -> int | None:
@@ -383,8 +516,7 @@ def check_abstract_domain_invariant(core_src: pathlib.Path) -> list[str]:
 def scan_scoped_boundary_violations_in_source(source: str, source_label: str = "<memory>") -> list[str]:
     """Scan non-test Rust source text for public cross-observer `Scoped<` or `*_scoped*` signatures."""
     violations: list[str] = []
-    non_test_lines = strip_cfg_test_tail(source.splitlines())
-    truncated_source = "\n".join(line for _lineno, line in non_test_lines)
+    truncated_source = _blank_cfg_test_modules(source)
     clean_text = strip_comments_preserve_lines(truncated_source)
 
     n = len(clean_text)
@@ -472,11 +604,119 @@ def strip_literals_preserve_lines(clean_text: str) -> str:
 
 
 def _extract_non_test_code(source: str) -> str:
-    """Strip `#[cfg(test)]` tails, comments, and string literals preserving line numbers."""
-    non_test_lines = strip_cfg_test_tail(source.splitlines())
-    truncated = "\n".join(line for _lineno, line in non_test_lines)
+    """Strip `#[cfg(test)]` modules, comments, and string literals preserving line numbers."""
+    truncated = _blank_cfg_test_modules(source)
     clean_text = strip_comments_preserve_lines(truncated)
     return strip_literals_preserve_lines(clean_text)
+
+
+def _find_function_line_span(code_only: str, fn_name: str) -> set[int]:
+    """Return 1-based line numbers spanning `fn <fn_name>(...) { ... }` in stripped code."""
+    match = re.search(rf"\bfn\s+{re.escape(fn_name)}\b", code_only)
+    if match is None:
+        return set()
+    brace_start = code_only.find("{", match.end())
+    if brace_start == -1:
+        return set()
+    depth = 0
+    end_idx = len(code_only)
+    for pos in range(brace_start, len(code_only)):
+        ch = code_only[pos]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end_idx = pos + 1
+                break
+    start_line = code_only.count("\n", 0, match.start()) + 1
+    end_line = code_only.count("\n", 0, end_idx) + 1
+    return set(range(start_line, end_line + 1))
+
+
+def check_workspace_crate_gates(repo_root: pathlib.Path) -> list[str]:
+    """Enforce inter-crate boundaries across `src/dsl/`, `src/cli/`, and `examples/candle_eval/`."""
+    violations: list[str] = []
+
+    # (a) `src/dsl/` must remain completely isolated from `liminika_core`.
+    dsl_src = repo_root / "src" / "dsl" / "src"
+    if dsl_src.is_dir():
+        for rs_file in sorted(dsl_src.rglob("*.rs")):
+            if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
+                continue
+            rel_path = rs_file.relative_to(repo_root).as_posix()
+            code_only = _extract_non_test_code(rs_file.read_text(encoding="utf-8"))
+            for match in DSL_CORE_REF_RE.finditer(code_only):
+                lineno = code_only.count("\n", 0, match.start()) + 1
+                violations.append(
+                    f"Workspace gate (dsl -> liminika_core): {rel_path}:{lineno}: "
+                    "disallowed `liminika_core` reference in `liminika-dsl`"
+                )
+
+    # (b) `src/cli/` and `examples/candle_eval/` must route mutable state through `liminika-adapter`.
+    host_roots = [
+        ("cli", repo_root / "src" / "cli" / "src"),
+        ("candle_eval", repo_root / "examples" / "candle_eval" / "src"),
+    ]
+    for crate_tag, src_dir in host_roots:
+        if not src_dir.is_dir():
+            continue
+        for rs_file in sorted(src_dir.rglob("*.rs")):
+            if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
+                continue
+            if crate_tag == "cli" and rs_file.name in QUARANTINED_CLI_FILES:
+                continue
+            rel_path = rs_file.relative_to(repo_root).as_posix()
+            raw_text = rs_file.read_text(encoding="utf-8")
+            code_only = _extract_non_test_code(raw_text)
+            raw_lines = raw_text.splitlines()
+
+            smoke_allowed_lines: set[int] = set()
+            if rel_path == "src/cli/src/main.rs":
+                smoke_allowed_lines = _find_function_line_span(
+                    code_only, "run_default_c_abi_smoke"
+                )
+
+            for match in ADAPTER_MUT_BACKDOOR_RE.finditer(code_only):
+                lineno = code_only.count("\n", 0, match.start()) + 1
+                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
+                violations.append(
+                    f"Workspace gate (adapter *_mut backdoor): {rel_path}:{lineno}: {snippet}"
+                )
+
+            for match in CORE_MUTABLE_ENGINE_RE.finditer(code_only):
+                lineno = code_only.count("\n", 0, match.start()) + 1
+                if lineno in smoke_allowed_lines:
+                    continue
+                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
+                violations.append(
+                    f"Workspace gate (direct core mutable state): {rel_path}:{lineno}: {snippet}"
+                )
+
+            for match in RAW_C_ABI_CALL_RE.finditer(code_only):
+                lineno = code_only.count("\n", 0, match.start()) + 1
+                if lineno in smoke_allowed_lines:
+                    continue
+                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
+                violations.append(
+                    f"Workspace gate (raw C-ABI call outside allowlist): {rel_path}:{lineno}: "
+                    f"{snippet}"
+                )
+
+            for match in CORE_ABI_FN_PATH_RE.finditer(code_only):
+                sym = match.group(1)
+                if sym.endswith("_t"):
+                    continue
+                lineno = code_only.count("\n", 0, match.start()) + 1
+                if lineno in smoke_allowed_lines:
+                    continue
+                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
+                violations.append(
+                    f"Workspace gate (raw C-ABI symbol outside allowlist): {rel_path}:{lineno}: "
+                    f"{snippet}"
+                )
+
+    return violations
 
 
 def _find_banned_public_decls(
@@ -669,7 +909,9 @@ def run_checks(core_src: pathlib.Path) -> list[str]:
     violations.extend(check_abstract_domain_invariant(core_src))
     violations.extend(check_cross_observer_scoped_boundaries(core_src))
     violations.extend(check_vocabulary_ownership(core_src))
-    violations.extend(check_downstream_vocabulary(core_src.parent.parent.parent))
+    repo_root = core_src.parent.parent.parent
+    violations.extend(check_downstream_vocabulary(repo_root))
+    violations.extend(check_workspace_crate_gates(repo_root))
     violations.extend(check_topology_matrix_parity(core_src))
     return violations
 
@@ -767,6 +1009,149 @@ def render_mermaid(core_src: pathlib.Path) -> str:
     ]
     for provider, consumer in ordered_pairs:
         refs = edge_counts.get((consumer, provider), 0)
+        if refs > 0:
+            lines.append(f"    {node_ids[provider]} -->|{refs} refs| {node_ids[consumer]}")
+
+    return "\n".join(lines) + "\n"
+
+
+def _scan_crate_prod_stats(
+    src_dir: pathlib.Path,
+    skip_names: frozenset[str] = frozenset(),
+) -> tuple[int, int, str]:
+    """Return `(prod_files, prod_loc, combined_non_test_code)` for a Rust crate `src/` dir."""
+    files = 0
+    prod_loc = 0
+    chunks: list[str] = []
+    if not src_dir.is_dir():
+        return 0, 0, ""
+    for rs_file in sorted(src_dir.rglob("*.rs")):
+        if rs_file.name == "tests.rs" or "tests" in rs_file.parts or rs_file.name in skip_names:
+            continue
+        raw = rs_file.read_text(encoding="utf-8")
+        files += 1
+        prod_loc += len(strip_cfg_test_tail(raw.splitlines()))
+        chunks.append(_extract_non_test_code(raw))
+    return files, prod_loc, "\n".join(chunks)
+
+
+def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
+    """Render workspace crates -> adapter canonical gates -> core 5-layer DAG as Mermaid."""
+    core_src = repo_root / "src" / "core" / "src"
+    files_per_node, loc_per_node, core_edges = collect_dag_metrics(core_src)
+
+    dsl_files, dsl_loc, _ = _scan_crate_prod_stats(repo_root / "src" / "dsl" / "src")
+    cli_files, cli_loc, cli_code = _scan_crate_prod_stats(
+        repo_root / "src" / "cli" / "src", QUARANTINED_CLI_FILES
+    )
+    eval_files, eval_loc, eval_code = _scan_crate_prod_stats(
+        repo_root / "examples" / "candle_eval" / "src"
+    )
+    ad_files, ad_loc, ad_code = _scan_crate_prod_stats(repo_root / "src" / "adapter" / "src")
+
+    cli_dsl_refs = len(re.findall(r"\bliminika_dsl\b", cli_code))
+    cli_adapter_gates = len(ADAPTER_MUT_GATE_CALL_RE.findall(cli_code))
+    cli_core_vals = len(CORE_CRATE_LAYER_RE.findall(cli_code))
+    cli_cabi_smoke = len(RAW_C_ABI_CALL_RE.findall(cli_code))
+
+    eval_adapter_gates = len(ADAPTER_MUT_GATE_CALL_RE.findall(eval_code))
+    eval_core_vals = len(CORE_CRATE_LAYER_RE.findall(eval_code))
+
+    ad_core_counts: Counter[str] = Counter(CORE_CRATE_LAYER_RE.findall(ad_code))
+    ad_runtime_gates = ad_core_counts["runtime"]
+    ad_liminal_vals = ad_core_counts["liminal"]
+    ad_foundation_vals = ad_core_counts["foundation"]
+    ad_stigmergy_vals = ad_core_counts["stigmergy"]
+    ad_drivers_vals = ad_core_counts["drivers"]
+
+    def core_label(key: str, title: str) -> str:
+        return f"{title} - {files_per_node[key]} files, {loc_per_node[key]} LOC"
+
+    lines = [
+        "flowchart TD",
+        '    %% Legend: solid arrow (-->) = Mutable State Gate; dashed arrow (-.->) = Value/Pod Ref',
+        '    subgraph WS_HOSTS["Workspace Host Crates & Evaluation Harness"]',
+        f'        W_dsl["liminika-dsl (Parser/AST) - {dsl_files} files, {dsl_loc} prod LOC"]',
+        f'        W_cli["liminika-cli (CLI & C-ABI Smoke) - {cli_files} files, {cli_loc} prod LOC"]',
+        (
+            f'        W_eval["candle_eval (Thin Eval Harness) - '
+            f'{eval_files} files, {eval_loc} prod LOC"]'
+        ),
+        "    end",
+        '    subgraph WS_ADAPTER["Canonical Adapter Gate (liminika-adapter)"]',
+        (
+            '        W_adapter["ModelSteeringAdapter + TurnOrchestrator + CompiledTokenCorpus '
+            f'- {ad_files} files, {ad_loc} prod LOC"]'
+        ),
+        "    end",
+        '    subgraph WS_CORE["liminika-core (#![no_std] 5-Layer Unidirectional DAG)"]',
+        f'        L0_liminal["{core_label("liminal", "Lv.0 liminal (Axioms & Lacuna)")}"]',
+        f'        L1_foundation["{core_label("foundation", "Lv.1 foundation (SWAR, RoPE, Pod)")}"]',
+        f'        L2_stigmergy["{core_label("stigmergy", "Lv.2 stigmergy (Substrate & Anchors)")}"]',
+        f'        L3_spine["{core_label("drivers::spine", "Lv.3 drivers/spine (Spine SSOT)")}"]',
+        f'        L3_ego["{core_label("drivers::ego", "Lv.3 drivers/ego (Ego P-Frame)")}"]',
+        f'        L3_drivers_hub["{core_label("drivers", "Lv.3 drivers/mod (Tension)")}"]',
+        f'        L4_runtime["{core_label("runtime", "Lv.4 runtime (Context, Gateway, ABI)")}"]',
+        "    end",
+        "",
+    ]
+
+    # Host -> DSL / Adapter / Core edges
+    if cli_dsl_refs > 0:
+        lines.append(f'    W_cli -.->|"Value/AST ({cli_dsl_refs} refs)"| W_dsl')
+    lines.append(f'    W_cli -->|"Mutable Gate ({cli_adapter_gates} calls)"| W_adapter')
+    if cli_core_vals > 0:
+        lines.append(f'    W_cli -.->|"Value/Pod & Inspect ({cli_core_vals} refs)"| L4_runtime')
+    if cli_cabi_smoke > 0:
+        lines.append(
+            f'    W_cli -.->|"C-ABI Smoke Allowlist ({cli_cabi_smoke} calls)"| L4_runtime'
+        )
+    lines.append(f'    W_eval -->|"Mutable Gate ({eval_adapter_gates} calls)"| W_adapter')
+    if eval_core_vals > 0:
+        lines.append(f'    W_eval -.->|"Value/Pod & Anchors ({eval_core_vals} refs)"| L4_runtime')
+
+    # Adapter -> Core edges (Mutable RuntimeContext gate vs Value/Pod/Trait refs)
+    lines.append(f'    W_adapter -->|"Mutable RuntimeContext Gate ({ad_runtime_gates} refs)"| L4_runtime')
+    if ad_liminal_vals > 0:
+        lines.append(f'    W_adapter -.->|"Value/Pod ({ad_liminal_vals} refs)"| L0_liminal')
+    if ad_foundation_vals > 0:
+        lines.append(f'    W_adapter -.->|"Value/Trait ({ad_foundation_vals} refs)"| L1_foundation')
+    if ad_stigmergy_vals > 0:
+        lines.append(f'    W_adapter -.->|"Value/Trait ({ad_stigmergy_vals} refs)"| L2_stigmergy')
+    if ad_drivers_vals > 0:
+        lines.append(f'    W_adapter -.->|"Value/Pod ({ad_drivers_vals} refs)"| L3_spine')
+
+    # Core internal 5-layer DAG edges
+    node_ids = {
+        "liminal": "L0_liminal",
+        "foundation": "L1_foundation",
+        "stigmergy": "L2_stigmergy",
+        "drivers::spine": "L3_spine",
+        "drivers::ego": "L3_ego",
+        "drivers": "L3_drivers_hub",
+        "runtime": "L4_runtime",
+    }
+    ordered_pairs = [
+        ("liminal", "foundation"),
+        ("liminal", "stigmergy"),
+        ("foundation", "stigmergy"),
+        ("liminal", "drivers::spine"),
+        ("foundation", "drivers::spine"),
+        ("stigmergy", "drivers::spine"),
+        ("liminal", "drivers::ego"),
+        ("foundation", "drivers::ego"),
+        ("stigmergy", "drivers::ego"),
+        ("drivers", "drivers::spine"),
+        ("drivers", "drivers::ego"),
+        ("liminal", "runtime"),
+        ("foundation", "runtime"),
+        ("stigmergy", "runtime"),
+        ("drivers::spine", "runtime"),
+        ("drivers::ego", "runtime"),
+        ("drivers", "runtime"),
+    ]
+    for provider, consumer in ordered_pairs:
+        refs = core_edges.get((consumer, provider), 0)
         if refs > 0:
             lines.append(f"    {node_ids[provider]} -->|{refs} refs| {node_ids[consumer]}")
 
@@ -998,6 +1383,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Emit a Mermaid flowchart TD representation of the live core dependency graph.",
     )
     parser.add_argument(
+        "--mermaid-workspace",
+        action="store_true",
+        help=(
+            "Emit a Mermaid flowchart TD representation of workspace crates -> adapter gates -> "
+            "core 5-layer DAG distinguishing Value/Pod refs (-.->) from Mutable State Gates (-->)."
+        ),
+    )
+    parser.add_argument(
         "--liminal-map",
         action="store_true",
         help="Emit the static liminal Abstraction <-> Concretion Mermaid map and correspondence table.",
@@ -1006,7 +1399,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output",
         type=pathlib.Path,
         default=None,
-        help="Optional output file path for --mermaid or --liminal-map output.",
+        help="Optional output file path for --mermaid, --mermaid-workspace, or --liminal-map output.",
     )
     parser.add_argument(
         "--hotspots",
@@ -1014,7 +1407,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Print top core source files by LOC, unsafe tokens, raw bitmask operations, and axiom surface.",
     )
     args = parser.parse_args(argv)
-    if not (args.check or args.mermaid or args.hotspots or args.liminal_map):
+    if not (
+        args.check
+        or args.mermaid
+        or args.mermaid_workspace
+        or args.hotspots
+        or args.liminal_map
+    ):
         args.check = True
     return args
 
@@ -1023,13 +1422,14 @@ def main(argv: list[str] | None = None) -> int:
     """Run requested architecture verification and analysis commands."""
     args = parse_args(argv)
     exit_code = 0
+    printed_any = False
 
     if args.check:
         violations = run_checks(CORE_SRC)
         if violations:
             print(
                 "Error: architecture, DAG, axiom orthogonality, boundary, "
-                "or vocabulary ownership violation detected:",
+                "workspace gate, or vocabulary ownership violation detected:",
                 *violations,
                 sep="\n  ",
             )
@@ -1037,36 +1437,54 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(
                 "All 5-layer DAG, spine/ego isolation, axiom orthogonality, "
-                "AbstractDomain, Scoped boundary, legacy declared-identifier bans, "
+                "AbstractDomain, Scoped boundary, workspace gate, legacy declared-identifier bans, "
                 "and Substrate ownership invariants passed (0 violations)."
             )
+        printed_any = True
 
     if args.hotspots:
-        if args.check:
+        if printed_any:
             print()
         print(format_hotspots(CORE_SRC), end="")
+        printed_any = True
+
+    diagram_flags = int(args.mermaid) + int(args.mermaid_workspace) + int(args.liminal_map)
 
     if args.mermaid:
         diagram = render_mermaid(CORE_SRC)
-        if args.output is not None and not args.liminal_map:
+        if args.output is not None and diagram_flags == 1:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(diagram.encode("utf-8"))
             print(f"\nWrote Mermaid diagram to {args.output.as_posix()}")
         else:
-            if args.check or args.hotspots:
+            if printed_any:
                 print()
             print(diagram, end="")
+            printed_any = True
+
+    if args.mermaid_workspace:
+        ws_diagram = render_mermaid_workspace(REPO_ROOT)
+        if args.output is not None and diagram_flags == 1:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_bytes(ws_diagram.encode("utf-8"))
+            print(f"\nWrote workspace Mermaid diagram to {args.output.as_posix()}")
+        else:
+            if printed_any:
+                print()
+            print(ws_diagram, end="")
+            printed_any = True
 
     if args.liminal_map:
         liminal_doc = render_liminal_map(CORE_SRC)
-        if args.output is not None and not args.mermaid:
+        if args.output is not None and diagram_flags == 1:
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_bytes(liminal_doc.encode("utf-8"))
             print(f"\nWrote liminal boundary map to {args.output.as_posix()}")
         else:
-            if args.check or args.hotspots or args.mermaid:
+            if printed_any:
                 print()
             print(liminal_doc, end="")
+            printed_any = True
 
     return exit_code
 

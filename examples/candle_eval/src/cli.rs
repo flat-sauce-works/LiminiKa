@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use crate::eval::{
     parse_bench_trials, parse_circuit_mode, parse_ego_max_hops, parse_ego_mode,
     parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens, parse_horizon_mode,
-    parse_kv_min_res, parse_logits_observe_stride, parse_pressure_sim_mode, parse_quant_mode,
-    parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode, EgoProfileMode,
-    FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
+    parse_kv_min_res, parse_logits_observe_stride, parse_pressure_sim_mode, parse_probe_frame,
+    parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode,
+    EgoProfileMode, FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
 };
+use crate::model::ProbeCoordinateFrame;
 use candle_core::quantized::GgmlDType;
 use liminika_core::abi::lmnk_q7_t;
 use liminika_core::drivers::LiminalEgoPreset;
@@ -33,6 +34,7 @@ pub(crate) struct EvalCliConfig {
     pub(crate) fixture_path: Option<PathBuf>,
     pub(crate) multi_turn: bool,
     pub(crate) quant_mode: Option<GgmlDType>,
+    pub(crate) probe_frame: ProbeCoordinateFrame,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
     pub(crate) circuit_mode: CircuitProfileMode,
     pub(crate) ego_mode: EgoProfileMode,
@@ -68,6 +70,9 @@ pub(crate) fn print_help() {
     println!("  --multi-turn                       Run 8-turn persistent KV dialogue evaluation (Step 2B)");
     println!(
         "  --quant=<bf16|q4_0|q4k|q8_0>       Model quantization mode (default: bf16 on CUDA)"
+    );
+    println!(
+        "  --probe-frame=<pre-rope|post-rope> Procrustes probe coordinate frame (default: pre-rope)"
     );
     println!(
         "  --kv-min-res=<i8>                  Override RAM Phase-KV minimum resonance Q7 threshold"
@@ -121,6 +126,7 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--bench-trials=",
         "--fixture=",
         "--quant=",
+        "--probe-frame=",
         "--kv-min-res=",
         "--circuit=",
         "--ego=",
@@ -156,6 +162,7 @@ impl EvalCliConfig {
         let fixture_path = parse_fixture_path(cli_args.iter().map(String::as_str));
         let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
         let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
+        let probe_frame = parse_probe_frame(cli_args.iter().map(String::as_str));
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
         let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
         let ego_mode = parse_ego_mode(cli_args.iter().map(String::as_str));
@@ -195,6 +202,7 @@ impl EvalCliConfig {
             fixture_path,
             multi_turn,
             quant_mode,
+            probe_frame,
             kv_min_res,
             circuit_mode,
             ego_mode,
@@ -801,7 +809,7 @@ pub(crate) fn build_step2_run_specs(cli: &EvalCliConfig) -> Vec<Step2RunSpec> {
 
 use crate::bake::BakedModelProfile;
 use crate::model::Phi3Model;
-use liminika_adapter::ModelSteeringAdapter;
+use liminika_adapter::{CompiledTokenCorpus, ModelSteeringAdapter};
 use liminika_core::stigmergy::StandardCognitiveBank;
 use tokenizers::Tokenizer;
 
@@ -810,6 +818,8 @@ pub(crate) struct EvalRuntime<'a> {
     pub(crate) model: &'a mut Phi3Model,
     pub(crate) adapter: &'a mut ModelSteeringAdapter,
     pub(crate) baked_opt: Option<&'a BakedModelProfile>,
+    pub(crate) compiled: &'a CompiledTokenCorpus,
+    pub(crate) compile_ms: f64,
     pub(crate) active_persona_bank: &'a mut Option<StandardCognitiveBank>,
 }
 
@@ -829,10 +839,12 @@ mod tests {
             "--bench-trials=0".to_string(),
             "--fixture=tests/fixtures/custom.txt".to_string(),
             "--quant=q4k".to_string(),
+            "--probe-frame=post-rope".to_string(),
         ];
         assert!(find_unrecognized_args(args.iter().skip(1).map(String::as_str)).is_empty());
         let parsed = EvalCliConfig::parse_from_args(&args);
         assert_eq!(parsed.bench_trials, 1);
+        assert_eq!(parsed.probe_frame, ProbeCoordinateFrame::PostRope);
         assert_eq!(
             parsed.fixture_path,
             Some(PathBuf::from("tests/fixtures/custom.txt"))
@@ -843,6 +855,10 @@ mod tests {
         assert_eq!(
             EvalCliConfig::parse_from_args(&["candle_eval".to_string()]).bench_trials,
             1
+        );
+        assert_eq!(
+            EvalCliConfig::parse_from_args(&["candle_eval".to_string()]).probe_frame,
+            ProbeCoordinateFrame::PreRope
         );
 
         let bad = find_unrecognized_args([

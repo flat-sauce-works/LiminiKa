@@ -4,18 +4,20 @@
 //! Fixture loading, base-prior sampling, RoPE baking, and VRAM/metric helpers.
 
 use std::path::Path;
+use std::time::Instant;
 
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device};
 use liminika_adapter::{
-    AttractorRole, CapturedTokenSequence, ContrastiveAnchorBank, ContrastiveAnchorEntry,
-    ModelBaseAttractorProfile, ModelSteeringAdapter, PrefixAliasProbe, SequenceActivationPooler,
-    TokenSequenceEncoder, TokenSequenceEntry, DEFAULT_STARTUP_PRIOR_PROBES,
+    AttractorRole, CapturedTokenSequence, CompiledTokenCorpus, ContrastiveAnchorBank,
+    ContrastiveAnchorEntry, ModelBaseAttractorProfile, ModelSteeringAdapter, PrefixAliasProbe,
+    SequenceActivationPooler, TokenSequenceEncoder, TokenSequenceEntry,
+    DEFAULT_STARTUP_PRIOR_PROBES,
 };
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
 
-use crate::model::{LogitsFetchMode, Phi3Config, Phi3Model};
+use crate::model::{KvCacheMode, LogitsFetchMode, Phi3Config, Phi3Model};
 
 pub(crate) type BakedModelProfile = ContrastiveAnchorBank;
 
@@ -49,7 +51,6 @@ impl<'a> Phi3TokenEncoder<'a> {
 
 impl TokenSequenceEncoder for Phi3TokenEncoder<'_> {
     fn encode_token_sequence(&mut self, text: &str) -> Result<CapturedTokenSequence, String> {
-        self.model.clear_cache();
         let owned_prompt;
         let input_text = if self.format_as_chat_prompt {
             owned_prompt = format_phi4_prompt(text);
@@ -65,7 +66,15 @@ impl TokenSequenceEncoder for Phi3TokenEncoder<'_> {
             .to_vec();
         let (_, layer_tok_qs, h_vec) = self
             .model
-            .forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)
+            .forward_tokens(
+                &ids,
+                0,
+                None,
+                false,
+                true,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::IsolatedProbe,
+            )
             .map_err(|e| format!("forward error: {e}"))?;
         let captured = CapturedTokenSequence::new(ids.len(), layer_tok_qs);
         if self.capture_final_hidden {
@@ -109,10 +118,17 @@ impl PrefixAliasProbe for Phi3TokenEncoder<'_> {
         }
         let mut full_ids = prefix_ids.clone();
         full_ids.extend_from_slice(&ids_spaced);
-        self.model.clear_cache();
         let (_, alias_tok_qs, _) = self
             .model
-            .forward_tokens(&full_ids, 0, None, false, true, LogitsFetchMode::FullLogits)
+            .forward_tokens(
+                &full_ids,
+                0,
+                None,
+                false,
+                true,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::IsolatedProbe,
+            )
             .map_err(|e| format!("alias forward error: {e}"))?;
         let start = prefix_ids.len() * q_rot_len;
         let end = full_ids.len() * q_rot_len;
@@ -363,8 +379,15 @@ pub(crate) fn sample_startup_base_prior(
             .map_err(|e| format!("base prior encode error: {e}"))?
             .get_ids()
             .to_vec();
-        let (prefill_out, _, _) =
-            model.forward_tokens(&seq_ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
+        let (prefill_out, _, _) = model.forward_tokens(
+            &seq_ids,
+            0,
+            None,
+            false,
+            false,
+            LogitsFetchMode::FullLogits,
+            KvCacheMode::Append,
+        )?;
         let mut logits = prefill_out.into_full_logits()?;
         let mut gen_ids = Vec::with_capacity(8);
         for offset in (seq_ids.len()..).take(8) {
@@ -380,13 +403,20 @@ pub(crate) fn sample_startup_base_prior(
                 false,
                 false,
                 LogitsFetchMode::FullLogits,
+                KvCacheMode::Append,
             )?;
             logits = next_out.into_full_logits()?;
         }
         seq_ids.extend_from_slice(&gen_ids);
-        model.clear_cache();
-        let (_, layer_tok_qs, _) =
-            model.forward_tokens(&seq_ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
+        let (_, layer_tok_qs, _) = model.forward_tokens(
+            &seq_ids,
+            0,
+            None,
+            false,
+            true,
+            LogitsFetchMode::FullLogits,
+            KvCacheMode::IsolatedProbe,
+        )?;
         base_entries.push(TokenSequenceEntry {
             role: AttractorRole::Persona,
             text: prompt.to_string(),
@@ -395,6 +425,7 @@ pub(crate) fn sample_startup_base_prior(
             per_layer_token_qs: layer_tok_qs,
         });
     }
+    model.clear_cache();
     ModelBaseAttractorProfile::extract(
         adapter,
         &base_entries,
@@ -404,24 +435,99 @@ pub(crate) fn sample_startup_base_prior(
     .map_err(|e| e.into())
 }
 
-pub(crate) fn bake_via_adapter(
+pub(crate) struct SharedFixtureArtifacts {
+    pub(crate) baked_opt: Option<BakedModelProfile>,
+    pub(crate) compiled: CompiledTokenCorpus,
+    pub(crate) bake_elapsed: std::time::Duration,
+    pub(crate) compile_ms: f64,
+    pub(crate) used_base_prior: bool,
+}
+
+/// Captures the fixture entries in a single model forward pass and builds both the optional
+/// [`ContrastiveAnchorBank`] (when `!recall_only`) and the shared [`CompiledTokenCorpus`],
+/// dropping raw token activation buffers immediately after compilation to keep peak RAM low.
+pub(crate) fn capture_and_build_shared_corpus(
     model: &mut Phi3Model,
     tokenizer: &Tokenizer,
-    adapter: &ModelSteeringAdapter,
+    adapter: &mut ModelSteeringAdapter,
     suite: &FixtureSuite,
-) -> Result<BakedModelProfile, Box<dyn std::error::Error>> {
-    let mut encoder = Phi3TokenEncoder::new(model, tokenizer).with_final_hidden(true);
+    recall_only: bool,
+    use_base_prior: bool,
+) -> Result<SharedFixtureArtifacts, Box<dyn std::error::Error>> {
+    adapter.set_layer_rope_mask(0xFFFF_0000);
+    let base_prior = if use_base_prior {
+        let t_prior = Instant::now();
+        let profile = sample_startup_base_prior(model, tokenizer, adapter)?;
+        println!(
+            "[BasePrior] samples={} sub_attractors={} pooled_basis={} token_basis={} elapsed={:.2?}",
+            profile.sample_count,
+            profile.sub_attractors.len(),
+            profile.pooled_common_mode_basis.len(),
+            profile.token_common_mode_basis.len(),
+            t_prior.elapsed()
+        );
+        Some(profile)
+    } else {
+        None
+    };
+
+    let t_capture = Instant::now();
     let total = suite.facts.len() + suite.persona.len() + suite.guards.len();
-    let mut entries = Vec::with_capacity(total);
-    for (role, texts) in [
-        (AttractorRole::Fact, suite.facts.as_slice()),
-        (AttractorRole::Persona, suite.persona.as_slice()),
-        (AttractorRole::Guard, suite.guards.as_slice()),
-    ] {
-        for text in texts {
-            let captured = encoder.encode_token_sequence(text.as_str())?;
-            entries.push(ContrastiveAnchorEntry { role, captured });
+    let mut contrastive_entries: Vec<ContrastiveAnchorEntry> = Vec::with_capacity(total);
+    let mut entry_meta: Vec<(&str, f32)> = Vec::with_capacity(total);
+    {
+        let mut encoder = Phi3TokenEncoder::new(model, tokenizer).with_final_hidden(!recall_only);
+        for (role, texts, energy) in [
+            (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
+            (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
+            (AttractorRole::Guard, suite.guards.as_slice(), 2.0_f32),
+        ] {
+            for text in texts {
+                let captured = encoder.encode_token_sequence(text.as_str())?;
+                contrastive_entries.push(ContrastiveAnchorEntry { role, captured });
+                entry_meta.push((text.as_str(), energy));
+            }
         }
     }
-    ContrastiveAnchorBank::from_entries(adapter, &entries).map_err(Into::into)
+
+    let baked_opt = if !recall_only {
+        Some(ContrastiveAnchorBank::from_entries(
+            adapter,
+            &contrastive_entries,
+        )?)
+    } else {
+        None
+    };
+    let bake_elapsed = t_capture.elapsed();
+
+    let t_compile = Instant::now();
+    // Move captured per-layer Q buffers without cloning and drop `final_hidden` immediately.
+    let staged_entries: Vec<TokenSequenceEntry> = contrastive_entries
+        .into_iter()
+        .zip(entry_meta)
+        .map(|(ce, (text, energy))| ce.captured.into_token_sequence_entry(ce.role, text, energy))
+        .collect();
+
+    let mut compiled = CompiledTokenCorpus::compile_with_base_prior(
+        adapter,
+        &staged_entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+        base_prior.as_ref(),
+    )?;
+    {
+        let mut alias_encoder = Phi3TokenEncoder::new(model, tokenizer);
+        compiled.append_leading_alias_observations(adapter, &staged_entries, &mut alias_encoder)?;
+    }
+    drop(staged_entries);
+    let compile_ms = (bake_elapsed + t_compile.elapsed()).as_secs_f64() * 1000.0;
+
+    Ok(SharedFixtureArtifacts {
+        baked_opt,
+        compiled,
+        bake_elapsed,
+        compile_ms,
+        used_base_prior: base_prior.is_some(),
+    })
 }

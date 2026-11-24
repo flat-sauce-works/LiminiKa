@@ -86,8 +86,22 @@ impl ModelSteeringAdapter {
     }
 
     /// Returns a mutable reference to the embedded 5,120-byte [`RuntimeContext`].
-    pub fn runtime_context_mut(&mut self) -> &mut RuntimeContext {
+    #[cfg(test)]
+    pub(crate) fn runtime_context_mut(&mut self) -> &mut RuntimeContext {
         &mut self.ctx
+    }
+
+    /// Re-anchors the baseline pressure reference of [`AnonymousComputePool`] in Q0.15 (`0..=32767`).
+    pub fn reanchor_compute_pressure(&mut self, baseline_q15: u16) {
+        self.ctx
+            .compute_pool_mut()
+            .reanchor_baseline_pressure(baseline_q15);
+    }
+
+    /// Resets per-turn decode bypass state and clears `last_entropy_h_tilde` before a turn starts.
+    pub fn reset_turn_decode_state(&mut self) {
+        self.ctx.reset_turn_bypass_state();
+        self.ctx.substrate_mut().last_entropy_h_tilde = 0.0;
     }
 
     /// Returns the per-regime [`StigmergicActionDecision`] invocation counts (`0..=6`) from
@@ -167,12 +181,6 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub fn compute_pool(&self) -> &AnonymousComputePool {
         self.ctx.compute_pool()
-    }
-
-    /// Returns a mutable reference to the label-free [`AnonymousComputePool`].
-    #[must_use]
-    pub fn compute_pool_mut(&mut self) -> &mut AnonymousComputePool {
-        self.ctx.compute_pool_mut()
     }
 
     /// Returns the 64-byte unified [`CorePrimitiveState`] (`Liminal` + `Stigmergy`).
@@ -648,7 +656,8 @@ impl ModelSteeringAdapter {
     }
 
     /// Returns a mutable reference to the embedded [`StigmergicSubstrate`].
-    pub fn substrate_mut(&mut self) -> &mut StigmergicSubstrate {
+    #[cfg(test)]
+    pub(crate) fn substrate_mut(&mut self) -> &mut StigmergicSubstrate {
         self.ctx.substrate_mut()
     }
 

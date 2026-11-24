@@ -8,7 +8,7 @@ use super::{AlignedF32Buffer32, AlignedQ7Buffer16, ModelSteeringAdapter};
 
 impl ModelSteeringAdapter {
     /// Computes per-head Q7 phase deltas from negative (`source`) and positive (`target`)
-    /// post-RoPE query centroids via [`PhaseSteeringGeometryExt::compute_procrustes_phase_delta_for_geometry`].
+    /// pre-RoPE query centroids via [`PhaseSteeringGeometryExt::compute_procrustes_phase_delta_for_geometry`].
     ///
     /// # Errors
     ///

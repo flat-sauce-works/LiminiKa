@@ -6,10 +6,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::bake::{
-    format_phi4_prompt, query_nvidia_smi_vram, sample_startup_base_prior, FixtureSuite,
-    Phi3TokenEncoder,
-};
+use crate::bake::{format_phi4_prompt, query_nvidia_smi_vram, FixtureSuite};
 use crate::cli::{
     build_step2_run_specs, mean_reply_bigram_jaccard, EvalCliConfig, EvalRuntime, Step2PassResult,
     Step2RunSpec, TrialPassMetrics,
@@ -19,20 +16,18 @@ use crate::eval::{
     HorizonAblationMode, KvTraceStats, PressureSimMode, ReflectMode, SteerDecodeConfig,
     StepTelemetryTotals,
 };
-use crate::model::{LogitsFetchMode, ResonantAnchors};
+use crate::model::{KvCacheMode, LogitsFetchMode, ResonantAnchors};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
-    CompiledTokenCorpus, CorpusRecallEscalationProvider, FrameTransitionMetrics,
-    LacunaBoundaryState, LmnkTimeline, ManifoldReflectionEvaluator, ReflectionCritique,
-    ReflectionPolicy, ReflectionSelection, SequenceActivationPooler, SourceTextRecord,
-    TimelineStepContext, TurnOrchestrator, TurnPrepareInput,
+    CorpusRecallEscalationProvider, FrameTransitionMetrics, LacunaBoundaryState, LmnkTimeline,
+    ManifoldReflectionEvaluator, ReflectionCritique, ReflectionPolicy, ReflectionSelection,
+    SourceTextRecord, TimelineStepContext, TurnOrchestrator, TurnPrepareInput,
 };
 use liminika_core::runtime::{
     AdaptiveThresholdPolicy, RamPhaseKvCacheOps, StandardPhaseKvGopCache,
 };
 
 pub(crate) struct Step2Output {
-    pub(crate) compiled: CompiledTokenCorpus,
     pub(crate) timeline: LmnkTimeline,
     pub(crate) cut_detector: AdaptiveGopCutDetector,
     pub(crate) kv_policy: AdaptiveThresholdPolicy,
@@ -49,8 +44,9 @@ pub(crate) fn run_step2_evaluation(
     let model = &mut *rt.model;
     let adapter = &mut *rt.adapter;
     let baked_opt = rt.baked_opt;
+    let compiled = rt.compiled;
+    let compile_ms = rt.compile_ms;
     let active_persona_bank = &mut *rt.active_persona_bank;
-    let use_base_prior = cli.use_base_prior;
     let no_reflect = cli.no_reflect;
     let reflect_mode = cli.reflect_mode;
     let ablate_dual_axis = cli.ablate_dual_axis;
@@ -63,54 +59,6 @@ pub(crate) fn run_step2_evaluation(
     // Step 2: Online Natural-Language -> Attractor Corpus & Liminal Boundary Evaluation
     println!("\n=== Step 2: Natural-Language Attractor Corpus & Liminal Boundary Eval ===");
     adapter.set_layer_rope_mask(0xFFFF_0000);
-    let base_prior = if use_base_prior {
-        let t_prior = Instant::now();
-        let profile = sample_startup_base_prior(model, tokenizer, adapter)?;
-        println!(
-            "[BasePrior] samples={} sub_attractors={} pooled_basis={} token_basis={} elapsed={:.2?}",
-            profile.sample_count,
-            profile.sub_attractors.len(),
-            profile.pooled_common_mode_basis.len(),
-            profile.token_common_mode_basis.len(),
-            t_prior.elapsed()
-        );
-        Some(profile)
-    } else {
-        None
-    };
-
-    let t_compile = Instant::now();
-    let mut corpus_sources: Vec<(AttractorRole, &str, f32)> = Vec::new();
-    for (role, texts, energy) in [
-        (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
-        (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
-        (AttractorRole::Guard, suite.guards.as_slice(), 2.0_f32),
-    ] {
-        for text in texts {
-            corpus_sources.push((role, text.as_str(), energy));
-        }
-    }
-    let mut encoder = Phi3TokenEncoder::new(model, tokenizer);
-    let staged_entries = CompiledTokenCorpus::capture_entries(&mut encoder, &corpus_sources)?;
-
-    let mut compiled = CompiledTokenCorpus::compile_with_base_prior(
-        adapter,
-        &staged_entries,
-        SequenceActivationPooler::default(),
-        2,
-        1,
-        base_prior.as_ref(),
-    )?;
-    compiled.append_leading_alias_observations(adapter, &staged_entries, &mut encoder)?;
-    let compile_ms = t_compile.elapsed().as_secs_f64() * 1000.0;
-    println!(
-        "Compiled {} natural-language attractors (two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}",
-        compiled.corpus.entries().len(),
-        base_prior.is_some(),
-        compile_ms,
-        compiled.recall_policy.min_coherence,
-        compiled.recall_policy.boundary_margin,
-    );
     let persona_rag_text = suite.persona.join(" ");
     let guard_rag_text = suite.guards.join(" ");
     let step2_runs: Vec<Step2RunSpec> = build_step2_run_specs(cli);
@@ -147,7 +95,7 @@ pub(crate) fn run_step2_evaluation(
         timeline = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
         adapter.reset_horizon_and_core_state();
         adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
-        adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
+        adapter.reanchor_compute_pressure(8192);
         adapter.set_ego_max_hops(run.ego_max_hops);
         apply_ego_mode(adapter, run_ego_mode);
         if ablate_dual_axis || ablate_ego || ablate_horizon || fair_bench_conditions.is_some() {
@@ -184,14 +132,6 @@ pub(crate) fn run_step2_evaluation(
         let mut step2_prompts_timed = 0_usize;
         let mut step2_steer_bypass_hits = 0_usize;
         let mut step2_steer_eligible_layers = 0_usize;
-        let mut step2_whole_token_bypass_hits = 0_usize;
-        let mut step2_decode_tokens_steered = 0_usize;
-        let mut step2_abstract_tokens = 0_usize;
-        let mut step2_concrete_tokens = 0_usize;
-        let mut step2_boundary_churn = 0_usize;
-        let mut step2_logits_skips = 0_usize;
-        let mut step2_instability_recoveries = 0_usize;
-        let mut step2_guard_relaxations = 0_usize;
         let mut step2_spine_veto_guard = 0_usize;
         let mut step2_spine_veto_repulse = 0_usize;
         let mut step2_spine_veto_pin = 0_usize;
@@ -232,7 +172,6 @@ pub(crate) fn run_step2_evaluation(
             let query_tok_qs = if let Some(cached) = prompt_q_cache.get(prompt.as_str()) {
                 cached.clone()
             } else {
-                model.clear_cache();
                 let (_, q_toks, _) = model.forward_tokens(
                     &q_ids,
                     0,
@@ -240,13 +179,14 @@ pub(crate) fn run_step2_evaluation(
                     false,
                     true,
                     LogitsFetchMode::FullLogits,
+                    KvCacheMode::IsolatedProbe,
                 )?;
                 prompt_q_cache.insert(prompt.clone(), q_toks.clone());
                 q_toks
             };
             let t_prep = Instant::now();
             let plan = TurnOrchestrator::prepare_turn(
-                &compiled,
+                compiled,
                 adapter,
                 &mut ram_kv_cache,
                 &TurnPrepareInput {
@@ -417,6 +357,7 @@ pub(crate) fn run_step2_evaluation(
                 } else {
                     PressureSimMode::Off
                 };
+                let effective_layer_mask = plan.effective_layer_steer_mask(adapter);
                 let mut pass1_cfg = SteerDecodeConfig {
                     q7s: Some(baked.fact_q7.as_slice()),
                     persona_q7s: Some(baked.persona_q7.as_slice()),
@@ -435,16 +376,11 @@ pub(crate) fn run_step2_evaluation(
                     temperature: run.temperature,
                     rng_seed: run.rng_seed,
                     logits_observe_stride: cli.logits_observe_stride,
+                    layer_steer_mask: Some(effective_layer_mask),
+                    probe_frame: cli.probe_frame,
+                    exit_entropy_h_tilde: 0.0,
                     steer_bypass_hits: 0,
                     steer_eligible_layers: 0,
-                    whole_token_bypass_hits: 0,
-                    decode_tokens_total: 0,
-                    abstract_tokens: 0,
-                    concrete_tokens: 0,
-                    boundary_churn_transitions: 0,
-                    logits_skips: 0,
-                    instability_recoveries: 0,
-                    guard_relaxations: 0,
                     spine_veto_guard_hits: 0,
                     spine_veto_repulse_hits: 0,
                     spine_veto_pin_hits: 0,
@@ -463,14 +399,6 @@ pub(crate) fn run_step2_evaluation(
                 step2_prompts_timed += 1;
                 step2_steer_bypass_hits += pass1_cfg.steer_bypass_hits;
                 step2_steer_eligible_layers += pass1_cfg.steer_eligible_layers;
-                step2_whole_token_bypass_hits += pass1_cfg.whole_token_bypass_hits;
-                step2_decode_tokens_steered += pass1_cfg.decode_tokens_total;
-                step2_abstract_tokens += pass1_cfg.abstract_tokens;
-                step2_concrete_tokens += pass1_cfg.concrete_tokens;
-                step2_boundary_churn += pass1_cfg.boundary_churn_transitions;
-                step2_logits_skips += pass1_cfg.logits_skips;
-                step2_instability_recoveries += pass1_cfg.instability_recoveries;
-                step2_guard_relaxations += pass1_cfg.guard_relaxations;
                 step2_spine_veto_guard += pass1_cfg.spine_veto_guard_hits;
                 step2_spine_veto_repulse += pass1_cfg.spine_veto_repulse_hits;
                 step2_spine_veto_pin += pass1_cfg.spine_veto_pin_hits;
@@ -485,8 +413,7 @@ pub(crate) fn run_step2_evaluation(
                     ReflectMode::Off => false,
                     ReflectMode::Always => true,
                     ReflectMode::Conditional => {
-                        let gate_in =
-                            plan.reflection_gate_input(adapter.substrate().last_entropy_h_tilde);
+                        let gate_in = plan.reflection_gate_input(pass1_cfg.exit_entropy_h_tilde);
                         let fire = ManifoldReflectionEvaluator.should_trigger_reflection(&gate_in);
                         if !fire {
                             reflect_gate_skipped += 1;
@@ -500,7 +427,7 @@ pub(crate) fn run_step2_evaluation(
                         model,
                         tokenizer,
                         adapter,
-                        &compiled,
+                        compiled,
                         plan.query_snapshot(),
                         &text,
                         &reflection_policy,
@@ -573,16 +500,11 @@ pub(crate) fn run_step2_evaluation(
                                 temperature: run.temperature,
                                 rng_seed: run.rng_seed,
                                 logits_observe_stride: cli.logits_observe_stride,
+                                layer_steer_mask: Some(effective_layer_mask),
+                                probe_frame: cli.probe_frame,
+                                exit_entropy_h_tilde: 0.0,
                                 steer_bypass_hits: 0,
                                 steer_eligible_layers: 0,
-                                whole_token_bypass_hits: 0,
-                                decode_tokens_total: 0,
-                                abstract_tokens: 0,
-                                concrete_tokens: 0,
-                                boundary_churn_transitions: 0,
-                                logits_skips: 0,
-                                instability_recoveries: 0,
-                                guard_relaxations: 0,
                                 spine_veto_guard_hits: 0,
                                 spine_veto_repulse_hits: 0,
                                 spine_veto_pin_hits: 0,
@@ -602,14 +524,6 @@ pub(crate) fn run_step2_evaluation(
                             step2_prompts_timed += 1;
                             step2_steer_bypass_hits += retry_cfg.steer_bypass_hits;
                             step2_steer_eligible_layers += retry_cfg.steer_eligible_layers;
-                            step2_whole_token_bypass_hits += retry_cfg.whole_token_bypass_hits;
-                            step2_decode_tokens_steered += retry_cfg.decode_tokens_total;
-                            step2_abstract_tokens += retry_cfg.abstract_tokens;
-                            step2_concrete_tokens += retry_cfg.concrete_tokens;
-                            step2_boundary_churn += retry_cfg.boundary_churn_transitions;
-                            step2_logits_skips += retry_cfg.logits_skips;
-                            step2_instability_recoveries += retry_cfg.instability_recoveries;
-                            step2_guard_relaxations += retry_cfg.guard_relaxations;
                             step2_spine_veto_guard += retry_cfg.spine_veto_guard_hits;
                             step2_spine_veto_repulse += retry_cfg.spine_veto_repulse_hits;
                             step2_spine_veto_pin += retry_cfg.spine_veto_pin_hits;
@@ -617,7 +531,7 @@ pub(crate) fn run_step2_evaluation(
                                 model,
                                 tokenizer,
                                 adapter,
-                                &compiled,
+                                compiled,
                                 plan.query_snapshot(),
                                 &p2_text,
                                 &reflection_policy,
@@ -808,6 +722,15 @@ pub(crate) fn run_step2_evaluation(
         } else {
             0.0
         };
+        let last_snap = adapter.telemetry_snapshot();
+        let step2_abstract_tokens = last_snap.abstract_token_count as usize;
+        let step2_concrete_tokens = last_snap.concrete_token_count as usize;
+        let step2_whole_token_bypass_hits = step2_abstract_tokens;
+        let step2_decode_tokens_steered = step2_abstract_tokens + step2_concrete_tokens;
+        let step2_boundary_churn = last_snap.boundary_churn_count as usize;
+        let step2_logits_skips = last_snap.logits_skip_count as usize;
+        let step2_instability_recoveries = last_snap.instability_recovery_count as usize;
+        let step2_guard_relaxations = last_snap.guard_relaxation_count as usize;
         let whole_bypass_pct = if step2_decode_tokens_steered == 0 {
             0.0
         } else {
@@ -866,7 +789,6 @@ pub(crate) fn run_step2_evaluation(
         vram_pass,
     );
         println!("{summary_line}");
-        let last_snap = adapter.telemetry_snapshot();
         step_tlm.accumulate(&last_snap);
         let guard_slot = adapter.coherence_guard_slot();
         let dwell = adapter.horizon_dwell();
@@ -1215,7 +1137,6 @@ pub(crate) fn run_step2_evaluation(
     }
 
     Ok(Step2Output {
-        compiled,
         timeline,
         cut_detector,
         kv_policy,

@@ -4496,3 +4496,20 @@ fn input_distillation_boundary_encoders_alias_probe_and_contrastive_bank() {
     assert!(bank_no_h.rank1_u.is_empty());
     assert!(bank_no_h.rank1_v.is_empty());
 }
+
+#[test]
+fn adapter_reanchor_compute_pressure_and_reset_turn_decode_state_preserve_guard_policy() {
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    adapter.reanchor_compute_pressure(12_345);
+    assert_eq!(adapter.compute_pool().baseline_pressure_q15, 12_345);
+
+    adapter.begin_turn_spine_policy(true, false);
+    adapter.substrate_mut().last_entropy_h_tilde = 0.65;
+    adapter.reset_turn_decode_state();
+    assert_eq!(adapter.substrate().last_entropy_h_tilde, 0.0);
+    assert_eq!(adapter.system_spine().whole_token_bypass_active, 0);
+    assert!(
+        adapter.system_spine().turn_guard_active(),
+        "reset_turn_decode_state must preserve active turn guard pin"
+    );
+}
