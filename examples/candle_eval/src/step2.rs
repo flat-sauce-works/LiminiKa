@@ -59,6 +59,21 @@ pub(crate) fn run_step2_evaluation(
     // Step 2: Online Natural-Language -> Attractor Corpus & Liminal Boundary Evaluation
     println!("\n=== Step 2: Natural-Language Attractor Corpus & Liminal Boundary Eval ===");
     adapter.set_layer_rope_mask(0xFFFF_0000);
+    if cli.layer_steer_mask_override.is_some()
+        || cli.phase_clamp_rad.is_some()
+        || cli.random_push_control
+        || cli.max_tokens != crate::eval::DEFAULT_MAX_GEN_TOKENS
+    {
+        println!(
+            "[Oscilloscope] layer_mask=0x{:08X} phase_clamp_rad={:?} random_push={} max_tokens={} probe_frame={:?}",
+            cli.layer_steer_mask_override
+                .unwrap_or(crate::eval::DEFAULT_LAYER_STEER_MASK),
+            cli.phase_clamp_rad,
+            cli.random_push_control,
+            cli.max_tokens,
+            cli.probe_frame,
+        );
+    }
     let persona_rag_text = suite.persona.join(" ");
     let guard_rag_text = suite.guards.join(" ");
     let step2_runs: Vec<Step2RunSpec> = build_step2_run_specs(cli);
@@ -196,7 +211,7 @@ pub(crate) fn run_step2_evaluation(
                     kv_policy: &kv_policy,
                     kv_min_resonance_override: kv_min_res,
                     persona_bank: active_persona_bank.as_ref(),
-                    layer_steer_mask_override: None,
+                    layer_steer_mask_override: cli.layer_steer_mask_override,
                 },
             )?;
             let prep_elapsed = t_prep.elapsed();
@@ -378,6 +393,11 @@ pub(crate) fn run_step2_evaluation(
                     logits_observe_stride: cli.logits_observe_stride,
                     layer_steer_mask: Some(effective_layer_mask),
                     probe_frame: cli.probe_frame,
+                    phase_clamp_override: cli.phase_clamp_rad,
+                    random_push_seed: cli.random_push_control.then_some(run.rng_seed),
+                    max_tokens: cli.max_tokens,
+                    capture_first_logits: false,
+                    first_prefill_logits: None,
                     exit_entropy_h_tilde: 0.0,
                     steer_bypass_hits: 0,
                     steer_eligible_layers: 0,
@@ -502,6 +522,11 @@ pub(crate) fn run_step2_evaluation(
                                 logits_observe_stride: cli.logits_observe_stride,
                                 layer_steer_mask: Some(effective_layer_mask),
                                 probe_frame: cli.probe_frame,
+                                phase_clamp_override: cli.phase_clamp_rad,
+                                random_push_seed: cli.random_push_control.then_some(run.rng_seed),
+                                max_tokens: cli.max_tokens,
+                                capture_first_logits: false,
+                                first_prefill_logits: None,
                                 exit_entropy_h_tilde: 0.0,
                                 steer_bypass_hits: 0,
                                 steer_eligible_layers: 0,

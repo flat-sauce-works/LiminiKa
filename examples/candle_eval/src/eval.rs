@@ -217,6 +217,64 @@ pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64
 
 pub(crate) const DEFAULT_LOGITS_OBSERVE_STRIDE: usize = 1;
 pub(crate) const DEFAULT_GUARD_HOLD_TOKENS: u8 = ModelSteeringAdapter::DEFAULT_GUARD_HOLD_TOKENS;
+pub(crate) const DEFAULT_LAYER_STEER_MASK: u64 = 0xFFFF_0000;
+pub(crate) const DEFAULT_MAX_GEN_TOKENS: usize = 64;
+
+pub(crate) fn parse_layer_mask<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<u64> {
+    for arg in args {
+        if let Some(raw) = arg.strip_prefix("--layer-mask=") {
+            let val = raw.trim();
+            if val.eq_ignore_ascii_case("top16") {
+                return Some(0xFFFF_0000);
+            }
+            if val.eq_ignore_ascii_case("mid12") {
+                return Some(0x003F_FC00);
+            }
+            if val.eq_ignore_ascii_case("mid16") {
+                return Some(0x03FF_FC00);
+            }
+            if val.eq_ignore_ascii_case("upper-mid12") || val.eq_ignore_ascii_case("upper_mid12") {
+                return Some(0x0FFF_0000);
+            }
+            if val.eq_ignore_ascii_case("all") {
+                return Some(0xFFFF_FFFF);
+            }
+            if let Some(hex_raw) = val.strip_prefix("0x").or_else(|| val.strip_prefix("0X")) {
+                let cleaned = hex_raw.replace('_', "");
+                if let Ok(parsed) = u64::from_str_radix(&cleaned, 16) {
+                    if parsed != 0 {
+                        return Some(parsed);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_phase_clamp_rad<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<f32> {
+    for arg in args {
+        if let Some(raw) = arg.strip_prefix("--phase-clamp-rad=") {
+            if let Ok(parsed) = raw.trim().parse::<f32>() {
+                if parsed.is_finite() && parsed > 0.0 && parsed <= std::f32::consts::FRAC_PI_2 {
+                    return Some(parsed);
+                }
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_max_tokens<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
+    for arg in args {
+        if let Some(raw) = arg.strip_prefix("--max-tokens=") {
+            if let Ok(parsed) = raw.trim().parse::<usize>() {
+                return parsed.clamp(1, 512);
+            }
+        }
+    }
+    DEFAULT_MAX_GEN_TOKENS
+}
 
 pub(crate) fn parse_logits_observe_stride<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
     for arg in args {
@@ -855,6 +913,11 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) logits_observe_stride: usize,
     pub(crate) layer_steer_mask: Option<u64>,
     pub(crate) probe_frame: ProbeCoordinateFrame,
+    pub(crate) phase_clamp_override: Option<f32>,
+    pub(crate) random_push_seed: Option<u64>,
+    pub(crate) max_tokens: usize,
+    pub(crate) capture_first_logits: bool,
+    pub(crate) first_prefill_logits: Option<Vec<f32>>,
     pub(crate) exit_entropy_h_tilde: f32,
     pub(crate) steer_bypass_hits: usize,
     pub(crate) steer_eligible_layers: usize,
@@ -960,6 +1023,8 @@ pub(crate) fn generate_steered_reply_with_offset(
             compute_dispatch: None,
             layer_steer_mask: cfg.layer_steer_mask,
             probe_frame: cfg.probe_frame,
+            phase_clamp_override: cfg.phase_clamp_override,
+            random_push_seed: cfg.random_push_seed,
             steer_bypass_hits: 0,
             steer_eligible_layers: 0,
         };
@@ -1002,9 +1067,14 @@ pub(crate) fn generate_steered_reply_with_offset(
             steer.adapter.commit_compute_exit_reward(exec_mask, 64);
         }
         let prefill_secs = t_prefill.elapsed().as_secs_f64();
+        if cfg.capture_first_logits {
+            if let LogitsOutcome::ObservedFull(ref logits) = pending_outcome {
+                cfg.first_prefill_logits = Some(logits.clone());
+            }
+        }
 
-        const MAX_GEN_TOKENS: usize = 64;
-        let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
+        let max_gen_tokens = cfg.max_tokens.max(1);
+        let mut gen_ids = Vec::with_capacity(max_gen_tokens);
         let mut rng_state = cfg.rng_seed.max(1);
         let greedy = cfg.temperature <= 1e-6;
         let mut entropy_sum = 0.0_f32;
@@ -1013,7 +1083,7 @@ pub(crate) fn generate_steered_reply_with_offset(
 
         let t_dec = Instant::now();
         for (step_idx, offset) in (start_offset + ids.len()..)
-            .take(MAX_GEN_TOKENS)
+            .take(max_gen_tokens)
             .enumerate()
         {
             let next = match pending_outcome {
@@ -1325,6 +1395,60 @@ mod tests {
             parse_probe_frame(["candle_eval", "--probe-frame=post-rope"]),
             ProbeCoordinateFrame::PostRope
         );
+
+        assert_eq!(parse_layer_mask(["candle_eval"]), None);
+        assert_eq!(
+            parse_layer_mask(["candle_eval", "--layer-mask=top16"]),
+            Some(0xFFFF_0000)
+        );
+        assert_eq!(
+            parse_layer_mask(["candle_eval", "--layer-mask=mid12"]),
+            Some(0x003F_FC00)
+        );
+        assert_eq!(
+            parse_layer_mask(["candle_eval", "--layer-mask=mid16"]),
+            Some(0x03FF_FC00)
+        );
+        assert_eq!(
+            parse_layer_mask(["candle_eval", "--layer-mask=upper-mid12"]),
+            Some(0x0FFF_0000)
+        );
+        assert_eq!(
+            parse_layer_mask(["candle_eval", "--layer-mask=all"]),
+            Some(0xFFFF_FFFF)
+        );
+        assert_eq!(
+            parse_layer_mask(["candle_eval", "--layer-mask=0x00FF_0000"]),
+            Some(0x00FF_0000)
+        );
+        assert_eq!(parse_layer_mask(["candle_eval", "--layer-mask=0x0"]), None);
+
+        assert_eq!(parse_phase_clamp_rad(["candle_eval"]), None);
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=0.14"]),
+            Some(0.14)
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=0.0"]),
+            None
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=-0.1"]),
+            None
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=2.5"]),
+            None
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=NaN"]),
+            None
+        );
+
+        assert_eq!(parse_max_tokens(["candle_eval"]), DEFAULT_MAX_GEN_TOKENS);
+        assert_eq!(parse_max_tokens(["candle_eval", "--max-tokens=0"]), 1);
+        assert_eq!(parse_max_tokens(["candle_eval", "--max-tokens=128"]), 128);
+        assert_eq!(parse_max_tokens(["candle_eval", "--max-tokens=9999"]), 512);
     }
 
     #[test]

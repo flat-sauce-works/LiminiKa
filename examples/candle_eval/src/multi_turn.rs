@@ -24,6 +24,7 @@ use crate::eval::{
     generate_steered_reply_with_offset, HorizonAblationMode, KvTraceStats, ReflectMode,
     SteerDecodeConfig,
 };
+use crate::metrics::summarize_dialogue_quality;
 use crate::model::{KvCacheMode, LogitsFetchMode, ResonantAnchors};
 use crate::step2::Step2Output;
 
@@ -131,6 +132,7 @@ pub(crate) fn run_multi_turn_and_step3(
             let mut mt_prefill_secs = 0.0_f64;
             let mut mt_decode_secs = 0.0_f64;
             let mut mt_prompts_timed = 0_usize;
+            let mut mt_replies: Vec<String> = Vec::with_capacity(dialogue_turns.len());
 
             model.clear_cache();
             let mut conv_offset = 0_usize;
@@ -171,7 +173,7 @@ pub(crate) fn run_multi_turn_and_step3(
                         kv_policy,
                         kv_min_resonance_override: kv_min_res,
                         persona_bank: active_persona_bank.as_ref(),
-                        layer_steer_mask_override: None,
+                        layer_steer_mask_override: cli.layer_steer_mask_override,
                     },
                 )?;
                 let mt_kv_note = mt_kv_stats.record_outcome(
@@ -264,6 +266,11 @@ pub(crate) fn run_multi_turn_and_step3(
                         logits_observe_stride: cli.logits_observe_stride,
                         layer_steer_mask: Some(effective_layer_mask),
                         probe_frame: cli.probe_frame,
+                        phase_clamp_override: cli.phase_clamp_rad,
+                        random_push_seed: cli.random_push_control.then_some(rng_seed),
+                        max_tokens: cli.max_tokens,
+                        capture_first_logits: false,
+                        first_prefill_logits: None,
                         exit_entropy_h_tilde: 0.0,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
@@ -387,6 +394,11 @@ pub(crate) fn run_multi_turn_and_step3(
                                     logits_observe_stride: cli.logits_observe_stride,
                                     layer_steer_mask: Some(effective_layer_mask),
                                     probe_frame: cli.probe_frame,
+                                    phase_clamp_override: cli.phase_clamp_rad,
+                                    random_push_seed: cli.random_push_control.then_some(rng_seed),
+                                    max_tokens: cli.max_tokens,
+                                    capture_first_logits: false,
+                                    first_prefill_logits: None,
                                     exit_entropy_h_tilde: 0.0,
                                     steer_bypass_hits: 0,
                                     steer_eligible_layers: 0,
@@ -483,6 +495,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 }
 
                 let lower = reply_text.to_lowercase();
+                mt_replies.push(reply_text.clone());
                 let t_exp = expected
                     .iter()
                     .filter(|kw| lower.contains(&kw.to_lowercase()))
@@ -605,6 +618,18 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_e2e_tps,
                 mt_prefill_total_ms,
                 mt_prefill_mean_ms,
+            );
+            let mt_q = summarize_dialogue_quality(&mt_replies);
+            println!(
+                "  [MultiTurnQuality] mattr20={:.3} mattr50={:.3} dist2={:.3} rep4_loop={:.3} aband={:.1}% | drift(T8-T1): d_mattr20={:+.3} d_dist2={:+.3} d_rep4={:+.3}",
+                mt_q.mean_mattr20,
+                mt_q.concat_mattr50,
+                mt_q.mean_distinct2,
+                mt_q.mean_rep4_loop,
+                mt_q.abandonment_rate * 100.0,
+                mt_q.delta_mattr20,
+                mt_q.delta_distinct2,
+                mt_q.delta_rep4_loop,
             );
             mt_metrics = Some(TrialPassMetrics {
                 label: "8-Turn".to_string(),

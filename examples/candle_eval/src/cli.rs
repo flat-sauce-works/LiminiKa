@@ -9,9 +9,10 @@ use std::path::PathBuf;
 use crate::eval::{
     parse_bench_trials, parse_circuit_mode, parse_ego_max_hops, parse_ego_mode,
     parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens, parse_horizon_mode,
-    parse_kv_min_res, parse_logits_observe_stride, parse_pressure_sim_mode, parse_probe_frame,
-    parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode,
-    EgoProfileMode, FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
+    parse_kv_min_res, parse_layer_mask, parse_logits_observe_stride, parse_max_tokens,
+    parse_phase_clamp_rad, parse_pressure_sim_mode, parse_probe_frame, parse_quant_mode,
+    parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode, EgoProfileMode,
+    FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
 };
 use crate::model::ProbeCoordinateFrame;
 use candle_core::quantized::GgmlDType;
@@ -35,6 +36,11 @@ pub(crate) struct EvalCliConfig {
     pub(crate) multi_turn: bool,
     pub(crate) quant_mode: Option<GgmlDType>,
     pub(crate) probe_frame: ProbeCoordinateFrame,
+    pub(crate) layer_steer_mask_override: Option<u64>,
+    pub(crate) phase_clamp_rad: Option<f32>,
+    pub(crate) random_push_control: bool,
+    pub(crate) max_tokens: usize,
+    pub(crate) physics_eval: bool,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
     pub(crate) circuit_mode: CircuitProfileMode,
     pub(crate) ego_mode: EgoProfileMode,
@@ -73,6 +79,21 @@ pub(crate) fn print_help() {
     );
     println!(
         "  --probe-frame=<pre-rope|post-rope> Procrustes probe coordinate frame (default: pre-rope)"
+    );
+    println!(
+        "  --layer-mask=<preset|0xHEX>        RoPE steering layer window: top16, mid12, mid16, upper-mid12, all, or 0xHEX (default: top16)"
+    );
+    println!(
+        "  --phase-clamp-rad=<f32>            Override eval-harness PhaseClamp arc in (0, pi/2] rad (default: core GatewayFrame default)"
+    );
+    println!(
+        "  --random-push-control              Inject norm-matched deterministic random Q7 phase perturbation through the closed-loop pipeline"
+    );
+    println!(
+        "  --max-tokens=<N>                   Maximum generated decode tokens per turn in [1, 512] (default: 64)"
+    );
+    println!(
+        "  --physics-eval                     Run the 4-axis deterministic steering-physics evaluation suite in a single model load"
     );
     println!(
         "  --kv-min-res=<i8>                  Override RAM Phase-KV minimum resonance Q7 threshold"
@@ -115,6 +136,8 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--ablate-horizon",
         "--fair-bench",
         "--step2-only",
+        "--random-push-control",
+        "--physics-eval",
     ];
     const PREFIX_FLAGS: &[&str] = &[
         "--reflect-mode=",
@@ -127,6 +150,9 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--fixture=",
         "--quant=",
         "--probe-frame=",
+        "--layer-mask=",
+        "--phase-clamp-rad=",
+        "--max-tokens=",
         "--kv-min-res=",
         "--circuit=",
         "--ego=",
@@ -163,6 +189,11 @@ impl EvalCliConfig {
         let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
         let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
         let probe_frame = parse_probe_frame(cli_args.iter().map(String::as_str));
+        let layer_steer_mask_override = parse_layer_mask(cli_args.iter().map(String::as_str));
+        let phase_clamp_rad = parse_phase_clamp_rad(cli_args.iter().map(String::as_str));
+        let random_push_control = cli_args.iter().any(|a| a == "--random-push-control");
+        let max_tokens = parse_max_tokens(cli_args.iter().map(String::as_str));
+        let physics_eval = cli_args.iter().any(|a| a == "--physics-eval");
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
         let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
         let ego_mode = parse_ego_mode(cli_args.iter().map(String::as_str));
@@ -203,6 +234,11 @@ impl EvalCliConfig {
             multi_turn,
             quant_mode,
             probe_frame,
+            layer_steer_mask_override,
+            phase_clamp_rad,
+            random_push_control,
+            max_tokens,
+            physics_eval,
             kv_min_res,
             circuit_mode,
             ego_mode,
@@ -840,11 +876,21 @@ mod tests {
             "--fixture=tests/fixtures/custom.txt".to_string(),
             "--quant=q4k".to_string(),
             "--probe-frame=post-rope".to_string(),
+            "--layer-mask=mid16".to_string(),
+            "--phase-clamp-rad=0.24".to_string(),
+            "--random-push-control".to_string(),
+            "--max-tokens=128".to_string(),
+            "--physics-eval".to_string(),
         ];
         assert!(find_unrecognized_args(args.iter().skip(1).map(String::as_str)).is_empty());
         let parsed = EvalCliConfig::parse_from_args(&args);
         assert_eq!(parsed.bench_trials, 1);
         assert_eq!(parsed.probe_frame, ProbeCoordinateFrame::PostRope);
+        assert_eq!(parsed.layer_steer_mask_override, Some(0x03FF_FC00));
+        assert_eq!(parsed.phase_clamp_rad, Some(0.24));
+        assert!(parsed.random_push_control);
+        assert_eq!(parsed.max_tokens, 128);
+        assert!(parsed.physics_eval);
         assert_eq!(
             parsed.fixture_path,
             Some(PathBuf::from("tests/fixtures/custom.txt"))
@@ -852,14 +898,14 @@ mod tests {
 
         let args_3 = vec!["candle_eval".to_string(), "--bench-trials=3".to_string()];
         assert_eq!(EvalCliConfig::parse_from_args(&args_3).bench_trials, 3);
-        assert_eq!(
-            EvalCliConfig::parse_from_args(&["candle_eval".to_string()]).bench_trials,
-            1
-        );
-        assert_eq!(
-            EvalCliConfig::parse_from_args(&["candle_eval".to_string()]).probe_frame,
-            ProbeCoordinateFrame::PreRope
-        );
+        let defaults = EvalCliConfig::parse_from_args(&["candle_eval".to_string()]);
+        assert_eq!(defaults.bench_trials, 1);
+        assert_eq!(defaults.probe_frame, ProbeCoordinateFrame::PreRope);
+        assert_eq!(defaults.layer_steer_mask_override, None);
+        assert_eq!(defaults.phase_clamp_rad, None);
+        assert!(!defaults.random_push_control);
+        assert_eq!(defaults.max_tokens, 64);
+        assert!(!defaults.physics_eval);
 
         let bad = find_unrecognized_args([
             "--step2-only",

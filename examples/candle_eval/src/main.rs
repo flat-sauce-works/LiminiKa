@@ -29,8 +29,10 @@ pub(crate) type LayerResonantSlices<'a> = (
 mod bake;
 mod cli;
 mod eval;
+mod metrics;
 mod model;
 mod multi_turn;
+mod physics_eval;
 mod step2;
 
 use bake::{
@@ -278,7 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             adapter.substrate().thresholds.rank1_inject_density_thresh,
         );
 
-        if !step2_only {
+        if !step2_only && !cli.physics_eval {
             // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs StigmergicSubstrate.
             // tuple: (label, layer_mask, rope_rad, rank1_scale, use_resonant_slice)
             let configs: [(&str, u64, f32, f32, bool); 6] = [
@@ -362,6 +364,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         compute_dispatch: None,
                         layer_steer_mask: Some(layer_mask),
                         probe_frame: cli.probe_frame,
+                        phase_clamp_override: cli.phase_clamp_rad,
+                        random_push_seed: cli.random_push_control.then_some(cli.rng_seed),
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
@@ -616,6 +620,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         compute_dispatch: None,
                         layer_steer_mask: Some(layer_mask),
                         probe_frame: cli.probe_frame,
+                        phase_clamp_override: cli.phase_clamp_rad,
+                        random_push_seed: cli.random_push_control.then_some(cli.rng_seed),
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
@@ -675,6 +681,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if !recall_only {
         eval::run_gpu_warmup(&mut model, &tokenizer)?;
+    }
+
+    if cli.physics_eval {
+        model.clear_cache();
+        let mut phys_adapter = configure_trial_adapter(&cfg, &cli)?;
+        if let Some(ref baked) = baked_opt {
+            calibrate_trial_adapter(&mut phys_adapter, baked, &base_entropies)?;
+        }
+        let mut phys_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
+        let mut rt = EvalRuntime {
+            tokenizer: &tokenizer,
+            model: &mut model,
+            adapter: &mut phys_adapter,
+            baked_opt: baked_opt.as_ref(),
+            compiled: &compiled,
+            compile_ms,
+            active_persona_bank: &mut phys_persona_bank,
+        };
+        physics_eval::run_physics_eval(&cli, &repo_root, &mut rt)?;
+        return Ok(());
     }
 
     let mut all_trial_metrics: Vec<Vec<cli::TrialPassMetrics>> =

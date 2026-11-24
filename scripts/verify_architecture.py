@@ -1064,33 +1064,38 @@ def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
     ad_stigmergy_vals = ad_core_counts["stigmergy"]
     ad_drivers_vals = ad_core_counts["drivers"]
 
+    def plural_files(count: int) -> str:
+        return f"{count} file" if count == 1 else f"{count} files"
+
     def core_label(key: str, title: str) -> str:
-        return f"{title} - {files_per_node[key]} files, {loc_per_node[key]} LOC"
+        return f"{title} - {plural_files(files_per_node[key])}, {loc_per_node[key]} LOC"
 
     lines = [
         "flowchart TD",
         '    %% Legend: solid arrow (-->) = Mutable State Gate; dashed arrow (-.->) = Value/Pod Ref',
         '    subgraph WS_HOSTS["Workspace Host Crates & Evaluation Harness"]',
-        f'        W_dsl["liminika-dsl (Parser/AST) - {dsl_files} files, {dsl_loc} prod LOC"]',
-        f'        W_cli["liminika-cli (CLI & C-ABI Smoke) - {cli_files} files, {cli_loc} prod LOC"]',
+        f'        W_dsl["liminika-dsl (Parser/AST) - {plural_files(dsl_files)}, {dsl_loc} prod LOC"]',
+        f'        W_cli["liminika-cli (CLI & C-ABI Smoke) - {plural_files(cli_files)}, {cli_loc} prod LOC"]',
         (
             f'        W_eval["candle_eval (Thin Eval Harness) - '
-            f'{eval_files} files, {eval_loc} prod LOC"]'
+            f'{plural_files(eval_files)}, {eval_loc} prod LOC"]'
         ),
         "    end",
         '    subgraph WS_ADAPTER["Canonical Adapter Gate (liminika-adapter)"]',
         (
             '        W_adapter["ModelSteeringAdapter + TurnOrchestrator + CompiledTokenCorpus '
-            f'- {ad_files} files, {ad_loc} prod LOC"]'
+            f'- {plural_files(ad_files)}, {ad_loc} prod LOC"]'
         ),
         "    end",
         '    subgraph WS_CORE["liminika-core (#![no_std] 5-Layer Unidirectional DAG)"]',
         f'        L0_liminal["{core_label("liminal", "Lv.0 liminal (Axioms & Lacuna)")}"]',
         f'        L1_foundation["{core_label("foundation", "Lv.1 foundation (SWAR, RoPE, Pod)")}"]',
         f'        L2_stigmergy["{core_label("stigmergy", "Lv.2 stigmergy (Substrate & Anchors)")}"]',
-        f'        L3_spine["{core_label("drivers::spine", "Lv.3 drivers/spine (Spine SSOT)")}"]',
-        f'        L3_ego["{core_label("drivers::ego", "Lv.3 drivers/ego (Ego P-Frame)")}"]',
-        f'        L3_drivers_hub["{core_label("drivers", "Lv.3 drivers/mod (Tension)")}"]',
+        '        subgraph WS_L3["Lv.3 drivers (Orthogonal Axes & Tension)"]',
+        f'            L3_spine["{core_label("drivers::spine", "Lv.3 drivers/spine (Spine SSOT)")}"]',
+        f'            L3_ego["{core_label("drivers::ego", "Lv.3 drivers/ego (Ego P-Frame)")}"]',
+        f'            L3_drivers_hub["{core_label("drivers", "Lv.3 drivers/mod (Tension)")}"]',
+        "        end",
         f'        L4_runtime["{core_label("runtime", "Lv.4 runtime (Context, Gateway, ABI)")}"]',
         "    end",
         "",
@@ -1154,6 +1159,11 @@ def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
         refs = core_edges.get((consumer, provider), 0)
         if refs > 0:
             lines.append(f"    {node_ids[provider]} -->|{refs} refs| {node_ids[consumer]}")
+
+    # Invisible rank links keep WS_CORE ordered Lv.0 -> Lv.1 -> Lv.2 -> Lv.3 -> Lv.4.
+    lines.append("    L2_stigmergy ~~~ L3_drivers_hub")
+    lines.append("    L3_spine ~~~ L4_runtime")
+    lines.append("    L3_ego ~~~ L4_runtime")
 
     return "\n".join(lines) + "\n"
 

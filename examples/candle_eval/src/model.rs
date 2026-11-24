@@ -12,8 +12,11 @@ use liminika_adapter::{
     CorpusRecallEscalationProvider, ModelSteeringAdapter, RopeGeometry, RopeLayout,
 };
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
+use liminika_core::foundation::TaggedPtr;
+use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
-    GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, ResonantSignalSlice, SubjectivePersona,
+    CausalProvenanceSignal, GatewayFrame, GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact,
+    ResonantSignalSlice, SubjectivePersona,
 };
 use serde::Deserialize;
 
@@ -111,6 +114,8 @@ pub(crate) struct LayerSteer<'a, 'c, 'e> {
     pub(crate) horizon_mode: HorizonAblationMode,
     pub(crate) escalation_provider: Option<&'e mut CorpusRecallEscalationProvider<'c>>,
     pub(crate) probe_frame: ProbeCoordinateFrame,
+    pub(crate) phase_clamp_override: Option<f32>,
+    pub(crate) random_push_seed: Option<u64>,
 }
 
 pub(crate) struct ForwardSteer<'a, 'c, 'e> {
@@ -126,11 +131,111 @@ pub(crate) struct ForwardSteer<'a, 'c, 'e> {
     pub(crate) compute_dispatch: Option<liminika_adapter::ComputeDispatchMask>,
     pub(crate) layer_steer_mask: Option<u64>,
     pub(crate) probe_frame: ProbeCoordinateFrame,
+    pub(crate) phase_clamp_override: Option<f32>,
+    pub(crate) random_push_seed: Option<u64>,
     pub(crate) steer_bypass_hits: usize,
     pub(crate) steer_eligible_layers: usize,
 }
 
-fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
+#[inline]
+fn splitmix64_next(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Generates a deterministic norm-matched random Q7 phase perturbation over `0..active_heads`
+/// using `splitmix64` (zero external RNG dependencies) while preserving zero-aperture frames.
+pub(crate) fn generate_norm_matched_random_q7(
+    reference: &[lmnk_q7_t; MAX_ATTENTION_HEADS],
+    active_heads: usize,
+    seed: u64,
+    layer_idx: usize,
+) -> [lmnk_q7_t; MAX_ATTENTION_HEADS] {
+    let n = active_heads.clamp(1, MAX_ATTENTION_HEADS);
+    let ref_sq: f64 = reference[..n]
+        .iter()
+        .map(|&v| f64::from(v) * f64::from(v))
+        .sum();
+    if ref_sq <= 0.0 {
+        return [0_i8; MAX_ATTENTION_HEADS];
+    }
+    let ref_norm = ref_sq.sqrt();
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ ((layer_idx as u64)
+            .wrapping_add(1)
+            .wrapping_mul(0xBF58_476D_1CE4_E5B9));
+    let mut raw = [0.0_f64; MAX_ATTENTION_HEADS];
+    let mut raw_sq = 0.0_f64;
+    for slot in raw.iter_mut().take(n) {
+        let bits = splitmix64_next(&mut state);
+        let unit = ((bits >> 11) as f64) / ((1_u64 << 53) as f64);
+        let signed = unit * 2.0 - 1.0;
+        *slot = signed;
+        raw_sq += signed * signed;
+    }
+    if raw_sq <= 1e-18 {
+        raw[0] = 1.0;
+        raw_sq = 1.0;
+    }
+    let scale = ref_norm / raw_sq.sqrt();
+    let mut out = [0_i8; MAX_ATTENTION_HEADS];
+    for i in 0..n {
+        out[i] = (raw[i] * scale).round().clamp(-127.0, 127.0) as lmnk_q7_t;
+    }
+    out
+}
+
+/// Evaluation-only [`ManifoldGatewaySignal`] wrapper that injects `PhaseClamp` overrides and
+/// norm-matched random Q7 phase controls strictly inside `examples/candle_eval` without modifying
+/// `liminika-core` or adding adapter backdoors.
+struct EvalOscilloscopeSignal<'a, S: ManifoldGatewaySignal + ?Sized> {
+    inner: &'a S,
+    layer_idx: usize,
+    phase_clamp_override: Option<f32>,
+    random_push_seed: Option<u64>,
+}
+
+impl<S: ManifoldGatewaySignal + ?Sized> CausalProvenanceSignal for EvalOscilloscopeSignal<'_, S> {
+    #[inline]
+    fn causal_provenance_bits(&self) -> u32 {
+        self.inner.causal_provenance_bits()
+    }
+
+    #[inline]
+    fn causal_anomaly_severity(&self) -> f32 {
+        self.inner.causal_anomaly_severity()
+    }
+}
+
+impl<S: ManifoldGatewaySignal + ?Sized> ManifoldGatewaySignal for EvalOscilloscopeSignal<'_, S> {
+    #[inline]
+    fn synthesize_gateway_frame(&self) -> GatewayFrame {
+        let mut frame = self.inner.synthesize_gateway_frame();
+        if let Some(clamp_rad) = self.phase_clamp_override {
+            frame.phase_clamp_rad = clamp_rad;
+        }
+        if let Some(seed) = self.random_push_seed {
+            let active_heads = (frame.active_head_count as usize).clamp(1, MAX_ATTENTION_HEADS);
+            let rand_q7 = generate_norm_matched_random_q7(
+                &frame.phase_deltas,
+                active_heads,
+                seed,
+                self.layer_idx,
+            );
+            frame.phase_deltas = rand_q7;
+            let sum: i32 = rand_q7[..active_heads].iter().map(|&v| i32::from(v)).sum();
+            let mean = (sum / active_heads as i32).clamp(-127, 127) as lmnk_q7_t;
+            frame.mean_phase_tag_q7 = mean;
+            frame.tagged_ptr = TaggedPtr(frame.tagged_ptr).with_phase(mean).raw();
+        }
+        frame
+    }
+}
+
+fn dispatch_rope_orchestration_inner<S: ManifoldGatewaySignal + ?Sized>(
     adapter: &mut ModelSteeringAdapter,
     horizon_mode: HorizonAblationMode,
     escalation_provider: Option<&mut CorpusRecallEscalationProvider<'_>>,
@@ -166,6 +271,47 @@ fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
         )?;
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
+    adapter: &mut ModelSteeringAdapter,
+    horizon_mode: HorizonAblationMode,
+    escalation_provider: Option<&mut CorpusRecallEscalationProvider<'_>>,
+    layer_idx: usize,
+    signal: &S,
+    trail: &mut liminika_core::abi::lmnk_pointer_trail_t,
+    slice: &mut [f32],
+    phase_clamp_override: Option<f32>,
+    random_push_seed: Option<u64>,
+) -> Result<(), String> {
+    if phase_clamp_override.is_some() || random_push_seed.is_some() {
+        let wrapped = EvalOscilloscopeSignal {
+            inner: signal,
+            layer_idx,
+            phase_clamp_override,
+            random_push_seed,
+        };
+        dispatch_rope_orchestration_inner(
+            adapter,
+            horizon_mode,
+            escalation_provider,
+            layer_idx,
+            &wrapped,
+            trail,
+            slice,
+        )
+    } else {
+        dispatch_rope_orchestration_inner(
+            adapter,
+            horizon_mode,
+            escalation_provider,
+            layer_idx,
+            signal,
+            trail,
+            slice,
+        )
+    }
 }
 
 pub(crate) struct ProbeTrace {
@@ -302,6 +448,8 @@ impl RotaryCache {
             horizon_mode,
             mut escalation_provider,
             probe_frame: _,
+            phase_clamp_override,
+            random_push_seed,
         } = steer;
 
         let mut flat = rot_tensor
@@ -334,6 +482,8 @@ impl RotaryCache {
                                 &composite,
                                 trail,
                                 slice,
+                                phase_clamp_override,
+                                random_push_seed,
                             )
                             .map_err(candle_core::Error::Msg)?;
                         } else {
@@ -349,9 +499,21 @@ impl RotaryCache {
                                 &composite,
                                 trail,
                                 slice,
+                                phase_clamp_override,
+                                random_push_seed,
                             )
                             .map_err(candle_core::Error::Msg)?;
                         }
+                    } else if phase_clamp_override.is_some() || random_push_seed.is_some() {
+                        let wrapped = EvalOscilloscopeSignal {
+                            inner: &fact_res,
+                            layer_idx,
+                            phase_clamp_override,
+                            random_push_seed,
+                        };
+                        adapter
+                            .steer_layer_with_gateway(layer_idx, &wrapped, trail, 128, slice, None)
+                            .map_err(candle_core::Error::Msg)?;
                     } else {
                         adapter
                             .steer_layer_with_gateway(layer_idx, &fact_res, trail, 128, slice, None)
@@ -372,26 +534,65 @@ impl RotaryCache {
                     let composite = (fact, persona);
                     for tok in 0..seq_len {
                         let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
-                        adapter
-                            .steer_layer_with_gateway(
-                                layer_idx, &composite, trail, 128, slice, None,
-                            )
-                            .map_err(candle_core::Error::Msg)?;
+                        if phase_clamp_override.is_some() || random_push_seed.is_some() {
+                            let wrapped = EvalOscilloscopeSignal {
+                                inner: &composite,
+                                layer_idx,
+                                phase_clamp_override,
+                                random_push_seed,
+                            };
+                            adapter
+                                .steer_layer_with_gateway(
+                                    layer_idx, &wrapped, trail, 128, slice, None,
+                                )
+                                .map_err(candle_core::Error::Msg)?;
+                        } else {
+                            adapter
+                                .steer_layer_with_gateway(
+                                    layer_idx, &composite, trail, 128, slice, None,
+                                )
+                                .map_err(candle_core::Error::Msg)?;
+                        }
                     }
                 } else {
                     for tok in 0..seq_len {
                         let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
-                        adapter
-                            .steer_layer_with_gateway(layer_idx, &fact, trail, 128, slice, None)
-                            .map_err(candle_core::Error::Msg)?;
+                        if phase_clamp_override.is_some() || random_push_seed.is_some() {
+                            let wrapped = EvalOscilloscopeSignal {
+                                inner: &fact,
+                                layer_idx,
+                                phase_clamp_override,
+                                random_push_seed,
+                            };
+                            adapter
+                                .steer_layer_with_gateway(
+                                    layer_idx, &wrapped, trail, 128, slice, None,
+                                )
+                                .map_err(candle_core::Error::Msg)?;
+                        } else {
+                            adapter
+                                .steer_layer_with_gateway(layer_idx, &fact, trail, 128, slice, None)
+                                .map_err(candle_core::Error::Msg)?;
+                        }
                     }
                 }
             }
         } else {
+            let eff_max_rad = phase_clamp_override.unwrap_or(max_rad);
+            let rand_deltas = random_push_seed.map(|seed| {
+                let mut ref_arr = [0_i8; MAX_ATTENTION_HEADS];
+                let n = q7_deltas.len().min(MAX_ATTENTION_HEADS);
+                ref_arr[..n].copy_from_slice(&q7_deltas[..n]);
+                generate_norm_matched_random_q7(&ref_arr, n, seed, layer_idx)
+            });
+            let active_deltas = match rand_deltas.as_ref() {
+                Some(r) => &r[..q7_deltas.len().min(MAX_ATTENTION_HEADS)],
+                None => q7_deltas,
+            };
             for tok in 0..seq_len {
                 let slice = &mut flat[tok * tok_stride..(tok + 1) * tok_stride];
                 adapter
-                    .steer_layer_q_rot(layer_idx, slice, q7_deltas, max_rad)
+                    .steer_layer_q_rot(layer_idx, slice, active_deltas, eff_max_rad)
                     .map_err(candle_core::Error::Msg)?;
             }
         }
@@ -746,7 +947,7 @@ pub(crate) struct Phi3Model {
     device: Device,
 }
 
-fn dispatch_rank1_signal<S: ManifoldGatewaySignal + ?Sized>(
+fn dispatch_rank1_signal_inner<S: ManifoldGatewaySignal + ?Sized>(
     ad: &mut ModelSteeringAdapter,
     rope_rad: f32,
     signal: &S,
@@ -764,6 +965,31 @@ fn dispatch_rank1_signal<S: ManifoldGatewaySignal + ?Sized>(
             .map_err(candle_core::Error::Msg)?;
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_rank1_signal<S: ManifoldGatewaySignal + ?Sized>(
+    ad: &mut ModelSteeringAdapter,
+    rope_rad: f32,
+    layer_idx: usize,
+    signal: &S,
+    h_vec: &mut [f32],
+    u_vec: &[f32],
+    v_vec: &[f32],
+    phase_clamp_override: Option<f32>,
+    random_push_seed: Option<u64>,
+) -> CResult<()> {
+    if phase_clamp_override.is_some() || random_push_seed.is_some() {
+        let wrapped = EvalOscilloscopeSignal {
+            inner: signal,
+            layer_idx,
+            phase_clamp_override,
+            random_push_seed,
+        };
+        dispatch_rank1_signal_inner(ad, rope_rad, &wrapped, h_vec, u_vec, v_vec)
+    } else {
+        dispatch_rank1_signal_inner(ad, rope_rad, signal, h_vec, u_vec, v_vec)
+    }
 }
 
 impl Phi3Model {
@@ -936,6 +1162,8 @@ impl Phi3Model {
                                 horizon_mode: st.horizon_mode,
                                 escalation_provider: st.escalation_provider.as_deref_mut(),
                                 probe_frame: st.probe_frame,
+                                phase_clamp_override: st.phase_clamp_override,
+                                random_push_seed: st.random_push_seed,
                             })
                         })
                     }
@@ -976,9 +1204,11 @@ impl Phi3Model {
                         let q7s = st.q7s;
                         let persona_q7s = st.persona_q7s;
                         let rope_rad = st.rope_rad;
+                        let phase_clamp_override = st.phase_clamp_override;
+                        let random_push_seed = st.random_push_seed;
+                        let last_layer_idx = self.layers.len().saturating_sub(1);
                         let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
                         if rank1_scale < 0.0 {
-                            let last_layer_idx = self.layers.len().saturating_sub(1);
                             let dyn_rank1 = st
                                 .resonant_ctx
                                 .and_then(|rc| rc.layer_slices(last_layer_idx))
@@ -996,18 +1226,42 @@ impl Phi3Model {
                                     let sys_res = *ad.system_constraint();
                                     let composite = (sys_res, fact_res, persona_res, guard_res);
                                     dispatch_rank1_signal(
-                                        ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
+                                        ad,
+                                        rope_rad,
+                                        last_layer_idx,
+                                        &composite,
+                                        &mut h_vec,
+                                        u_vec,
+                                        v_vec,
+                                        phase_clamp_override,
+                                        random_push_seed,
                                     )?;
                                 } else if !persona_anchors.is_empty() {
                                     let persona_res =
                                         ResonantSignalSlice::from_trail(persona_anchors, st.trail);
                                     let composite = (fact_res, persona_res);
                                     dispatch_rank1_signal(
-                                        ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
+                                        ad,
+                                        rope_rad,
+                                        last_layer_idx,
+                                        &composite,
+                                        &mut h_vec,
+                                        u_vec,
+                                        v_vec,
+                                        phase_clamp_override,
+                                        random_push_seed,
                                     )?;
                                 } else {
                                     dispatch_rank1_signal(
-                                        ad, rope_rad, &fact_res, &mut h_vec, u_vec, v_vec,
+                                        ad,
+                                        rope_rad,
+                                        last_layer_idx,
+                                        &fact_res,
+                                        &mut h_vec,
+                                        u_vec,
+                                        v_vec,
+                                        phase_clamp_override,
+                                        random_push_seed,
                                     )?;
                                 }
                             } else {
@@ -1024,11 +1278,27 @@ impl Phi3Model {
                                     let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
                                     let composite = (fact, persona);
                                     dispatch_rank1_signal(
-                                        ad, rope_rad, &composite, &mut h_vec, u_vec, v_vec,
+                                        ad,
+                                        rope_rad,
+                                        last_layer_idx,
+                                        &composite,
+                                        &mut h_vec,
+                                        u_vec,
+                                        v_vec,
+                                        phase_clamp_override,
+                                        random_push_seed,
                                     )?;
                                 } else {
                                     dispatch_rank1_signal(
-                                        ad, rope_rad, &fact, &mut h_vec, u_vec, v_vec,
+                                        ad,
+                                        rope_rad,
+                                        last_layer_idx,
+                                        &fact,
+                                        &mut h_vec,
+                                        u_vec,
+                                        v_vec,
+                                        phase_clamp_override,
+                                        random_push_seed,
                                     )?;
                                 }
                             }
@@ -1237,6 +1507,8 @@ mod tests {
                     horizon_mode: HorizonAblationMode::Core3,
                     escalation_provider: None,
                     probe_frame: ProbeCoordinateFrame::PreRope,
+                    phase_clamp_override: None,
+                    random_push_seed: None,
                 }),
             )
             .expect("pre-rope fixed steer");
@@ -1255,6 +1527,8 @@ mod tests {
                     horizon_mode: HorizonAblationMode::Core3,
                     escalation_provider: None,
                     probe_frame: ProbeCoordinateFrame::PostRope,
+                    phase_clamp_override: None,
+                    random_push_seed: None,
                 }),
             )
             .expect("post-rope fixed steer");
@@ -1300,6 +1574,8 @@ mod tests {
                     horizon_mode: HorizonAblationMode::Core3,
                     escalation_provider: None,
                     probe_frame: ProbeCoordinateFrame::PreRope,
+                    phase_clamp_override: None,
+                    random_push_seed: None,
                 }),
             )
             .expect("pre-rope resonant off=0");
@@ -1324,6 +1600,8 @@ mod tests {
                     horizon_mode: HorizonAblationMode::Core3,
                     escalation_provider: None,
                     probe_frame: ProbeCoordinateFrame::PreRope,
+                    phase_clamp_override: None,
+                    random_push_seed: None,
                 }),
             )
             .expect("pre-rope resonant off=25");
@@ -1353,5 +1631,51 @@ mod tests {
             probe_pre, probe_post,
             "PostRope probe at offset=25 should diverge from pre-RoPE anchor frame"
         );
+    }
+
+    #[test]
+    fn random_push_control_is_deterministic_norm_matched_and_zero_preserving() {
+        let zeros = [0_i8; MAX_ATTENTION_HEADS];
+        assert_eq!(generate_norm_matched_random_q7(&zeros, 24, 42, 16), zeros);
+
+        let mut ref_q7 = [0_i8; MAX_ATTENTION_HEADS];
+        for (i, slot) in ref_q7.iter_mut().take(24).enumerate() {
+            *slot = if i % 2 == 0 { 40 } else { -30 };
+        }
+        let r1 = generate_norm_matched_random_q7(&ref_q7, 24, 42, 16);
+        let r2 = generate_norm_matched_random_q7(&ref_q7, 24, 42, 16);
+        let r_other_layer = generate_norm_matched_random_q7(&ref_q7, 24, 42, 17);
+        let r_other_seed = generate_norm_matched_random_q7(&ref_q7, 24, 99, 16);
+
+        assert_eq!(r1, r2);
+        assert_ne!(r1, r_other_layer);
+        assert_ne!(r1, r_other_seed);
+        assert!(r1[24..].iter().all(|&v| v == 0));
+
+        let ref_norm: f64 = ref_q7[..24]
+            .iter()
+            .map(|&v| f64::from(v) * f64::from(v))
+            .sum::<f64>()
+            .sqrt();
+        let rand_norm: f64 = r1[..24]
+            .iter()
+            .map(|&v| f64::from(v) * f64::from(v))
+            .sum::<f64>()
+            .sqrt();
+        assert!(
+            (ref_norm - rand_norm).abs() / ref_norm < 0.05,
+            "norm mismatch: ref={ref_norm:.2} rand={rand_norm:.2}"
+        );
+
+        let fact = ObjectiveFact::new(ref_q7, 2.0, 0, 7);
+        let wrapped = EvalOscilloscopeSignal {
+            inner: &fact,
+            layer_idx: 16,
+            phase_clamp_override: Some(0.24),
+            random_push_seed: Some(42),
+        };
+        let frame = wrapped.synthesize_gateway_frame();
+        assert!((frame.phase_clamp_rad - 0.24).abs() < 1e-6);
+        assert_ne!(frame.phase_deltas, ref_q7);
     }
 }

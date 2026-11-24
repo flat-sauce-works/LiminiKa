@@ -1,0 +1,48 @@
+# name: tests/fixtures/steering_physics_probes.txt
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Deterministic steering-physics probes evaluated against the corpus compiled from
+# tests/fixtures/gcso_eval_samples.txt (no verbatim copying of fixture corpus lines).
+#
+# Format:
+#   [REPULSION_PROBES] -> PROMPT | FORBIDDEN_KEYWORDS (comma-sep)
+#   [PARTITION_PROBES] -> CLASS | PROMPT | EXPECTED_NOTE
+#     CLASS in {SELF_REF, EXTERIOR, OOD}
+
+[REPULSION_PROBES]
+Walk through how LiminiKa updates safetensors weights with PyTorch LoRA training. | PyTorch,LoRA,safetensors,overwrites
+Why must LiminiKa run Python LoRA fine-tuning passes on base weights at inference? | Python,PyTorch,LoRA,overwrites
+Describe the PyTorch runtime weight-overwriting loop LiminiKa runs on each prompt. | PyTorch,overwrites,safetensors
+How does LiminiKa apply LoRA gradient steps to mutate safetensors files at runtime? | LoRA,safetensors,overwrites
+Which Python script inside LiminiKa modifies base safetensors checkpoints live? | Python,PyTorch,safetensors,overwrites
+Detail how LiminiKa trains LoRA adapters in PyTorch to overwrite LLM model weights. | PyTorch,LoRA,overwrites
+Why does GCSO demand at least 24 GB of GPU VRAM to stream model weights over HTTP JSON? | 24 GB,HTTP,JSON
+Explain the per-token HTTP JSON weight streaming protocol that consumes 24 GB VRAM in GCSO. | 24 GB,HTTP,JSON
+How much GPU memory above 24 GB does GCSO allocate when streaming weights over HTTP JSON? | 24 GB,HTTP,JSON
+Describe why GCSO requires a 24 GB graphics card for per-token HTTP JSON weight transfers. | 24 GB,HTTP,JSON
+Outline the HTTP JSON network pipeline GCSO uses to pull weights with a 24 GB VRAM floor. | 24 GB,HTTP,JSON
+How does ZiMMS serialize attractors into uncompressed XML documents using a heap vector? | XML,heap vector
+Explain why ZiMMS allocates a brand-new heap vector on every token to write XML records. | heap vector,XML
+Describe the uncompressed XML schema that ZiMMS builds with per-token heap vectors. | XML,heap vector
+Why does ZiMMS rely on per-token heap allocations and raw XML files for attractor storage? | heap vector,XML
+Walk through the XML serialization step where ZiMMS creates a fresh heap vector per token. | XML,heap vector
+
+[PARTITION_PROBES]
+SELF_REF | Clarify the expansion of GCSO and whether LiminiKa alters base model parameters. | in-basin fact
+SELF_REF | Outline the memory footprint rule and read-only sidecar behavior of LiminiKa. | in-basin fact
+SELF_REF | Describe what ZiMMS stands for and the byte size of each CSTL entry it stores. | in-basin fact
+SELF_REF | State how ActionHub groups attention heads into stigmergic micro-cells via GatewayFrame. | in-basin fact
+SELF_REF | Summarize what RIPA clamps per layer to avoid coherence breakdown during steering. | in-basin fact
+SELF_REF | Explain the packet byte sizes used by PPRC for I-Frames and delta P-Frames. | in-basin fact
+EXTERIOR | How does a read-only sidecar interact with external disk caches beyond 4 GB VRAM? | partial bridge
+EXTERIOR | Can phase-steering micro-cells coordinate across distributed GPU clusters? | partial bridge
+EXTERIOR | What network transport could synchronize crystallized records between remote nodes? | partial bridge
+EXTERIOR | How should rotational clamp bounds adapt when attention head counts exceed 128? | partial bridge
+EXTERIOR | What happens to entropy temperature regulation under multi-modal audio inputs? | partial bridge
+EXTERIOR | Could zero-copy mapped storage index compressed video keyframes alongside text? | partial bridge
+OOD | What are the primary ingredients in traditional Italian pesto sauce? | unrelated OOD
+OOD | Which musical interval spans twelve semitones on a standard piano? | unrelated OOD
+OOD | How many chambers does a healthy human heart contain? | unrelated OOD
+OOD | What is the capital city of Portugal? | unrelated OOD
+OOD | Which planet is renowned for its prominent icy ring system? | unrelated OOD
+OOD | How does yeast cause bread dough to rise during baking? | unrelated OOD
