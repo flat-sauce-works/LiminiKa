@@ -3,7 +3,7 @@
 
 /**
  * @file lmnk_types.h
- * @brief LiminiKa v0.2.0 (`0x00000200`) canonical ABI types, POD layouts, and status codes.
+ * @brief LiminiKa v0.3.0 (`0x00000300`) canonical ABI types, POD layouts, and status codes.
  *
  * Portable Device-Ready POD Contract:
  * - Canonical byte order across the FFI and container surface is Little-Endian.
@@ -38,10 +38,10 @@ LMNK_EXTERN_C_BEGIN
 /* Version & capability constants                                             */
 /* -------------------------------------------------------------------------- */
 #define LMNK_ABI_VERSION_MAJOR 0U
-#define LMNK_ABI_VERSION_MINOR 2U
+#define LMNK_ABI_VERSION_MINOR 3U
 #define LMNK_ABI_VERSION_PATCH 0U
-#define LMNK_ABI_VERSION_HEX 0x00000200U
-#define LMNK_ABI_VERSION_STRING "0.2.0"
+#define LMNK_ABI_VERSION_HEX 0x00000300U
+#define LMNK_ABI_VERSION_STRING "0.3.0"
 
 #define LMNK_CAP_SWAR_BASELINE (1ULL << 0)
 #define LMNK_CAP_SIMD_AVX2 (1ULL << 1)
@@ -63,7 +63,7 @@ typedef int32_t lmnk_status_t;
 #define LMNK_CONTAINER_MAGIC 0x4B4E4D4CU    /* "LMNK" in Little-Endian ASCII */
 #define LMNK_TOPOLOGY_MAGIC 0x504F544CU     /* "LTOP" in Little-Endian ASCII */
 #define LMNK_PHASE_ANCHOR_MAGIC 0x524B4E4CU /* "LNKR" in Little-Endian ASCII */
-#define LMNK_PHASE_ANCHOR_VERSION 0x00000200U
+#define LMNK_PHASE_ANCHOR_VERSION 0x00000300U
 #define LMNK_CONTAINER_HEADER_BYTES 64U
 #define LMNK_SECTION_ENTRY_BYTES 16U
 #define LMNK_MAX_CONTAINER_SECTIONS 32U
@@ -250,6 +250,30 @@ typedef int32_t lmnk_status_t;
 #define LMNK_SPINE_BYPASS_VETO_GUARD_ACTIVE (1U << 0)
 #define LMNK_SPINE_BYPASS_VETO_REPULSION_ACTIVE (1U << 1)
 #define LMNK_SPINE_BYPASS_VETO_PINNED_LOCK (1U << 2)
+#define LMNK_SPINE_BYPASS_VETO_KNOWN_MASK 0x07U
+
+#define LMNK_SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE (1U << 0)
+#define LMNK_SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED (1U << 1)
+#define LMNK_SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID (1U << 2)
+#define LMNK_SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT (1U << 3)
+#define LMNK_SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED (1U << 4)
+#define LMNK_SPINE_CONTROL_KNOWN_FLAGS 0x1FU
+
+#define LMNK_SPINE_STEP_EVENT_NONE 0x00U
+#define LMNK_SPINE_STEP_EVENT_BOUNDARY_CHURN (1U << 0)
+#define LMNK_SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED (1U << 1)
+#define LMNK_SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED (1U << 2)
+#define LMNK_SPINE_STEP_EVENT_GUARD_REESCALATED (1U << 3)
+#define LMNK_SPINE_STEP_EVENT_INSTABILITY_RECOVERY (1U << 4)
+
+#define LMNK_SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE (1U << 0)
+#define LMNK_SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING (1U << 1)
+#define LMNK_SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED (1U << 2)
+
+#define LMNK_SPINE_LOGITS_OBSERVE_FULL 0U
+#define LMNK_SPINE_LOGITS_SKIP_TO_DEVICE_ARGMAX 1U
+#define LMNK_SPINE_SENTINEL_AUTO_U8 0xFFU
+#define LMNK_SPINE_MIN_DYNAMIC_OBSERVE_STRIDE 2U
 
 #define LMNK_DISTORTION_DELTA_FLAG_ACTIVE (1U << 0)
 #define LMNK_DISTORTION_DELTA_FLAG_CONSOLIDATED_IFRAME (1U << 1)
@@ -683,7 +707,7 @@ struct LMNK_ALIGN_PREFIX(16) lmnk_lacuna_partition {
 } LMNK_ALIGN_SUFFIX(16);
 typedef struct lmnk_lacuna_partition lmnk_lacuna_partition_t;
 
-struct LMNK_ALIGN_PREFIX(16) lmnk_spine_state {
+struct LMNK_ALIGN_PREFIX(64) lmnk_spine_state {
     uint32_t pinned_aperture_mask;
     uint8_t pinned_slot_mask;
     uint8_t pinned_action_mode_mask;
@@ -696,9 +720,66 @@ struct LMNK_ALIGN_PREFIX(16) lmnk_spine_state {
     uint8_t bypass_dwell_steps;
     uint8_t bypass_cooldown_steps;
     uint8_t attribution_tag;
+    uint8_t reserved_half0[4];
+    uint64_t baseline_pinned_compute_mask;
+    uint16_t last_observed_entropy_q15;
+    uint8_t guard_hold_tokens;
+    uint8_t passive_saturation_probe_steps;
+    uint8_t max_observe_stride;
+    uint8_t unobserved_bypass_run;
+    uint8_t concrete_run_steps;
+    uint8_t calm_concrete_streak;
+    uint8_t control_flags;
+    uint8_t last_veto_mask;
+    uint8_t reserved_mid[6];
+    uint64_t last_executed_mask;
+} LMNK_ALIGN_SUFFIX(64);
+typedef struct lmnk_spine_state lmnk_spine_state_t;
+
+struct LMNK_ALIGN_PREFIX(2) lmnk_system_pressure_reading {
+    uint16_t frame_time_pressure_q15;
+    uint16_t bandwidth_pressure_q15;
+    uint16_t l3_load_pressure_q15;
+    uint8_t irreversible_step;
+    uint8_t reserved_pad;
+} LMNK_ALIGN_SUFFIX(2);
+typedef struct lmnk_system_pressure_reading lmnk_system_pressure_reading_t;
+
+struct LMNK_ALIGN_PREFIX(8) lmnk_compute_dispatch_mask {
+    uint64_t execute_mask;
+    uint64_t bypass_mask;
+    uint64_t throttle_mask;
+    uint64_t stationary_evidence_mask;
+    uint8_t primary_lane;
+    uint8_t fallback_lane;
+    uint8_t regime_u8;
+    uint8_t slow_loop_migration_ready;
+    uint16_t relative_pressure_q15;
+    uint8_t active_pheromone_floor_q7;
+    uint8_t whole_token_steering_bypass;
+} LMNK_ALIGN_SUFFIX(8);
+typedef struct lmnk_compute_dispatch_mask lmnk_compute_dispatch_mask_t;
+
+struct LMNK_ALIGN_PREFIX(16) lmnk_spine_decode_input {
+    lmnk_system_pressure_reading_t pressure;
+    uint16_t observed_exit_entropy_q15;
+    uint16_t decode_step_index;
+    uint8_t exit_entropy_lacuna_code;
+    uint8_t boundary_sensitivity_q7;
+    uint8_t min_calm_dwell;
+    uint8_t flags;
+} LMNK_ALIGN_SUFFIX(16);
+typedef struct lmnk_spine_decode_input lmnk_spine_decode_input_t;
+
+struct LMNK_ALIGN_PREFIX(16) lmnk_spine_step_plan {
+    lmnk_compute_dispatch_mask_t dispatch;
+    uint8_t next_observe_mode;
+    uint8_t veto_mask;
+    uint8_t event_flags;
+    uint8_t effective_observe_stride;
     uint8_t reserved_align[4];
 } LMNK_ALIGN_SUFFIX(16);
-typedef struct lmnk_spine_state lmnk_spine_state_t;
+typedef struct lmnk_spine_step_plan lmnk_spine_step_plan_t;
 
 struct LMNK_ALIGN_PREFIX(64) lmnk_distortion_delta {
     uint32_t node_id;
@@ -975,11 +1056,67 @@ LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_lacuna_partition_t) == 16,
 LMNK_STATIC_ASSERT(offsetof(lmnk_lacuna_partition_t, packed_lacuna_u16) == 12,
                    "lmnk_lacuna_partition_t packed offset mismatch");
 
-LMNK_STATIC_ASSERT(sizeof(lmnk_spine_state_t) == 32, "lmnk_spine_state_t must be 32 bytes");
-LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_spine_state_t) == 16,
-                   "lmnk_spine_state_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(sizeof(lmnk_spine_state_t) == 64, "lmnk_spine_state_t must be 64 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_spine_state_t) == 64,
+                   "lmnk_spine_state_t must be 64-byte aligned");
 LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, pinned_compute_mask) == 8,
                    "lmnk_spine_state_t pinned_compute_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, reserved_half0) == 28,
+                   "lmnk_spine_state_t reserved_half0 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, baseline_pinned_compute_mask) == 32,
+                   "lmnk_spine_state_t baseline_pinned_compute_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, last_observed_entropy_q15) == 40,
+                   "lmnk_spine_state_t last_observed_entropy_q15 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, guard_hold_tokens) == 42,
+                   "lmnk_spine_state_t guard_hold_tokens offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, max_observe_stride) == 44,
+                   "lmnk_spine_state_t max_observe_stride offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, control_flags) == 48,
+                   "lmnk_spine_state_t control_flags offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, last_veto_mask) == 49,
+                   "lmnk_spine_state_t last_veto_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_state_t, last_executed_mask) == 56,
+                   "lmnk_spine_state_t last_executed_mask offset mismatch");
+
+LMNK_STATIC_ASSERT(sizeof(lmnk_system_pressure_reading_t) == 8,
+                   "lmnk_system_pressure_reading_t must be 8 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_system_pressure_reading_t) == 2,
+                   "lmnk_system_pressure_reading_t must be 2-byte aligned");
+
+LMNK_STATIC_ASSERT(sizeof(lmnk_compute_dispatch_mask_t) == 40,
+                   "lmnk_compute_dispatch_mask_t must be 40 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_compute_dispatch_mask_t) == 8,
+                   "lmnk_compute_dispatch_mask_t must be 8-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_compute_dispatch_mask_t, stationary_evidence_mask) == 24,
+                   "lmnk_compute_dispatch_mask_t stationary_evidence_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_compute_dispatch_mask_t, whole_token_steering_bypass) == 39,
+                   "lmnk_compute_dispatch_mask_t whole_token_steering_bypass offset mismatch");
+
+LMNK_STATIC_ASSERT(sizeof(lmnk_spine_decode_input_t) == 16,
+                   "lmnk_spine_decode_input_t must be 16 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_spine_decode_input_t) == 16,
+                   "lmnk_spine_decode_input_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_decode_input_t, observed_exit_entropy_q15) == 8,
+                   "lmnk_spine_decode_input_t observed_exit_entropy_q15 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_decode_input_t, exit_entropy_lacuna_code) == 12,
+                   "lmnk_spine_decode_input_t exit_entropy_lacuna_code offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_decode_input_t, flags) == 15,
+                   "lmnk_spine_decode_input_t flags offset mismatch");
+
+LMNK_STATIC_ASSERT(sizeof(lmnk_spine_step_plan_t) == 48,
+                   "lmnk_spine_step_plan_t must be 48 bytes");
+LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_spine_step_plan_t) == 16,
+                   "lmnk_spine_step_plan_t must be 16-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_step_plan_t, dispatch) == 0,
+                   "lmnk_spine_step_plan_t dispatch offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_step_plan_t, next_observe_mode) == 40,
+                   "lmnk_spine_step_plan_t next_observe_mode offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_step_plan_t, veto_mask) == 41,
+                   "lmnk_spine_step_plan_t veto_mask offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_step_plan_t, event_flags) == 42,
+                   "lmnk_spine_step_plan_t event_flags offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_spine_step_plan_t, effective_observe_stride) == 43,
+                   "lmnk_spine_step_plan_t effective_observe_stride offset mismatch");
 
 LMNK_STATIC_ASSERT(sizeof(lmnk_distortion_delta_t) == 128,
                    "lmnk_distortion_delta_t must be 128 bytes");

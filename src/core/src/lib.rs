@@ -1,7 +1,7 @@
 // name: src/core/src/lib.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Core execution engine library for `LiminiKa` (`v0.2.0`, `0x0000_0200`).
+//! Core execution engine library for `LiminiKa` (`v0.3.0`, `0x0000_0300`).
 //!
 //! This crate serves as the primary `#![no_std]` runtime engine for `LiminiKa`, implementing
 //! non-invasive LLM steering and low-VRAM (2-4 GB) orchestration across a Y-shaped 5-layer
@@ -27,7 +27,7 @@
 //! - **Level 4 — `runtime` ([`crate::runtime`])**: Single orchestrator facade (`RuntimeContext`,
 //!   `#[repr(C, align(64))]`, caller-owned `in_place` initialization), Manifold Gateway
 //!   (`ManifoldGatewaySignal`, `GatewayFrame`), Latent Horizon (`LatentHorizonSlot`),
-//!   `.lmnk` snapshot storage, telemetry, and the C11/C++20 `v0.2.0` (`lmnk_*`) C-ABI firewall (`abi`).
+//!   `.lmnk` snapshot storage, telemetry, and the C11/C++20 `v0.3.0` (`lmnk_*`) C-ABI firewall (`abi`).
 //!
 //! # Core Mathematical & Systems Design Principles
 //! 1. **Sequential Conditional Transition Probability x Attention Phase Interference**:
@@ -106,7 +106,7 @@ pub mod drivers;
 /// Latent Horizon, `.lmnk` storage, and C-ABI translation firewall (`abi`).
 pub mod runtime;
 
-/// C-ABI `v0.2.0` (`0x0000_0200`) bindings, FFI safety barriers, binary layout contracts, and status codes.
+/// C-ABI `v0.3.0` (`0x0000_0300`) bindings, FFI safety barriers, binary layout contracts, and status codes.
 pub use crate::runtime::abi;
 
 // ===================================================================
@@ -262,14 +262,26 @@ pub use crate::drivers::{
     AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
     DistortionDelta, DistortionTension, DistortionTensionStateCode, EgoDifferentialNet,
     EgoIntentAxes, EntropyController, EntropyState, FrameDirective, FrameKind, LiminalEgoPreset,
-    LiminalEgoState, PFrameColdMeta, PFrameRoutingMeta, SpineFrameTransitionInput,
-    SystemPressureReading, SystemSpineState, TokenBypassObservation, EGO_TRIGGER_ALL_DEFAULT,
-    EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION,
-    EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR,
-    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_NONE,
+    LiminalEgoState, PFrameColdMeta, PFrameRoutingMeta, SpineDecodeInput, SpineDecodeSignal,
+    SpineFrameTransitionInput, SpineLogitsObserveMode, SpineStepPlan, SystemPressureReading,
+    SystemSpineState, TokenBypassObservation, EGO_TRIGGER_ALL_DEFAULT, EGO_TRIGGER_BASIN_CAPTURE,
+    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
+    EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_BYPASS_VETO_NONE,
     SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
-    SPINE_TRANSITION_FLAG_GUARD_REPULSION, SPINE_TRANSITION_FLAG_IRREVERSIBLE,
-    SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED, SPINE_TRANSITION_FLAG_STATIONARY_BYPASS_READY,
+    SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID, SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT,
+    SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED, SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED,
+    SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE, SPINE_CONTROL_KNOWN_FLAGS,
+    SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING, SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED,
+    SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE, SPINE_ENTROPY_CALM_THRESH_Q15,
+    SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE, SPINE_ENTROPY_REWARD_LOW_THRESH_Q15,
+    SPINE_ENTROPY_SURGE_THRESH_Q15, SPINE_ENTROPY_TENSION_FLOOR_Q15,
+    SPINE_MIN_DYNAMIC_OBSERVE_STRIDE, SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN,
+    SPINE_STEP_EVENT_GUARD_REESCALATED, SPINE_STEP_EVENT_INSTABILITY_RECOVERY,
+    SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED, SPINE_STEP_EVENT_NONE,
+    SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED, SPINE_TRANSITION_FLAG_GUARD_REPULSION,
+    SPINE_TRANSITION_FLAG_IRREVERSIBLE, SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED,
+    SPINE_TRANSITION_FLAG_STATIONARY_BYPASS_READY,
 };
 
 pub use crate::runtime::{
@@ -328,20 +340,21 @@ pub use crate::runtime::{
 
 pub use crate::runtime::abi::{
     lmnk_action_decision_t, lmnk_attribution_tag_t, lmnk_bloom_filter_t, lmnk_boundary_delta_t,
-    lmnk_capability_flags_t, lmnk_causal_report_t, lmnk_cognitive_ledger_t, lmnk_config_t,
-    lmnk_container_header_t, lmnk_core_primitive_state_t, lmnk_core_state_stack_t,
-    lmnk_descriptor_header_t, lmnk_distortion_delta_t, lmnk_distortion_tension_t,
-    lmnk_ego_intent_axes_t, lmnk_entropy_state_t, lmnk_epistemic_horizon_t,
-    lmnk_fragment_ensemble_report_t, lmnk_gateway_frame_t, lmnk_kv_keyframe_header_t,
-    lmnk_lacuna_partition_t, lmnk_ledger_slot_t, lmnk_liminal_ego_state_t,
-    lmnk_liminal_threshold_state_t, lmnk_overlap_discovery_report_t, lmnk_paged_bitmask_t,
-    lmnk_phase_anchor_record_t, lmnk_pointer_trail_t, lmnk_q7_t, lmnk_rank1_descriptor_t,
-    lmnk_reconstitution_report_t, lmnk_section_entry_t, lmnk_spine_state_t, lmnk_status_t,
+    lmnk_capability_flags_t, lmnk_causal_report_t, lmnk_cognitive_ledger_t,
+    lmnk_compute_dispatch_mask_t, lmnk_config_t, lmnk_container_header_t,
+    lmnk_core_primitive_state_t, lmnk_core_state_stack_t, lmnk_descriptor_header_t,
+    lmnk_distortion_delta_t, lmnk_distortion_tension_t, lmnk_ego_intent_axes_t,
+    lmnk_entropy_state_t, lmnk_epistemic_horizon_t, lmnk_fragment_ensemble_report_t,
+    lmnk_gateway_frame_t, lmnk_kv_keyframe_header_t, lmnk_lacuna_partition_t, lmnk_ledger_slot_t,
+    lmnk_liminal_ego_state_t, lmnk_liminal_threshold_state_t, lmnk_overlap_discovery_report_t,
+    lmnk_paged_bitmask_t, lmnk_phase_anchor_record_t, lmnk_pointer_trail_t, lmnk_q7_t,
+    lmnk_rank1_descriptor_t, lmnk_reconstitution_report_t, lmnk_section_entry_t,
+    lmnk_spine_decode_input_t, lmnk_spine_state_t, lmnk_spine_step_plan_t, lmnk_status_t,
     lmnk_stigmergic_granule_state_t, lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t,
-    lmnk_substrate_step_report_t, lmnk_tagged_ptr_t, lmnk_topology_matrix_t,
-    lmnk_topology_snapshot_t, FfiHandleMut, FfiHandleRef, LmnkContextHandle, LmnkContextOpaque,
-    LmnkEntropyControllerHandle, LmnkEntropyControllerOpaque, LmnkPhaseSteeringHandle,
-    LmnkPhaseSteeringOpaque, LmnkSubstrateHandle, LmnkSubstrateOpaque,
+    lmnk_substrate_step_report_t, lmnk_system_pressure_reading_t, lmnk_tagged_ptr_t,
+    lmnk_topology_matrix_t, lmnk_topology_snapshot_t, FfiHandleMut, FfiHandleRef,
+    LmnkContextHandle, LmnkContextOpaque, LmnkEntropyControllerHandle, LmnkEntropyControllerOpaque,
+    LmnkPhaseSteeringHandle, LmnkPhaseSteeringOpaque, LmnkSubstrateHandle, LmnkSubstrateOpaque,
 };
 
 // ===================================================================
@@ -412,17 +425,19 @@ pub mod prelude {
     pub use crate::liminal::*;
     pub use crate::runtime::abi::{
         lmnk_action_decision_t, lmnk_attribution_tag_t, lmnk_bloom_filter_t, lmnk_boundary_delta_t,
-        lmnk_capability_flags_t, lmnk_causal_report_t, lmnk_cognitive_ledger_t, lmnk_config_t,
-        lmnk_container_header_t, lmnk_core_primitive_state_t, lmnk_core_state_stack_t,
-        lmnk_descriptor_header_t, lmnk_distortion_delta_t, lmnk_distortion_tension_t,
-        lmnk_ego_intent_axes_t, lmnk_entropy_state_t, lmnk_epistemic_horizon_t,
-        lmnk_fragment_ensemble_report_t, lmnk_gateway_frame_t, lmnk_kv_keyframe_header_t,
-        lmnk_lacuna_partition_t, lmnk_ledger_slot_t, lmnk_liminal_ego_state_t,
-        lmnk_liminal_threshold_state_t, lmnk_overlap_discovery_report_t, lmnk_paged_bitmask_t,
-        lmnk_phase_anchor_record_t, lmnk_pointer_trail_t, lmnk_q7_t, lmnk_rank1_descriptor_t,
-        lmnk_reconstitution_report_t, lmnk_section_entry_t, lmnk_spine_state_t, lmnk_status_t,
-        lmnk_stigmergic_granule_state_t, lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t,
-        lmnk_substrate_step_report_t, lmnk_tagged_ptr_t, lmnk_topology_matrix_t,
+        lmnk_capability_flags_t, lmnk_causal_report_t, lmnk_cognitive_ledger_t,
+        lmnk_compute_dispatch_mask_t, lmnk_config_t, lmnk_container_header_t,
+        lmnk_core_primitive_state_t, lmnk_core_state_stack_t, lmnk_descriptor_header_t,
+        lmnk_distortion_delta_t, lmnk_distortion_tension_t, lmnk_ego_intent_axes_t,
+        lmnk_entropy_state_t, lmnk_epistemic_horizon_t, lmnk_fragment_ensemble_report_t,
+        lmnk_gateway_frame_t, lmnk_kv_keyframe_header_t, lmnk_lacuna_partition_t,
+        lmnk_ledger_slot_t, lmnk_liminal_ego_state_t, lmnk_liminal_threshold_state_t,
+        lmnk_overlap_discovery_report_t, lmnk_paged_bitmask_t, lmnk_phase_anchor_record_t,
+        lmnk_pointer_trail_t, lmnk_q7_t, lmnk_rank1_descriptor_t, lmnk_reconstitution_report_t,
+        lmnk_section_entry_t, lmnk_spine_decode_input_t, lmnk_spine_state_t,
+        lmnk_spine_step_plan_t, lmnk_status_t, lmnk_stigmergic_granule_state_t,
+        lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t, lmnk_substrate_step_report_t,
+        lmnk_system_pressure_reading_t, lmnk_tagged_ptr_t, lmnk_topology_matrix_t,
         lmnk_topology_snapshot_t, FfiHandleMut, FfiHandleRef, LmnkContextHandle, LmnkContextOpaque,
         LmnkEntropyControllerHandle, LmnkEntropyControllerOpaque, LmnkPhaseSteeringHandle,
         LmnkPhaseSteeringOpaque, LmnkSubstrateHandle, LmnkSubstrateOpaque,

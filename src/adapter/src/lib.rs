@@ -58,12 +58,22 @@ pub mod stratum;
 pub use liminika_core::drivers::{
     AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
     DistortionDelta, DistortionTension, DistortionTensionStateCode, EgoDifferentialNet,
-    EgoIntentAxes, SystemPressureReading, SystemSpineState, TokenBypassObservation,
-    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK,
-    SPINE_BYPASS_VETO_REPULSION_ACTIVE,
+    EgoIntentAxes, SpineDecodeInput, SpineDecodeSignal, SpineLogitsObserveMode, SpineStepPlan,
+    SystemPressureReading, SystemSpineState, TokenBypassObservation,
+    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_GUARD_ACTIVE,
+    SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID,
+    SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT, SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED,
+    SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED, SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE,
+    SPINE_CONTROL_KNOWN_FLAGS, SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING,
+    SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED, SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE,
+    SPINE_MIN_DYNAMIC_OBSERVE_STRIDE, SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN,
+    SPINE_STEP_EVENT_GUARD_REESCALATED, SPINE_STEP_EVENT_INSTABILITY_RECOVERY,
+    SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED, SPINE_STEP_EVENT_NONE,
+    SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
 };
 pub use liminika_core::liminal::{
-    evaluate_lacuna_partition_branchless, AttributionTag, DriverKind, LacunaPartition8,
+    evaluate_lacuna_partition_branchless, AttributionTag, DriverKind, Lacuna, LacunaPartition8,
     PrimitiveKind, SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR, SCOPE_REGION_SELF_REF,
 };
 pub use liminika_core::stigmergy::{

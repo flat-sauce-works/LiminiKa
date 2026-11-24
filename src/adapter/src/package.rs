@@ -1038,7 +1038,7 @@ mod tests {
     #[test]
     fn roundtrip_canonical_lmnkp_package_and_64b_alignment() {
         let manifest = format_package_manifest_json(
-            "0.2.0",
+            "0.3.0",
             0xDEAD_BEEF_CAFE_BABE,
             4,
             0x1234_5678,

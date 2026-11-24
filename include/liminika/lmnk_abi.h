@@ -3,7 +3,7 @@
 
 /**
  * @file lmnk_abi.h
- * @brief LiminiKa Core Engine C-ABI v0.2.0 (`0x00000200`) Public Functional Interface.
+ * @brief LiminiKa Core Engine C-ABI v0.3.0 (`0x00000300`) Public Functional Interface.
  *
  * Exposes exact 1:1 C11/C++20 bindings for `liminika-core` (`runtime/abi`):
  * - Version, capability, and configuration validation
@@ -66,6 +66,13 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_reset(lmnk_context_
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_step_token(
     lmnk_context_handle_t context, uint32_t token_id, float* LMNK_RESTRICT query_tensor,
     float* LMNK_RESTRICT key_tensor, lmnk_pointer_trail_t* LMNK_RESTRICT trail_out) LMNK_NOEXCEPT;
+
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_begin_turn_spine_policy(
+    lmnk_context_handle_t context, uint8_t guard_turn, uint8_t unobserved_locked) LMNK_NOEXCEPT;
+
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_step_decode_control(
+    lmnk_context_handle_t context, const lmnk_spine_decode_input_t* LMNK_RESTRICT input,
+    uint8_t external_guard_active, lmnk_spine_step_plan_t* LMNK_RESTRICT plan_out) LMNK_NOEXCEPT;
 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_context_serialize(lmnk_context_handle_t context, uint8_t* LMNK_RESTRICT buffer,

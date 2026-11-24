@@ -396,7 +396,7 @@ impl<'a> LmnkContainerView<'a> {
     ///
     /// Validation sequence:
     /// 1. Length bounds (`64 <= bytes.len() <= 64 MiB`) and `header.total_size == bytes.len()`.
-    /// 2. Magic (`"LMNK"`), ABI version (`0x0000_0200`), header geometry (`header_size == 64`,
+    /// 2. Magic (`"LMNK"`), ABI version (`0x0000_0300`), header geometry (`header_size == 64`,
     ///    `section_table_offset == 64`, `section_count <= 32`).
     /// 3. Header IEEE 802.3 CRC32 verification (`bytes[0..60]`).
     /// 4. Topology CRC32 verification against [`CORE_TOPOLOGY`] ([`LMNK_ERR_TOPOLOGY_MISMATCH`]).

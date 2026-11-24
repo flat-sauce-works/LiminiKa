@@ -9,6 +9,7 @@ use super::{
 };
 use crate::drivers::{
     EntropyController, EntropyState, SystemSpineState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_CONTROL_KNOWN_FLAGS, SPINE_ENTROPY_Q15_ONE,
 };
 use crate::foundation::{branchless_is_finite_f32, Pod, RopePairLayout};
 use crate::liminal::{
@@ -90,7 +91,7 @@ impl RuntimeContext {
     /// Enforces a minimum host-pinned compute mask floor that external containers cannot clear.
     #[inline(always)]
     pub const fn apply_host_spine_pin_floor(&mut self, required_pinned_mask: u64) {
-        self.system_spine.pin_compute_slots(required_pinned_mask);
+        self.system_spine.apply_host_pin_floor(required_pinned_mask);
     }
 
     /// Deserializes a unified `.lmnk` binary snapshot container to restore context state in-place
@@ -111,7 +112,7 @@ impl RuntimeContext {
         let payload = view
             .section_bytes(LMNK_SECTION_RUNTIME_SNAPSHOT)
             .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)?;
-        if payload.len() < 352 {
+        if payload.len() < 384 {
             return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
@@ -136,7 +137,7 @@ impl RuntimeContext {
                 .ok_or(LMNK_ERR_CONTAINER_CORRUPTED)
         };
 
-        let host_compute_pin_floor = self.system_spine.pinned_compute_mask;
+        let host_baseline_compute_pin_floor = self.system_spine.baseline_pinned_compute_mask;
         let host_aperture_pin_floor = self.system_spine.pinned_aperture_mask;
         let host_slot_pin_floor = self.system_spine.pinned_slot_mask;
         let host_mode_pin_floor = self.system_spine.pinned_action_mode_mask;
@@ -210,10 +211,22 @@ impl RuntimeContext {
         let saved_core_layers = CoreStateStack::read_unaligned_from(payload, 192)?;
         let mut restored_spine = SystemSpineState::read_unaligned_from(payload, 320)?;
 
-        // Host-locked Spine & slot privilege invariants cannot be stripped by untrusted snapshot data.
+        if (restored_spine.control_flags & !SPINE_CONTROL_KNOWN_FLAGS) != 0
+            || restored_spine.last_observed_entropy_q15 > SPINE_ENTROPY_Q15_ONE
+            || (restored_spine.last_veto_mask & !SPINE_BYPASS_VETO_KNOWN_MASK) != 0
+        {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+        if restored_spine.max_observe_stride == 0 {
+            restored_spine.max_observe_stride = 1;
+        }
+
+        // Host-locked Spine & slot privilege invariants cannot be stripped by untrusted snapshot data,
+        // and transient turn-guard compute pins never bleed into permanent baseline pin floors.
         let default_spine = SystemSpineState::new();
-        restored_spine.pinned_compute_mask |=
-            host_compute_pin_floor | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        restored_spine.baseline_pinned_compute_mask |=
+            host_baseline_compute_pin_floor | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        restored_spine.pinned_compute_mask |= restored_spine.baseline_pinned_compute_mask;
         restored_spine.pinned_aperture_mask |=
             host_aperture_pin_floor | default_spine.pinned_aperture_mask;
         restored_spine.pinned_slot_mask |= host_slot_pin_floor | default_spine.pinned_slot_mask;

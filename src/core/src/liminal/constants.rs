@@ -17,16 +17,16 @@ use core::mem::{align_of, offset_of, size_of};
 /// Unified LiminiKa C-ABI Major Version Component.
 pub const LMNK_ABI_VERSION_MAJOR: u32 = 0;
 /// Unified LiminiKa C-ABI Minor Version Component.
-pub const LMNK_ABI_VERSION_MINOR: u32 = 2;
+pub const LMNK_ABI_VERSION_MINOR: u32 = 3;
 /// Unified LiminiKa C-ABI Patch Version Component.
 pub const LMNK_ABI_VERSION_PATCH: u32 = 0;
-/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0200`).
+/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0300`).
 pub const LMNK_ABI_VERSION_HEX: u32 =
     (LMNK_ABI_VERSION_MAJOR << 16) | (LMNK_ABI_VERSION_MINOR << 8) | LMNK_ABI_VERSION_PATCH;
 /// String Representation of the active Unified ABI Version (derived from `Cargo.toml`).
 pub const LMNK_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
 /// NUL-terminated C string representation of the active Unified ABI Version.
-pub const LMNK_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.2.0";
+pub const LMNK_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.3.0";
 
 const _: () = {
     let c_bytes = LMNK_ABI_VERSION_CSTR.to_bytes();

@@ -35,7 +35,7 @@ pub const LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL: u16 = 1 << 2;
 /// DAG invariant bit `3`: `liminika-core` enforces `#![no_std]` zero-allocation boundaries.
 pub const LMNK_DAG_FLAG_NO_STD_CORE: u16 = 1 << 3;
 
-/// Canonical composite DAG invariant flags for `LiminiKa` `v0.2.0`.
+/// Canonical composite DAG invariant flags for `LiminiKa` `v0.3.0`.
 pub const LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL: u16 = LMNK_DAG_FLAG_Y_SHAPED_PARALLEL_ROOTS
     | LMNK_DAG_FLAG_SPINE_EGO_ISOLATED
     | LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL
@@ -106,7 +106,7 @@ unsafe impl Pod for LiminalTopologyMatrix {}
 impl Default for LiminalTopologyMatrix {
     #[inline(always)]
     fn default() -> Self {
-        Self::canonical_v0_2_0()
+        Self::canonical_v0_3_0()
     }
 }
 
@@ -199,10 +199,10 @@ impl LiminalTopologyMatrix {
             & (self.topology_crc32 == self.compute_crc32())
     }
 
-    /// Constructs the canonical `LiminiKa` `v0.2.0` topology matrix with stamped compile-time CRC32.
+    /// Constructs the canonical `LiminiKa` `v0.3.0` topology matrix with stamped compile-time CRC32.
     #[inline(always)]
     #[must_use]
-    pub const fn canonical_v0_2_0() -> Self {
+    pub const fn canonical_v0_3_0() -> Self {
         let mut matrix = Self {
             magic: LMNK_TOPOLOGY_MAGIC,
             version: LMNK_ABI_VERSION_HEX,
@@ -257,8 +257,8 @@ impl LiminalTopologyMatrix {
     }
 }
 
-/// Canonical compile-time `LiminiKa` `v0.2.0` topology matrix.
-pub const CORE_TOPOLOGY: LiminalTopologyMatrix = LiminalTopologyMatrix::canonical_v0_2_0();
+/// Canonical compile-time `LiminiKa` `v0.3.0` topology matrix.
+pub const CORE_TOPOLOGY: LiminalTopologyMatrix = LiminalTopologyMatrix::canonical_v0_3_0();
 
 const _: () = {
     assert!(size_of::<LiminalTopologyMatrix>() == 64);

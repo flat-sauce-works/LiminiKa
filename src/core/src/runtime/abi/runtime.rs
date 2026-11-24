@@ -111,7 +111,7 @@ pub extern "C" fn lmnk_abi_version_patch() -> u32 {
     LMNK_ABI_VERSION_PATCH
 }
 
-/// Returns the packed hexadecimal C-ABI version identifier (`0x0000_0200`).
+/// Returns the packed hexadecimal C-ABI version identifier (`0x0000_0300`).
 #[no_mangle]
 pub extern "C" fn lmnk_abi_version_hex() -> u32 {
     LMNK_ABI_VERSION_HEX
@@ -412,6 +412,63 @@ pub unsafe extern "C" fn lmnk_context_step_token(
             k_opt.as_mut(),
             trail_opt.as_deref_mut(),
         )?;
+        Ok(LMNK_OK)
+    })
+}
+
+/// Initializes per-turn mechanical spine policy at prompt / turn boundaries (`0 alloc`).
+///
+/// # Safety
+/// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
+#[no_mangle]
+pub unsafe extern "C" fn lmnk_context_begin_turn_spine_policy(
+    context: LmnkContextHandle,
+    guard_turn: u8,
+    unobserved_locked: u8,
+) -> LmnkStatus {
+    ffi_boundary!({
+        let typed = context.cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        // SAFETY: `typed` is verified non-null, 64B-aligned, and exclusively mutably accessed.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(typed)? };
+        ctx.begin_turn_spine_policy(guard_turn != 0, unobserved_locked != 0);
+        Ok(LMNK_OK)
+    })
+}
+
+/// Evaluates one 4-stage decode control step on [`RuntimeContext`] (`0 alloc`, `0 fdiv`), reading
+/// `input` (`16 B`) and writing `plan_out` (`48 B`).
+///
+/// # Safety
+/// All pointers must be non-null, naturally aligned, and pairwise disjoint in memory.
+#[no_mangle]
+pub unsafe extern "C" fn lmnk_context_step_decode_control(
+    context: LmnkContextHandle,
+    input: *const lmnk_spine_decode_input_t,
+    external_guard_active: u8,
+    plan_out: *mut lmnk_spine_step_plan_t,
+) -> LmnkStatus {
+    ffi_boundary!({
+        let typed = context.cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        validate_ptr(input)?;
+        validate_ptr(plan_out)?;
+        check_disjoint_rw(
+            &[
+                (typed as usize, size_of::<RuntimeContext>()),
+                (plan_out as usize, size_of::<lmnk_spine_step_plan_t>()),
+            ],
+            &[(input as usize, size_of::<lmnk_spine_decode_input_t>())],
+        )?;
+        // SAFETY: All pointers are non-null, aligned, and verified pairwise disjoint above.
+        let (mut ctx, sig_ref, mut out_ref) = unsafe {
+            (
+                FfiHandleMut::from_raw(typed)?,
+                FfiHandleRef::from_raw(input)?,
+                FfiHandleMut::from_raw(plan_out)?,
+            )
+        };
+        *out_ref = ctx.step_decode_control(sig_ref.as_ref(), external_guard_active != 0);
         Ok(LMNK_OK)
     })
 }

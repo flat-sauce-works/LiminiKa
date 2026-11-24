@@ -742,14 +742,14 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "liminika-adapter"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "liminika-core",
 ]
 
 [[package]]
 name = "liminika-candle-eval"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "liminika-core"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "log"

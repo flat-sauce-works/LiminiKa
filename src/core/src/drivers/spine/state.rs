@@ -1,21 +1,25 @@
 // name: src/core/src/drivers/spine/state.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Mechanical execution spine state (`SystemSpineState`, 32 B), primitive `pinned`
-//! isolation logic (`isolate_slot_and_modes_branchless`), and branchless I-Frame / P-Frame
-//! transition evaluation (`evaluate_frame_transition_branchless`).
+//! Mechanical execution spine state (`SystemSpineState`, 64 B), abstract decode signal boundary
+//! ([`SpineDecodeSignal`], [`SpineDecodeInput`], [`SpineStepPlan`]), primitive `pinned` isolation
+//! logic (`isolate_slot_and_modes_branchless`), and branchless I-Frame / P-Frame transition
+//! evaluation (`evaluate_frame_transition_branchless`).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
 
-use core::mem::{align_of, size_of};
+use core::mem::{align_of, offset_of, size_of};
 
+use crate::drivers::spine::compute_pool::{
+    ComputeDispatchMask, SystemPressureReading, TokenBypassObservation,
+};
 use crate::foundation::{Pod, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK};
 use crate::liminal::{
-    branchless_select_u8, AttributionTag, BitCut32, BitCut64, BitCut8, Lacuna,
-    THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_SYSTEM_CONSTRAINT,
+    branchless_select_u8, sensitivity_4p1mp_q7, AttributionTag, BitCut32, BitCut64, BitCut8,
+    Lacuna, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_SYSTEM_CONSTRAINT,
 };
 use crate::stigmergy::{ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE};
 
@@ -122,8 +126,13 @@ impl SpineFrameTransitionInput {
 // SAFETY: `SpineFrameTransitionInput` is `#[repr(C, align(8))]` of exact size 8 bytes with primitive `u8` fields only.
 unsafe impl Pod for SpineFrameTransitionInput {}
 
-// 3. System Spine State & Physical `pinned` Isolation (32 B)
+// 3. Spine Decode Signal Boundary (`SpineDecodeSignal` / `SpineDecodeInput` / `SpineStepPlan`)
 // ===================================================================
+
+/// Bitmask of valid `SPINE_BYPASS_VETO_*` flags (`0x07`).
+pub const SPINE_BYPASS_VETO_KNOWN_MASK: u8 = SPINE_BYPASS_VETO_GUARD_ACTIVE
+    | SPINE_BYPASS_VETO_REPULSION_ACTIVE
+    | SPINE_BYPASS_VETO_PINNED_LOCK;
 
 /// No spine bypass veto active (`0x00`).
 pub const SPINE_BYPASS_VETO_NONE: u8 = 0x00;
@@ -137,11 +146,383 @@ pub const SPINE_BYPASS_VETO_PINNED_LOCK: u8 = 1 << 2;
 /// Minimum host-immutable compute slot bitmask (`bit 0`) preserved across untrusted snapshot restores.
 pub const HOST_IMMUTABLE_PINNED_COMPUTE_MASK: u64 = 1u64 << 0;
 
-/// Mechanical execution spine (`32 B`, `#[repr(C, align(16))]`, `DriverKind::System` = I-Frame).
+/// Spine control flag (`bit 0`): active turn holds a contradiction-guard compute pin.
+pub const SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE: u8 = 1 << 0;
+/// Spine control flag (`bit 1`): transient contradiction-guard compute pin was safely relaxed.
+pub const SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED: u8 = 1 << 1;
+/// Spine control flag (`bit 2`): `PREV_WAS_ABSTRACT` residency tracking bit is initialized for this turn.
+pub const SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID: u8 = 1 << 2;
+/// Spine control flag (`bit 3`): previous decode step ran in abstract (`whole_token_bypass_active`) residency.
+pub const SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT: u8 = 1 << 3;
+/// Spine control flag (`bit 4`): pre-inference whole-token bypass evaluation is enabled.
+pub const SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED: u8 = 1 << 4;
+/// Bitmask of all defined `SPINE_CONTROL_FLAG_*` bits (`0x1F`).
+pub const SPINE_CONTROL_KNOWN_FLAGS: u8 = SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE
+    | SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED
+    | SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID
+    | SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT
+    | SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED;
+
+/// No special spine decode step events emitted (`0x00`).
+pub const SPINE_STEP_EVENT_NONE: u8 = 0x00;
+/// Step event flag (`bit 0`): residency transitioned between abstract and concrete mode.
+pub const SPINE_STEP_EVENT_BOUNDARY_CHURN: u8 = 1 << 0;
+/// Step event flag (`bit 1`): logits observation was skipped (`Lacuna::Unobserved`) on this step.
+pub const SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED: u8 = 1 << 1;
+/// Step event flag (`bit 2`): transient contradiction-guard pin relaxed cleanly.
+pub const SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED: u8 = 1 << 2;
+/// Step event flag (`bit 3`): relaxed contradiction-guard pin re-escalated immediately on instability.
+pub const SPINE_STEP_EVENT_GUARD_REESCALATED: u8 = 1 << 3;
+/// Step event flag (`bit 4`): exit entropy surge or [`Lacuna::Undefined`] triggered instability recovery.
+pub const SPINE_STEP_EVENT_INSTABILITY_RECOVERY: u8 = 1 << 4;
+
+/// [`SpineDecodeInput`] flag (`bit 0`): phase-conjugate repulsion was active on the completed step.
+pub const SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE: u8 = 1 << 0;
+/// [`SpineDecodeInput`] flag (`bit 1`): greedy sampling (`temperature <= 1e-6`) is active.
+pub const SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING: u8 = 1 << 1;
+/// [`SpineDecodeInput`] flag (`bit 2`): pre-inference whole-token bypass evaluation is enabled.
+pub const SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED: u8 = 1 << 2;
+
+/// Sentinel `u8` (`0xFF`) delegating sensitivity or reward override selection to core spine defaults.
+pub const SPINE_SENTINEL_AUTO_U8: u8 = 0xFF;
+
+/// Unit scale (`1.0`) for normalized exit entropy in Q0.15 (`32_768`).
+pub const SPINE_ENTROPY_Q15_ONE: u16 = 32_768;
+/// Stationary exit-entropy upper bound (`0.78` in Q0.15) separating `SelfRef` from `Exterior`.
+pub const SPINE_ENTROPY_CALM_THRESH_Q15: u16 = 25_559;
+/// Maximum observed exit entropy (`0.72` in Q0.15) allowed for transient contradiction-guard relaxation.
+pub const SPINE_ENTROPY_GUARD_RELAX_MAX_Q15: u16 = 23_593;
+/// Exit entropy surge cutoff (`0.85` in Q0.15) triggering immediate full-layer instability recovery.
+pub const SPINE_ENTROPY_SURGE_THRESH_Q15: u16 = 27_853;
+/// Low-entropy reward threshold (`0.55` in Q0.15) splitting `56` vs `96` Q0.7 exit pheromone reward.
+pub const SPINE_ENTROPY_REWARD_LOW_THRESH_Q15: u16 = 18_022;
+/// Baseline entropy floor (`0.15` in Q0.15) subtracted when feeding `DistortionTension`.
+pub const SPINE_ENTROPY_TENSION_FLOOR_Q15: u16 = 4_915;
+/// Minimum dynamic logits observation stride (`2`) when dynamic subsampling (`max_observe_stride > 1`) is active.
+pub const SPINE_MIN_DYNAMIC_OBSERVE_STRIDE: u8 = 2;
+
+const SPINE_ENTROPY_CALM_THRESH_F32: f32 = 0.78;
+
+/// Logits D2H observation directive for the upcoming decode forward pass.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpineLogitsObserveMode {
+    /// Transfer full logits to host CPU for entropy observation (`0`).
+    #[default]
+    ObserveFullLogits = 0,
+    /// Keep logits on device and fetch only the greedy argmax token ID (`1`).
+    SkipToDeviceArgmax = 1,
+}
+
+impl SpineLogitsObserveMode {
+    /// Returns the compact `u8` discriminant (`0` = `ObserveFullLogits`, `1` = `SkipToDeviceArgmax`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        self as u8
+    }
+
+    /// Decodes a `u8` discriminant, defaulting fail-safe to [`Self::ObserveFullLogits`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::SkipToDeviceArgmax,
+            _ => Self::ObserveFullLogits,
+        }
+    }
+}
+
+/// Abstract zero-allocation observation boundary consumed by `RuntimeContext::step_decode_control`
+/// via static generics (monomorphization, `0 alloc`, `0` host-runtime coupling).
+pub trait SpineDecodeSignal {
+    /// Returns the external `+ System` Gauge-Zero pressure reading for the next step.
+    fn pressure_reading(&self) -> SystemPressureReading;
+
+    /// Returns the 4-state [`Lacuna`] classification of exit-logit entropy for the completed step.
+    fn exit_entropy_lacuna(&self) -> Lacuna;
+
+    /// Returns the observed exit-logit entropy in Q0.15 (`0..=32768`) when `exit_entropy_lacuna().observed()`.
+    fn observed_exit_entropy_q15(&self) -> u16;
+
+    /// Returns the $4p(1-p)$ boundary sensitivity in Q0.7 (`0..=127`), or [`SPINE_SENTINEL_AUTO_U8`]
+    /// (`0xFF`) to fall back to the active context's `last_lacuna_partition.boundary_sensitivity_q7`.
+    fn boundary_sensitivity_q7(&self) -> u8;
+
+    /// Returns the 0-based index of the decode step that just completed (`step_idx`).
+    fn decode_step_index(&self) -> u16;
+
+    /// Returns `true` when phase-conjugate repulsion fired on the completed step.
+    fn repulsion_active(&self) -> bool;
+
+    /// Returns `true` when decoding runs deterministically (`temperature <= 1e-6`).
+    fn greedy_sampling(&self) -> bool;
+
+    /// Minimum consecutive calm decode steps required before re-engaging whole-token bypass (`default = 2`).
+    #[inline(always)]
+    fn min_calm_dwell(&self) -> u8 {
+        2
+    }
+
+    /// Optional Q0.7 pheromone exit reward override (`0..=127`), or [`SPINE_SENTINEL_AUTO_U8`] (`0xFF`)
+    /// to compute the reward inside core from the latest observed entropy (`< 0.55` -> `56`, else `96`).
+    #[inline(always)]
+    fn exit_reward_override_q7(&self) -> u8 {
+        SPINE_SENTINEL_AUTO_U8
+    }
+
+    /// Returns `true` when pre-inference whole-token steering bypass is permitted for this step.
+    #[inline(always)]
+    fn pre_bypass_enabled(&self) -> bool {
+        true
+    }
+}
+
+/// Compact 16-byte (`#[repr(C, align(16))]`, zero implicit padding) concrete [`Pod`] implementing
+/// [`SpineDecodeSignal`] for host FFI and adapter callers (`lmnk_spine_decode_input_t`).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpineDecodeInput {
+    /// External `+ System` Gauge-Zero pressure reading (`offset 0..8`).
+    pub pressure: SystemPressureReading,
+    /// Quantized exit-logit entropy in Q0.15 (`0..=32768`, `offset 8..10`).
+    pub observed_exit_entropy_q15: u16,
+    /// 0-based decode step index that just completed (`offset 10..12`).
+    pub decode_step_index: u16,
+    /// Encoded [`Lacuna`] classification (`0=Unobserved`, `1=SelfRef`, `2=Exterior`, `3=Undefined`, `offset 12`).
+    pub exit_entropy_lacuna_code: u8,
+    /// Boundary sensitivity in Q0.7 (`0..=127`), or [`SPINE_SENTINEL_AUTO_U8`] (`0xFF`, `offset 13`).
+    pub boundary_sensitivity_q7: u8,
+    /// Minimum calm dwell tokens before whole-token bypass (`0` uses default `2`, `offset 14`).
+    pub min_calm_dwell: u8,
+    /// Bitwise OR of `SPINE_DECODE_INPUT_FLAG_*` flags (`offset 15`).
+    pub flags: u8,
+}
+
+const _: () = {
+    assert!(size_of::<SpineDecodeInput>() == 16);
+    assert!(align_of::<SpineDecodeInput>() == 16);
+    assert!(offset_of!(SpineDecodeInput, pressure) == 0);
+    assert!(offset_of!(SpineDecodeInput, observed_exit_entropy_q15) == 8);
+    assert!(offset_of!(SpineDecodeInput, decode_step_index) == 10);
+    assert!(offset_of!(SpineDecodeInput, exit_entropy_lacuna_code) == 12);
+    assert!(offset_of!(SpineDecodeInput, boundary_sensitivity_q7) == 13);
+    assert!(offset_of!(SpineDecodeInput, min_calm_dwell) == 14);
+    assert!(offset_of!(SpineDecodeInput, flags) == 15);
+};
+
+// SAFETY: `SpineDecodeInput` is `#[repr(C, align(16))]`, exact size 16 bytes with zero implicit padding.
+unsafe impl Pod for SpineDecodeInput {}
+
+impl SpineDecodeInput {
+    /// Constructs a [`SpineDecodeInput`] from an observed floating-point exit-logit entropy,
+    /// encapsulating the core [`Lacuna`] classification (`NaN`/`±Inf` -> `Undefined`,
+    /// `< 0.78` -> `SelfRef`, `>= 0.78` -> `Exterior`) inside `liminika-core`.
+    #[inline]
+    #[must_use]
+    pub fn from_observed_entropy_f32(
+        pressure: SystemPressureReading,
+        decode_step_index: u16,
+        exit_entropy: f32,
+        boundary_sensitivity_q7: u8,
+        repulsion_active: bool,
+        greedy_sampling: bool,
+    ) -> Self {
+        let (lacuna, ent_q15) = if !exit_entropy.is_finite() {
+            (Lacuna::Undefined, 0)
+        } else {
+            let clamped = exit_entropy.clamp(0.0, 1.0);
+            let q15 = ((clamped * f32::from(SPINE_ENTROPY_Q15_ONE) + 0.5) as u16)
+                .min(SPINE_ENTROPY_Q15_ONE);
+            let lac = if clamped < SPINE_ENTROPY_CALM_THRESH_F32 {
+                Lacuna::SelfRef
+            } else {
+                Lacuna::Exterior
+            };
+            (lac, q15)
+        };
+        let mut flags = SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED;
+        if repulsion_active {
+            flags |= SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE;
+        }
+        if greedy_sampling {
+            flags |= SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING;
+        }
+        Self {
+            pressure,
+            observed_exit_entropy_q15: ent_q15,
+            decode_step_index,
+            exit_entropy_lacuna_code: lacuna.code(),
+            boundary_sensitivity_q7,
+            min_calm_dwell: 2,
+            flags,
+        }
+    }
+
+    /// Constructs a [`SpineDecodeInput`] representing a skipped logits observation
+    /// ([`Lacuna::Unobserved`], zero-aperture non-observation).
+    #[inline(always)]
+    #[must_use]
+    pub const fn unobserved(
+        pressure: SystemPressureReading,
+        decode_step_index: u16,
+        boundary_sensitivity_q7: u8,
+        repulsion_active: bool,
+        greedy_sampling: bool,
+    ) -> Self {
+        let mut flags = SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED;
+        if repulsion_active {
+            flags |= SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE;
+        }
+        if greedy_sampling {
+            flags |= SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING;
+        }
+        Self {
+            pressure,
+            observed_exit_entropy_q15: 0,
+            decode_step_index,
+            exit_entropy_lacuna_code: Lacuna::Unobserved.code(),
+            boundary_sensitivity_q7,
+            min_calm_dwell: 2,
+            flags,
+        }
+    }
+
+    /// Sets whether pre-inference whole-token bypass evaluation is enabled for this step.
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_pre_bypass(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.flags |= SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED;
+        } else {
+            self.flags &= !SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED;
+        }
+        self
+    }
+
+    /// Overrides the minimum consecutive calm dwell tokens required before whole-token bypass.
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_min_calm_dwell(mut self, min_calm_dwell: u8) -> Self {
+        self.min_calm_dwell = if min_calm_dwell < 2 {
+            2
+        } else {
+            min_calm_dwell
+        };
+        self
+    }
+}
+
+impl SpineDecodeSignal for SpineDecodeInput {
+    #[inline(always)]
+    fn pressure_reading(&self) -> SystemPressureReading {
+        self.pressure
+    }
+
+    #[inline(always)]
+    fn exit_entropy_lacuna(&self) -> Lacuna {
+        Lacuna::from_code(self.exit_entropy_lacuna_code)
+    }
+
+    #[inline(always)]
+    fn observed_exit_entropy_q15(&self) -> u16 {
+        self.observed_exit_entropy_q15.min(SPINE_ENTROPY_Q15_ONE)
+    }
+
+    #[inline(always)]
+    fn boundary_sensitivity_q7(&self) -> u8 {
+        self.boundary_sensitivity_q7
+    }
+
+    #[inline(always)]
+    fn decode_step_index(&self) -> u16 {
+        self.decode_step_index
+    }
+
+    #[inline(always)]
+    fn repulsion_active(&self) -> bool {
+        (self.flags & SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE) != 0
+    }
+
+    #[inline(always)]
+    fn greedy_sampling(&self) -> bool {
+        (self.flags & SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING) != 0
+    }
+
+    #[inline(always)]
+    fn min_calm_dwell(&self) -> u8 {
+        if self.min_calm_dwell < 2 {
+            2
+        } else {
+            self.min_calm_dwell
+        }
+    }
+
+    #[inline(always)]
+    fn pre_bypass_enabled(&self) -> bool {
+        (self.flags & SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED) != 0
+    }
+}
+
+/// Compact 48-byte (`#[repr(C, align(16))]`, zero implicit padding) pre-execution decode step plan
+/// emitted by `RuntimeContext::step_decode_control` (`lmnk_spine_step_plan_t`).
+#[repr(C, align(16))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SpineStepPlan {
+    /// Pre-execution compute dispatch plan for the next decode token (`offset 0..40`).
+    pub dispatch: ComputeDispatchMask,
+    /// Encoded [`SpineLogitsObserveMode`] governing logits fetch on the next decode token (`offset 40`).
+    pub next_observe_mode: u8,
+    /// Active `SPINE_BYPASS_VETO_*` bitmask evaluated for the next decode token (`offset 41`).
+    pub veto_mask: u8,
+    /// Bitwise OR of `SPINE_STEP_EVENT_*` transitions observed on this step (`offset 42`).
+    pub event_flags: u8,
+    /// Effective dynamic logits observation stride computed for the next decode token (`offset 43`).
+    pub effective_observe_stride: u8,
+    /// Explicit C alignment padding (`offset 44..48`).
+    pub reserved_align: [u8; 4],
+}
+
+const _: () = {
+    assert!(size_of::<SpineStepPlan>() == 48);
+    assert!(align_of::<SpineStepPlan>() == 16);
+    assert!(offset_of!(SpineStepPlan, dispatch) == 0);
+    assert!(offset_of!(SpineStepPlan, next_observe_mode) == 40);
+    assert!(offset_of!(SpineStepPlan, veto_mask) == 41);
+    assert!(offset_of!(SpineStepPlan, event_flags) == 42);
+    assert!(offset_of!(SpineStepPlan, effective_observe_stride) == 43);
+    assert!(offset_of!(SpineStepPlan, reserved_align) == 44);
+};
+
+// SAFETY: `SpineStepPlan` is `#[repr(C, align(16))]`, exact size 48 bytes with zero implicit padding.
+unsafe impl Pod for SpineStepPlan {}
+
+impl SpineStepPlan {
+    /// Returns [`SpineLogitsObserveMode`] decoded fail-safely from `self.next_observe_mode`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn next_observe_mode_enum(&self) -> SpineLogitsObserveMode {
+        SpineLogitsObserveMode::from_code(self.next_observe_mode)
+    }
+
+    /// Returns `true` when the next decode token runs in whole-token steering bypass (`0` D2H syncs).
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_whole_token_bypass(&self) -> bool {
+        self.dispatch.whole_token_steering_bypass != 0
+    }
+}
+
+// ===================================================================
+// 4. System Spine State & Physical `pinned` Isolation (64 B = 1 CL)
+// ===================================================================
+
+/// Mechanical execution spine (`64 B`, `#[repr(C, align(64))]`, `DriverKind::System` = I-Frame).
 ///
 /// Owns physical `pinned` masks isolating irreversible steps, memory safety, OOD aperture-0 locks,
-/// and explicit contradiction guards so `EgoDifferentialNet` masks/XORs cannot reach them.
-#[repr(C, align(16))]
+/// host permanent baseline pins (`baseline_pinned_compute_mask`), and decode bypass/stride SSOT
+/// state so `EgoDifferentialNet` masks/XORs and transient guard pins cannot corrupt host invariants.
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SystemSpineState {
     /// Physical `Liminal` aperture bits protected from Ego override (`offset 0..4`).
@@ -168,9 +549,63 @@ pub struct SystemSpineState {
     pub bypass_cooldown_steps: u8,
     /// 2-bit [`AttributionTag`] (`Liminal`/`System`, `offset 27`).
     pub attribution_tag: u8,
-    /// Explicit C alignment padding (`offset 28..32`).
-    pub reserved_align: [u8; 4],
+    /// Explicit C alignment padding for the `0..32` ABI-preserved prefix (`offset 28..32`).
+    pub reserved_half0: [u8; 4],
+    /// Permanent host compute slot pin floor protected from transient guard pin clearing (`offset 32..40`).
+    pub baseline_pinned_compute_mask: u64,
+    /// Latest finite observed exit-logit entropy in Q0.15 (`0..=32768`, `offset 40..42`).
+    pub last_observed_entropy_q15: u16,
+    /// Opening decode token hold window for transient guard pins (`0` = hold entire turn, `offset 42`).
+    pub guard_hold_tokens: u8,
+    /// Remaining concrete probe steps enforced after Slow-Loop `PassiveSaturation` (`offset 43`).
+    pub passive_saturation_probe_steps: u8,
+    /// Maximum logits observation stride (`1` = observe every token; `0` treated defensively as `1`, `offset 44`).
+    pub max_observe_stride: u8,
+    /// Consecutive unobserved whole-token bypass skips since last full-logits observation (`offset 45`).
+    pub unobserved_bypass_run: u8,
+    /// Consecutive concrete (`whole_token_bypass_active == 0`) decode steps in active turn (`offset 46`).
+    pub concrete_run_steps: u8,
+    /// Consecutive calm concrete decode steps eligible for transient guard relaxation (`offset 47`).
+    pub calm_concrete_streak: u8,
+    /// Bitwise OR of `SPINE_CONTROL_FLAG_*` state bits (`offset 48`).
+    pub control_flags: u8,
+    /// Most recent `SPINE_BYPASS_VETO_*` bitmask (`offset 49`).
+    pub last_veto_mask: u8,
+    /// Explicit C alignment padding (`offset 50..56`).
+    pub reserved_mid: [u8; 6],
+    /// Compute slot execution mask applied on the most recently dispatched step (`offset 56..64`).
+    pub last_executed_mask: u64,
 }
+
+const _: () = {
+    assert!(size_of::<SystemSpineState>() == 64);
+    assert!(align_of::<SystemSpineState>() == 64);
+    assert!(offset_of!(SystemSpineState, pinned_aperture_mask) == 0);
+    assert!(offset_of!(SystemSpineState, pinned_slot_mask) == 4);
+    assert!(offset_of!(SystemSpineState, pinned_action_mode_mask) == 5);
+    assert!(offset_of!(SystemSpineState, unobserved_locked) == 6);
+    assert!(offset_of!(SystemSpineState, irreversible_step_lock) == 7);
+    assert!(offset_of!(SystemSpineState, pinned_compute_mask) == 8);
+    assert!(offset_of!(SystemSpineState, gauge_anchor_epoch) == 16);
+    assert!(offset_of!(SystemSpineState, slow_loop_epoch) == 20);
+    assert!(offset_of!(SystemSpineState, whole_token_bypass_active) == 24);
+    assert!(offset_of!(SystemSpineState, bypass_dwell_steps) == 25);
+    assert!(offset_of!(SystemSpineState, bypass_cooldown_steps) == 26);
+    assert!(offset_of!(SystemSpineState, attribution_tag) == 27);
+    assert!(offset_of!(SystemSpineState, reserved_half0) == 28);
+    assert!(offset_of!(SystemSpineState, baseline_pinned_compute_mask) == 32);
+    assert!(offset_of!(SystemSpineState, last_observed_entropy_q15) == 40);
+    assert!(offset_of!(SystemSpineState, guard_hold_tokens) == 42);
+    assert!(offset_of!(SystemSpineState, passive_saturation_probe_steps) == 43);
+    assert!(offset_of!(SystemSpineState, max_observe_stride) == 44);
+    assert!(offset_of!(SystemSpineState, unobserved_bypass_run) == 45);
+    assert!(offset_of!(SystemSpineState, concrete_run_steps) == 46);
+    assert!(offset_of!(SystemSpineState, calm_concrete_streak) == 47);
+    assert!(offset_of!(SystemSpineState, control_flags) == 48);
+    assert!(offset_of!(SystemSpineState, last_veto_mask) == 49);
+    assert!(offset_of!(SystemSpineState, reserved_mid) == 50);
+    assert!(offset_of!(SystemSpineState, last_executed_mask) == 56);
+};
 
 impl Default for SystemSpineState {
     #[inline(always)]
@@ -181,7 +616,7 @@ impl Default for SystemSpineState {
 
 impl SystemSpineState {
     /// Constructs a canonical [`SystemSpineState`] locking SystemConstraint, ContradictionGuard,
-    /// and `ACTION_MODE_PHASE_REPULSE` in physical `pinned` storage.
+    /// and `ACTION_MODE_PHASE_REPULSE` in physical `pinned` storage with `max_observe_stride = 1`.
     #[inline(always)]
     #[must_use]
     pub const fn new() -> Self {
@@ -199,8 +634,320 @@ impl SystemSpineState {
             bypass_dwell_steps: 0,
             bypass_cooldown_steps: 0,
             attribution_tag: AttributionTag::LIMINAL_SYSTEM.raw(),
-            reserved_align: [0; 4],
+            reserved_half0: [0; 4],
+            baseline_pinned_compute_mask: 0,
+            last_observed_entropy_q15: 0,
+            guard_hold_tokens: 0,
+            passive_saturation_probe_steps: 0,
+            max_observe_stride: 1,
+            unobserved_bypass_run: 0,
+            concrete_run_steps: 0,
+            calm_concrete_streak: 0,
+            control_flags: SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED,
+            last_veto_mask: SPINE_BYPASS_VETO_NONE,
+            reserved_mid: [0; 6],
+            last_executed_mask: 0,
         }
+    }
+
+    /// Raises both permanent host baseline pins (`baseline_pinned_compute_mask`) and active
+    /// `pinned_compute_mask` so untrusted snapshots or transient guard resets cannot strip them.
+    #[inline(always)]
+    pub const fn apply_host_pin_floor(&mut self, required_pinned_mask: u64) {
+        self.baseline_pinned_compute_mask |= required_pinned_mask;
+        self.pinned_compute_mask |= required_pinned_mask;
+    }
+
+    /// Replaces `baseline_pinned_compute_mask` (used when model geometry rebinds) and updates
+    /// `pinned_compute_mask` without dropping [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`].
+    #[inline(always)]
+    pub const fn set_baseline_pin_mask(&mut self, baseline_mask: u64) {
+        let safe_base = baseline_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        self.baseline_pinned_compute_mask = safe_base;
+        self.pinned_compute_mask = safe_base;
+    }
+
+    /// Arms a transient turn-local compute guard pin (`active_mask`) without polluting
+    /// `baseline_pinned_compute_mask`.
+    #[inline(always)]
+    pub const fn arm_transient_guard_pin(&mut self, active_mask: u64) {
+        self.pinned_compute_mask |= active_mask | self.baseline_pinned_compute_mask;
+    }
+
+    /// Restores `pinned_compute_mask` strictly to `baseline_pinned_compute_mask` plus
+    /// [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`], clearing any transient guard pin bits.
+    #[inline(always)]
+    pub const fn restore_baseline_pin_mask(&mut self) {
+        self.pinned_compute_mask =
+            self.baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+    }
+
+    /// Returns `true` when the active turn holds a contradiction-guard compute pin.
+    #[inline(always)]
+    #[must_use]
+    pub const fn turn_guard_active(&self) -> bool {
+        (self.control_flags & SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE) != 0
+    }
+
+    /// Sets or clears `SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE`.
+    #[inline(always)]
+    pub const fn set_turn_guard_active(&mut self, active: bool) {
+        if active {
+            self.control_flags |= SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE;
+        } else {
+            self.control_flags &= !SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE;
+        }
+    }
+
+    /// Returns `true` when the active turn's transient contradiction-guard pin was relaxed.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_transient_guard_relaxed(&self) -> bool {
+        (self.control_flags & SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED) != 0
+    }
+
+    /// Sets or clears `SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED`.
+    #[inline(always)]
+    pub const fn set_transient_guard_relaxed(&mut self, relaxed: bool) {
+        if relaxed {
+            self.control_flags |= SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED;
+        } else {
+            self.control_flags &= !SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED;
+        }
+    }
+
+    /// Returns `true` when pre-inference whole-token bypass evaluation is enabled.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_pre_bypass_enabled(&self) -> bool {
+        (self.control_flags & SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED) != 0
+    }
+
+    /// Sets or clears `SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED`.
+    #[inline(always)]
+    pub const fn set_pre_bypass_enabled(&mut self, enabled: bool) {
+        if enabled {
+            self.control_flags |= SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED;
+        } else {
+            self.control_flags &= !SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED;
+        }
+    }
+
+    /// Returns `max_observe_stride` clamped defensively to `>= 1` (safe even after zeroization).
+    #[inline(always)]
+    #[must_use]
+    pub const fn effective_max_observe_stride(&self) -> u8 {
+        if self.max_observe_stride == 0 {
+            1
+        } else {
+            self.max_observe_stride
+        }
+    }
+
+    /// Configures `max_observe_stride` (`>= 1`, where `1` forces logits observation on every token).
+    #[inline(always)]
+    pub const fn set_max_observe_stride(&mut self, stride: u8) {
+        self.max_observe_stride = if stride == 0 { 1 } else { stride };
+    }
+
+    /// Computes effective logits observation stride (`>= 2` when `max_observe_stride > 1`, else `1`)
+    /// branchlessly with `0 fdiv`, shrinking monotonically as boundary/entropy sensitivity rises.
+    #[inline(always)]
+    #[must_use]
+    pub const fn compute_effective_observe_stride(&self, sensitivity_q7: u8) -> u8 {
+        let max_s = self.effective_max_observe_stride();
+        let is_dynamic = max_s > 1;
+        // Map last_observed_entropy_q15 / (2 * 0.78) * 127 into [0..=64] with integer multiply-shift.
+        let p_ent_raw = ((self.last_observed_entropy_q15 as u32) * 163) >> 16;
+        let p_ent_q7 = if p_ent_raw > 64 { 64 } else { p_ent_raw as u8 };
+        let ent_sens_q7 = sensitivity_4p1mp_q7(p_ent_q7);
+        let eff_sens_q7 = if sensitivity_q7 > ent_sens_q7 {
+            sensitivity_q7
+        } else {
+            ent_sens_q7
+        };
+        let span = max_s.saturating_sub(SPINE_MIN_DYNAMIC_OBSERVE_STRIDE);
+        let shrink_raw = (((span as u16) * (eff_sens_q7 as u16) + 64) >> 7) as u8;
+        let shrink = if shrink_raw > span { span } else { shrink_raw };
+        let dyn_stride = max_s.saturating_sub(shrink);
+        branchless_select_u8(is_dynamic, dyn_stride, 1)
+    }
+
+    /// Selects the logits observation mode for `next_step_index` without allocation or `fdiv`,
+    /// returning `(next_observe_mode, effective_observe_stride)`. Step `0` (`next_step_index == 0`),
+    /// non-greedy sampling, concrete steering steps, and `max_observe_stride <= 1` always require
+    /// [`SpineLogitsObserveMode::ObserveFullLogits`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn select_next_observe_mode(
+        &self,
+        next_step_index: u16,
+        greedy_sampling: bool,
+        next_whole_token_bypass: bool,
+        sensitivity_q7: u8,
+    ) -> (SpineLogitsObserveMode, u8) {
+        let stride = self.compute_effective_observe_stride(sensitivity_q7);
+        let can_skip = (stride > 1)
+            & greedy_sampling
+            & (next_step_index > 0)
+            & next_whole_token_bypass
+            & (self.unobserved_bypass_run.saturating_add(1) < stride);
+        let mode = if can_skip {
+            SpineLogitsObserveMode::SkipToDeviceArgmax
+        } else {
+            SpineLogitsObserveMode::ObserveFullLogits
+        };
+        (mode, stride)
+    }
+
+    /// Arms asymmetric bypass recovery cooldown on exit instability or `Lacuna::Undefined`.
+    #[inline(always)]
+    pub const fn arm_bypass_cooldown(&mut self, cooldown_steps: u8) {
+        let min_cd = if cooldown_steps == 0 {
+            1
+        } else {
+            cooldown_steps
+        };
+        if self.bypass_cooldown_steps < min_cd {
+            self.bypass_cooldown_steps = min_cd;
+        }
+        self.bypass_dwell_steps = 0;
+        self.whole_token_bypass_active = 0;
+    }
+
+    /// Resets per-turn whole-token bypass dwell, cooldown, concrete streaks, and residency
+    /// history while preserving session configuration (`baseline_pinned_compute_mask`,
+    /// `guard_hold_tokens`, `max_observe_stride`, and `PRE_BYPASS_ENABLED`).
+    #[inline(always)]
+    pub const fn reset_turn_bypass_state(&mut self) {
+        self.whole_token_bypass_active = 0;
+        self.bypass_dwell_steps = 0;
+        self.bypass_cooldown_steps = 0;
+        self.unobserved_bypass_run = 0;
+        self.concrete_run_steps = 0;
+        self.calm_concrete_streak = 0;
+        self.last_veto_mask = SPINE_BYPASS_VETO_NONE;
+        self.control_flags &=
+            !(SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID | SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT);
+    }
+
+    /// Clears bypass dwell, cooldown, and concrete streaks (preserving residency valid flags).
+    #[inline(always)]
+    pub const fn reset_turn_bypass_counters_only(&mut self) {
+        self.whole_token_bypass_active = 0;
+        self.bypass_dwell_steps = 0;
+        self.bypass_cooldown_steps = 0;
+        self.concrete_run_steps = 0;
+        self.calm_concrete_streak = 0;
+    }
+
+    /// Returns `true` when a transient contradiction-guard compute pin may safely relax toward
+    /// low-cost bypass (`guard_hold_tokens == 0` disables relaxation and holds the entire turn).
+    #[inline(always)]
+    #[must_use]
+    pub const fn can_relax_transient_guard_pin(
+        &self,
+        guard_hold_tokens: u8,
+        liminal_stationary: u8,
+        repulsion_active: bool,
+        exit_entropy_rising: bool,
+        min_calm_dwell: u8,
+    ) -> bool {
+        let req_calm = if min_calm_dwell < 2 {
+            2
+        } else {
+            min_calm_dwell
+        };
+        (guard_hold_tokens > 0)
+            & !repulsion_active
+            & !exit_entropy_rising
+            & (liminal_stationary != 0)
+            & (self.concrete_run_steps >= guard_hold_tokens)
+            & (self.calm_concrete_streak >= req_calm)
+    }
+
+    /// Clears transient guard-induced cooldown lag and seeds `bypass_dwell_steps` once
+    /// post-hold guard pin relaxation is authorized so bypass engages smoothly.
+    #[inline(always)]
+    pub const fn on_transient_guard_relaxed(&mut self, min_calm_dwell: u8) {
+        let req_calm = if min_calm_dwell < 2 {
+            2
+        } else {
+            min_calm_dwell
+        };
+        self.bypass_cooldown_steps = 0;
+        if self.bypass_dwell_steps < req_calm {
+            self.bypass_dwell_steps = req_calm;
+        }
+    }
+
+    /// Evaluates whole-token steering bypass directly on `self` (`0 alloc`, `0 fdiv`) and updates
+    /// `bypass_dwell_steps`, `bypass_cooldown_steps`, `whole_token_bypass_active`,
+    /// `concrete_run_steps`, `calm_concrete_streak`, and `dispatch.whole_token_steering_bypass`.
+    #[inline]
+    pub const fn evaluate_whole_token_bypass_branchless(
+        &mut self,
+        obs: TokenBypassObservation,
+        spine_vetoed: bool,
+        min_cooldown_steps: u8,
+        dispatch: &mut ComputeDispatchMask,
+    ) -> bool {
+        let raw_irreversible = obs.irreversible_step != 0;
+        let unsafe_or_boundary = raw_irreversible
+            | spine_vetoed
+            | (obs.repulsion_active != 0)
+            | (obs.exit_entropy_rising != 0)
+            | (obs.boundary_sensitivity_q7 >= 80)
+            | (obs.ego_active_boundary != 0);
+
+        let min_cd = if min_cooldown_steps < 2 {
+            2
+        } else {
+            min_cooldown_steps
+        };
+        let req_dwell = if obs.min_calm_dwell < 2 {
+            2
+        } else {
+            obs.min_calm_dwell
+        };
+
+        let ready = if unsafe_or_boundary {
+            self.bypass_dwell_steps = 0;
+            if self.bypass_cooldown_steps < min_cd {
+                self.bypass_cooldown_steps = min_cd;
+            }
+            false
+        } else {
+            self.bypass_cooldown_steps = self.bypass_cooldown_steps.saturating_sub(1);
+            if obs.liminal_stationary == 0 {
+                self.bypass_dwell_steps = 0;
+                false
+            } else {
+                self.bypass_dwell_steps = self.bypass_dwell_steps.saturating_add(1);
+                (self.bypass_cooldown_steps == 0) & (self.bypass_dwell_steps >= req_dwell)
+            }
+        };
+
+        let ready_u8 = ready as u8;
+        self.whole_token_bypass_active = ready_u8;
+        dispatch.whole_token_steering_bypass = ready_u8;
+
+        // Track concrete decode streaks independently of spine-vetoed `bypass_dwell_steps`
+        // so transient guard pins can relax after holding the opening window.
+        let is_concrete = !ready;
+        self.concrete_run_steps =
+            branchless_select_u8(is_concrete, self.concrete_run_steps.saturating_add(1), 0);
+        let is_calm_concrete = is_concrete
+            & !raw_irreversible
+            & (obs.repulsion_active == 0)
+            & (obs.exit_entropy_rising == 0)
+            & (obs.liminal_stationary != 0);
+        self.calm_concrete_streak = branchless_select_u8(
+            is_calm_concrete,
+            self.calm_concrete_streak.saturating_add(1),
+            0,
+        );
+        ready
     }
 
     /// Physical `pinned` isolation barrier ensuring Ego modulation never mutates pinned apertures.
@@ -387,7 +1134,7 @@ impl SystemSpineState {
     }
 }
 
-// SAFETY: `SystemSpineState` is `#[repr(C, align(16))]`, exact size 32 bytes with zero padding.
+// SAFETY: `SystemSpineState` is `#[repr(C, align(64))]`, exact size 64 bytes with zero implicit padding.
 unsafe impl Pod for SystemSpineState {}
 
 #[cfg(test)]
@@ -595,6 +1342,99 @@ mod tests {
         assert_eq!(
             spine.evaluate_frame_transition_branchless(undefined_in),
             (FrameDirective::RejectUndefined, 0)
+        );
+    }
+
+    #[test]
+    fn spine_decode_input_encapsulates_lacuna_thresholds_and_sentinel() {
+        let p = SystemPressureReading::default();
+        let calm = SpineDecodeInput::from_observed_entropy_f32(p, 0, 0.50, 12, false, true);
+        assert_eq!(calm.exit_entropy_lacuna(), Lacuna::SelfRef);
+        assert!(
+            calm.observed_exit_entropy_q15() > 16000 && calm.observed_exit_entropy_q15() < 16600
+        );
+        assert!(calm.greedy_sampling());
+        assert!(!calm.repulsion_active());
+        assert!(calm.pre_bypass_enabled());
+        assert_eq!(calm.exit_reward_override_q7(), SPINE_SENTINEL_AUTO_U8);
+
+        let boundary = SpineDecodeInput::from_observed_entropy_f32(p, 1, 0.78, 12, false, true);
+        assert_eq!(boundary.exit_entropy_lacuna(), Lacuna::Exterior);
+
+        let unobs = SpineDecodeInput::unobserved(p, 2, 16, true, true).with_pre_bypass(false);
+        assert_eq!(unobs.exit_entropy_lacuna(), Lacuna::Unobserved);
+        assert_eq!(unobs.observed_exit_entropy_q15(), 0);
+        assert!(unobs.repulsion_active());
+        assert!(!unobs.pre_bypass_enabled());
+
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let undef = SpineDecodeInput::from_observed_entropy_f32(p, 3, bad, 0, false, true);
+            assert_eq!(undef.exit_entropy_lacuna(), Lacuna::Undefined);
+            assert_eq!(undef.observed_exit_entropy_q15(), 0);
+        }
+    }
+
+    #[test]
+    fn spine_observe_stride_shrinks_monotonically_and_guards_baseline_pins() {
+        let mut spine = SystemSpineState::new();
+        assert_eq!(spine.effective_max_observe_stride(), 1);
+        assert_eq!(spine.compute_effective_observe_stride(0), 1);
+
+        // Zero-defensive fallback: even all-zero spine operates at stride 1.
+        let zeroed = SystemSpineState {
+            max_observe_stride: 0,
+            ..SystemSpineState::new()
+        };
+        assert_eq!(zeroed.effective_max_observe_stride(), 1);
+        assert_eq!(
+            zeroed.select_next_observe_mode(3, true, true, 0),
+            (SpineLogitsObserveMode::ObserveFullLogits, 1)
+        );
+
+        spine.set_max_observe_stride(8);
+        let mut prev_stride = u8::MAX;
+        for &(sens_q7, ent_f32) in &[(0u8, 0.0f32), (24, 0.25), (48, 0.50), (64, 0.78)] {
+            spine.last_observed_entropy_q15 = ((ent_f32 * f32::from(SPINE_ENTROPY_Q15_ONE) + 0.5)
+                as u16)
+                .min(SPINE_ENTROPY_Q15_ONE);
+            let s = spine.compute_effective_observe_stride(sens_q7);
+            assert!((2..=8).contains(&s));
+            assert!(s <= prev_stride);
+            prev_stride = s;
+        }
+        spine.last_observed_entropy_q15 = 0;
+        assert_eq!(spine.compute_effective_observe_stride(0), 8);
+        spine.last_observed_entropy_q15 = SPINE_ENTROPY_CALM_THRESH_Q15;
+        assert_eq!(spine.compute_effective_observe_stride(126), 2);
+
+        // Step 0, non-greedy, and non-bypass always observe full logits.
+        spine.last_observed_entropy_q15 = 0;
+        assert_eq!(
+            spine.select_next_observe_mode(0, true, true, 0),
+            (SpineLogitsObserveMode::ObserveFullLogits, 8)
+        );
+        assert_eq!(
+            spine.select_next_observe_mode(1, false, true, 0),
+            (SpineLogitsObserveMode::ObserveFullLogits, 8)
+        );
+        assert_eq!(
+            spine.select_next_observe_mode(1, true, false, 0),
+            (SpineLogitsObserveMode::ObserveFullLogits, 8)
+        );
+        assert_eq!(
+            spine.select_next_observe_mode(1, true, true, 0),
+            (SpineLogitsObserveMode::SkipToDeviceArgmax, 8)
+        );
+
+        // Transient guard pin does not pollute baseline_pinned_compute_mask.
+        spine.apply_host_pin_floor(0b0000_1010);
+        spine.arm_transient_guard_pin(0xFFFF_FFFF);
+        assert_eq!(spine.baseline_pinned_compute_mask, 0b0000_1010);
+        assert_eq!(spine.pinned_compute_mask, 0xFFFF_FFFF);
+        spine.restore_baseline_pin_mask();
+        assert_eq!(
+            spine.pinned_compute_mask,
+            0b0000_1010 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
         );
     }
 }

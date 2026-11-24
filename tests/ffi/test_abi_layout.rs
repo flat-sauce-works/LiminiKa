@@ -7,8 +7,8 @@
 fn test_lmnk_types_abi_layout_invariants() {
     use std::mem::{align_of, needs_drop, offset_of, size_of};
 
-    assert_eq!(liminika_core::abi::LMNK_ABI_VERSION_HEX, 0x0000_0200);
-    assert_eq!(liminika_core::abi::LMNK_ABI_VERSION_STRING, "0.2.0");
+    assert_eq!(liminika_core::abi::LMNK_ABI_VERSION_HEX, 0x0000_0300);
+    assert_eq!(liminika_core::abi::LMNK_ABI_VERSION_STRING, "0.3.0");
 
     // Verify 128-byte, 64-byte-aligned lmnk_pointer_trail_t
     assert_eq!(size_of::<liminika_core::abi::lmnk_pointer_trail_t>(), 128);
@@ -398,7 +398,7 @@ fn test_lmnk_types_abi_layout_invariants() {
         1 << 2
     );
 
-    // Unified v0.2.0 2 Primitives x 2 Drivers & Distortion ABI types
+    // Unified v0.3.0 2 Primitives x 2 Drivers & Distortion ABI types
     assert_eq!(size_of::<liminika_core::abi::lmnk_attribution_tag_t>(), 1);
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_core_primitive_state_t>(),
@@ -428,8 +428,8 @@ fn test_lmnk_types_abi_layout_invariants() {
         ),
         8
     );
-    assert_eq!(size_of::<liminika_core::abi::lmnk_spine_state_t>(), 32);
-    assert_eq!(align_of::<liminika_core::abi::lmnk_spine_state_t>(), 16);
+    assert_eq!(size_of::<liminika_core::abi::lmnk_spine_state_t>(), 64);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_spine_state_t>(), 64);
     assert_eq!(
         offset_of!(liminika_core::abi::lmnk_spine_state_t, pinned_compute_mask),
         8
@@ -440,6 +440,77 @@ fn test_lmnk_types_abi_layout_invariants() {
             whole_token_bypass_active
         ),
         24
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_state_t, reserved_half0),
+        28
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_spine_state_t,
+            baseline_pinned_compute_mask
+        ),
+        32
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_spine_state_t,
+            last_observed_entropy_q15
+        ),
+        40
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_state_t, guard_hold_tokens),
+        42
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_state_t, max_observe_stride),
+        44
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_state_t, control_flags),
+        48
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_state_t, last_veto_mask),
+        49
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_state_t, last_executed_mask),
+        56
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_system_pressure_reading_t>(),
+        8
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_system_pressure_reading_t>(),
+        2
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_compute_dispatch_mask_t>(),
+        40
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_compute_dispatch_mask_t>(),
+        8
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_spine_decode_input_t>(),
+        16
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_spine_decode_input_t>(),
+        16
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_spine_step_plan_t>(), 48);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_spine_step_plan_t>(), 16);
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_spine_step_plan_t,
+            next_observe_mode
+        ),
+        40
     );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_distortion_delta_t>(),

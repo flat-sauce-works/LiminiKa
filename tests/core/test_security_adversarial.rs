@@ -1192,12 +1192,14 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
             .unwrap(),
     ) as usize;
 
-    // 1. Valid CRC32 snapshot trying to zero out pinned_compute_mask and slot_pinned_mask
-    //    must preserve host floor bits and HOST_IMMUTABLE_PINNED_COMPUTE_MASK.
+    // 1. Valid CRC32 snapshot trying to zero out pinned_compute_mask, baseline_pinned_compute_mask,
+    //    and slot_pinned_mask must preserve host floor bits and HOST_IMMUTABLE_PINNED_COMPUTE_MASK.
     let mut priv_snap = snap.clone();
-    // Payload offset 21 is slot_pinned_mask; payload offset 320 + 8 = 328 is SystemSpineState.pinned_compute_mask.
+    // Payload offset 21 is slot_pinned_mask; 320 + 8 = 328 is pinned_compute_mask;
+    // 320 + 32 = 352 is SystemSpineState.baseline_pinned_compute_mask.
     priv_snap[sec_off + 21] = 0;
     priv_snap[sec_off + 328..sec_off + 336].copy_from_slice(&0u64.to_le_bytes());
+    priv_snap[sec_off + 352..sec_off + 360].copy_from_slice(&0u64.to_le_bytes());
     restamp_snapshot_crcs(&mut priv_snap);
 
     let mut dst = RuntimeContext::new_boxed(Config::new()).expect("dst ctx");
@@ -1205,11 +1207,28 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
     dst.substrate_mut().slot_pinned_mask = 0x05;
     dst.deserialize_from_bytes(&priv_snap).expect("deserialize");
     assert_ne!(
+        dst.system_spine().baseline_pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+        0
+    );
+    assert_eq!(dst.system_spine().baseline_pinned_compute_mask & 0x0E, 0x0E);
+    assert_ne!(
         dst.system_spine().pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
         0
     );
     assert_eq!(dst.system_spine().pinned_compute_mask & 0x0E, 0x0E);
     assert_eq!(dst.slot_pinned_mask() & 0x05, 0x05);
+
+    // 1b. Active transient turn-guard pins must not bleed into permanent host floor on restore.
+    let active_mask = 0xFFFF_u64;
+    dst.compute_pool_mut()
+        .set_slot_masks(active_mask, 0x0F, 0, active_mask & !0x0F);
+    dst.system_spine_mut().set_baseline_pin_mask(0x0F);
+    dst.begin_turn_spine_policy(true, false);
+    assert_eq!(dst.system_spine().pinned_compute_mask, active_mask);
+    dst.deserialize_from_bytes(&snap)
+        .expect("restore unguarded");
+    assert_eq!(dst.system_spine().baseline_pinned_compute_mask, 0x0F);
+    assert_eq!(dst.system_spine().pinned_compute_mask, 0x0F);
 
     // 2. Transactional rejection of valid-CRC32 corrupted snapshots: dst must remain untouched!
     dst.substrate_mut().step_counter = 999;
@@ -1257,6 +1276,20 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
         (
             "Out-of-range active_count",
             Box::new(|b, off| b[off + 8..off + 12].copy_from_slice(&999u32.to_le_bytes())),
+        ),
+        (
+            "Invalid SystemSpineState.control_flags",
+            Box::new(|b, off| b[off + 320 + 48] = 0x80),
+        ),
+        (
+            "Out-of-range SystemSpineState.last_observed_entropy_q15",
+            Box::new(|b, off| {
+                b[off + 320 + 40..off + 320 + 42].copy_from_slice(&40_000u16.to_le_bytes())
+            }),
+        ),
+        (
+            "Invalid SystemSpineState.last_veto_mask",
+            Box::new(|b, off| b[off + 320 + 49] = 0x80),
         ),
     ];
 

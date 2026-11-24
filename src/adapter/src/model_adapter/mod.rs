@@ -388,20 +388,13 @@ pub struct ModelSteeringAdapter {
     escalation_boundary_dirty: bool,
     last_escalated_regime: u8,
     active_workbench_preset: WorkbenchPreset,
-    baseline_pinned_compute_mask: u64,
     sandbox_settlement_streak: u8,
     prev_sandbox_coherence: f32,
     prev_sandbox_assim_drift: f32,
-    turn_guard_active: bool,
-    transient_guard_relaxed: bool,
-    guard_hold_tokens: u8,
-    passive_saturation_probe_steps: u8,
 }
 
 impl Drop for ModelSteeringAdapter {
     fn drop(&mut self) {
-        self.turn_guard_active = false;
-        self.transient_guard_relaxed = false;
         self.ctx.zeroize_in_place();
         self.configured_ego = LiminalEgoState::new();
         self.residual_adapter = ResidualAdapterEngine::default();
@@ -480,7 +473,12 @@ impl ModelSteeringAdapter {
             Self::compute_slot_masks(geometry.num_layers);
         ctx.compute_pool_mut()
             .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
-        ctx.apply_host_spine_pin_floor(pinned_slots);
+        {
+            let spine = ctx.system_spine_mut();
+            spine.set_baseline_pin_mask(pinned_slots);
+            spine.guard_hold_tokens = Self::DEFAULT_GUARD_HOLD_TOKENS;
+            spine.set_max_observe_stride(1);
+        }
 
         *ctx.last_horizon_mut() = EpistemicHorizonReading {
             total_memory_support: 1.0,
@@ -504,14 +502,9 @@ impl ModelSteeringAdapter {
             escalation_boundary_dirty: true,
             last_escalated_regime: EpistemicRegime::KnownCoherent as u8,
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
-            baseline_pinned_compute_mask: pinned_slots,
             sandbox_settlement_streak: 0,
             prev_sandbox_coherence: 0.0,
             prev_sandbox_assim_drift: 1.0,
-            turn_guard_active: false,
-            transient_guard_relaxed: false,
-            guard_hold_tokens: Self::DEFAULT_GUARD_HOLD_TOKENS,
-            passive_saturation_probe_steps: 0,
         })
     }
 }

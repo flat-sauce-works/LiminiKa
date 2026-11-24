@@ -174,6 +174,28 @@ fn test_zero_alloc_in_place_context_lifecycle() {
             LMNK_OK
         );
         assert_eq!(trail_out.step_count, 1);
+        assert_eq!(
+            liminika_core::abi::lmnk_context_begin_turn_spine_policy(ctx_handle, 0, 0),
+            LMNK_OK
+        );
+        let decode_in = liminika_core::abi::lmnk_spine_decode_input_t::from_observed_entropy_f32(
+            liminika_core::abi::lmnk_system_pressure_reading_t::default(),
+            0,
+            0.35,
+            8,
+            false,
+            true,
+        );
+        let mut decode_plan = liminika_core::abi::lmnk_spine_step_plan_t::default();
+        assert_eq!(
+            liminika_core::abi::lmnk_context_step_decode_control(
+                ctx_handle,
+                &decode_in,
+                0,
+                &mut decode_plan
+            ),
+            LMNK_OK
+        );
         assert_eq!(lmnk_context_reset(ctx_handle), LMNK_OK);
         assert_eq!(lmnk_context_deinit_in_place(ctx_handle), LMNK_OK);
         assert!(backing.0[..req_size].iter().all(|&b| b == 0));
@@ -358,7 +380,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         _pad: 0,
     });
     ctx.commit_compute_exit_reward(dispatch.execute_mask, 96);
-    let _ = ctx.compute_pool_mut().evaluate_whole_token_steering_bypass(
+    let _ = ctx.evaluate_whole_token_bypass_with_spine(
         liminika_core::drivers::TokenBypassObservation {
             irreversible_step: 0,
             liminal_stationary: 1,
@@ -369,7 +391,37 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
             min_calm_dwell: 2,
             _pad: 0,
         },
+        false,
         &mut dispatch,
+    );
+    ctx.begin_turn_spine_policy(false, false);
+    let pressure = liminika_core::drivers::SystemPressureReading::default();
+    let _ = ctx.step_decode_control(
+        &liminika_core::drivers::SpineDecodeInput::from_observed_entropy_f32(
+            pressure, 0, 0.35, 8, false, true,
+        ),
+        false,
+    );
+    let _ = ctx.step_decode_control(
+        &liminika_core::drivers::SpineDecodeInput::unobserved(pressure, 1, 8, false, true),
+        false,
+    );
+    let _ = ctx.step_decode_control(
+        &liminika_core::drivers::SpineDecodeInput::from_observed_entropy_f32(
+            pressure, 2, 0.90, 96, false, true,
+        ),
+        false,
+    );
+    let _ = ctx.step_decode_control(
+        &liminika_core::drivers::SpineDecodeInput::from_observed_entropy_f32(
+            pressure,
+            3,
+            f32::NAN,
+            8,
+            false,
+            true,
+        ),
+        false,
     );
     let part = liminika_core::evaluate_lacuna_partition_branchless(
         0b0000_0011,

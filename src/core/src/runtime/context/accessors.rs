@@ -291,14 +291,16 @@ impl RuntimeContext {
             .commit_exit_reward(executed_mask, reward_q7);
     }
 
-    /// Resets per-turn bypass dwell, cooldown, and concrete streak counters on the compute pool.
+    /// Resets per-turn bypass dwell, cooldown, and concrete streak counters across both the
+    /// compute pool and [`SystemSpineState`].
     #[inline(always)]
     pub const fn reset_turn_bypass_state(&mut self) {
         self.compute_pool.reset_turn_bypass_state();
+        self.system_spine.reset_turn_bypass_state();
     }
 
-    /// Returns `true` when the embedded [`AnonymousComputePool`] allows relaxing a transient
-    /// contradiction-guard compute pin back toward bypass.
+    /// Returns `true` when [`SystemSpineState`] allows relaxing a transient contradiction-guard
+    /// compute pin back toward bypass.
     #[inline(always)]
     #[must_use]
     pub const fn can_relax_transient_guard_pin(
@@ -309,7 +311,7 @@ impl RuntimeContext {
         exit_entropy_rising: bool,
         min_calm_dwell: u8,
     ) -> bool {
-        self.compute_pool.can_relax_transient_guard_pin(
+        self.system_spine.can_relax_transient_guard_pin(
             guard_hold_tokens,
             liminal_stationary,
             repulsion_active,
@@ -318,11 +320,22 @@ impl RuntimeContext {
         )
     }
 
-    /// Clears transient guard-induced cooldown lag and seeds `whole_token_calm_dwell` once
-    /// post-hold relaxation is authorized.
+    /// Clears transient guard-induced cooldown lag on both the compute pool and [`SystemSpineState`]
+    /// and seeds `bypass_dwell_steps` once post-hold relaxation is authorized.
     #[inline(always)]
     pub const fn on_transient_guard_relaxed(&mut self, min_calm_dwell: u8) {
-        self.compute_pool.on_transient_guard_relaxed(min_calm_dwell);
+        self.compute_pool.re_bypass_cooldown = 0;
+        self.system_spine.on_transient_guard_relaxed(min_calm_dwell);
+    }
+
+    /// Triggers exit instability recovery across both [`AnonymousComputePool`] and [`SystemSpineState`],
+    /// arming asymmetric re-bypass cooldowns and recording an instability recovery telemetry event.
+    #[inline]
+    pub fn signal_compute_instability(&mut self) {
+        let cooldown = self.compute_pool.config.min_re_bypass_dwell.max(2);
+        self.compute_pool.signal_exit_instability();
+        self.system_spine.arm_bypass_cooldown(cooldown);
+        self.telemetry.record_instability_recovery();
     }
 
     /// Updates the [`TelemetryCapturePolicy`] governing verbosity transitions (`Coarse` / `Standard` / `Detailed`).

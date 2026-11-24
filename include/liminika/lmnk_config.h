@@ -6,7 +6,7 @@
  * @brief LiminiKa C11/C++20 ABI portability, compiler attribute, and static assertion macros.
  *
  * Designed for clean cross-platform compilation across MSVC, GCC, Clang, and embedded/WebAssembly
- * toolchains (`#![no_std]` Rust FFI counterpart: `liminika-core` v0.2.0 / `0x00000200`).
+ * toolchains (`#![no_std]` Rust FFI counterpart: `liminika-core` v0.3.0 / `0x00000300`).
  */
 
 #ifndef LIMINIKA_LMNK_CONFIG_H

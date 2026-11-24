@@ -31,7 +31,7 @@ const _: () = {
                 | (LMNK_ABI_VERSION_MINOR << 8)
                 | LMNK_ABI_VERSION_PATCH)
     );
-    assert!(LMNK_ABI_VERSION_HEX >= 0x0000_0200);
+    assert!(LMNK_ABI_VERSION_HEX >= 0x0000_0300);
     assert!(MAX_ATTRACTOR_DOMAINS == 8);
     assert!(MAX_ATTENTION_HEADS == 64);
     assert!(NUM_STIGMERGIC_GRANULES * HEADS_PER_STIGMERGIC_GRANULE == MAX_ATTENTION_HEADS);

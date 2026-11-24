@@ -3,7 +3,7 @@
 
 //! C-ABI constants, status codes, `#[repr(C)]` POD aliases (`lmnk_*_t`),
 //! Portable Device-Ready POD vs Host FFI Descriptor wire contract, and compile-time
-//! layout assertions for `LiminiKa` `v0.2.0` (`0x0000_0200`).
+//! layout assertions for `LiminiKa` `v0.3.0` (`0x0000_0300`).
 //!
 //! # Portable Wire & Device Contract
 //! - **Byte Order**: All multi-byte scalars and `u64` SWAR words use **Canonical Little-Endian**.
@@ -16,8 +16,18 @@
 use super::*;
 
 pub use crate::drivers::{
-    DistortionDelta, DistortionTension, EgoIntentAxes, EntropyController, EntropyState,
-    LiminalEgoState, SystemSpineState,
+    ComputeDispatchMask, DistortionDelta, DistortionTension, EgoIntentAxes, EntropyController,
+    EntropyState, LiminalEgoState, SpineDecodeInput, SpineStepPlan, SystemPressureReading,
+    SystemSpineState, SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_KNOWN_MASK,
+    SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
+    SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID, SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT,
+    SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED, SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED,
+    SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE, SPINE_CONTROL_KNOWN_FLAGS,
+    SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING, SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED,
+    SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE, SPINE_MIN_DYNAMIC_OBSERVE_STRIDE,
+    SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN, SPINE_STEP_EVENT_GUARD_REESCALATED,
+    SPINE_STEP_EVENT_INSTABILITY_RECOVERY, SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED,
+    SPINE_STEP_EVENT_NONE, SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
 };
 pub use crate::foundation::{
     AlignedSlice, AlignedSliceMut, DisjointMutTriple, KvMotionDeltaPacket, PagedBitmask,
@@ -149,17 +159,25 @@ pub type lmnk_core_primitive_state_t = CorePrimitiveState;
 pub type lmnk_distortion_delta_t = DistortionDelta;
 /// 32-byte Asymmetric Homeostatic Tension (`DistortionTension`).
 pub type lmnk_distortion_tension_t = DistortionTension;
-/// 32-byte Mechanical Execution Spine State (`SystemSpineState`).
+/// 8-byte External System Gauge-Zero Pressure Reading (`SystemPressureReading`).
+pub type lmnk_system_pressure_reading_t = SystemPressureReading;
+/// 40-byte Pre-Execution Anonymous Compute Dispatch Mask (`ComputeDispatchMask`).
+pub type lmnk_compute_dispatch_mask_t = ComputeDispatchMask;
+/// 16-byte Spine Decode Signal Input (`SpineDecodeInput`).
+pub type lmnk_spine_decode_input_t = SpineDecodeInput;
+/// 48-byte Pre-Execution Spine Decode Step Plan (`SpineStepPlan`).
+pub type lmnk_spine_step_plan_t = SpineStepPlan;
+/// 64-byte Mechanical Execution Spine State (`SystemSpineState`).
 pub type lmnk_spine_state_t = SystemSpineState;
 
 // Compile-time layout assertions enforcing Portable Device-Ready POD guarantees
-// and 1:1 C11/C++20 header parity for v0.2.0 (`0x0000_0200`).
+// and 1:1 C11/C++20 header parity for v0.3.0 (`0x0000_0300`).
 const _: () = {
-    assert!(LMNK_ABI_VERSION_HEX == 0x0000_0200);
+    assert!(LMNK_ABI_VERSION_HEX == 0x0000_0300);
     assert!(LMNK_CONTAINER_MAGIC == 0x4B4E_4D4C);
     assert!(LMNK_TOPOLOGY_MAGIC == 0x504F_544C);
     assert!(LMNK_PHASE_ANCHOR_MAGIC == 0x524B_4E4C);
-    assert!(LMNK_PHASE_ANCHOR_VERSION == 0x0000_0200);
+    assert!(LMNK_PHASE_ANCHOR_VERSION == 0x0000_0300);
 
     assert!(size_of::<lmnk_status_t>() == 4);
     assert!(size_of::<lmnk_q7_t>() == 1);
@@ -420,7 +438,7 @@ const _: () = {
     assert!(offset_of!(lmnk_lacuna_partition_t, dominant_lacuna) == 14);
     assert!(offset_of!(lmnk_lacuna_partition_t, attribution_tag) == 15);
 
-    assert!(size_of::<lmnk_spine_state_t>() == 32 && align_of::<lmnk_spine_state_t>() == 16);
+    assert!(size_of::<lmnk_spine_state_t>() == 64 && align_of::<lmnk_spine_state_t>() == 64);
     assert!(offset_of!(lmnk_spine_state_t, pinned_aperture_mask) == 0);
     assert!(offset_of!(lmnk_spine_state_t, pinned_slot_mask) == 4);
     assert!(offset_of!(lmnk_spine_state_t, pinned_action_mode_mask) == 5);
@@ -428,6 +446,42 @@ const _: () = {
     assert!(offset_of!(lmnk_spine_state_t, irreversible_step_lock) == 7);
     assert!(offset_of!(lmnk_spine_state_t, pinned_compute_mask) == 8);
     assert!(offset_of!(lmnk_spine_state_t, whole_token_bypass_active) == 24);
+    assert!(offset_of!(lmnk_spine_state_t, reserved_half0) == 28);
+    assert!(offset_of!(lmnk_spine_state_t, baseline_pinned_compute_mask) == 32);
+    assert!(offset_of!(lmnk_spine_state_t, last_observed_entropy_q15) == 40);
+    assert!(offset_of!(lmnk_spine_state_t, guard_hold_tokens) == 42);
+    assert!(offset_of!(lmnk_spine_state_t, max_observe_stride) == 44);
+    assert!(offset_of!(lmnk_spine_state_t, control_flags) == 48);
+    assert!(offset_of!(lmnk_spine_state_t, last_veto_mask) == 49);
+    assert!(offset_of!(lmnk_spine_state_t, last_executed_mask) == 56);
+
+    assert!(
+        size_of::<lmnk_system_pressure_reading_t>() == 8
+            && align_of::<lmnk_system_pressure_reading_t>() == 2
+    );
+    assert!(
+        size_of::<lmnk_compute_dispatch_mask_t>() == 40
+            && align_of::<lmnk_compute_dispatch_mask_t>() == 8
+    );
+    assert!(offset_of!(lmnk_compute_dispatch_mask_t, stationary_evidence_mask) == 24);
+    assert!(offset_of!(lmnk_compute_dispatch_mask_t, whole_token_steering_bypass) == 39);
+
+    assert!(
+        size_of::<lmnk_spine_decode_input_t>() == 16
+            && align_of::<lmnk_spine_decode_input_t>() == 16
+    );
+    assert!(offset_of!(lmnk_spine_decode_input_t, observed_exit_entropy_q15) == 8);
+    assert!(offset_of!(lmnk_spine_decode_input_t, exit_entropy_lacuna_code) == 12);
+    assert!(offset_of!(lmnk_spine_decode_input_t, flags) == 15);
+
+    assert!(
+        size_of::<lmnk_spine_step_plan_t>() == 48 && align_of::<lmnk_spine_step_plan_t>() == 16
+    );
+    assert!(offset_of!(lmnk_spine_step_plan_t, dispatch) == 0);
+    assert!(offset_of!(lmnk_spine_step_plan_t, next_observe_mode) == 40);
+    assert!(offset_of!(lmnk_spine_step_plan_t, veto_mask) == 41);
+    assert!(offset_of!(lmnk_spine_step_plan_t, event_flags) == 42);
+    assert!(offset_of!(lmnk_spine_step_plan_t, effective_observe_stride) == 43);
 
     assert!(
         size_of::<lmnk_distortion_delta_t>() == 128 && align_of::<lmnk_distortion_delta_t>() == 64

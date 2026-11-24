@@ -6,7 +6,16 @@
 use super::{
     abi_version, abi_version_string, query_capability, CoreStateStack, Result, RuntimeContext,
 };
-use crate::drivers::{DistortionTension, EgoDifferentialNet, EntropyState, SystemSpineState};
+use crate::drivers::{
+    DistortionTension, EgoDifferentialNet, EntropyState, SpineDecodeSignal, SpineStepPlan,
+    SystemSpineState, TokenBypassObservation, SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID,
+    SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT, SPINE_ENTROPY_CALM_THRESH_Q15,
+    SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE, SPINE_ENTROPY_REWARD_LOW_THRESH_Q15,
+    SPINE_ENTROPY_SURGE_THRESH_Q15, SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_SENTINEL_AUTO_U8,
+    SPINE_STEP_EVENT_BOUNDARY_CHURN, SPINE_STEP_EVENT_GUARD_REESCALATED,
+    SPINE_STEP_EVENT_INSTABILITY_RECOVERY, SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED,
+    SPINE_STEP_EVENT_NONE, SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
+};
 use crate::foundation::{
     branchless_clamp_f32, branchless_max_f32, branchless_min_f32, store_q7_words_64,
     swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSliceMut32, PhaseSteering,
@@ -14,7 +23,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    AttributionTag, BitCut8, DriverKind, EpistemicRegime, LacunaPartition8, PrimitiveKind,
+    AttributionTag, BitCut8, DriverKind, EpistemicRegime, Lacuna, LacunaPartition8, PrimitiveKind,
     RuntimeConfig, Scoped, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
@@ -92,11 +101,259 @@ impl RuntimeContext {
         self.sandbox_workbench_lane = None;
         self.last_sandbox_event = SandboxLifecycleEvent::Idle;
         self.sandbox_settlements = 0;
+        self.compute_pool.reset_turn_bypass_state();
         self.system_spine = SystemSpineState::new();
         self.last_lacuna_partition = LacunaPartition8::default();
         self.distortion_tension = DistortionTension::new(false);
         self.ego_differential_net = EgoDifferentialNet::default();
         Ok(())
+    }
+
+    /// Initializes per-turn mechanical spine policy at prompt / turn boundaries (`0 alloc`).
+    ///
+    /// Resets per-turn bypass counters, clears stale observed entropy, arms or restores transient
+    /// turn-guard compute pins without mutating `baseline_pinned_compute_mask`, and seeds
+    /// `last_executed_mask` to `compute_pool.active_mask`.
+    #[inline]
+    pub fn begin_turn_spine_policy(&mut self, guard_turn: bool, unobserved_locked: bool) {
+        self.compute_pool.reset_turn_bypass_state();
+        self.system_spine.reset_turn_bypass_state();
+        self.system_spine.last_observed_entropy_q15 = 0;
+        self.system_spine.set_transient_guard_relaxed(false);
+        self.system_spine.set_turn_guard_active(guard_turn);
+        self.system_spine.unobserved_locked = u8::from(unobserved_locked);
+        let active_mask = self.compute_pool.active_mask;
+        if guard_turn {
+            self.system_spine.arm_transient_guard_pin(active_mask);
+        } else {
+            self.system_spine.restore_baseline_pin_mask();
+        }
+        self.system_spine.last_executed_mask = active_mask;
+    }
+
+    /// Evaluates the 4-stage decode control step in [`RuntimeContext`] using static-generic
+    /// [`SpineDecodeSignal`] (`0 alloc`, `0 fdiv`), returning a pre-execution [`SpineStepPlan`]:
+    ///
+    /// 1. Residency & boundary-churn accounting plus [`Lacuna`] exit-entropy handling.
+    /// 2. Compute exit reward commitment onto `last_executed_mask` (when `lacuna.is_defined()`).
+    /// 3. Transient contradiction-guard pin relaxation or immediate instability re-escalation.
+    /// 4. Pre-execution compute dispatch, whole-token bypass gating, next logits observation mode
+    ///    selection, and `last_executed_mask` update.
+    #[inline]
+    #[must_use]
+    pub fn step_decode_control<S: SpineDecodeSignal>(
+        &mut self,
+        signal: &S,
+        external_guard_active: bool,
+    ) -> SpineStepPlan {
+        const Q15_TO_F32: f32 = 1.0_f32 / 32_768.0_f32;
+
+        let step_was_whole_bypass = self.system_spine.whole_token_bypass_active != 0;
+        let lacuna = signal.exit_entropy_lacuna();
+        let action_repulse = StigmergicActionDecision::from_u8(self.substrate.last_decision)
+            == StigmergicActionDecision::RepulsionEscape;
+        let entropy_repulse = self.entropy_controller.is_repulsion_mode();
+        let eff_repulsion = signal.repulsion_active() || action_repulse || entropy_repulse;
+
+        let raw_sens = signal.boundary_sensitivity_q7();
+        let sens_q7 = if raw_sens == SPINE_SENTINEL_AUTO_U8 {
+            self.last_lacuna_partition.boundary_sensitivity_q7
+        } else {
+            raw_sens.min(127)
+        };
+        let min_calm_dwell = signal.min_calm_dwell().max(2);
+        let pre_bypass_active =
+            signal.pre_bypass_enabled() && self.system_spine.is_pre_bypass_enabled();
+        let mut event_flags = SPINE_STEP_EVENT_NONE;
+
+        // Stage 1: Residency tracking, boundary-churn detection, and `Lacuna` exit-entropy update.
+        let prev_valid =
+            (self.system_spine.control_flags & SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID) != 0;
+        let prev_was_abstract =
+            (self.system_spine.control_flags & SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT) != 0;
+        let churn = prev_valid && (prev_was_abstract != step_was_whole_bypass);
+        if churn {
+            event_flags |= SPINE_STEP_EVENT_BOUNDARY_CHURN;
+        }
+        self.system_spine.control_flags |= SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID;
+        if step_was_whole_bypass {
+            self.system_spine.control_flags |= SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT;
+        } else {
+            self.system_spine.control_flags &= !SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT;
+        }
+        self.telemetry
+            .record_decode_residency(step_was_whole_bypass, churn);
+
+        let entropy_surge = match lacuna {
+            Lacuna::SelfRef | Lacuna::Exterior => {
+                let ent_q15 = signal
+                    .observed_exit_entropy_q15()
+                    .min(SPINE_ENTROPY_Q15_ONE);
+                self.system_spine.last_observed_entropy_q15 = ent_q15;
+                self.system_spine.unobserved_bypass_run = 0;
+                if step_was_whole_bypass {
+                    self.substrate.last_entropy_h_tilde = f32::from(ent_q15) * Q15_TO_F32;
+                }
+                let ent_above_floor_q15 = ent_q15.saturating_sub(SPINE_ENTROPY_TENSION_FLOOR_Q15);
+                let exit_entropy_q7 =
+                    (((u32::from(ent_above_floor_q15) * 127) + 16_384) >> 15).min(127) as u8;
+                let guard_prox_q7 = if eff_repulsion { 88 } else { sens_q7 >> 2 };
+                let active_overdrive = eff_repulsion && self.core_layers.ego.is_active();
+                self.distortion_tension.step_hot_path_branchless(
+                    self.ego_differential_net.last_delta_norm_q7,
+                    sens_q7,
+                    exit_entropy_q7,
+                    guard_prox_q7,
+                    active_overdrive,
+                );
+                let surge = ent_q15 > SPINE_ENTROPY_SURGE_THRESH_Q15;
+                if surge {
+                    self.signal_compute_instability();
+                    event_flags |= SPINE_STEP_EVENT_INSTABILITY_RECOVERY;
+                }
+                surge
+            }
+            Lacuna::Unobserved => {
+                self.system_spine.unobserved_bypass_run =
+                    self.system_spine.unobserved_bypass_run.saturating_add(1);
+                self.telemetry.record_logits_skip();
+                event_flags |= SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED;
+                false
+            }
+            Lacuna::Undefined => {
+                self.system_spine.unobserved_bypass_run = 0;
+                self.signal_compute_instability();
+                event_flags |= SPINE_STEP_EVENT_INSTABILITY_RECOVERY;
+                true
+            }
+        };
+
+        // Stage 2: Commit completed-step compute reward when observation is well-defined.
+        if lacuna.is_defined() {
+            let raw_reward = signal.exit_reward_override_q7();
+            let reward_q7 = if raw_reward == SPINE_SENTINEL_AUTO_U8 {
+                if self.system_spine.last_observed_entropy_q15 < SPINE_ENTROPY_REWARD_LOW_THRESH_Q15
+                {
+                    56
+                } else {
+                    96
+                }
+            } else {
+                raw_reward.min(127)
+            };
+            let reward_mask = if self.system_spine.last_executed_mask != 0 {
+                self.system_spine.last_executed_mask
+            } else {
+                self.compute_pool.active_mask
+            };
+            self.compute_pool.commit_exit_reward(reward_mask, reward_q7);
+        }
+
+        // Stage 3: Transient contradiction-guard relaxation or instability re-escalation.
+        let liminal_stationary = u8::from(
+            lacuna.is_defined()
+                && (self.system_spine.last_observed_entropy_q15 < SPINE_ENTROPY_CALM_THRESH_Q15)
+                && (sens_q7 < 80),
+        );
+        if self.system_spine.is_transient_guard_relaxed() {
+            if eff_repulsion || entropy_surge || !lacuna.is_defined() {
+                self.system_spine.set_transient_guard_relaxed(false);
+                self.system_spine.set_turn_guard_active(true);
+                let active_mask = self.compute_pool.active_mask;
+                self.system_spine.arm_transient_guard_pin(active_mask);
+                self.compute_pool.reset_turn_bypass_state();
+                self.system_spine.reset_turn_bypass_counters_only();
+                self.system_spine.unobserved_bypass_run = 0;
+                event_flags |= SPINE_STEP_EVENT_GUARD_REESCALATED;
+            }
+        } else if pre_bypass_active
+            && (self.system_spine.turn_guard_active() || external_guard_active)
+            && self.system_spine.guard_hold_tokens > 0
+            && self.system_spine.passive_saturation_probe_steps == 0
+            && self.system_spine.unobserved_locked == 0
+            && lacuna.is_defined()
+            && (self.system_spine.last_observed_entropy_q15 < SPINE_ENTROPY_GUARD_RELAX_MAX_Q15)
+            && self.system_spine.can_relax_transient_guard_pin(
+                self.system_spine.guard_hold_tokens,
+                liminal_stationary,
+                eff_repulsion,
+                entropy_surge,
+                min_calm_dwell,
+            )
+        {
+            self.system_spine.set_transient_guard_relaxed(true);
+            self.system_spine.set_turn_guard_active(false);
+            self.system_spine.restore_baseline_pin_mask();
+            self.compute_pool.re_bypass_cooldown = 0;
+            self.system_spine.on_transient_guard_relaxed(min_calm_dwell);
+            self.telemetry.record_guard_relaxation();
+            event_flags |= SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED;
+        }
+
+        // Stage 4: Pre-execution dispatch, whole-token bypass evaluation, and next observe mode.
+        let static_guard = !self.system_spine.is_transient_guard_relaxed()
+            && (self.system_spine.turn_guard_active() || external_guard_active);
+        let eff_guard_active =
+            static_guard || (self.system_spine.passive_saturation_probe_steps > 0);
+        self.system_spine.passive_saturation_probe_steps = self
+            .system_spine
+            .passive_saturation_probe_steps
+            .saturating_sub(1);
+
+        let mut dispatch = self.compute_pool.step_dispatch_with_spine(
+            signal.pressure_reading(),
+            &self.system_spine,
+            eff_guard_active,
+            eff_repulsion,
+        );
+        let veto_mask = if pre_bypass_active {
+            let irreversible_step = u8::from(
+                (signal.pressure_reading().irreversible_step != 0)
+                    || (self.system_spine.irreversible_step_lock != 0),
+            );
+            let ego_active_boundary = u8::from(self.core_layers.ego.is_active() && sens_q7 >= 80);
+            let obs = TokenBypassObservation {
+                irreversible_step,
+                liminal_stationary,
+                boundary_sensitivity_q7: sens_q7,
+                repulsion_active: u8::from(eff_repulsion),
+                exit_entropy_rising: u8::from(entropy_surge),
+                ego_active_boundary,
+                min_calm_dwell,
+                _pad: 0,
+            };
+            self.evaluate_whole_token_bypass_with_spine(obs, eff_guard_active, &mut dispatch)
+        } else {
+            dispatch.whole_token_steering_bypass = 0;
+            self.system_spine.whole_token_bypass_active = 0;
+            let veto = self.system_spine.evaluate_pool_bypass_veto_branchless(
+                self.compute_pool.reversible_mask,
+                eff_guard_active,
+                eff_repulsion,
+            );
+            self.system_spine.last_veto_mask = veto;
+            veto
+        };
+
+        let next_step_index = signal.decode_step_index().saturating_add(1);
+        let next_whole_token_bypass = dispatch.whole_token_steering_bypass != 0;
+        let (next_mode_enum, effective_observe_stride) =
+            self.system_spine.select_next_observe_mode(
+                next_step_index,
+                signal.greedy_sampling(),
+                next_whole_token_bypass,
+                sens_q7,
+            );
+        self.system_spine.last_executed_mask = dispatch.execute_mask;
+
+        SpineStepPlan {
+            dispatch,
+            next_observe_mode: next_mode_enum.code(),
+            veto_mask,
+            event_flags,
+            effective_observe_stride,
+            reserved_align: [0; 4],
+        }
     }
 
     /// Executes a per-token Hot Path inference step in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).

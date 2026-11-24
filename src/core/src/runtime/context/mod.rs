@@ -434,7 +434,6 @@ pub struct RuntimeContext {
     config: Config,
     core_layers: CoreStateStack,
     entropy_controller: EntropyController,
-    probe_baseline: ManifoldProbeBaseline,
     system_spine: SystemSpineState,
     last_horizon: EpistemicHorizonReading,
     last_overlap_report: OverlapDiscoveryReport,
@@ -442,6 +441,7 @@ pub struct RuntimeContext {
     phase_steering: PhaseSteeringEngine,
     last_lacuna_partition: LacunaPartition8,
     last_boundary_delta: LiminalBoundaryDelta,
+    probe_baseline: ManifoldProbeBaseline,
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
     sandbox_settlements: u32,
@@ -460,6 +460,7 @@ pub struct RuntimeContext {
 const _: () = {
     assert!(core::mem::size_of::<RuntimeContext>() == 5120);
     assert!(core::mem::align_of::<RuntimeContext>() == 64);
+    assert!(core::mem::offset_of!(RuntimeContext, system_spine) == 384);
     assert!(core::mem::offset_of!(RuntimeContext, telemetry) == 4544);
     assert!(!core::mem::needs_drop::<RuntimeContext>());
 };

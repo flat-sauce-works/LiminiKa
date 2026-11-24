@@ -84,23 +84,12 @@ impl ModelSteeringAdapter {
                 recall.action_decision,
                 liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape
             );
-        self.turn_guard_active = guard_turn;
-        self.transient_guard_relaxed = false;
-        self.ctx.reset_turn_bypass_state();
-        if guard_turn {
-            let active_mask = self.ctx.compute_pool().active_mask;
-            self.ctx.apply_host_spine_pin_floor(active_mask);
-        } else {
-            self.ctx.system_spine_mut().pinned_compute_mask = self.baseline_pinned_compute_mask;
-        }
+        let unobserved_locked = matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
+            && !recall.is_known_unknown_exterior
+            && recall.guard_conflict_margin <= 0.05;
         self.ctx
-            .apply_host_spine_pin_floor(self.baseline_pinned_compute_mask);
+            .begin_turn_spine_policy(guard_turn, unobserved_locked);
         *self.ctx.last_lacuna_partition_mut() = recall.lacuna_partition;
-        self.ctx.system_spine_mut().unobserved_locked = u8::from(
-            matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
-                && !recall.is_known_unknown_exterior
-                && recall.guard_conflict_margin <= 0.05,
-        );
         if !has_guard_conflict && self.configured_ego.is_active() {
             let tension = self.ctx.distortion_tension_mut();
             tension.effective_ego_scale_q7 = tension.effective_ego_scale_q7.max(48);
@@ -557,15 +546,13 @@ impl ModelSteeringAdapter {
         *self.ctx.escalated_workbench_lane_mut() = None;
         self.escalation_boundary_dirty = true;
         self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
-        self.turn_guard_active = false;
-        self.transient_guard_relaxed = false;
-        self.ctx.reset_turn_bypass_state();
-        self.baseline_pinned_compute_mask = pinned_slots;
         self.ctx
             .compute_pool_mut()
             .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
-        self.ctx.system_spine_mut().pinned_compute_mask = pinned_slots;
-        self.ctx.apply_host_spine_pin_floor(pinned_slots);
+        self.ctx
+            .system_spine_mut()
+            .set_baseline_pin_mask(pinned_slots);
+        self.ctx.begin_turn_spine_policy(false, false);
         self.ctx.reset_telemetry();
         self.ctx.set_probe_baseline(next_probe);
         Ok(next_probe.probe_epoch)

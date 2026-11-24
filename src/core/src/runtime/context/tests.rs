@@ -496,3 +496,177 @@ fn test_residual_spillover_slot_cache_promotion_eviction_and_escalation() {
     assert_eq!(evicted, 1);
     assert!(spillover.cache_evictions >= 1);
 }
+
+#[test]
+fn test_spine_policy_and_decode_control_four_lacunae_and_guard_relaxation() {
+    struct CustomCalmSignal {
+        step_idx: u16,
+        pressure: SystemPressureReading,
+        greedy: bool,
+    }
+
+    impl SpineDecodeSignal for CustomCalmSignal {
+        fn pressure_reading(&self) -> SystemPressureReading {
+            self.pressure
+        }
+        fn exit_entropy_lacuna(&self) -> Lacuna {
+            Lacuna::SelfRef
+        }
+        fn observed_exit_entropy_q15(&self) -> u16 {
+            13_107 // ~0.40 (< 0.55 reward split & < 0.72 guard relax bound)
+        }
+        fn boundary_sensitivity_q7(&self) -> u8 {
+            SPINE_SENTINEL_AUTO_U8
+        }
+        fn decode_step_index(&self) -> u16 {
+            self.step_idx
+        }
+        fn repulsion_active(&self) -> bool {
+            false
+        }
+        fn greedy_sampling(&self) -> bool {
+            self.greedy
+        }
+    }
+
+    let mut ctx = RuntimeContext::new(Config::new()).unwrap();
+    let active = 0x00FF_u64;
+    let host_base = 0x0081_u64;
+    let rev = BitCut64::split(active, host_base).outside;
+    ctx.compute_pool_mut().reanchor_baseline_pressure(8_000);
+    ctx.compute_pool_mut()
+        .set_slot_masks(active, host_base, 0, rev);
+    ctx.system_spine_mut().set_baseline_pin_mask(host_base);
+    ctx.system_spine_mut().set_max_observe_stride(4);
+    ctx.system_spine_mut().guard_hold_tokens = 2;
+
+    // 1. Guarded turn arms active_mask transiently without modifying baseline_pinned_compute_mask.
+    ctx.begin_turn_spine_policy(true, false);
+    assert!(ctx.system_spine().turn_guard_active());
+    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, host_base);
+    assert_eq!(ctx.system_spine().pinned_compute_mask, active);
+    assert_eq!(ctx.system_spine().last_executed_mask, active);
+
+    let calm_pressure = SystemPressureReading {
+        frame_time_pressure_q15: 8_000,
+        bandwidth_pressure_q15: 8_000,
+        l3_load_pressure_q15: 4_000,
+        irreversible_step: 0,
+        _pad: 0,
+    };
+
+    // Step 0 & Step 1: hold window (2) keeps concrete execution; step 0 requires ObserveFullLogits.
+    // Step 2: Stage 3 sees concrete_run_steps == 2 & calm_concrete_streak == 2, relaxes guard pin
+    // back to host_base, enters whole-token bypass, and schedules SkipToDeviceArgmax for step 3.
+    let plan0 = ctx.step_decode_control(
+        &CustomCalmSignal {
+            step_idx: 0,
+            pressure: calm_pressure,
+            greedy: true,
+        },
+        false,
+    );
+    assert_eq!(
+        plan0.next_observe_mode_enum(),
+        SpineLogitsObserveMode::ObserveFullLogits
+    );
+    assert!(!plan0.is_whole_token_bypass());
+    assert_eq!(plan0.event_flags & SPINE_STEP_EVENT_BOUNDARY_CHURN, 0);
+
+    let plan1 = ctx.step_decode_control(
+        &CustomCalmSignal {
+            step_idx: 1,
+            pressure: calm_pressure,
+            greedy: true,
+        },
+        false,
+    );
+    assert!(!plan1.is_whole_token_bypass());
+    assert_eq!(
+        plan1.event_flags & SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
+        0
+    );
+
+    let plan2 = ctx.step_decode_control(
+        &CustomCalmSignal {
+            step_idx: 2,
+            pressure: calm_pressure,
+            greedy: true,
+        },
+        false,
+    );
+    assert_ne!(
+        plan2.event_flags & SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
+        0
+    );
+    assert!(ctx.system_spine().is_transient_guard_relaxed());
+    assert!(!ctx.system_spine().turn_guard_active());
+    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, host_base);
+    assert_eq!(ctx.system_spine().pinned_compute_mask, host_base);
+    assert!(plan2.is_whole_token_bypass());
+    assert_eq!(plan2.dispatch.execute_mask, active);
+    assert_eq!(
+        plan2.next_observe_mode_enum(),
+        SpineLogitsObserveMode::SkipToDeviceArgmax
+    );
+    assert!(plan2.effective_observe_stride >= 2);
+
+    // 2. Step 3 receives Lacuna::Unobserved -> skips D2H entropy update without dirtying entropy.
+    let saved_ent_q15 = ctx.system_spine().last_observed_entropy_q15;
+    let plan3 = ctx.step_decode_control(
+        &SpineDecodeInput::unobserved(calm_pressure, 3, 8, false, true),
+        false,
+    );
+    assert_ne!(plan3.event_flags & SPINE_STEP_EVENT_BOUNDARY_CHURN, 0);
+    assert_ne!(
+        plan3.event_flags & SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED,
+        0
+    );
+    assert_eq!(ctx.system_spine().last_observed_entropy_q15, saved_ent_q15);
+    assert!(plan3.is_whole_token_bypass());
+
+    // 3. Exterior surge triggers instability recovery & re-escalates relaxed guard without polluting base.
+    let plan4 = ctx.step_decode_control(
+        &SpineDecodeInput::from_observed_entropy_f32(calm_pressure, 4, 0.92, 96, false, true),
+        false,
+    );
+    assert_ne!(plan4.event_flags & SPINE_STEP_EVENT_INSTABILITY_RECOVERY, 0);
+    assert_ne!(plan4.event_flags & SPINE_STEP_EVENT_GUARD_REESCALATED, 0);
+    assert!(!plan4.is_whole_token_bypass());
+    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, host_base);
+    assert_eq!(ctx.system_spine().pinned_compute_mask, active);
+
+    // 4. Undefined (NaN) rejects reward commit and never overwrites last_observed_entropy_q15.
+    let ent_before_nan = ctx.system_spine().last_observed_entropy_q15;
+    let ph_before_nan = ctx.compute_pool().slot_pheromone_q7[2];
+    let nan_input =
+        SpineDecodeInput::from_observed_entropy_f32(calm_pressure, 5, f32::NAN, 8, false, true);
+    assert_eq!(nan_input.exit_entropy_lacuna(), Lacuna::Undefined);
+    let plan5 = ctx.step_decode_control(&nan_input, false);
+    assert_ne!(plan5.event_flags & SPINE_STEP_EVENT_INSTABILITY_RECOVERY, 0);
+    assert_ne!(plan5.event_flags & SPINE_STEP_EVENT_BOUNDARY_CHURN, 0);
+    assert_eq!(ctx.system_spine().last_observed_entropy_q15, ent_before_nan);
+    assert_eq!(ctx.compute_pool().slot_pheromone_q7[2], ph_before_nan);
+
+    // 5. Telemetry snapshot reflects counters unconditionally under Standard verbosity.
+    let snap = ctx.telemetry_snapshot();
+    assert_eq!(snap.concrete_token_count, 4);
+    assert_eq!(snap.abstract_token_count, 2);
+    assert_eq!(snap.boundary_churn_count, 2);
+    assert_eq!(snap.logits_skip_count, 1);
+    assert_eq!(snap.guard_relaxation_count, 1);
+    assert_eq!(snap.instability_recovery_count, 2);
+
+    // 6. Reward uses completed-step `last_executed_mask` rather than unconditionally full active_mask.
+    ctx.begin_turn_spine_policy(false, false);
+    assert_eq!(ctx.system_spine().pinned_compute_mask, host_base);
+    ctx.system_spine_mut().last_executed_mask = 0x0001_u64;
+    let slot0_before = ctx.compute_pool().slot_pheromone_q7[0];
+    let slot2_before = ctx.compute_pool().slot_pheromone_q7[2];
+    let _ = ctx.step_decode_control(
+        &SpineDecodeInput::from_observed_entropy_f32(calm_pressure, 0, 0.70, 8, false, true),
+        false,
+    );
+    assert!(ctx.compute_pool().slot_pheromone_q7[0] >= slot0_before);
+    assert!(ctx.compute_pool().slot_pheromone_q7[2] < slot2_before);
+}

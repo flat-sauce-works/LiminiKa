@@ -669,6 +669,18 @@ pub struct CoreTelemetrySnapshot {
     pub exterior_sandbox_stages: u64,
     /// Cumulative steps where Unobserved ($\overline{S \cup O}$) locked aperture to `0`.
     pub unobserved_aperture_zeros: u64,
+    /// Cumulative decode tokens executed in abstract whole-token bypass mode.
+    pub abstract_token_count: u64,
+    /// Cumulative decode tokens executed through concrete compute layers.
+    pub concrete_token_count: u64,
+    /// Cumulative decode residency transitions (`abstract <-> concrete`).
+    pub boundary_churn_count: u64,
+    /// Cumulative decode steps where host D2H logits observation was skipped.
+    pub logits_skip_count: u64,
+    /// Cumulative transient contradiction-guard pin relaxations.
+    pub guard_relaxation_count: u64,
+    /// Cumulative exit instability or `Lacuna::Undefined` recoveries.
+    pub instability_recovery_count: u64,
 }
 
 /// Standalone `#![no_std]` zero-alloc `3 + System` telemetry bank stored beside compute engines.
@@ -708,9 +720,15 @@ pub struct CoreTelemetryBank {
     assimilation_drift_q15: u16,
     assimilation_drift_dwell: u16,
     sandbox_coherence_improve_dwell: u16,
-    reserved_warm: [u16; 5],
+    reserved_warm_pad: u16,
+    guard_relaxation_count: u32,
+    instability_recovery_count: u32,
     /// Slide-in detailed counters (untouched unless `active_mode == Detailed`; CL6-isolated).
     pub detailed: DetailedLayerTelemetry,
+    abstract_token_count: u32,
+    concrete_token_count: u32,
+    boundary_churn_count: u32,
+    logits_skip_count: u32,
 }
 
 const _: () = {
@@ -718,7 +736,11 @@ const _: () = {
     assert!(core::mem::align_of::<CoreTelemetryBank>() == 64);
     assert!(core::mem::size_of::<CoreTelemetryBank>() == 576);
     assert!(core::mem::offset_of!(CoreTelemetryBank, spine) == 8);
+    assert!(core::mem::offset_of!(CoreTelemetryBank, guard_relaxation_count) == 376);
+    assert!(core::mem::offset_of!(CoreTelemetryBank, instability_recovery_count) == 380);
     assert!(core::mem::offset_of!(CoreTelemetryBank, detailed) == 384);
+    assert!(core::mem::offset_of!(CoreTelemetryBank, abstract_token_count) == 560);
+    assert!(core::mem::offset_of!(CoreTelemetryBank, logits_skip_count) == 572);
 };
 
 impl Default for CoreTelemetryBank {
@@ -793,13 +815,19 @@ impl CoreTelemetryBank {
             assimilation_drift_q15: 0,
             assimilation_drift_dwell: 0,
             sandbox_coherence_improve_dwell: 0,
-            reserved_warm: [0; 5],
+            reserved_warm_pad: 0,
+            guard_relaxation_count: 0,
+            instability_recovery_count: 0,
             detailed: DetailedLayerTelemetry {
                 liminal_channel_chatter_counts: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
                 stigmergic_granule_overlap_hits: [0; NUM_STIGMERGIC_GRANULES],
                 ego_trigger_counts: [0; 5],
                 detailed_captured_steps: 0,
             },
+            abstract_token_count: 0,
+            concrete_token_count: 0,
+            boundary_churn_count: 0,
+            logits_skip_count: 0,
         }
     }
 
@@ -898,6 +926,12 @@ impl CoreTelemetryBank {
         self.pframe_total_hops = 0;
         self.exterior_sandbox_stages = 0;
         self.unobserved_aperture_zeros = 0;
+        self.guard_relaxation_count = 0;
+        self.instability_recovery_count = 0;
+        self.abstract_token_count = 0;
+        self.concrete_token_count = 0;
+        self.boundary_churn_count = 0;
+        self.logits_skip_count = 0;
     }
 
     /// Records a `SystemSpine` whole-token stationary bypass event without polluting
@@ -905,6 +939,79 @@ impl CoreTelemetryBank {
     #[inline(always)]
     pub fn record_whole_token_bypass(&mut self) {
         self.whole_token_bypass_events = self.whole_token_bypass_events.saturating_add(1);
+    }
+
+    /// Records abstract vs. concrete token residency and boundary-churn transitions.
+    #[inline(always)]
+    pub fn record_decode_residency(&mut self, whole_token_abstract: bool, boundary_churn: bool) {
+        if whole_token_abstract {
+            self.abstract_token_count = self.abstract_token_count.saturating_add(1);
+        } else {
+            self.concrete_token_count = self.concrete_token_count.saturating_add(1);
+        }
+        if boundary_churn {
+            self.boundary_churn_count = self.boundary_churn_count.saturating_add(1);
+        }
+    }
+
+    /// Records a skipped host D2H logits observation (`SpineLogitsObserveMode::SkipToDeviceArgmax`).
+    #[inline(always)]
+    pub fn record_logits_skip(&mut self) {
+        self.logits_skip_count = self.logits_skip_count.saturating_add(1);
+    }
+
+    /// Records a transient contradiction-guard pin relaxation event.
+    #[inline(always)]
+    pub fn record_guard_relaxation(&mut self) {
+        self.guard_relaxation_count = self.guard_relaxation_count.saturating_add(1);
+    }
+
+    /// Records an exit instability or `Lacuna::Undefined` recovery event.
+    #[inline(always)]
+    pub fn record_instability_recovery(&mut self) {
+        self.instability_recovery_count = self.instability_recovery_count.saturating_add(1);
+    }
+
+    /// Returns cumulative abstract-bypass decode tokens recorded on this bank.
+    #[inline(always)]
+    #[must_use]
+    pub const fn abstract_token_count(&self) -> u32 {
+        self.abstract_token_count
+    }
+
+    /// Returns cumulative concrete compute-executed decode tokens recorded on this bank.
+    #[inline(always)]
+    #[must_use]
+    pub const fn concrete_token_count(&self) -> u32 {
+        self.concrete_token_count
+    }
+
+    /// Returns cumulative decode residency boundary-churn transitions (`abstract <-> concrete`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn boundary_churn_count(&self) -> u32 {
+        self.boundary_churn_count
+    }
+
+    /// Returns cumulative host D2H logits observation skips.
+    #[inline(always)]
+    #[must_use]
+    pub const fn logits_skip_count(&self) -> u32 {
+        self.logits_skip_count
+    }
+
+    /// Returns cumulative transient contradiction-guard pin relaxations.
+    #[inline(always)]
+    #[must_use]
+    pub const fn guard_relaxation_count(&self) -> u32 {
+        self.guard_relaxation_count
+    }
+
+    /// Returns cumulative exit instability / `Lacuna::Undefined` recovery events.
+    #[inline(always)]
+    #[must_use]
+    pub const fn instability_recovery_count(&self) -> u32 {
+        self.instability_recovery_count
     }
 
     /// Records lightweight `2 Primitives x 2 Drivers` structural attribution, P-Frame chain hops,
@@ -1359,6 +1466,24 @@ impl CoreTelemetryBank {
         self.unobserved_aperture_zeros = self
             .unobserved_aperture_zeros
             .saturating_add(snap.unobserved_aperture_zeros);
+        self.guard_relaxation_count = self
+            .guard_relaxation_count
+            .saturating_add(u32::try_from(snap.guard_relaxation_count).unwrap_or(u32::MAX));
+        self.instability_recovery_count = self
+            .instability_recovery_count
+            .saturating_add(u32::try_from(snap.instability_recovery_count).unwrap_or(u32::MAX));
+        self.abstract_token_count = self
+            .abstract_token_count
+            .saturating_add(u32::try_from(snap.abstract_token_count).unwrap_or(u32::MAX));
+        self.concrete_token_count = self
+            .concrete_token_count
+            .saturating_add(u32::try_from(snap.concrete_token_count).unwrap_or(u32::MAX));
+        self.boundary_churn_count = self
+            .boundary_churn_count
+            .saturating_add(u32::try_from(snap.boundary_churn_count).unwrap_or(u32::MAX));
+        self.logits_skip_count = self
+            .logits_skip_count
+            .saturating_add(u32::try_from(snap.logits_skip_count).unwrap_or(u32::MAX));
     }
 
     /// Computes a Lazy-Pull cross-layer [`LayerDistortionReport`] diagnosing whether the core
@@ -1537,6 +1662,12 @@ impl CoreTelemetryBank {
             pframe_total_hops: self.pframe_total_hops,
             exterior_sandbox_stages: self.exterior_sandbox_stages,
             unobserved_aperture_zeros: self.unobserved_aperture_zeros,
+            abstract_token_count: u64::from(self.abstract_token_count),
+            concrete_token_count: u64::from(self.concrete_token_count),
+            boundary_churn_count: u64::from(self.boundary_churn_count),
+            logits_skip_count: u64::from(self.logits_skip_count),
+            guard_relaxation_count: u64::from(self.guard_relaxation_count),
+            instability_recovery_count: u64::from(self.instability_recovery_count),
         }
     }
 

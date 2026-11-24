@@ -483,7 +483,7 @@ impl<'a, T> AsMut<T> for FfiHandleMut<'a, T> {
 }
 
 // ===================================================================
-// Strongly-Typed Opaque Handles (v0.2.0 `0x0000_0200`)
+// Strongly-Typed Opaque Handles (v0.3.0 `0x0000_0300`)
 // ===================================================================
 
 macro_rules! define_opaque_handles {

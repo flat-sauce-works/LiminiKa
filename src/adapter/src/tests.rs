@@ -3262,6 +3262,91 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
 }
 
 #[test]
+fn snapshot_restore_under_active_transient_guard_does_not_leak_permanent_pins() {
+    let mut clean_adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let baseline = clean_adapter.system_spine().baseline_pinned_compute_mask;
+    clean_adapter.begin_turn_spine_policy(false, false);
+    assert_eq!(clean_adapter.system_spine().pinned_compute_mask, baseline);
+
+    let mut req = 0usize;
+    clean_adapter
+        .runtime_context()
+        .serialize_to_bytes(&mut [], &mut req)
+        .expect("size snapshot");
+    let mut buf = vec![0u8; req];
+    clean_adapter
+        .runtime_context()
+        .serialize_to_bytes(&mut buf, &mut req)
+        .expect("serialize unguarded snapshot");
+
+    // Arm transient all-layer guard pin on live adapter, then restore clean unguarded snapshot.
+    let mut guarded_adapter =
+        ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("guarded adapter");
+    guarded_adapter.begin_turn_spine_policy(true, false);
+    assert_eq!(
+        guarded_adapter.system_spine().pinned_compute_mask,
+        guarded_adapter.compute_pool().active_mask
+    );
+    assert_eq!(
+        guarded_adapter.system_spine().baseline_pinned_compute_mask,
+        baseline
+    );
+
+    guarded_adapter
+        .runtime_context_mut()
+        .deserialize_from_bytes(&buf)
+        .expect("restore snapshot");
+    assert_eq!(
+        guarded_adapter.system_spine().baseline_pinned_compute_mask,
+        baseline
+    );
+    assert_eq!(guarded_adapter.system_spine().pinned_compute_mask, baseline);
+    assert!(!guarded_adapter.system_spine().turn_guard_active());
+}
+
+#[test]
+fn adapter_begin_turn_and_step_decode_control_delegate_to_core_ctx() {
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    adapter.set_guard_hold_tokens(2);
+    adapter.set_max_observe_stride(4);
+    assert_eq!(adapter.guard_hold_tokens(), 2);
+    assert_eq!(adapter.max_observe_stride(), 4);
+    assert!(adapter.is_pre_bypass_enabled());
+
+    adapter.begin_turn_spine_policy(false, false);
+    let p = SystemPressureReading {
+        frame_time_pressure_q15: 8_192,
+        bandwidth_pressure_q15: 8_192,
+        l3_load_pressure_q15: 4_096,
+        irreversible_step: 0,
+        _pad: 0,
+    };
+    let s0 = adapter.step_decode_control(&SpineDecodeInput::from_observed_entropy_f32(
+        p, 0, 0.30, 8, false, true,
+    ));
+    assert_eq!(
+        s0.next_observe_mode_enum(),
+        SpineLogitsObserveMode::ObserveFullLogits
+    );
+    assert!(!s0.is_whole_token_bypass());
+
+    let s1 = adapter.step_decode_control(&SpineDecodeInput::from_observed_entropy_f32(
+        p, 1, 0.30, 8, false, true,
+    ));
+    assert!(s1.is_whole_token_bypass());
+    assert_eq!(
+        s1.next_observe_mode_enum(),
+        SpineLogitsObserveMode::SkipToDeviceArgmax
+    );
+    let flow = adapter.liminal_boundary_flow_summary();
+    assert_eq!(flow.concrete_token_count, 2);
+    assert_eq!(flow.abstract_token_count, 0);
+    assert!(adapter
+        .render_liminal_flow_mermaid()
+        .contains("Decode Spine Control"));
+}
+
+#[test]
 fn load_from_path_recognizes_uppercase_lmnkp_extension() {
     let dir = std::env::temp_dir().join(format!("liminika_upper_lmnkp_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

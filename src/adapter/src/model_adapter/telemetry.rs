@@ -9,8 +9,7 @@ use super::ModelSteeringAdapter;
 /// Runtime observability summary projecting [`CoreTelemetrySnapshot`] counters onto
 /// the `liminal` Abstraction <-> Concretion coordinate system.
 ///
-/// Every counter maps directly onto existing `v0.2.0` [`CoreTelemetryBank`] fields
-/// without modifying the frozen core ABI or POD layouts.
+/// Every counter maps directly onto `v0.3.0` [`CoreTelemetryBank`] fields via [`CoreTelemetrySnapshot`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LiminalBoundaryFlowSummary {
     /// Total monotonic runtime steps (`spine.total_steps`).
@@ -23,6 +22,18 @@ pub struct LiminalBoundaryFlowSummary {
     pub stationary_shortcut_hits: u64,
     /// Abstract ground-state steps: `Lacuna::Unobserved` zero-aperture locks (`unobserved_aperture_zeros`).
     pub unobserved_aperture_zeros: u64,
+    /// Completed decode tokens executed in abstract whole-token bypass (`abstract_token_count`).
+    pub abstract_token_count: u64,
+    /// Completed decode tokens executed through concrete layers (`concrete_token_count`).
+    pub concrete_token_count: u64,
+    /// Decode residency transitions (`abstract <-> concrete`, `boundary_churn_count`).
+    pub boundary_churn_count: u64,
+    /// Host D2H logits observation skips (`logits_skip_count`).
+    pub logits_skip_count: u64,
+    /// Transient contradiction-guard pin relaxations (`guard_relaxation_count`).
+    pub guard_relaxation_count: u64,
+    /// Exit instability and `Lacuna::Undefined` recoveries (`instability_recovery_count`).
+    pub instability_recovery_count: u64,
     /// Boundary gate transitions: dynamic horizon slide-ins (`liminal.slide_in_count`).
     pub slide_in_count: u64,
     /// Boundary gate transitions: dynamic horizon slide-outs (`liminal.slide_out_count`).
@@ -123,9 +134,16 @@ impl ModelSteeringAdapter {
         *self.ctx.escalated_workbench_lane_mut() = None;
         *self.ctx.sandbox_workbench_lane_mut() = None;
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
-        *self.ctx.system_spine_mut() = SystemSpineState::new();
-        self.ctx
-            .apply_host_spine_pin_floor(self.baseline_pinned_compute_mask);
+        let preserved_base = self.ctx.system_spine().baseline_pinned_compute_mask;
+        let preserved_hold = self.ctx.system_spine().guard_hold_tokens;
+        let preserved_stride = self.ctx.system_spine().max_observe_stride;
+        let preserved_pre_bypass = self.ctx.system_spine().is_pre_bypass_enabled();
+        let mut fresh_spine = SystemSpineState::new();
+        fresh_spine.set_baseline_pin_mask(preserved_base);
+        fresh_spine.guard_hold_tokens = preserved_hold;
+        fresh_spine.set_max_observe_stride(preserved_stride);
+        fresh_spine.set_pre_bypass_enabled(preserved_pre_bypass);
+        *self.ctx.system_spine_mut() = fresh_spine;
         *self.ctx.last_lacuna_partition_mut() = LacunaPartition8::default();
         *self.ctx.distortion_tension_mut() = DistortionTension::new(false);
         *self.ctx.ego_differential_net_mut() = EgoDifferentialNet::new_empty(saved_hops);
@@ -133,10 +151,7 @@ impl ModelSteeringAdapter {
         self.prev_sandbox_coherence = 0.0;
         self.prev_sandbox_assim_drift = 1.0;
         self.ctx.set_sandbox_settlements(0);
-        self.turn_guard_active = false;
-        self.transient_guard_relaxed = false;
         self.ctx.reset_turn_bypass_state();
-        self.passive_saturation_probe_steps = 0;
         let policy = self.ctx.telemetry_bank().policy();
         self.ctx.set_telemetry_policy(policy);
         self.reset_substrate_stats();
@@ -222,22 +237,63 @@ impl ModelSteeringAdapter {
         );
     }
 
+    #[inline(always)]
+    fn external_guard_active(&self) -> bool {
+        (self.coherence_guard_slot.activations > self.coherence_guard_slot.retractions)
+            && (self.ctx.last_horizon().conflict_severity > 0.25)
+    }
+
+    /// Initializes per-turn mechanical spine policy on [`RuntimeContext`].
+    pub fn begin_turn_spine_policy(&mut self, guard_turn: bool, unobserved_locked: bool) {
+        self.ctx
+            .begin_turn_spine_policy(guard_turn, unobserved_locked);
+    }
+
+    /// Evaluates one 4-stage decode control step in [`RuntimeContext`] with adapter guard context.
+    #[must_use]
+    pub fn step_decode_control<S: SpineDecodeSignal>(&mut self, signal: &S) -> SpineStepPlan {
+        let external_guard = self.external_guard_active();
+        self.ctx.step_decode_control(signal, external_guard)
+    }
+
     /// Configures the decode-token hold window before a transient contradiction-guard compute pin
     /// may relax toward low-cost bypass (`0` holds the entire turn).
     pub fn set_guard_hold_tokens(&mut self, tokens: u8) {
-        self.guard_hold_tokens = tokens;
+        self.ctx.system_spine_mut().guard_hold_tokens = tokens;
     }
 
     /// Returns the configured decode-token hold window before transient guard relaxation (`0` = full turn).
     #[must_use]
-    pub const fn guard_hold_tokens(&self) -> u8 {
-        self.guard_hold_tokens
+    pub fn guard_hold_tokens(&self) -> u8 {
+        self.ctx.system_spine().guard_hold_tokens
+    }
+
+    /// Configures maximum logits observation stride (`>= 1`, where `1` observes every token).
+    pub fn set_max_observe_stride(&mut self, stride: u8) {
+        self.ctx.system_spine_mut().set_max_observe_stride(stride);
+    }
+
+    /// Returns effective maximum logits observation stride (`>= 1`).
+    #[must_use]
+    pub fn max_observe_stride(&self) -> u8 {
+        self.ctx.system_spine().effective_max_observe_stride()
+    }
+
+    /// Enables or disables pre-inference whole-token steering bypass on [`SystemSpineState`].
+    pub fn set_pre_bypass_enabled(&mut self, enabled: bool) {
+        self.ctx.system_spine_mut().set_pre_bypass_enabled(enabled);
+    }
+
+    /// Returns `true` when pre-inference whole-token steering bypass is enabled.
+    #[must_use]
+    pub fn is_pre_bypass_enabled(&self) -> bool {
+        self.ctx.system_spine().is_pre_bypass_enabled()
     }
 
     /// Returns `true` when the active turn's transient contradiction-guard pin has been relaxed.
     #[must_use]
-    pub const fn is_transient_guard_relaxed(&self) -> bool {
-        self.transient_guard_relaxed
+    pub fn is_transient_guard_relaxed(&self) -> bool {
+        self.ctx.system_spine().is_transient_guard_relaxed()
     }
 
     /// Resolves step/turn-local effective `(guard_active, repulsion_active)` signals for
@@ -245,12 +301,10 @@ impl ModelSteeringAdapter {
     /// `StigmergicSubstrate::slot_repulsion_mask`.
     #[must_use]
     pub fn effective_spine_guard_and_repulsion(&self, obs_repulsion: bool) -> (bool, bool) {
-        let guard_slot_slid_in = (self.coherence_guard_slot.activations
-            > self.coherence_guard_slot.retractions)
-            && (self.ctx.last_horizon().conflict_severity > 0.25);
-        let static_guard =
-            !self.transient_guard_relaxed && (self.turn_guard_active || guard_slot_slid_in);
-        let guard_active = static_guard || self.passive_saturation_probe_steps > 0;
+        let spine = self.ctx.system_spine();
+        let static_guard = !spine.is_transient_guard_relaxed()
+            && (spine.turn_guard_active() || self.external_guard_active());
+        let guard_active = static_guard || spine.passive_saturation_probe_steps > 0;
         let action_repulse = liminika_core::stigmergy::StigmergicActionDecision::from_u8(
             self.ctx.substrate().last_decision,
         )
@@ -272,28 +326,28 @@ impl ModelSteeringAdapter {
         min_calm_dwell: u8,
     ) -> bool {
         let (_, eff_repulsion) = self.effective_spine_guard_and_repulsion(repulsion_active);
-        if self.transient_guard_relaxed {
+        let ext_guard = self.external_guard_active();
+        if self.ctx.system_spine().is_transient_guard_relaxed() {
             if eff_repulsion || exit_entropy_rising {
-                self.transient_guard_relaxed = false;
-                self.turn_guard_active = true;
                 let active_mask = self.ctx.compute_pool().active_mask;
-                self.ctx.apply_host_spine_pin_floor(
-                    active_mask
-                        | self.baseline_pinned_compute_mask
-                        | liminika_core::drivers::HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
-                );
-                self.ctx.reset_turn_bypass_state();
+                {
+                    let spine = self.ctx.system_spine_mut();
+                    spine.set_transient_guard_relaxed(false);
+                    spine.set_turn_guard_active(true);
+                    spine.arm_transient_guard_pin(active_mask);
+                    spine.reset_turn_bypass_counters_only();
+                    spine.unobserved_bypass_run = 0;
+                }
+                self.ctx.compute_pool_mut().reset_turn_bypass_state();
             }
             return false;
         }
 
-        let guard_slot_slid_in = (self.coherence_guard_slot.activations
-            > self.coherence_guard_slot.retractions)
-            && (self.ctx.last_horizon().conflict_severity > 0.25);
-        let has_static_guard = self.turn_guard_active || guard_slot_slid_in;
+        let hold_tokens = self.ctx.system_spine().guard_hold_tokens;
+        let has_static_guard = self.ctx.system_spine().turn_guard_active() || ext_guard;
         if !has_static_guard
-            || self.guard_hold_tokens == 0
-            || self.passive_saturation_probe_steps > 0
+            || hold_tokens == 0
+            || self.ctx.system_spine().passive_saturation_probe_steps > 0
             || self.ctx.system_spine().unobserved_locked != 0
             || !last_observed_entropy.is_finite()
             || last_observed_entropy >= 0.72
@@ -302,7 +356,7 @@ impl ModelSteeringAdapter {
         }
 
         if !self.ctx.can_relax_transient_guard_pin(
-            self.guard_hold_tokens,
+            hold_tokens,
             liminal_stationary,
             eff_repulsion,
             exit_entropy_rising,
@@ -311,14 +365,14 @@ impl ModelSteeringAdapter {
             return false;
         }
 
-        self.transient_guard_relaxed = true;
-        self.turn_guard_active = false;
-        self.ctx.system_spine_mut().pinned_compute_mask = self.baseline_pinned_compute_mask;
-        self.ctx.apply_host_spine_pin_floor(
-            self.baseline_pinned_compute_mask
-                | liminika_core::drivers::HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
-        );
+        {
+            let spine = self.ctx.system_spine_mut();
+            spine.set_transient_guard_relaxed(true);
+            spine.set_turn_guard_active(false);
+            spine.restore_baseline_pin_mask();
+        }
         self.ctx.on_transient_guard_relaxed(min_calm_dwell);
+        self.ctx.telemetry_bank_mut().record_guard_relaxation();
         true
     }
 
@@ -333,7 +387,9 @@ impl ModelSteeringAdapter {
         let (guard_active, repulsion_active) =
             self.effective_spine_guard_and_repulsion(obs.repulsion_active != 0);
         obs.repulsion_active = u8::from(repulsion_active);
-        self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.saturating_sub(1);
+        let spine = self.ctx.system_spine_mut();
+        spine.passive_saturation_probe_steps =
+            spine.passive_saturation_probe_steps.saturating_sub(1);
         self.ctx
             .evaluate_whole_token_bypass_with_spine(obs, guard_active, dispatch)
     }
@@ -475,10 +531,11 @@ impl ModelSteeringAdapter {
             .commit_exit_reward(executed_mask, reward_q7);
     }
 
-    /// Triggers immediate 1-step full-layer recovery in the anonymous compute pool with asymmetric
-    /// re-bypass dwell hysteresis (called on exit entropy spike, `InternalConflict`, or `LiminalExterior`).
+    /// Triggers immediate 1-step full-layer recovery across the compute pool and [`SystemSpineState`]
+    /// with asymmetric re-bypass dwell hysteresis (called on exit entropy spike, `InternalConflict`, or
+    /// `LiminalExterior`).
     pub fn signal_compute_instability(&mut self) {
-        self.ctx.compute_pool_mut().signal_exit_instability();
+        self.ctx.signal_compute_instability();
     }
 
     /// Updates the [`TelemetryCapturePolicy`] (`Pinned` vs `Auto` `Coarse`/`Standard`/`Detailed`).
@@ -534,7 +591,8 @@ impl ModelSteeringAdapter {
                     liminika_core::runtime::LayerDistortionKind::PassiveSaturation
                 );
             if passive_sat {
-                self.passive_saturation_probe_steps = self.passive_saturation_probe_steps.max(2);
+                let spine = self.ctx.system_spine_mut();
+                spine.passive_saturation_probe_steps = spine.passive_saturation_probe_steps.max(2);
             }
             let chatter = self.ctx.last_boundary_delta().chatter_potential_u8;
             let ego_active = self.configured_ego.is_active();
@@ -859,6 +917,12 @@ impl ModelSteeringAdapter {
             whole_token_bypass_events: snap.whole_token_bypass_events,
             stationary_shortcut_hits: snap.liminal.stationary_shortcut_hits,
             unobserved_aperture_zeros: snap.unobserved_aperture_zeros,
+            abstract_token_count: snap.abstract_token_count,
+            concrete_token_count: snap.concrete_token_count,
+            boundary_churn_count: snap.boundary_churn_count,
+            logits_skip_count: snap.logits_skip_count,
+            guard_relaxation_count: snap.guard_relaxation_count,
+            instability_recovery_count: snap.instability_recovery_count,
             slide_in_count: snap.liminal.slide_in_count,
             slide_out_count: snap.liminal.slide_out_count,
             chatter_events: snap.liminal.chatter_events,
@@ -914,12 +978,13 @@ impl ModelSteeringAdapter {
         let _ = writeln!(out, "    subgraph LIM[\"liminal Boundary Gate\"]");
         let _ = writeln!(
             out,
-            "        LIM_GATE[\"steps={} (std={}) slide_in={} slide_out={} chatter={}\"]",
+            "        LIM_GATE[\"steps={} (std={}) slide_in={} slide_out={} chatter={} churn={}\"]",
             s.total_steps,
             s.continuous_standard_steps,
             s.slide_in_count,
             s.slide_out_count,
-            s.chatter_events
+            s.chatter_events,
+            s.boundary_churn_count
         );
         let _ = writeln!(out, "    end");
         let _ = writeln!(out, "    subgraph CON[\"Concrete Realm (Excited State)\"]");
@@ -1005,6 +1070,19 @@ impl ModelSteeringAdapter {
             s.immediate_tension_damps,
             s.slow_tension_excites,
             s.tension_balance_ratio * 100.0
+        );
+        let _ = writeln!(
+            out,
+            concat!(
+                "| Decode Spine Control | `abstract_token_count` / `concrete_token_count` ",
+                "/ `logits_skip_count` | {} / {} / {} (churn={}, relax={}, recov={}) | - |"
+            ),
+            s.abstract_token_count,
+            s.concrete_token_count,
+            s.logits_skip_count,
+            s.boundary_churn_count,
+            s.guard_relaxation_count,
+            s.instability_recovery_count
         );
         out
     }

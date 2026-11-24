@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! C-ABI interface definitions, FFI safety barriers, binary layout contracts, pointer-driven
-//! orchestration entry points, and opaque handle management for `LiminiKa` `v0.2.0` (`0x0000_0200`).
+//! orchestration entry points, and opaque handle management for `LiminiKa` `v0.3.0` (`0x0000_0300`).
 
 #![allow(non_camel_case_types)]
 #![allow(clippy::too_many_lines)]
@@ -147,7 +147,7 @@ mod tests {
             assert_eq!(lmnk_config_init_default(&mut config), LMNK_OK);
             assert_eq!(lmnk_config_validate(&config), LMNK_OK);
             let ver_c = CStr::from_ptr(lmnk_abi_version_string());
-            assert_eq!(ver_c.to_str().unwrap(), "0.2.0");
+            assert_eq!(ver_c.to_str().unwrap(), "0.3.0");
             let c_str = CStr::from_ptr(lmnk_status_to_string(LMNK_OK));
             assert_eq!(c_str.to_str().unwrap(), "LMNK_OK");
         }
@@ -157,7 +157,7 @@ mod tests {
                 LMNK_ABI_VERSION_MAJOR,
                 LMNK_ABI_VERSION_MINOR,
                 LMNK_ABI_VERSION_PATCH,
-                0x0000_0200,
+                0x0000_0300,
             )
         );
         assert_ne!(cap_flags & LMNK_CAP_SWAR_BASELINE, 0);
@@ -1188,5 +1188,52 @@ mod tests {
             LmnkContainerView::parse(&container[..written]).err(),
             Some(LMNK_ERR_CONTAINER_CORRUPTED)
         );
+    }
+
+    #[test]
+    fn test_context_spine_policy_and_step_decode_control_c_abi() {
+        let mut cfg = lmnk_config_t::default();
+        let mut ctx_handle: LmnkContextHandle = ptr::null_mut();
+        // SAFETY: Testing C-ABI creation, spine turn policy init, and decode step execution.
+        unsafe {
+            assert_eq!(lmnk_config_init_default(&mut cfg), LMNK_OK);
+            assert_eq!(lmnk_context_create(&cfg, &mut ctx_handle), LMNK_OK);
+            assert!(!ctx_handle.is_null());
+
+            assert_eq!(
+                lmnk_context_begin_turn_spine_policy(ptr::null_mut(), 1, 0),
+                LMNK_ERR_NULL_POINTER
+            );
+            assert_eq!(
+                lmnk_context_begin_turn_spine_policy(ctx_handle, 0, 0),
+                LMNK_OK
+            );
+
+            let input = lmnk_spine_decode_input_t::from_observed_entropy_f32(
+                lmnk_system_pressure_reading_t::default(),
+                0,
+                0.35,
+                8,
+                false,
+                true,
+            );
+            let mut plan = lmnk_spine_step_plan_t::default();
+            assert_eq!(
+                lmnk_context_step_decode_control(ctx_handle, ptr::null(), 0, &mut plan),
+                LMNK_ERR_NULL_POINTER
+            );
+            assert_eq!(
+                lmnk_context_step_decode_control(ctx_handle, &input, 0, ptr::null_mut()),
+                LMNK_ERR_NULL_POINTER
+            );
+            assert_eq!(
+                lmnk_context_step_decode_control(ctx_handle, &input, 0, &mut plan),
+                LMNK_OK
+            );
+            assert_eq!(plan.next_observe_mode, 0);
+            assert_eq!(plan.effective_observe_stride, 1);
+
+            assert_eq!(lmnk_context_destroy(ctx_handle), LMNK_OK);
+        }
     }
 }
