@@ -175,6 +175,16 @@ fn test_zero_alloc_in_place_context_lifecycle() {
         );
         assert_eq!(trail_out.step_count, 1);
         assert_eq!(
+            liminika_core::abi::lmnk_context_configure_compute_pool(
+                ctx_handle,
+                0x0000_FFFF,
+                0x0000_0004,
+                0x0000_FFFC,
+                8000,
+            ),
+            LMNK_OK
+        );
+        assert_eq!(
             liminika_core::abi::lmnk_context_configure_spine(ctx_handle, 0x0081, 3, 4, 1),
             LMNK_OK
         );

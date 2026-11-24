@@ -27,6 +27,8 @@ void test_static_invariants() {
     static_assert(LMNK_ABI_VERSION_MINOR == 3U);
     static_assert(LMNK_ABI_VERSION_PATCH == 0U);
     static_assert(LMNK_ABI_VERSION_HEX == 0x00000300U);
+    static_assert(LMNK_ABI_COMPAT_MASK == 0xFFFFFF00U);
+    static_assert(LMNK_ABI_COMPAT_VERSION_HEX == 0x00000300U);
     static_assert(LMNK_PHASE_ANCHOR_MAGIC == 0x524B4E4CU);
     static_assert(LMNK_PHASE_ANCHOR_VERSION == LMNK_ABI_VERSION_HEX);
     static_assert(sizeof(lmnk_config_t) == 64U);
@@ -188,9 +190,14 @@ void test_context_boxed_and_in_place_lifecycle() {
     LMNK_TEST_CHECK(restored_trail.step_count == 2U);
     LMNK_TEST_CHECK(restored_trail.prev_ptr == 42U);
 
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
+                        restored, 0x0000FFFFULL, 0x00000004ULL, 0x0000FFFCULL, 8000U) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_configure_spine(restored, 0x0081ULL, 3U, 4U, 1U) == LMNK_OK);
     // Passing 0 for baseline_pinned_compute_mask preserves existing host floor monotonically.
     LMNK_TEST_CHECK(lmnk_context_configure_spine(restored, 0ULL, 3U, 4U, 1U) == LMNK_OK);
+    // Passing 0 for baseline_pressure_q15 preserves the re-anchored baseline pressure.
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
+                        restored, 0x0000FFFFULL, 0x00000004ULL, 0x0000FFFCULL, 0U) == LMNK_OK);
     alignas(64) lmnk_spine_state_t spine_snap{};
     LMNK_TEST_CHECK(lmnk_context_get_spine_state(restored, &spine_snap) == LMNK_OK);
     LMNK_TEST_CHECK((spine_snap.baseline_pinned_compute_mask & 0x0081ULL) == 0x0081ULL);
@@ -205,6 +212,8 @@ void test_context_boxed_and_in_place_lifecycle() {
     alignas(16) lmnk_spine_decode_input_t zero_decode_in{};
     LMNK_TEST_CHECK(lmnk_context_step_decode_control(restored, &zero_decode_in, 0U, &decode_plan) ==
                     LMNK_OK);
+    LMNK_TEST_CHECK((decode_plan.dispatch.execute_mask & 0x0081ULL) == 0x0081ULL);
+    LMNK_TEST_CHECK((decode_plan.dispatch.execute_mask & 0x0000FFFFULL) != 0ULL);
 
     alignas(16) lmnk_spine_decode_input_t decode_in{};
     decode_in.pressure.frame_time_pressure_q15 = 8192U;
@@ -221,6 +230,34 @@ void test_context_boxed_and_in_place_lifecycle() {
                     LMNK_OK);
     LMNK_TEST_CHECK(decode_plan.next_observe_mode == LMNK_SPINE_LOGITS_OBSERVE_FULL);
     LMNK_TEST_CHECK(decode_plan.effective_observe_stride >= LMNK_SPINE_MIN_DYNAMIC_OBSERVE_STRIDE);
+
+    // Commutativity check: pure C++20 host loop `pool -> spine` vs `spine -> pool` must match.
+    lmnk_context_handle_t ctx_a = nullptr;
+    lmnk_context_handle_t ctx_b = nullptr;
+    LMNK_TEST_CHECK(lmnk_context_create(&cfg, &ctx_a) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_create(&cfg, &ctx_b) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
+                        ctx_a, 0x0000FFFFULL, 0x00000083ULL, 0xFFFFFFFFULL, 8000U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_spine(ctx_a, 0x0081ULL, 3U, 4U, 1U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_spine(ctx_b, 0x0081ULL, 3U, 4U, 1U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
+                        ctx_b, 0x0000FFFFULL, 0x00000083ULL, 0xFFFFFFFFULL, 8000U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_begin_turn_spine_policy(ctx_a, 0U, 0U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_begin_turn_spine_policy(ctx_b, 0U, 0U) == LMNK_OK);
+    alignas(64) lmnk_spine_state_t state_a{};
+    alignas(64) lmnk_spine_state_t state_b{};
+    LMNK_TEST_CHECK(lmnk_context_get_spine_state(ctx_a, &state_a) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_get_spine_state(ctx_b, &state_b) == LMNK_OK);
+    LMNK_TEST_CHECK(std::memcmp(&state_a, &state_b, sizeof(lmnk_spine_state_t)) == 0);
+    alignas(64) lmnk_spine_step_plan_t plan_a{};
+    alignas(64) lmnk_spine_step_plan_t plan_b{};
+    LMNK_TEST_CHECK(lmnk_context_step_decode_control(ctx_a, &decode_in, 0U, &plan_a) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_step_decode_control(ctx_b, &decode_in, 0U, &plan_b) == LMNK_OK);
+    LMNK_TEST_CHECK(std::memcmp(&plan_a, &plan_b, sizeof(lmnk_spine_step_plan_t)) == 0);
+    LMNK_TEST_CHECK((plan_a.dispatch.execute_mask & 0x0081ULL) == 0x0081ULL);
+    LMNK_TEST_CHECK((plan_a.dispatch.bypass_mask & 0x0081ULL) == 0ULL);
+    LMNK_TEST_CHECK(lmnk_context_destroy(ctx_a) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_destroy(ctx_b) == LMNK_OK);
 
     // Mutate topology_crc32 and re-stamp header_crc32 to trigger LMNK_ERR_TOPOLOGY_MISMATCH
     raw_ptr[8] ^= 0x01U;

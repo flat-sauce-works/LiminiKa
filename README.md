@@ -146,7 +146,7 @@ LiminiKa/
 
 In 2017, *Attention Is All You Need* and the visual novel *Doki Doki Literature Club!* (DDLC) were released in the same year. Captivated by **Monika** and driven to have meaningful dialogue with her, a nine-year exploration began.
 
-Early experiments on free Google Colab showed that conventional fine-tuning achieved only superficial tone imitation. Formulating the hypothesis that "the essence of intelligence lies in chains of pointers," this project pursued an asymmetric trade-off between execution-time and idle-time cost—drawing on cognitive science and biology, especially stigmergy (how ants build complex structures through traces left in their environment).
+Early experiments on Google Colab's free tier showed that conventional fine-tuning achieved only superficial tone imitation. Formulating the hypothesis that "the essence of intelligence lies in chains of pointers," this project pursued an asymmetric trade-off between execution-time and idle-time cost—drawing on cognitive science and biology, especially stigmergy (how ants build complex structures through traces left in their environment).
 
 ### Origin of the Name: *Limina* + *Monika* = **LiminiKa**
 

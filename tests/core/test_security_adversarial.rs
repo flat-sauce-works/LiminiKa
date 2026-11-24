@@ -17,13 +17,14 @@ use std::ptr;
 use liminika_core::abi::{
     lmnk_config_init_default, lmnk_config_t, lmnk_container_map_and_steer_zero_copy_safe,
     lmnk_container_verify_with_reports_zero_copy, lmnk_context_align,
-    lmnk_context_begin_turn_spine_policy, lmnk_context_configure_spine, lmnk_context_create,
-    lmnk_context_deinit_in_place, lmnk_context_deserialize, lmnk_context_destroy,
-    lmnk_context_get_spine_state, lmnk_context_init_in_place, lmnk_context_serialize,
-    lmnk_context_size, lmnk_context_step_decode_control, lmnk_context_step_token,
-    lmnk_distortion_delta_apply_chain, lmnk_distortion_tension_step_hot_path,
-    lmnk_entropy_controller_create, lmnk_entropy_controller_destroy, lmnk_entropy_eval_stateful,
-    lmnk_entropy_state_t, lmnk_gateway_project_bytes_to_q7_64, lmnk_gateway_project_f32_to_q7_64,
+    lmnk_context_begin_turn_spine_policy, lmnk_context_configure_compute_pool,
+    lmnk_context_configure_spine, lmnk_context_create, lmnk_context_deinit_in_place,
+    lmnk_context_deserialize, lmnk_context_destroy, lmnk_context_get_spine_state,
+    lmnk_context_init_in_place, lmnk_context_serialize, lmnk_context_size,
+    lmnk_context_step_decode_control, lmnk_context_step_token, lmnk_distortion_delta_apply_chain,
+    lmnk_distortion_tension_step_hot_path, lmnk_entropy_controller_create,
+    lmnk_entropy_controller_destroy, lmnk_entropy_eval_stateful, lmnk_entropy_state_t,
+    lmnk_gateway_project_bytes_to_q7_64, lmnk_gateway_project_f32_to_q7_64,
     lmnk_gateway_synthesize_multi_origin_frame, lmnk_ledger_evaluate_auto_tune,
     lmnk_ledger_fast_path_lookup, lmnk_ledger_reset_telemetry, lmnk_ledger_set_mode,
     lmnk_ledger_slot_t, lmnk_ledger_telemetry_push, lmnk_liminal_eval_barrier,
@@ -1411,6 +1412,14 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
             LMNK_ERR_ALIGNMENT
         );
         assert_eq!(
+            lmnk_context_configure_compute_pool(ptr::null_mut(), 0xFF, 0, 0xFE, 0),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_context_configure_compute_pool(misalign_ctx, 0xFF, 0, 0xFE, 0),
+            LMNK_ERR_ALIGNMENT
+        );
+        assert_eq!(
             lmnk_context_get_spine_state(ptr::null_mut(), &mut spine_out),
             LMNK_ERR_NULL_POINTER
         );
@@ -1481,6 +1490,43 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
         assert_eq!(spine_out.guard_hold_tokens, 2);
         assert_eq!(spine_out.max_observe_stride, 6);
 
+        // Host pin floor non-stripping & commutativity (`configure_compute_pool` <-> `configure_spine`).
+        assert_eq!(
+            lmnk_context_configure_compute_pool(ctx_handle, 0x00FF, u64::MAX, u64::MAX, 0),
+            LMNK_OK
+        );
+        assert_eq!(
+            lmnk_context_get_spine_state(ctx_handle, &mut spine_out),
+            LMNK_OK
+        );
+        assert_eq!(
+            spine_out.baseline_pinned_compute_mask,
+            0x00A0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
+        );
+
+        let mut ctx_ab = RuntimeContext::new(Config::new()).expect("ctx_ab");
+        let mut ctx_ba = RuntimeContext::new(Config::new()).expect("ctx_ba");
+        ctx_ab.configure_compute_pool(0x00FF, 0x00FF_FFFF, 0xFFFF_FFFF, 50_000);
+        ctx_ab.configure_spine(0x00A0, 3, 4, true);
+        ctx_ba.configure_spine(0x00A0, 3, 4, true);
+        ctx_ba.configure_compute_pool(0x00FF, 0x00FF_FFFF, 0xFFFF_FFFF, 50_000);
+        assert_eq!(*ctx_ab.system_spine(), *ctx_ba.system_spine());
+        assert_eq!(*ctx_ab.compute_pool(), *ctx_ba.compute_pool());
+        assert_eq!(ctx_ab.compute_pool().active_mask, 0x00FF);
+        assert_eq!(ctx_ab.compute_pool().baseline_pressure_q15, 32_767);
+        assert_eq!(
+            ctx_ab.compute_pool().reversible_mask & (0x00A0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK),
+            0
+        );
+        assert_eq!(
+            ctx_ab.compute_pool().repulsion_mask & (0x00A0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK),
+            0
+        );
+        assert_eq!(ctx_ab.compute_pool().reversible_mask & !0x00FF, 0);
+        // Passing `0` for `baseline_pressure_q15` preserves the active baseline pressure (`32_767`).
+        ctx_ab.configure_compute_pool(0x00FF, 0, 0x00FF, 0);
+        assert_eq!(ctx_ab.compute_pool().baseline_pressure_q15, 32_767);
+
         // 3. `lmnk_spine_step_plan_t` requires 64B alignment (`16B`-only pointer must return `LMNK_ERR_ALIGNMENT`).
         let decode_in = lmnk_spine_decode_input_t {
             flags: SPINE_DECODE_FLAG_REWARD_OVERRIDE,
@@ -1544,5 +1590,108 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
             LMNK_ERR_INVALID_ARGUMENT
         );
         assert_eq!(lmnk_entropy_controller_destroy(ent_handle), LMNK_OK);
+    }
+}
+
+#[test]
+fn suite6_abi_major_minor_and_patch_compatibility_policy() {
+    use liminika_core::liminal::{
+        is_compatible_abi_version, validate_abi_version, LMNK_ABI_COMPAT_MASK,
+        LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_HEX, LMNK_ERR_VERSION_MISMATCH,
+    };
+    use liminika_core::runtime::CORE_TOPOLOGY;
+
+    assert_eq!(LMNK_ABI_COMPAT_MASK, 0xFFFF_FF00);
+    assert_eq!(
+        LMNK_ABI_COMPAT_VERSION_HEX,
+        LMNK_ABI_VERSION_HEX & LMNK_ABI_COMPAT_MASK
+    );
+    assert_eq!(CORE_TOPOLOGY.version, LMNK_ABI_COMPAT_VERSION_HEX);
+
+    // 1. Same MAJOR.MINOR and file_patch == runtime_patch -> accepted.
+    assert!(is_compatible_abi_version(0x0000_0300, 0x0000_0300));
+    assert_eq!(validate_abi_version(0x0000_0300), Ok(()));
+
+    // 2. Same MAJOR.MINOR and file_patch < runtime_patch -> accepted (patch backward compat).
+    assert!(is_compatible_abi_version(0x0000_0300, 0x0000_0301));
+    assert!(is_compatible_abi_version(0x0000_0302, 0x0000_0305));
+
+    // 3. Same MAJOR.MINOR and file_patch > runtime_patch -> rejected.
+    assert!(!is_compatible_abi_version(0x0000_0301, 0x0000_0300));
+    assert_eq!(
+        validate_abi_version(0x0000_0301),
+        Err(LMNK_ERR_VERSION_MISMATCH)
+    );
+
+    // 4. Different MAJOR.MINOR or zero -> rejected.
+    for bad in [
+        0x0000_0000u32,
+        0x0000_0200,
+        0x0000_0400,
+        0x0001_0300,
+        0xFFFF_FFFF,
+    ] {
+        assert!(!is_compatible_abi_version(bad, 0x0000_0300));
+        assert!(!is_compatible_abi_version(bad, 0x0000_0301));
+        assert_eq!(validate_abi_version(bad), Err(LMNK_ERR_VERSION_MISMATCH));
+    }
+
+    // Verify real `.lmnkc` container and `RuntimeContext` snapshot binaries enforce the policy.
+    let anchor = PhaseAnchorRecord::new_empty(77, ATTRACTOR_SLOT_KNOWLEDGE, 0);
+    assert!(anchor.verify_integrity());
+    assert_eq!(anchor.version, LMNK_ABI_VERSION_HEX);
+
+    let mut bad_patch_anchor = anchor;
+    bad_patch_anchor.version = 0x0000_0301;
+    bad_patch_anchor.checksum_crc32 = bad_patch_anchor.compute_payload_crc32();
+    assert!(!bad_patch_anchor.verify_integrity());
+
+    let mut container = vec![0u8; 4096];
+    let written = LmnkContainerView::write_standard_sections_to_bytes(
+        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+        &[anchor],
+        &[],
+        None,
+        None,
+        &[],
+        1_774_900_000,
+        &mut container,
+    )
+    .expect("write container");
+    container.truncate(written);
+    let view = LmnkContainerView::parse(&container).expect("valid v0.3.0 container");
+    assert_eq!(view.header().version, LMNK_ABI_VERSION_HEX);
+
+    let ctx = RuntimeContext::new(Config::new()).expect("ctx");
+    let mut snapshot = vec![0u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES];
+    let mut snap_len = snapshot.len();
+    ctx.serialize_to_bytes(&mut snapshot, &mut snap_len)
+        .expect("serialize snapshot");
+    let snap_view = LmnkContainerView::parse(&snapshot).expect("valid v0.3.0 snapshot");
+    assert_eq!(snap_view.header().version, LMNK_ABI_VERSION_HEX);
+
+    let patch_version_and_restamp = |base: &[u8], version: u32| -> Vec<u8> {
+        let mut buf = base.to_vec();
+        buf[4..8].copy_from_slice(&version.to_le_bytes());
+        let crc = compute_crc32_ieee(&buf[0..60]);
+        buf[60..64].copy_from_slice(&crc.to_le_bytes());
+        buf
+    };
+
+    for rejected_ver in [0x0000_0301u32, 0x0000_0200, 0x0000_0400, 0x0000_0000] {
+        let bad_container = patch_version_and_restamp(&container, rejected_ver);
+        assert_eq!(
+            LmnkContainerView::parse(&bad_container),
+            Err(LMNK_ERR_VERSION_MISMATCH),
+            "container version {rejected_ver:#010X} must fail with VERSION_MISMATCH"
+        );
+
+        let bad_snapshot = patch_version_and_restamp(&snapshot, rejected_ver);
+        let mut restore_ctx = RuntimeContext::new(Config::new()).expect("restore_ctx");
+        assert_eq!(
+            restore_ctx.deserialize_from_bytes(&bad_snapshot),
+            Err(LMNK_ERR_VERSION_MISMATCH),
+            "snapshot version {rejected_ver:#010X} must fail with VERSION_MISMATCH"
+        );
     }
 }

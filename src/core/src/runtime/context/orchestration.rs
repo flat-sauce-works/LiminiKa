@@ -121,7 +121,8 @@ impl RuntimeContext {
     }
 
     /// Updates runtime spine policy parameters (`0 alloc`) while monotonically raising the
-    /// permanent host compute pin floor (`baseline_pinned_compute_mask`).
+    /// permanent host compute pin floor (`baseline_pinned_compute_mask`) and re-clamping
+    /// [`crate::drivers::AnonymousComputePool`] masks so `configure_spine` and `configure_compute_pool` commute.
     ///
     /// Passing `0` for `baseline_pinned_compute_mask` preserves the active permanent floor while
     /// enforcing [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`].
@@ -141,6 +142,51 @@ impl RuntimeContext {
         self.system_spine.set_pre_bypass_enabled(pre_bypass_enabled);
         self.config.raw.guard_hold_tokens = guard_hold_tokens;
         self.config.raw.max_observe_stride = self.system_spine.max_observe_stride;
+        let effective_pinned = self.system_spine.pinned_compute_mask
+            | self.system_spine.baseline_pinned_compute_mask
+            | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        self.compute_pool.set_slot_masks(
+            self.compute_pool.active_mask,
+            effective_pinned,
+            self.compute_pool.repulsion_mask,
+            self.compute_pool.reversible_mask,
+        );
+    }
+
+    /// Configures anonymous compute pool slot masks (`active`, `repulsion`, `reversible`) and
+    /// optionally re-anchors the Gauge-Zero baseline pressure (`0 alloc`).
+    ///
+    /// - Host-pinned slots (`pinned_compute_mask | baseline_pinned_compute_mask |
+    ///   HOST_IMMUTABLE_PINNED_COMPUTE_MASK`) are never stripped and are clamped out of
+    ///   `repulsion_mask` and `reversible_mask` alongside any bits outside `active_mask`.
+    /// - Passing `0` for `baseline_pressure_q15` preserves the active baseline pressure
+    ///   (default `8192`); any non-zero value calls
+    ///   [`crate::drivers::AnonymousComputePool::reanchor_baseline_pressure`] (clamped to `32767`).
+    /// - Commutes with [`Self::configure_spine`]: calling either order yields identical
+    ///   `SystemSpineState` and `AnonymousComputePool` masks.
+    #[inline]
+    pub fn configure_compute_pool(
+        &mut self,
+        active_mask: u64,
+        repulsion_mask: u64,
+        reversible_mask: u64,
+        baseline_pressure_q15: u16,
+    ) {
+        self.system_spine
+            .apply_host_pin_floor(HOST_IMMUTABLE_PINNED_COMPUTE_MASK);
+        let effective_pinned = self.system_spine.pinned_compute_mask
+            | self.system_spine.baseline_pinned_compute_mask
+            | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        self.compute_pool.set_slot_masks(
+            active_mask,
+            effective_pinned,
+            repulsion_mask,
+            reversible_mask,
+        );
+        if baseline_pressure_q15 != 0 {
+            self.compute_pool
+                .reanchor_baseline_pressure(baseline_pressure_q15);
+        }
     }
 
     /// Initializes per-turn mechanical spine policy at prompt / turn boundaries (`0 alloc`).

@@ -12,7 +12,7 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::{compute_crc32_ieee, Pod};
-use crate::liminal::{BitCut8, LMNK_ABI_VERSION_HEX};
+use crate::liminal::{BitCut8, LMNK_ABI_COMPAT_VERSION_HEX};
 
 /// Binary magic constant for [`LiminalTopologyMatrix`] (`0x504F_544C` = ASCII `"LTOP"`).
 pub const LMNK_TOPOLOGY_MAGIC: u32 = 0x504F_544C;
@@ -74,7 +74,7 @@ pub const LMNK_TOPOLOGY_SANDBOX_CHANNEL_MASK: u8 = 1 << 7;
 pub struct LiminalTopologyMatrix {
     /// Structure identifier magic constant ([`LMNK_TOPOLOGY_MAGIC`] = `"LTOP"`, `offset 0..4`).
     pub magic: u32,
-    /// ABI version matching [`LMNK_ABI_VERSION_HEX`] (`offset 4..8`).
+    /// `MAJOR.MINOR` ABI compatibility prefix matching [`LMNK_ABI_COMPAT_VERSION_HEX`] (`offset 4..8`).
     pub version: u32,
     /// Architectural layer count (`5`, `offset 8`).
     pub layer_count: u8,
@@ -195,7 +195,7 @@ impl LiminalTopologyMatrix {
     #[must_use]
     pub const fn verify_crc32(&self) -> bool {
         (self.magic == LMNK_TOPOLOGY_MAGIC)
-            & (self.version == LMNK_ABI_VERSION_HEX)
+            & (self.version == LMNK_ABI_COMPAT_VERSION_HEX)
             & (self.topology_crc32 == self.compute_crc32())
     }
 
@@ -205,7 +205,7 @@ impl LiminalTopologyMatrix {
     pub const fn canonical_v0_3_0() -> Self {
         let mut matrix = Self {
             magic: LMNK_TOPOLOGY_MAGIC,
-            version: LMNK_ABI_VERSION_HEX,
+            version: LMNK_ABI_COMPAT_VERSION_HEX,
             layer_count: LMNK_TOPOLOGY_LAYER_COUNT,
             channel_count: LMNK_TOPOLOGY_CHANNEL_COUNT,
             dag_flags: LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL,

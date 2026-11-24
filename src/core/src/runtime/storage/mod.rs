@@ -17,7 +17,8 @@ use core::mem::{offset_of, size_of};
 pub use crate::foundation::KvMotionDeltaPacket;
 use crate::foundation::{compute_crc32_ieee, Pod};
 use crate::liminal::{
-    LmnkResult, LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_VERSION_MISMATCH,
+    is_compatible_abi_version, LmnkResult, LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL,
+    LMNK_ERR_VERSION_MISMATCH,
 };
 use crate::runtime::topology::CORE_TOPOLOGY;
 
@@ -451,14 +452,15 @@ pub const fn init_descriptor_header<T>() -> DescriptorHeader {
     }
 }
 
-/// Validates a `DescriptorHeader` against expected structure byte size and [`LMNK_ABI_VERSION_HEX`].
+/// Validates a `DescriptorHeader` against expected structure byte size and ABI compatibility
+/// ([`is_compatible_abi_version`] against [`LMNK_ABI_VERSION_HEX`]).
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `struct_size` or `abi_version` does not match.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `struct_size` or `abi_version` is incompatible.
 #[inline(always)]
 pub const fn validate_descriptor_header<T>(header: &DescriptorHeader) -> LmnkResult<()> {
     let valid = (header.struct_size as usize == size_of::<T>())
-        & (header.abi_version == LMNK_ABI_VERSION_HEX);
+        & is_compatible_abi_version(header.abi_version, LMNK_ABI_VERSION_HEX);
     if valid {
         Ok(())
     } else {

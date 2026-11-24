@@ -16,9 +16,9 @@ use crate::foundation::{
     compute_aligned64_payload_crc32_ieee, compute_crc32_ieee, AlignedSlice, Pod,
 };
 use crate::liminal::{
-    LmnkResult, RuntimeConfig, LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL,
-    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_TOPOLOGY_MISMATCH,
-    LMNK_ERR_VERSION_MISMATCH,
+    validate_abi_version, LmnkResult, RuntimeConfig, LMNK_ABI_VERSION_HEX,
+    LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT,
+    LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_ERR_VERSION_MISMATCH,
 };
 use crate::runtime::gateway::signals::CausalProvenanceReport;
 use crate::runtime::topology::CORE_TOPOLOGY;
@@ -396,8 +396,9 @@ impl<'a> LmnkContainerView<'a> {
     ///
     /// Validation sequence:
     /// 1. Length bounds (`64 <= bytes.len() <= 64 MiB`) and `header.total_size == bytes.len()`.
-    /// 2. Magic (`"LMNK"`), ABI version (`0x0000_0300`), header geometry (`header_size == 64`,
-    ///    `section_table_offset == 64`, `section_count <= 32`).
+    /// 2. Magic (`"LMNK"`), ABI version compatibility (`MAJOR.MINOR` strict match and
+    ///    `file_patch <= runtime_patch` via [`validate_abi_version`]), header geometry
+    ///    (`header_size == 64`, `section_table_offset == 64`, `section_count <= 32`).
     /// 3. Header IEEE 802.3 CRC32 verification (`bytes[0..60]`).
     /// 4. Topology CRC32 verification against [`CORE_TOPOLOGY`] ([`LMNK_ERR_TOPOLOGY_MISMATCH`]).
     /// 5. Monotonic 64B-aligned non-overlapping section table parsing, unique `kind` enforcement,
@@ -423,9 +424,7 @@ impl<'a> LmnkContainerView<'a> {
         if header.magic != LMNK_CONTAINER_MAGIC {
             return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
-        if header.version != LMNK_ABI_VERSION_HEX {
-            return Err(LMNK_ERR_VERSION_MISMATCH);
-        }
+        validate_abi_version(header.version)?;
         if header.header_size != LMNK_CONTAINER_HEADER_BYTES as u16
             || header.section_table_offset != LMNK_CONTAINER_HEADER_BYTES as u32
             || header.section_count > LMNK_MAX_CONTAINER_SECTIONS

@@ -40,10 +40,11 @@ use crate::foundation::{
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_q7, branchless_select_usize, AbstractDomain, Grounded,
-    Indivisible, LmnkResult, PhaseQ7, Scoped, DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX,
-    LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, branchless_select_q7, branchless_select_usize,
+    is_compatible_abi_version, AbstractDomain, Grounded, Indivisible, LmnkResult, PhaseQ7, Scoped,
+    DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
+    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES,
 };
 
 /// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
@@ -264,8 +265,6 @@ impl PhaseAnchorRecord {
     /// Borrows `self.phase_profile` (`offset 64` of `#[repr(C, align(64))]` [`Self`], guaranteed
     /// 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR reference on little-endian targets,
     /// eliminating 64-byte stack copies and 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls.
-    /// Borrows `self.phase_profile` (`offset 64` of `#[repr(C, align(64))]`
-    /// [`PhaseAnchorRecord`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
     pub const fn phase_words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
@@ -641,15 +640,19 @@ impl PhaseAnchorRecord {
         *self.phase_words_mut() = *src.phase_words_ref();
     }
 
-    /// Verifies `magic`, `version`, and the IEEE 802.3 `checksum_crc32` integrity of this record.
+    /// Verifies `magic`, ABI-compatible `version` (`MAJOR.MINOR` strict match, `file_patch <= runtime_patch`),
+    /// and the IEEE 802.3 `checksum_crc32` integrity of this record.
     #[inline(always)]
     #[must_use]
     pub const fn verify_integrity(&self) -> bool {
-        if (self.magic != LMNK_PHASE_ANCHOR_MAGIC) | (self.version != LMNK_PHASE_ANCHOR_VERSION) {
+        if (self.magic != LMNK_PHASE_ANCHOR_MAGIC)
+            | !is_compatible_abi_version(self.version, LMNK_PHASE_ANCHOR_VERSION)
+        {
             return false;
         }
         let pw = self.phase_words_ref();
-        if self.sample_count == 0
+        if self.version == LMNK_PHASE_ANCHOR_VERSION
+            && self.sample_count == 0
             && ((self.anchor_id
                 | self.base_energy.to_bits()
                 | self.resultant_r_bar.to_bits()

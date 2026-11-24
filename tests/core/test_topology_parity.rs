@@ -9,7 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use liminika_core::foundation::{compute_crc32_ieee, Pod};
-use liminika_core::liminal::BitCut8;
+use liminika_core::liminal::{
+    BitCut8, LMNK_ABI_COMPAT_MASK, LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_HEX,
+};
 use liminika_core::runtime::{
     CORE_TOPOLOGY, LMNK_TOPOLOGY_CHANNEL_COUNT, LMNK_TOPOLOGY_DAG_EDGE_MATRIX,
     LMNK_TOPOLOGY_LAYER_COUNT, LMNK_TOPOLOGY_MAGIC,
@@ -49,6 +51,12 @@ fn test_core_topology_matrix_and_filesystem_dag_parity() {
     assert_eq!(core::mem::size_of_val(&CORE_TOPOLOGY), 64);
     assert_eq!(core::mem::align_of_val(&CORE_TOPOLOGY), 64);
     assert_eq!(CORE_TOPOLOGY.magic, LMNK_TOPOLOGY_MAGIC);
+    assert_eq!(LMNK_ABI_COMPAT_MASK, 0xFFFF_FF00);
+    assert_eq!(
+        LMNK_ABI_COMPAT_VERSION_HEX,
+        LMNK_ABI_VERSION_HEX & LMNK_ABI_COMPAT_MASK
+    );
+    assert_eq!(CORE_TOPOLOGY.version, LMNK_ABI_COMPAT_VERSION_HEX);
     assert_eq!(CORE_TOPOLOGY.layer_count, LMNK_TOPOLOGY_LAYER_COUNT);
     assert_eq!(CORE_TOPOLOGY.channel_count, LMNK_TOPOLOGY_CHANNEL_COUNT);
     assert_eq!(CORE_TOPOLOGY.dag_edge_matrix, LMNK_TOPOLOGY_DAG_EDGE_MATRIX);

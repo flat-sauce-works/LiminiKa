@@ -23,6 +23,10 @@ pub const LMNK_ABI_VERSION_PATCH: u32 = 0;
 /// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0300`).
 pub const LMNK_ABI_VERSION_HEX: u32 =
     (LMNK_ABI_VERSION_MAJOR << 16) | (LMNK_ABI_VERSION_MINOR << 8) | LMNK_ABI_VERSION_PATCH;
+/// Bitmask extracting `(MAJOR << 16) | (MINOR << 8)` for Pre-1.0 ABI compatibility checks.
+pub const LMNK_ABI_COMPAT_MASK: u32 = 0xFFFF_FF00;
+/// Packed hexadecimal `MAJOR.MINOR` compatibility prefix (`LMNK_ABI_VERSION_HEX & LMNK_ABI_COMPAT_MASK`).
+pub const LMNK_ABI_COMPAT_VERSION_HEX: u32 = LMNK_ABI_VERSION_HEX & LMNK_ABI_COMPAT_MASK;
 /// String Representation of the active Unified ABI Version (derived from `Cargo.toml`).
 pub const LMNK_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
 /// NUL-terminated C string representation of the active Unified ABI Version.
@@ -52,13 +56,25 @@ pub const LMNK_CAP_ZERO_ALLOC_CORE: u64 = 1 << 4;
 /// Capability bitmask flag indicating zero-heap caller-buffered `in_place` context lifecycle.
 pub const LMNK_CAP_INPLACE_CONTEXT_INIT: u64 = 1 << 5;
 
-/// Validates a C-ABI snapshot or descriptor version against [`LMNK_ABI_VERSION_HEX`].
+/// Returns `true` when `file_version` is ABI-compatible with `runtime_version`:
+/// non-zero, identical `MAJOR.MINOR` prefix (`& LMNK_ABI_COMPAT_MASK`), and
+/// `file_patch <= runtime_patch` (Pre-1.0 strict `MAJOR.MINOR` + `PATCH` backward compatibility).
+#[inline(always)]
+#[must_use]
+pub const fn is_compatible_abi_version(file_version: u32, runtime_version: u32) -> bool {
+    (file_version != 0)
+        & ((file_version & LMNK_ABI_COMPAT_MASK) == (runtime_version & LMNK_ABI_COMPAT_MASK))
+        & ((file_version & 0xFF) <= (runtime_version & 0xFF))
+}
+
+/// Validates a C-ABI snapshot or container version against [`LMNK_ABI_VERSION_HEX`] using
+/// [`is_compatible_abi_version`] (`MAJOR.MINOR` strict match and `file_patch <= runtime_patch`).
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version_hex != LMNK_ABI_VERSION_HEX`.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version_hex` is incompatible with [`LMNK_ABI_VERSION_HEX`].
 #[inline(always)]
 pub const fn validate_abi_version(version_hex: u32) -> Result<(), LmnkStatus> {
-    if version_hex == LMNK_ABI_VERSION_HEX {
+    if is_compatible_abi_version(version_hex, LMNK_ABI_VERSION_HEX) {
         Ok(())
     } else {
         Err(LMNK_ERR_VERSION_MISMATCH)

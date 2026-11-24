@@ -51,7 +51,7 @@ pub struct DistortionTension {
     pub deadband_high_q7: u8,
     /// Effective multiplicative Q0.7 scale applied to [`DistortionDelta`] amplitudes (`offset 3`).
     pub effective_ego_scale_q7: u8,
-    /// Slow-Loop accumulator (`0..=255`) driving gradual Ego awakening (`offset 4`).
+    /// Slow-Loop accumulator (`0..=255`) driving gradual Ego excitation (`offset 4`).
     pub excitation_potential_u8: u8,
     /// Remaining Hot-Path cooldown steps after immediate damping (`offset 5`).
     pub suppression_cooldown_steps: u8,

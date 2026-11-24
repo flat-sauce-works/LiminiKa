@@ -71,6 +71,19 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_configure_spine(
     lmnk_context_handle_t context, uint64_t baseline_pinned_compute_mask, uint8_t guard_hold_tokens,
     uint8_t max_observe_stride, uint8_t pre_bypass_enabled) LMNK_NOEXCEPT;
 
+/**
+ * Configures the embedded compute pool slot masks and optional Gauge-Zero baseline pressure.
+ *
+ * Bits outside `active_mask` and host-pinned slots (`baseline_pinned_compute_mask |
+ * LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK`) are clamped out of `repulsion_mask` and
+ * `reversible_mask`. Passing `0` for `baseline_pressure_q15` preserves the active baseline
+ * pressure (default `8192`); non-zero values re-anchor it (clamped to `32767`). Commutes with
+ * `lmnk_context_configure_spine` in either call order.
+ */
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_configure_compute_pool(
+    lmnk_context_handle_t context, uint64_t active_mask, uint64_t repulsion_mask,
+    uint64_t reversible_mask, uint16_t baseline_pressure_q15) LMNK_NOEXCEPT;
+
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_get_spine_state(
     lmnk_context_handle_t context, lmnk_spine_state_t* LMNK_RESTRICT state_out) LMNK_NOEXCEPT;
 

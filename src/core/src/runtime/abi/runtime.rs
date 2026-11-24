@@ -453,6 +453,41 @@ pub unsafe extern "C" fn lmnk_context_configure_spine(
     })
 }
 
+/// Configures the embedded `AnonymousComputePool` slot bitmasks (`active`, `repulsion`,
+/// `reversible`) and optional Gauge-Zero baseline pressure (`0 alloc`).
+///
+/// - Bits outside `active_mask` and host-pinned bits (`pinned_compute_mask |
+///   baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK`) are clamped out of
+///   `repulsion_mask` and `reversible_mask` without stripping host pin floors.
+/// - `baseline_pressure_q15 == 0` preserves the active baseline pressure (default `8192`);
+///   non-zero values re-anchor via `reanchor_baseline_pressure` (clamped to `32767`).
+/// - Commutes with [`lmnk_context_configure_spine`] in either call order.
+///
+/// # Safety
+/// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
+#[no_mangle]
+pub unsafe extern "C" fn lmnk_context_configure_compute_pool(
+    context: LmnkContextHandle,
+    active_mask: u64,
+    repulsion_mask: u64,
+    reversible_mask: u64,
+    baseline_pressure_q15: u16,
+) -> LmnkStatus {
+    ffi_boundary!({
+        let typed = context.cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        // SAFETY: `typed` is verified non-null, 64B-aligned, and exclusively mutably accessed.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(typed)? };
+        ctx.configure_compute_pool(
+            active_mask,
+            repulsion_mask,
+            reversible_mask,
+            baseline_pressure_q15,
+        );
+        Ok(LMNK_OK)
+    })
+}
+
 /// Copies a read-only 64-byte [`lmnk_spine_state_t`] snapshot out of `context` (`0 alloc`).
 ///
 /// # Safety

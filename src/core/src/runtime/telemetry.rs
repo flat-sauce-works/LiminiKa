@@ -44,7 +44,7 @@ pub enum LayerDistortionKind {
 }
 
 /// Lazy-computed diagnostic summary of cross-layer distortion (`Distortion`) used to trigger
-/// corrective Ego awakening on passive stalls or Ego cooldown on active overdrive.
+/// corrective Ego excitation on passive stalls or Ego cooldown on active overdrive.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LayerDistortionReport {
