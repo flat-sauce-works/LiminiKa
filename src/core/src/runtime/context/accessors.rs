@@ -569,7 +569,13 @@ impl RuntimeContext {
         thresholds: StigmergicThresholds,
         baseline_entropy: f32,
     ) -> Result<()> {
-        if substrate_capacity == 0 || head_dim > u16::MAX as u32 || num_heads > u16::MAX as u32 {
+        if substrate_capacity == 0
+            || head_dim > u16::MAX as u32
+            || num_heads > u16::MAX as u32
+            || rotary_dim > head_dim
+            || (rotary_dim & 1) != 0
+            || rope_layout > 1
+        {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         thresholds.validate()?;

@@ -31,6 +31,9 @@ void test_static_invariants() {
     static_assert(LMNK_PHASE_ANCHOR_VERSION == LMNK_ABI_VERSION_HEX);
     static_assert(sizeof(lmnk_config_t) == 64U);
     static_assert(alignof(lmnk_config_t) == 64U);
+    static_assert(offsetof(lmnk_config_t, guard_hold_tokens) == 44U);
+    static_assert(offsetof(lmnk_config_t, max_observe_stride) == 45U);
+    static_assert(offsetof(lmnk_config_t, reserved) == 46U);
     static_assert(sizeof(lmnk_pointer_trail_t) == 128U);
     static_assert(alignof(lmnk_pointer_trail_t) == 64U);
     static_assert(sizeof(lmnk_entropy_state_t) == 32U);
@@ -47,10 +50,13 @@ void test_static_invariants() {
     static_assert(alignof(lmnk_spine_state_t) == 64U);
     static_assert(sizeof(lmnk_system_pressure_reading_t) == 8U);
     static_assert(sizeof(lmnk_compute_dispatch_mask_t) == 40U);
-    static_assert(sizeof(lmnk_spine_decode_input_t) == 16U);
+    static_assert(sizeof(lmnk_spine_decode_input_t) == 32U);
     static_assert(alignof(lmnk_spine_decode_input_t) == 16U);
-    static_assert(sizeof(lmnk_spine_step_plan_t) == 48U);
-    static_assert(alignof(lmnk_spine_step_plan_t) == 16U);
+    static_assert(offsetof(lmnk_spine_decode_input_t, exit_reward_override_q7) == 16U);
+    static_assert(offsetof(lmnk_spine_decode_input_t, reserved) == 17U);
+    static_assert(sizeof(lmnk_spine_step_plan_t) == 64U);
+    static_assert(alignof(lmnk_spine_step_plan_t) == 64U);
+    static_assert(offsetof(lmnk_spine_step_plan_t, reserved_align) == 44U);
     static_assert(sizeof(lmnk_distortion_delta_t) == 128U);
     static_assert(alignof(lmnk_distortion_delta_t) == 64U);
     static_assert(sizeof(lmnk_distortion_tension_t) == 32U);
@@ -182,21 +188,39 @@ void test_context_boxed_and_in_place_lifecycle() {
     LMNK_TEST_CHECK(restored_trail.step_count == 2U);
     LMNK_TEST_CHECK(restored_trail.prev_ptr == 42U);
 
+    LMNK_TEST_CHECK(lmnk_context_configure_spine(restored, 0x0081ULL, 3U, 4U, 1U) == LMNK_OK);
+    // Passing 0 for baseline_pinned_compute_mask preserves existing host floor monotonically.
+    LMNK_TEST_CHECK(lmnk_context_configure_spine(restored, 0ULL, 3U, 4U, 1U) == LMNK_OK);
+    alignas(64) lmnk_spine_state_t spine_snap{};
+    LMNK_TEST_CHECK(lmnk_context_get_spine_state(restored, &spine_snap) == LMNK_OK);
+    LMNK_TEST_CHECK((spine_snap.baseline_pinned_compute_mask & 0x0081ULL) == 0x0081ULL);
+    LMNK_TEST_CHECK((spine_snap.baseline_pinned_compute_mask &
+                     LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK) != 0ULL);
+    LMNK_TEST_CHECK(spine_snap.guard_hold_tokens == 3U);
+    LMNK_TEST_CHECK(spine_snap.max_observe_stride == 4U);
+
     LMNK_TEST_CHECK(lmnk_context_begin_turn_spine_policy(restored, 0U, 0U) == LMNK_OK);
+    alignas(64) lmnk_spine_step_plan_t decode_plan{};
+    // Zero-initialized C/C++ `lmnk_spine_decode_input_t` is valid (`Unobserved`, auto reward).
+    alignas(16) lmnk_spine_decode_input_t zero_decode_in{};
+    LMNK_TEST_CHECK(lmnk_context_step_decode_control(restored, &zero_decode_in, 0U, &decode_plan) ==
+                    LMNK_OK);
+
     alignas(16) lmnk_spine_decode_input_t decode_in{};
     decode_in.pressure.frame_time_pressure_q15 = 8192U;
     decode_in.observed_exit_entropy_q15 = 9830U;
     decode_in.decode_step_index = 0U;
-    decode_in.exit_entropy_lacuna_code = 1U;
+    decode_in.exit_entropy_lacuna_code = LMNK_LACUNA_SELF_REF;
     decode_in.boundary_sensitivity_q7 = 8U;
     decode_in.min_calm_dwell = 2U;
     decode_in.flags = LMNK_SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING |
-                      LMNK_SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED;
-    alignas(16) lmnk_spine_step_plan_t decode_plan{};
+                      LMNK_SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED |
+                      LMNK_SPINE_DECODE_FLAG_REWARD_OVERRIDE;
+    decode_in.exit_reward_override_q7 = 200U;
     LMNK_TEST_CHECK(lmnk_context_step_decode_control(restored, &decode_in, 0U, &decode_plan) ==
                     LMNK_OK);
     LMNK_TEST_CHECK(decode_plan.next_observe_mode == LMNK_SPINE_LOGITS_OBSERVE_FULL);
-    LMNK_TEST_CHECK(decode_plan.effective_observe_stride == 1U);
+    LMNK_TEST_CHECK(decode_plan.effective_observe_stride >= LMNK_SPINE_MIN_DYNAMIC_OBSERVE_STRIDE);
 
     // Mutate topology_crc32 and re-stamp header_crc32 to trigger LMNK_ERR_TOPOLOGY_MISMATCH
     raw_ptr[8] ^= 0x01U;

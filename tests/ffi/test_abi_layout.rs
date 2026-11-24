@@ -32,7 +32,15 @@ fn test_lmnk_types_abi_layout_invariants() {
         offset_of!(liminika_core::abi::lmnk_config_t, execution_flags),
         40
     );
-    assert_eq!(offset_of!(liminika_core::abi::lmnk_config_t, reserved), 44);
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_config_t, guard_hold_tokens),
+        44
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_config_t, max_observe_stride),
+        45
+    );
+    assert_eq!(offset_of!(liminika_core::abi::lmnk_config_t, reserved), 46);
 
     // Verify 64-byte, 64-byte-aligned lmnk_ledger_slot_t
     assert_eq!(size_of::<liminika_core::abi::lmnk_ledger_slot_t>(), 64);
@@ -497,20 +505,35 @@ fn test_lmnk_types_abi_layout_invariants() {
     );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_spine_decode_input_t>(),
-        16
+        32
     );
     assert_eq!(
         align_of::<liminika_core::abi::lmnk_spine_decode_input_t>(),
         16
     );
-    assert_eq!(size_of::<liminika_core::abi::lmnk_spine_step_plan_t>(), 48);
-    assert_eq!(align_of::<liminika_core::abi::lmnk_spine_step_plan_t>(), 16);
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_spine_decode_input_t,
+            exit_reward_override_q7
+        ),
+        16
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_decode_input_t, reserved),
+        17
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_spine_step_plan_t>(), 64);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_spine_step_plan_t>(), 64);
     assert_eq!(
         offset_of!(
             liminika_core::abi::lmnk_spine_step_plan_t,
             next_observe_mode
         ),
         40
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_spine_step_plan_t, reserved_align),
+        44
     );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_distortion_delta_t>(),

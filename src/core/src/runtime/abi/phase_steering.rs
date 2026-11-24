@@ -1158,13 +1158,15 @@ pub unsafe extern "C" fn lmnk_phase_steering_destroy(
     if kernel.is_null() {
         return LMNK_OK;
     }
-    if !is_aligned(kernel) {
+    let typed = kernel.cast::<PhaseSteeringEngine>();
+    if !is_aligned(typed) {
         return LMNK_ERR_ALIGNMENT;
     }
     ffi_boundary!({
-        // SAFETY: `kernel` was allocated via `Box::into_raw` in `lmnk_phase_steering_create`.
+        // SAFETY: `typed` is verified non-null, naturally aligned for `PhaseSteeringEngine`,
+        // and was allocated via `Box::into_raw` in `lmnk_phase_steering_create`.
         unsafe {
-            let _ = Box::from_raw(kernel.cast::<PhaseSteeringEngine>());
+            let _ = Box::from_raw(typed);
         }
         Ok(LMNK_OK)
     })

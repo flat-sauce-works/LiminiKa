@@ -101,7 +101,9 @@ pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
         ledger_mode: 0,
         rotary_dim: 0,
         rope_layout: 0,
-        reserved: [0; 20],
+        guard_hold_tokens: 0,
+        max_observe_stride: 1,
+        reserved: [0; 18],
     };
     Ok(())
 }
@@ -116,6 +118,9 @@ pub fn validate_config_invariants(config: &RuntimeConfig) -> LmnkResult<()> {
         & ((config.head_dim & 1) == 0)
         & (config.num_heads != 0)
         & ((config.num_heads as usize) <= MAX_ATTENTION_HEADS)
+        & (config.rotary_dim <= config.head_dim)
+        & ((config.rotary_dim & 1) == 0)
+        & (config.rope_layout <= 1)
         & ((config.paged_block_size == 16) | (config.paged_block_size == 32));
     let valid_scales = branchless_is_finite_f32(config.q7_phase_scale)
         & (config.q7_phase_scale > 0.0)
@@ -488,12 +493,21 @@ impl RuntimeContext {
         entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
         entropy_ctrl.set_tau_flux(config.tau_flux);
 
+        let mut config = config;
+        if config.raw.max_observe_stride == 0 {
+            config.raw.max_observe_stride = 1;
+        }
+        let system_spine = SystemSpineState::with_policy(
+            config.raw.guard_hold_tokens,
+            config.raw.max_observe_stride,
+        );
+
         Ok(Self {
             config,
             core_layers: CoreStateStack::new(),
             entropy_controller: entropy_ctrl,
             probe_baseline: ManifoldProbeBaseline::new(),
-            system_spine: SystemSpineState::new(),
+            system_spine,
             last_horizon: EpistemicHorizonReading::default(),
             last_overlap_report: OverlapDiscoveryReport::default(),
             distortion_tension: DistortionTension::default(),
@@ -542,6 +556,10 @@ impl RuntimeContext {
         entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
         entropy_ctrl.set_tau_flux(config.tau_flux);
 
+        let mut config = config;
+        if config.raw.max_observe_stride == 0 {
+            config.raw.max_observe_stride = 1;
+        }
         let raw_cfg = config.raw;
         let rep_thresh = config.repulsion_threshold;
         let rep_scale_u7 = config.repulsion_scale_u7;
@@ -565,7 +583,10 @@ impl RuntimeContext {
             );
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).system_spine),
-                SystemSpineState::new(),
+                SystemSpineState::with_policy(
+                    raw_cfg.guard_hold_tokens,
+                    raw_cfg.max_observe_stride,
+                ),
             );
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).last_horizon),

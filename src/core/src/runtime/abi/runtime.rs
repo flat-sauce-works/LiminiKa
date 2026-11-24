@@ -282,7 +282,13 @@ pub unsafe extern "C" fn lmnk_context_create(
     context_out: *mut LmnkContextHandle,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
+        validate_ptr(config)?;
+        validate_ptr(context_out)?;
+        check_disjoint_rw(
+            &[(context_out as usize, size_of::<LmnkContextHandle>())],
+            &[(config as usize, size_of::<lmnk_config_t>())],
+        )?;
+        // SAFETY: Validated for non-nullness, alignment, and disjointness above.
         let (cfg, mut out_handle) = unsafe {
             (
                 FfiHandleRef::from_raw(config)?,
@@ -416,6 +422,66 @@ pub unsafe extern "C" fn lmnk_context_step_token(
     })
 }
 
+/// Configures runtime mechanical spine policy parameters (`0 alloc`) while monotonically raising
+/// the permanent host compute pin floor (`baseline_pinned_compute_mask`).
+///
+/// Passing `0` for `baseline_pinned_compute_mask` preserves the active host floor while enforcing
+/// [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`]. `max_observe_stride == 0` is normalized to `1`.
+///
+/// # Safety
+/// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
+#[no_mangle]
+pub unsafe extern "C" fn lmnk_context_configure_spine(
+    context: LmnkContextHandle,
+    baseline_pinned_compute_mask: u64,
+    guard_hold_tokens: u8,
+    max_observe_stride: u8,
+    pre_bypass_enabled: u8,
+) -> LmnkStatus {
+    ffi_boundary!({
+        let typed = context.cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        // SAFETY: `typed` is verified non-null, 64B-aligned, and exclusively mutably accessed.
+        let mut ctx = unsafe { FfiHandleMut::from_raw(typed)? };
+        ctx.configure_spine(
+            baseline_pinned_compute_mask,
+            guard_hold_tokens,
+            max_observe_stride,
+            pre_bypass_enabled != 0,
+        );
+        Ok(LMNK_OK)
+    })
+}
+
+/// Copies a read-only 64-byte [`lmnk_spine_state_t`] snapshot out of `context` (`0 alloc`).
+///
+/// # Safety
+/// `context` (`64 B` aligned) and `state_out` (`64 B` aligned) must be non-null and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn lmnk_context_get_spine_state(
+    context: LmnkContextHandle,
+    state_out: *mut lmnk_spine_state_t,
+) -> LmnkStatus {
+    ffi_boundary!({
+        let typed = context.cast_const().cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        validate_ptr(state_out)?;
+        check_disjoint_rw(
+            &[(state_out as usize, size_of::<lmnk_spine_state_t>())],
+            &[(typed as usize, size_of::<RuntimeContext>())],
+        )?;
+        // SAFETY: `typed` and `state_out` are verified non-null, 64B-aligned, and disjoint above.
+        let (ctx, mut out_ref) = unsafe {
+            (
+                FfiHandleRef::from_raw(typed)?,
+                FfiHandleMut::from_raw(state_out)?,
+            )
+        };
+        *out_ref = *ctx.system_spine();
+        Ok(LMNK_OK)
+    })
+}
+
 /// Initializes per-turn mechanical spine policy at prompt / turn boundaries (`0 alloc`).
 ///
 /// # Safety
@@ -437,7 +503,7 @@ pub unsafe extern "C" fn lmnk_context_begin_turn_spine_policy(
 }
 
 /// Evaluates one 4-stage decode control step on [`RuntimeContext`] (`0 alloc`, `0 fdiv`), reading
-/// `input` (`16 B`) and writing `plan_out` (`48 B`).
+/// `input` (`32 B`, `16 B` aligned) and writing `plan_out` (`64 B`, `64 B` aligned).
 ///
 /// # Safety
 /// All pointers must be non-null, naturally aligned, and pairwise disjoint in memory.
@@ -767,12 +833,26 @@ pub unsafe extern "C" fn lmnk_container_verify_with_reports_zero_copy(
         if byte_len < LMNK_CONTAINER_HEADER_BYTES {
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
+        let c_bytes = validate_raw_slice_bounds(container_bytes, byte_len)?;
         // SAFETY: `container_bytes` is non-null, `byte_len >= 64`, and within `isize::MAX`.
         let bytes = unsafe { checked_slice_from_raw_parts(container_bytes, byte_len)? };
         let view = LmnkContainerView::parse(bytes)?;
         if ((container_bytes as usize) & 63) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
+        check_disjoint_rw(
+            &[
+                opt_span(num_anchors_out)?,
+                opt_span(num_trails_out)?,
+                opt_span(num_reports_out)?,
+                opt_span(anchors_ptr_out)?,
+                opt_span(trails_ptr_out)?,
+                opt_span(bloom_ptr_out)?,
+                opt_span(ledger_ptr_out)?,
+                opt_span(reports_ptr_out)?,
+            ],
+            &[(container_bytes as usize, c_bytes)],
+        )?;
 
         let anchors = view.phase_anchors_zero_copy()?;
         let trails = view.pointer_trails_zero_copy()?;
@@ -887,39 +967,19 @@ pub unsafe extern "C" fn lmnk_container_map_and_steer_zero_copy_safe(
         validate_ptr(trail_inout)?;
         let (_, total_len) = init_phase_engine(head_dim, num_heads)?;
         let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
-        if raw_byte_ranges_overlap(
-            container_bytes as usize,
-            c_bytes,
-            trail_inout as usize,
-            size_of::<lmnk_pointer_trail_t>(),
-        ) || raw_byte_ranges_overlap(
-            container_bytes as usize,
-            c_bytes,
-            query_tensor as usize,
-            qk_bytes,
-        ) || (!key_tensor.is_null()
-            && raw_byte_ranges_overlap(
-                container_bytes as usize,
-                c_bytes,
-                key_tensor as usize,
-                qk_bytes,
-            ))
-            || raw_byte_ranges_overlap(
-                trail_inout as usize,
-                size_of::<lmnk_pointer_trail_t>(),
-                query_tensor as usize,
-                qk_bytes,
-            )
-            || (!key_tensor.is_null()
-                && raw_byte_ranges_overlap(
-                    trail_inout as usize,
-                    size_of::<lmnk_pointer_trail_t>(),
-                    key_tensor as usize,
-                    qk_bytes,
-                ))
-        {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+        let k_bytes = if key_tensor.is_null() { 0 } else { qk_bytes };
+        check_disjoint_rw(
+            &[
+                (trail_inout as usize, size_of::<lmnk_pointer_trail_t>()),
+                (query_tensor as usize, qk_bytes),
+                (key_tensor as usize, k_bytes),
+                opt_span(num_anchors_out)?,
+                opt_span(total_pull_out)?,
+                opt_span(dominant_anchor_id_out)?,
+                opt_span(effective_phase_clamp_rad_out)?,
+            ],
+            &[(container_bytes as usize, c_bytes)],
+        )?;
 
         // SAFETY: `container_bytes` is non-null and bounds-checked; `bind_qk_32` validates Q/K
         // alignment and disjointness; `trail_inout` is disjoint from Q/K and `container_bytes`.

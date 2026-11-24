@@ -275,27 +275,31 @@ unsafe fn validate_and_unpack_rank1_descriptor<'a>(
     if desc.rank != 1 || d_in == 0 || d_out == 0 || !branchless_is_finite_f32(desc.scale_factor) {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-    let u_ptr = desc.u_vector_ptr as *const f32;
-    let v_ptr = desc.v_vector_ptr as *const f32;
-    if (u_ptr as usize) & 31 != 0 || (v_ptr as usize) & 31 != 0 {
+    let u_addr = usize::try_from(desc.u_vector_ptr).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
+    let v_addr = usize::try_from(desc.v_vector_ptr).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
+    let u_ptr = u_addr as *const f32;
+    let v_ptr = v_addr as *const f32;
+    if (u_addr & 31) != 0 || (v_addr & 31) != 0 {
         return Err(LMNK_ERR_ALIGNMENT);
     }
     let y_bytes = validate_raw_slice_bounds(y_out_ptr, d_out)?;
     let u_bytes = validate_raw_slice_bounds(u_ptr, d_out)?;
     let v_bytes = validate_raw_slice_bounds(v_ptr, d_in)?;
-    if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, u_ptr as usize, u_bytes)
-        || raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, v_ptr as usize, v_bytes)
+    if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, u_addr, u_bytes)
+        || raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, v_addr, v_bytes)
     {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let g_ptr_opt = if desc.gain_scalar_ptr != 0 {
-        let g_ptr = desc.gain_scalar_ptr as *const f32;
-        if (g_ptr as usize) & 31 != 0 {
+        let g_addr =
+            usize::try_from(desc.gain_scalar_ptr).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
+        let g_ptr = g_addr as *const f32;
+        if (g_addr & 31) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         let g_bytes = validate_raw_slice_bounds(g_ptr, d_out)?;
-        if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, g_ptr as usize, g_bytes) {
+        if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, g_addr, g_bytes) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         Some(g_ptr)

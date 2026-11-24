@@ -310,7 +310,13 @@ pub unsafe extern "C" fn lmnk_substrate_step_pointer(
     trail_out: *mut lmnk_pointer_trail_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        validate_ptr(context.cast::<RuntimeContext>())?;
+        let typed = context.cast_const().cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        validate_ptr(trail_out)?;
+        check_disjoint_rw(
+            &[(trail_out as usize, size_of::<lmnk_pointer_trail_t>())],
+            &[(typed as usize, size_of::<RuntimeContext>())],
+        )?;
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and 64B alignment.
         let mut trail = unsafe { FfiHandleMut::from_raw(trail_out)? };
         let tp = TaggedPtr(current_ptr);
@@ -675,7 +681,13 @@ pub unsafe extern "C" fn lmnk_ledger_fast_path_lookup(
     shortcut_out: *mut u64,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
+        validate_ptr(slot)?;
+        validate_ptr(shortcut_out)?;
+        check_disjoint_rw(
+            &[(shortcut_out as usize, size_of::<u64>())],
+            &[(slot as usize, size_of::<lmnk_ledger_slot_t>())],
+        )?;
+        // SAFETY: Validated for non-nullness, alignment, and disjointness above.
         let (slot_ref, mut out_val) = unsafe {
             (
                 FfiHandleRef::from_raw(slot)?,
@@ -732,7 +744,13 @@ pub unsafe extern "C" fn lmnk_ledger_evaluate_auto_tune(
     config_out: *mut lmnk_config_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
+        validate_ptr(slot)?;
+        validate_ptr(config_out)?;
+        check_disjoint_rw(
+            &[(config_out as usize, size_of::<lmnk_config_t>())],
+            &[(slot as usize, size_of::<lmnk_ledger_slot_t>())],
+        )?;
+        // SAFETY: Validated for non-nullness, alignment, and disjointness above.
         let (slot_ref, mut cfg_mut) = unsafe {
             (
                 FfiHandleRef::from_raw(slot)?,

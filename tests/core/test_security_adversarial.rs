@@ -16,30 +16,36 @@ use std::ptr;
 
 use liminika_core::abi::{
     lmnk_config_init_default, lmnk_config_t, lmnk_container_map_and_steer_zero_copy_safe,
-    lmnk_container_verify_with_reports_zero_copy, lmnk_context_align, lmnk_context_create,
+    lmnk_container_verify_with_reports_zero_copy, lmnk_context_align,
+    lmnk_context_begin_turn_spine_policy, lmnk_context_configure_spine, lmnk_context_create,
     lmnk_context_deinit_in_place, lmnk_context_deserialize, lmnk_context_destroy,
-    lmnk_context_init_in_place, lmnk_context_serialize, lmnk_context_size, lmnk_context_step_token,
+    lmnk_context_get_spine_state, lmnk_context_init_in_place, lmnk_context_serialize,
+    lmnk_context_size, lmnk_context_step_decode_control, lmnk_context_step_token,
     lmnk_distortion_delta_apply_chain, lmnk_distortion_tension_step_hot_path,
-    lmnk_gateway_project_bytes_to_q7_64, lmnk_gateway_project_f32_to_q7_64,
+    lmnk_entropy_controller_create, lmnk_entropy_controller_destroy, lmnk_entropy_eval_stateful,
+    lmnk_entropy_state_t, lmnk_gateway_project_bytes_to_q7_64, lmnk_gateway_project_f32_to_q7_64,
     lmnk_gateway_synthesize_multi_origin_frame, lmnk_ledger_evaluate_auto_tune,
     lmnk_ledger_fast_path_lookup, lmnk_ledger_reset_telemetry, lmnk_ledger_set_mode,
-    lmnk_ledger_telemetry_push, lmnk_liminal_eval_barrier, lmnk_liminal_eval_barrier_pitchfork,
-    lmnk_liminal_eval_dyadic128, lmnk_liminal_evaluate_lacuna_partition, lmnk_lora_project,
+    lmnk_ledger_slot_t, lmnk_ledger_telemetry_push, lmnk_liminal_eval_barrier,
+    lmnk_liminal_eval_barrier_pitchfork, lmnk_liminal_eval_dyadic128,
+    lmnk_liminal_evaluate_lacuna_partition, lmnk_lora_project,
     lmnk_phase_steering_apply_fused_safe, lmnk_phase_steering_apply_safe,
     lmnk_phase_steering_compute_procrustes_half_split, lmnk_phase_steering_create,
     lmnk_phase_steering_destroy, lmnk_phase_steering_fused_logit_shift,
     lmnk_phase_steering_steer_gateway_frame_safe, lmnk_pointer_trail_t, lmnk_q7_t,
-    lmnk_rank1_descriptor_t, lmnk_rank1_eval, lmnk_rank1_eval_fused,
-    lmnk_subhead_dispatch_single_pass, lmnk_substrate_create, lmnk_substrate_destroy,
-    lmnk_substrate_evaluate_thresholds, lmnk_substrate_hash_slot256_index,
-    lmnk_substrate_init_default_thresholds, lmnk_substrate_link_hallucinated_trails,
-    lmnk_substrate_paged_block_warp_bitmask, lmnk_substrate_pull_trail_to_anchor,
-    lmnk_substrate_reduce_bit_tree, lmnk_substrate_resolve_trail_in_swarm,
-    lmnk_substrate_step_pointer, lmnk_substrate_step_safe, lmnk_tagged_ptr_evolve_mode,
-    lmnk_tagged_ptr_pack, lmnk_tagged_ptr_pack_action, lmnk_tagged_ptr_unpack_action_mode,
-    lmnk_tagged_ptr_unpack_addr, lmnk_tagged_ptr_unpack_attractor_slot,
-    lmnk_tagged_ptr_unpack_phase, lmnk_tagged_ptr_unpack_tag, LmnkContextHandle,
-    LmnkPhaseSteeringHandle, LmnkSubstrateHandle,
+    lmnk_rank1_descriptor_t, lmnk_rank1_eval, lmnk_rank1_eval_fused, lmnk_spine_decode_input_t,
+    lmnk_spine_state_t, lmnk_spine_step_plan_t, lmnk_subhead_dispatch_single_pass,
+    lmnk_substrate_create, lmnk_substrate_destroy, lmnk_substrate_evaluate_thresholds,
+    lmnk_substrate_hash_slot256_index, lmnk_substrate_init_default_thresholds,
+    lmnk_substrate_link_hallucinated_trails, lmnk_substrate_paged_block_warp_bitmask,
+    lmnk_substrate_pull_trail_to_anchor, lmnk_substrate_reduce_bit_tree,
+    lmnk_substrate_resolve_trail_in_swarm, lmnk_substrate_step_pointer, lmnk_substrate_step_safe,
+    lmnk_tagged_ptr_evolve_mode, lmnk_tagged_ptr_pack, lmnk_tagged_ptr_pack_action,
+    lmnk_tagged_ptr_unpack_action_mode, lmnk_tagged_ptr_unpack_addr,
+    lmnk_tagged_ptr_unpack_attractor_slot, lmnk_tagged_ptr_unpack_phase,
+    lmnk_tagged_ptr_unpack_tag, LmnkContextHandle, LmnkEntropyControllerHandle,
+    LmnkEntropyControllerOpaque, LmnkPhaseSteeringHandle, LmnkPhaseSteeringOpaque,
+    LmnkSubstrateHandle, SPINE_DECODE_FLAG_REWARD_OVERRIDE,
 };
 use liminika_core::drivers::{
     DistortionDelta, DistortionTension, EgoDifferentialNet, LiminalEgoPreset, LiminalEgoState,
@@ -1370,4 +1376,173 @@ fn suite5_uaf_free_zeroize_volatile_all_5120_bytes_proof() {
         raw_bytes.iter().all(|&b| b == 0x00),
         "RuntimeContext::zeroize_in_place must zero all 5,120 bytes cleanly"
     );
+}
+
+#[test]
+fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
+    let mut cfg = lmnk_config_t::default();
+    // SAFETY: Stack config is 64B aligned and writable.
+    assert_eq!(unsafe { lmnk_config_init_default(&mut cfg) }, LMNK_OK);
+
+    let mut backing = AlignedBuffer64::<u8, 5248>::new([0u8; 5248]);
+    let base_ptr = backing.as_mut_slice().as_mut_ptr();
+    let req_size = lmnk_context_size();
+    assert_eq!(req_size, 5120);
+
+    // SAFETY: Exercising hostile NULL, misaligned, and overlapping pointers against C-ABI guards.
+    unsafe {
+        assert_eq!(
+            lmnk_context_init_in_place(&cfg, base_ptr, req_size),
+            LMNK_OK
+        );
+        let ctx_handle = base_ptr.cast::<liminika_core::abi::LmnkContextOpaque>();
+        let misalign_ctx = base_ptr
+            .add(16)
+            .cast::<liminika_core::abi::LmnkContextOpaque>();
+
+        // 1. NULL and misaligned handle rejections on `configure_spine` & `get_spine_state`.
+        let mut spine_out = lmnk_spine_state_t::default();
+        assert_eq!(
+            lmnk_context_configure_spine(ptr::null_mut(), 0, 0, 1, 1),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_context_configure_spine(misalign_ctx, 0, 0, 1, 1),
+            LMNK_ERR_ALIGNMENT
+        );
+        assert_eq!(
+            lmnk_context_get_spine_state(ptr::null_mut(), &mut spine_out),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_context_get_spine_state(ctx_handle, ptr::null_mut()),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_context_get_spine_state(misalign_ctx, &mut spine_out),
+            LMNK_ERR_ALIGNMENT
+        );
+
+        let mut raw_spine_buf = AlignedBuffer64::<u8, 128>::new([0u8; 128]);
+        let misalign_spine_out = raw_spine_buf.as_mut_slice().as_mut_ptr().add(16);
+        assert_eq!(
+            lmnk_context_get_spine_state(ctx_handle, misalign_spine_out.cast()),
+            LMNK_ERR_ALIGNMENT
+        );
+
+        // Overlapping `state_out` inside the 5,120 B `context` buffer (e.g. `system_spine @ +384`) must fail!
+        let overlap_spine_out = base_ptr.add(384).cast::<lmnk_spine_state_t>();
+        assert_eq!(
+            lmnk_context_get_spine_state(ctx_handle, overlap_spine_out),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+
+        // 2. Monotonic non-strippable host pin floor (`0` preserves floor; bit 0 is always pinned).
+        assert_eq!(
+            lmnk_context_configure_spine(ctx_handle, 0x00A0, 4, 0, 0),
+            LMNK_OK
+        );
+        assert_eq!(
+            lmnk_context_get_spine_state(ctx_handle, &mut spine_out),
+            LMNK_OK
+        );
+        assert_eq!(
+            spine_out.baseline_pinned_compute_mask,
+            0x00A0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
+        );
+        assert_eq!(
+            spine_out.pinned_compute_mask,
+            0x00A0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
+        );
+        assert_eq!(spine_out.guard_hold_tokens, 4);
+        assert_eq!(spine_out.max_observe_stride, 1);
+
+        // Passing `0` and running an unguarded turn cannot strip `0x00A1`.
+        assert_eq!(
+            lmnk_context_configure_spine(ctx_handle, 0, 2, 6, 1),
+            LMNK_OK
+        );
+        assert_eq!(
+            lmnk_context_begin_turn_spine_policy(ctx_handle, 0, 0),
+            LMNK_OK
+        );
+        assert_eq!(
+            lmnk_context_get_spine_state(ctx_handle, &mut spine_out),
+            LMNK_OK
+        );
+        assert_eq!(
+            spine_out.baseline_pinned_compute_mask,
+            0x00A0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
+        );
+        assert_eq!(
+            spine_out.pinned_compute_mask,
+            0x00A0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
+        );
+        assert_eq!(spine_out.guard_hold_tokens, 2);
+        assert_eq!(spine_out.max_observe_stride, 6);
+
+        // 3. `lmnk_spine_step_plan_t` requires 64B alignment (`16B`-only pointer must return `LMNK_ERR_ALIGNMENT`).
+        let decode_in = lmnk_spine_decode_input_t {
+            flags: SPINE_DECODE_FLAG_REWARD_OVERRIDE,
+            exit_reward_override_q7: 250,
+            ..Default::default()
+        };
+        let mut plan_buf = AlignedBuffer64::<u8, 128>::new([0u8; 128]);
+        let misalign_plan = plan_buf
+            .as_mut_slice()
+            .as_mut_ptr()
+            .add(16)
+            .cast::<lmnk_spine_step_plan_t>();
+        assert_eq!(
+            lmnk_context_step_decode_control(ctx_handle, &decode_in, 0, misalign_plan),
+            LMNK_ERR_ALIGNMENT
+        );
+        let mut plan_ok = lmnk_spine_step_plan_t::default();
+        assert_eq!(
+            lmnk_context_step_decode_control(ctx_handle, &decode_in, 0, &mut plan_ok),
+            LMNK_OK
+        );
+
+        assert_eq!(lmnk_context_deinit_in_place(ctx_handle), LMNK_OK);
+
+        // 4. Concrete alignment & aliasing checks on destroy / ledger / entropy entry points.
+        assert_eq!(
+            lmnk_phase_steering_destroy(
+                base_ptr.add(1).cast::<LmnkPhaseSteeringOpaque>() as LmnkPhaseSteeringHandle
+            ),
+            LMNK_ERR_ALIGNMENT
+        );
+        assert_eq!(
+            lmnk_entropy_controller_destroy(base_ptr.add(16).cast::<LmnkEntropyControllerOpaque>()
+                as LmnkEntropyControllerHandle),
+            LMNK_ERR_ALIGNMENT
+        );
+
+        let mut shared_64 = AlignedBuffer64::<u8, 64>::new([0u8; 64]);
+        let same_ptr = shared_64.as_mut_slice().as_mut_ptr();
+        assert_eq!(
+            lmnk_ledger_evaluate_auto_tune(
+                same_ptr.cast::<lmnk_ledger_slot_t>(),
+                same_ptr.cast::<lmnk_config_t>(),
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+
+        let init_ent = lmnk_entropy_state_t {
+            bifurcation_threshold: 1.5,
+            singularity_eps: 1e-12,
+            sample_temperature: 1.0,
+            ..Default::default()
+        };
+        let mut ent_handle: LmnkEntropyControllerHandle = ptr::null_mut();
+        assert_eq!(
+            lmnk_entropy_controller_create(&init_ent, &mut ent_handle),
+            LMNK_OK
+        );
+        assert_eq!(
+            lmnk_entropy_eval_stateful(ent_handle, 0.5, ent_handle.cast::<lmnk_entropy_state_t>()),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(lmnk_entropy_controller_destroy(ent_handle), LMNK_OK);
+    }
 }

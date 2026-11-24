@@ -8,13 +8,14 @@ use super::{
 };
 use crate::drivers::{
     DistortionTension, EgoDifferentialNet, EntropyState, SpineDecodeSignal, SpineStepPlan,
-    SystemSpineState, TokenBypassObservation, SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID,
-    SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT, SPINE_ENTROPY_CALM_THRESH_Q15,
-    SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE, SPINE_ENTROPY_REWARD_LOW_THRESH_Q15,
-    SPINE_ENTROPY_SURGE_THRESH_Q15, SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_SENTINEL_AUTO_U8,
-    SPINE_STEP_EVENT_BOUNDARY_CHURN, SPINE_STEP_EVENT_GUARD_REESCALATED,
-    SPINE_STEP_EVENT_INSTABILITY_RECOVERY, SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED,
-    SPINE_STEP_EVENT_NONE, SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
+    SystemSpineState, TokenBypassObservation, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID, SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT,
+    SPINE_ENTROPY_CALM_THRESH_Q15, SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE,
+    SPINE_ENTROPY_REWARD_LOW_THRESH_Q15, SPINE_ENTROPY_SURGE_THRESH_Q15,
+    SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN,
+    SPINE_STEP_EVENT_GUARD_REESCALATED, SPINE_STEP_EVENT_INSTABILITY_RECOVERY,
+    SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED, SPINE_STEP_EVENT_NONE,
+    SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
 };
 use crate::foundation::{
     branchless_clamp_f32, branchless_max_f32, branchless_min_f32, store_q7_words_64,
@@ -102,11 +103,44 @@ impl RuntimeContext {
         self.last_sandbox_event = SandboxLifecycleEvent::Idle;
         self.sandbox_settlements = 0;
         self.compute_pool.reset_turn_bypass_state();
-        self.system_spine = SystemSpineState::new();
+        let prev_baseline_pin = self.system_spine.baseline_pinned_compute_mask;
+        let prev_pre_bypass = self.system_spine.is_pre_bypass_enabled();
+        let mut reset_spine = SystemSpineState::with_policy(
+            self.config.raw.guard_hold_tokens,
+            self.config.raw.max_observe_stride,
+        );
+        if prev_baseline_pin != 0 {
+            reset_spine.apply_host_pin_floor(prev_baseline_pin);
+        }
+        reset_spine.set_pre_bypass_enabled(prev_pre_bypass);
+        self.system_spine = reset_spine;
         self.last_lacuna_partition = LacunaPartition8::default();
         self.distortion_tension = DistortionTension::new(false);
         self.ego_differential_net = EgoDifferentialNet::default();
         Ok(())
+    }
+
+    /// Updates runtime spine policy parameters (`0 alloc`) while monotonically raising the
+    /// permanent host compute pin floor (`baseline_pinned_compute_mask`).
+    ///
+    /// Passing `0` for `baseline_pinned_compute_mask` preserves the active permanent floor while
+    /// enforcing [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`].
+    #[inline]
+    pub fn configure_spine(
+        &mut self,
+        baseline_pinned_compute_mask: u64,
+        guard_hold_tokens: u8,
+        max_observe_stride: u8,
+        pre_bypass_enabled: bool,
+    ) {
+        self.system_spine.apply_host_pin_floor(
+            baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+        );
+        self.system_spine.guard_hold_tokens = guard_hold_tokens;
+        self.system_spine.set_max_observe_stride(max_observe_stride);
+        self.system_spine.set_pre_bypass_enabled(pre_bypass_enabled);
+        self.config.raw.guard_hold_tokens = guard_hold_tokens;
+        self.config.raw.max_observe_stride = self.system_spine.max_observe_stride;
     }
 
     /// Initializes per-turn mechanical spine policy at prompt / turn boundaries (`0 alloc`).
@@ -352,7 +386,7 @@ impl RuntimeContext {
             veto_mask,
             event_flags,
             effective_observe_stride,
-            reserved_align: [0; 4],
+            reserved_align: [0; 20],
         }
     }
 

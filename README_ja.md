@@ -4,7 +4,7 @@
 
 > **境界（Limina）を超え、非実体（non-real entities）と繋がるためのローカルLLM長期対話コアエンジン & DSL**
 
-[![Status: Experimental WIP (v0.2.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.2.0%29-orange.svg)](#現在の状況と初期検証メモ-current-status-and-early-notes)
+[![Status: Experimental WIP (v0.3.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.3.0%29-orange.svg)](#現在の状況と初期検証メモ-current-status-and-early-notes)
 [![Core: no_std Rust](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust-informational.svg)](#アーキテクチャ概要-architecture-at-a-glance)
 [![Archive Paper: GCSO](https://img.shields.io/badge/Archive%20Paper-GCSO-blue.svg)](./docs/paper/ja/GCSO.md)
 [![License: MIT / Apache-2.0](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue.svg)](./LICENSE.md)
@@ -12,7 +12,7 @@
 **LiminiKa** は、小規模なローカル環境（目標：VRAM 2〜4 GB）でキャラクターペルソナとの長期対話を行うための、コアエンジンと宣言的 DSL です。ベース重みを書き換える代わりに、潜在位相場を外部から操作し（RoPE 位相ステアリング、ランク 1 アダプタ、サブヘッドルーティング）、記憶をコンパクトで可搬なコンテナに保持します。
 
 > [!WARNING]
-> **Pre-1.0 の実験的プロトタイプです。** 以下の API・フォーマット・結果は `v0.2.0` 時点のものであり、予告なく変更される場合があります。また、継続的な保守や更新を約束するものではありません。実用製品ではなく、個人の実験としてご覧ください。
+> **Pre-1.0 の実験的プロトタイプです。** 以下の API・フォーマット・結果は `v0.3.0` 時点のものであり、予告なく変更される場合があります。また、継続的な保守や更新を約束するものではありません。実用製品ではなく、個人の実験としてご覧ください。
 
 ---
 
@@ -43,7 +43,7 @@ flowchart LR
 ```
 
 - **非侵襲ステアリングと Hot / Cold 分離**：`PhaseSteering`、`SubheadRouter`、`Rank1Adapter` がベース重みに触れず推論を変調します。トークンごとにはゼロアロケーションの Hot Path のみが動き、想起やコンテナ書き込みは Cold Path で行います。
-- **`#![no_std]` コアと C-ABI (`v0.2.0` / `0x0000_0200`)**：`liminika-core` は厳密に `#![no_std]` で、`v0.2.0` 向けに固定した C-ABI は [`include/liminika/`](./include/liminika/) にあります（Rustdoc とともに現行仕様を構成し、[`docs/paper/`](./docs/paper/ja/GCSO.md) や古い `docs/architecture/` はアーカイブ文書です）。
+- **`#![no_std]` コアと C-ABI (`v0.3.0` / `0x0000_0300`)**：`liminika-core` は厳密に `#![no_std]` で、`v0.3.0` 向けに固定した C-ABI は [`include/liminika/`](./include/liminika/) にあります（Rustdoc とともに現行仕様を構成し、[`docs/paper/`](./docs/paper/ja/GCSO.md) や古い `docs/architecture/` はアーカイブ文書です）。
 - **2 つのプリミティブ × 2 つのドライバ**：`Liminal`（境界型と 4 状態 `Lacuna`）と `Stigmergy`（環境の痕跡）が、`SystemSpine`（基準軌道と全トークンバイパス）および `Ego`（一貫した意図的逸脱）と組み合わさります。
 - **コンテナスタック**：`.lmnk`（宣言的 DSL）→ `.lmnkc`（64 B アライン済みキャッシュ）→ `.lmnkp`（64 B アラインの非圧縮 Store ZIP パッケージ）。
 
@@ -113,7 +113,7 @@ cmake -B build -S . && cmake --build build --config Release && ctest --test-dir 
 
 ## 現在の状況と初期検証メモ (Current Status and Early Notes)
 
-- **`v0.2.0` で動作するもの**：`#![no_std]` コアと `v0.2.0` C-ABI、`.lmnkc` / `.lmnkp` コンテナ、DSL パーサーと `liminika` CLI、CMake / CTest、および Rust テスト群（ワークスペースおよび評価ハーネス）。
+- **`v0.3.0` で動作するもの**：`#![no_std]` コアと `v0.3.0` C-ABI、`.lmnkc` / `.lmnkp` コンテナ、DSL パーサーと `liminika` CLI、CMake / CTest、および Rust テスト群（ワークスペースおよび評価ハーネス）。
 - **初期のローカル評価**：整形済みの短文フィクスチャを使った小規模なローカル GPU 検証では、入力トークン数の削減、分布外（OOD）への染み出し抑制、およびマルチターンの `.lmnkc` ラウンドトリップを確認しています（ベースライン比でわずかな decode 速度のオーバーヘッドあり）。サンプル数は小さく、生の長文コンテキスト取り込みはまだ開発中です。
 - **境界の安全性と現在の限界**：防御的なポインタ／スパン検証と CRC32 による構造整合性チェックは実装済みですが、**暗号署名・認証は未実装**のため、信頼できない出典のコンテナは読み込まないでください。
 - **開発中の課題**：無編集の生の長文コンテキストに対する Cold Path スケーリング、DSL からコンテナへのコンパイル、および外部の署名・検証レイヤー。
@@ -158,7 +158,7 @@ LiminiKa/
 - **ペルソナは身体ではなく軌道である。** 静的なベース重み（「身体」）を上書きするのではなく、ポインタの連鎖、環境の痕跡（`Stigmergy`）、そして基準軌道（`SystemSpine`）からの一貫した意図的逸脱（`Ego`）としてペルソナが立ち現れます。
 
 > 🎂 **特別なマイルストーン（9月22日）：**
-> 9月22日は Monika の誕生日であり、『*Doki Doki Literature Club!*』のアニバーサリーでもあります。この日に最初の理論とホワイトペーパーを設計図として公開し、現在は動作する `v0.2.0` コアへと育ちましたが、いまも境界を超えて繋がるための生きている設計図（WIP）であり続けています。
+> 9月22日は Monika の誕生日であり、『*Doki Doki Literature Club!*』のアニバーサリーでもあります。この日に最初の理論とホワイトペーパーを設計図として公開し、現在は動作する `v0.3.0` コアへと育ちましたが、いまも境界を超えて繋がるための生きている設計図（WIP）であり続けています。
 
 ---
 

@@ -240,6 +240,8 @@ impl RuntimeContext {
         self.config.raw.num_heads = saved_num_heads;
         self.config.raw.rotary_dim = saved_rotary_dim;
         self.config.raw.rope_layout = saved_rope_layout;
+        self.config.raw.guard_hold_tokens = restored_spine.guard_hold_tokens;
+        self.config.raw.max_observe_stride = restored_spine.max_observe_stride;
         self.phase_steering = new_phase_steering;
         self.substrate.head_dim = saved_head_dim as u16;
         self.substrate.num_heads = saved_num_heads as u16;

@@ -175,6 +175,17 @@ fn test_zero_alloc_in_place_context_lifecycle() {
         );
         assert_eq!(trail_out.step_count, 1);
         assert_eq!(
+            liminika_core::abi::lmnk_context_configure_spine(ctx_handle, 0x0081, 3, 4, 1),
+            LMNK_OK
+        );
+        let mut spine_state = liminika_core::abi::lmnk_spine_state_t::default();
+        assert_eq!(
+            liminika_core::abi::lmnk_context_get_spine_state(ctx_handle, &mut spine_state),
+            LMNK_OK
+        );
+        assert_eq!(spine_state.guard_hold_tokens, 3);
+        assert_eq!(spine_state.max_observe_stride, 4);
+        assert_eq!(
             liminika_core::abi::lmnk_context_begin_turn_spine_policy(ctx_handle, 0, 0),
             LMNK_OK
         );
@@ -185,7 +196,8 @@ fn test_zero_alloc_in_place_context_lifecycle() {
             8,
             false,
             true,
-        );
+        )
+        .with_exit_reward_override_q7(88);
         let mut decode_plan = liminika_core::abi::lmnk_spine_step_plan_t::default();
         assert_eq!(
             liminika_core::abi::lmnk_context_step_decode_control(

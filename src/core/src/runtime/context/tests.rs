@@ -19,6 +19,22 @@ fn test_config_validation_and_builder() {
 
     let invalid_config = config.with_head_dim(127);
     assert_eq!(invalid_config.validate(), Err(LMNK_ERR_INVALID_ARGUMENT));
+    assert_eq!(
+        Config::from_raw(RuntimeConfig {
+            rotary_dim: 256,
+            ..config.raw
+        })
+        .validate(),
+        Err(LMNK_ERR_INVALID_ARGUMENT)
+    );
+    assert_eq!(
+        Config::from_raw(RuntimeConfig {
+            rope_layout: 2,
+            ..config.raw
+        })
+        .validate(),
+        Err(LMNK_ERR_INVALID_ARGUMENT)
+    );
 }
 
 #[test]
@@ -669,4 +685,48 @@ fn test_spine_policy_and_decode_control_four_lacunae_and_guard_relaxation() {
     );
     assert!(ctx.compute_pool().slot_pheromone_q7[0] >= slot0_before);
     assert!(ctx.compute_pool().slot_pheromone_q7[2] < slot2_before);
+}
+
+#[test]
+fn test_config_spine_policy_propagation_and_configure_spine() {
+    let cfg = Config::new()
+        .with_guard_hold_tokens(5)
+        .with_max_observe_stride(6);
+    assert_eq!(cfg.raw.guard_hold_tokens, 5);
+    assert_eq!(cfg.raw.max_observe_stride, 6);
+
+    // 1. RuntimeContext::new + reset preserve configured spine policy and host pin floor.
+    let mut ctx = RuntimeContext::new(cfg).unwrap();
+    assert_eq!(ctx.system_spine().guard_hold_tokens, 5);
+    assert_eq!(ctx.system_spine().max_observe_stride, 6);
+    ctx.configure_spine(0x0081, 3, 0, false);
+    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.system_spine().pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.system_spine().guard_hold_tokens, 3);
+    assert_eq!(ctx.system_spine().max_observe_stride, 1);
+    assert!(!ctx.system_spine().is_pre_bypass_enabled());
+    // Passing 0 for baseline_pinned_compute_mask retains existing host floor monotonically.
+    ctx.configure_spine(0, 7, 4, true);
+    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.system_spine().guard_hold_tokens, 7);
+    assert_eq!(ctx.system_spine().max_observe_stride, 4);
+    assert!(ctx.system_spine().is_pre_bypass_enabled());
+
+    ctx.reset().unwrap();
+    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.system_spine().guard_hold_tokens, 7);
+    assert_eq!(ctx.system_spine().max_observe_stride, 4);
+
+    // 2. RuntimeContext::write_in_place honors zero-init `max_observe_stride = 0` -> `1` and `guard_hold_tokens`.
+    let mut raw_zero_stride = cfg.raw;
+    raw_zero_stride.max_observe_stride = 0;
+    let mut uninit = core::mem::MaybeUninit::<RuntimeContext>::uninit();
+    // SAFETY: `uninit` is 64-byte aligned, writable, and non-aliased.
+    unsafe {
+        RuntimeContext::write_in_place(uninit.as_mut_ptr(), Config::from_raw(raw_zero_stride))
+            .unwrap();
+        let inplace = uninit.assume_init_ref();
+        assert_eq!(inplace.system_spine().guard_hold_tokens, 5);
+        assert_eq!(inplace.system_spine().max_observe_stride, 1);
+    }
 }

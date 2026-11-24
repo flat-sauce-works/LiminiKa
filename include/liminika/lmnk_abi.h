@@ -67,6 +67,13 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_step_token(
     lmnk_context_handle_t context, uint32_t token_id, float* LMNK_RESTRICT query_tensor,
     float* LMNK_RESTRICT key_tensor, lmnk_pointer_trail_t* LMNK_RESTRICT trail_out) LMNK_NOEXCEPT;
 
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_configure_spine(
+    lmnk_context_handle_t context, uint64_t baseline_pinned_compute_mask, uint8_t guard_hold_tokens,
+    uint8_t max_observe_stride, uint8_t pre_bypass_enabled) LMNK_NOEXCEPT;
+
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_get_spine_state(
+    lmnk_context_handle_t context, lmnk_spine_state_t* LMNK_RESTRICT state_out) LMNK_NOEXCEPT;
+
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_begin_turn_spine_policy(
     lmnk_context_handle_t context, uint8_t guard_turn, uint8_t unobserved_locked) LMNK_NOEXCEPT;
 
@@ -287,8 +294,8 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_phase_steering_compute_proc
     const float* LMNK_RESTRICT source, const float* LMNK_RESTRICT target, size_t dim,
     lmnk_q7_t* LMNK_RESTRICT phase_out) LMNK_NOEXCEPT;
 
-LMNK_API lmnk_status_t LMNK_CALL lmnk_phase_steering_destroy(lmnk_phase_steering_handle_t kernel)
-    LMNK_NOEXCEPT;
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
+lmnk_phase_steering_destroy(lmnk_phase_steering_handle_t kernel) LMNK_NOEXCEPT;
 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_subhead_dispatch_single_pass(
     float* LMNK_RESTRICT query_tensor, const lmnk_subhead_config_t* LMNK_RESTRICT subhead_cfg,
@@ -315,8 +322,8 @@ lmnk_lora_project(const float* LMNK_RESTRICT lora_a, const float* LMNK_RESTRICT 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_substrate_create(
     uint32_t capacity, lmnk_substrate_handle_t* LMNK_RESTRICT substrate_out) LMNK_NOEXCEPT;
 
-LMNK_API lmnk_status_t LMNK_CALL lmnk_substrate_destroy(lmnk_substrate_handle_t handle)
-    LMNK_NOEXCEPT;
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
+lmnk_substrate_destroy(lmnk_substrate_handle_t handle) LMNK_NOEXCEPT;
 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_substrate_init_default_thresholds(
     lmnk_stigmergic_thresholds_t* LMNK_RESTRICT thresholds_out) LMNK_NOEXCEPT;
@@ -419,7 +426,7 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_liminal_eval_barrier_pitchf
     float liminal_score, float tau_eff, float alpha, float beta, uint32_t head_dim,
     float* LMNK_RESTRICT barrier_out) LMNK_NOEXCEPT;
 
-LMNK_API lmnk_status_t LMNK_CALL
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_entropy_controller_destroy(lmnk_entropy_controller_handle_t controller) LMNK_NOEXCEPT;
 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_epistemic_evaluate_horizon(

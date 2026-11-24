@@ -67,6 +67,18 @@ pub(super) fn validate_ptr_aligned<T>(ptr: *const T, align: usize) -> LmnkResult
     }
 }
 
+/// Validates an optional pointer's alignment and returns its `(addr, byte_len)` span (`(0, 0)` on `NULL`).
+#[inline(always)]
+pub(super) fn opt_span<T>(ptr: *const T) -> LmnkResult<(usize, usize)> {
+    if ptr.is_null() {
+        Ok((0, 0))
+    } else if !is_aligned(ptr) {
+        Err(LMNK_ERR_ALIGNMENT)
+    } else {
+        Ok((ptr as usize, size_of::<T>()))
+    }
+}
+
 /// Validates that all mutable memory regions in `muts` are pairwise disjoint and none overlap
 /// any immutable input region in `reads` (zero-length entries are ignored).
 ///

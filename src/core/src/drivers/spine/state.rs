@@ -182,6 +182,10 @@ pub const SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE: u8 = 1 << 0;
 pub const SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING: u8 = 1 << 1;
 /// [`SpineDecodeInput`] flag (`bit 2`): pre-inference whole-token bypass evaluation is enabled.
 pub const SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED: u8 = 1 << 2;
+/// [`SpineDecodeInput`] flag (`bit 3`): `exit_reward_override_q7` overrides automatic reward selection.
+pub const SPINE_DECODE_INPUT_FLAG_REWARD_OVERRIDE: u8 = 1 << 3;
+/// Canonical alias for [`SPINE_DECODE_INPUT_FLAG_REWARD_OVERRIDE`] (`bit 3`).
+pub const SPINE_DECODE_FLAG_REWARD_OVERRIDE: u8 = SPINE_DECODE_INPUT_FLAG_REWARD_OVERRIDE;
 
 /// Sentinel `u8` (`0xFF`) delegating sensitivity or reward override selection to core spine defaults.
 pub const SPINE_SENTINEL_AUTO_U8: u8 = 0xFF;
@@ -278,8 +282,8 @@ pub trait SpineDecodeSignal {
     }
 }
 
-/// Compact 16-byte (`#[repr(C, align(16))]`, zero implicit padding) concrete [`Pod`] implementing
-/// [`SpineDecodeSignal`] for host FFI and adapter callers (`lmnk_spine_decode_input_t`).
+/// Compact 32-byte (`#[repr(C, align(16))]`, zero implicit padding) concrete [`Pod`] implementing
+/// [`SpineDecodeSignal`] with 1:1 trait parity for host FFI and adapter callers (`lmnk_spine_decode_input_t`).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SpineDecodeInput {
@@ -297,10 +301,14 @@ pub struct SpineDecodeInput {
     pub min_calm_dwell: u8,
     /// Bitwise OR of `SPINE_DECODE_INPUT_FLAG_*` flags (`offset 15`).
     pub flags: u8,
+    /// Explicit Q0.7 exit pheromone reward (`0..=127`) honored when [`SPINE_DECODE_FLAG_REWARD_OVERRIDE`] is set (`offset 16`).
+    pub exit_reward_override_q7: u8,
+    /// Explicit zero-initialized reserved space for future ABI extensions (`offset 17..32`).
+    pub reserved: [u8; 15],
 }
 
 const _: () = {
-    assert!(size_of::<SpineDecodeInput>() == 16);
+    assert!(size_of::<SpineDecodeInput>() == 32);
     assert!(align_of::<SpineDecodeInput>() == 16);
     assert!(offset_of!(SpineDecodeInput, pressure) == 0);
     assert!(offset_of!(SpineDecodeInput, observed_exit_entropy_q15) == 8);
@@ -309,9 +317,11 @@ const _: () = {
     assert!(offset_of!(SpineDecodeInput, boundary_sensitivity_q7) == 13);
     assert!(offset_of!(SpineDecodeInput, min_calm_dwell) == 14);
     assert!(offset_of!(SpineDecodeInput, flags) == 15);
+    assert!(offset_of!(SpineDecodeInput, exit_reward_override_q7) == 16);
+    assert!(offset_of!(SpineDecodeInput, reserved) == 17);
 };
 
-// SAFETY: `SpineDecodeInput` is `#[repr(C, align(16))]`, exact size 16 bytes with zero implicit padding.
+// SAFETY: `SpineDecodeInput` is `#[repr(C, align(16))]`, exact size 32 bytes with zero implicit padding.
 unsafe impl Pod for SpineDecodeInput {}
 
 impl SpineDecodeInput {
@@ -356,6 +366,8 @@ impl SpineDecodeInput {
             boundary_sensitivity_q7,
             min_calm_dwell: 2,
             flags,
+            exit_reward_override_q7: 0,
+            reserved: [0; 15],
         }
     }
 
@@ -385,6 +397,8 @@ impl SpineDecodeInput {
             boundary_sensitivity_q7,
             min_calm_dwell: 2,
             flags,
+            exit_reward_override_q7: 0,
+            reserved: [0; 15],
         }
     }
 
@@ -409,6 +423,25 @@ impl SpineDecodeInput {
         } else {
             min_calm_dwell
         };
+        self
+    }
+
+    /// Arms [`SPINE_DECODE_FLAG_REWARD_OVERRIDE`] and sets the explicit Q0.7 exit pheromone reward
+    /// clamped safely into `0..=127`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_exit_reward_override_q7(mut self, reward_q7: u8) -> Self {
+        self.exit_reward_override_q7 = if reward_q7 > 127 { 127 } else { reward_q7 };
+        self.flags |= SPINE_DECODE_FLAG_REWARD_OVERRIDE;
+        self
+    }
+
+    /// Clears [`SPINE_DECODE_FLAG_REWARD_OVERRIDE`] so core derives the exit reward automatically.
+    #[inline(always)]
+    #[must_use]
+    pub const fn without_exit_reward_override(mut self) -> Self {
+        self.exit_reward_override_q7 = 0;
+        self.flags &= !SPINE_DECODE_FLAG_REWARD_OVERRIDE;
         self
     }
 }
@@ -459,14 +492,23 @@ impl SpineDecodeSignal for SpineDecodeInput {
     }
 
     #[inline(always)]
+    fn exit_reward_override_q7(&self) -> u8 {
+        if (self.flags & SPINE_DECODE_FLAG_REWARD_OVERRIDE) != 0 {
+            self.exit_reward_override_q7.min(127)
+        } else {
+            SPINE_SENTINEL_AUTO_U8
+        }
+    }
+
+    #[inline(always)]
     fn pre_bypass_enabled(&self) -> bool {
         (self.flags & SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED) != 0
     }
 }
 
-/// Compact 48-byte (`#[repr(C, align(16))]`, zero implicit padding) pre-execution decode step plan
-/// emitted by `RuntimeContext::step_decode_control` (`lmnk_spine_step_plan_t`).
-#[repr(C, align(16))]
+/// Cacheline-aligned 64-byte (`#[repr(C, align(64))]`, zero implicit padding) pre-execution decode
+/// step plan emitted by `RuntimeContext::step_decode_control` (`lmnk_spine_step_plan_t`).
+#[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SpineStepPlan {
     /// Pre-execution compute dispatch plan for the next decode token (`offset 0..40`).
@@ -479,13 +521,13 @@ pub struct SpineStepPlan {
     pub event_flags: u8,
     /// Effective dynamic logits observation stride computed for the next decode token (`offset 43`).
     pub effective_observe_stride: u8,
-    /// Explicit C alignment padding (`offset 44..48`).
-    pub reserved_align: [u8; 4],
+    /// Explicit 64-byte cacheline alignment and future extension padding (`offset 44..64`).
+    pub reserved_align: [u8; 20],
 }
 
 const _: () = {
-    assert!(size_of::<SpineStepPlan>() == 48);
-    assert!(align_of::<SpineStepPlan>() == 16);
+    assert!(size_of::<SpineStepPlan>() == 64);
+    assert!(align_of::<SpineStepPlan>() == 64);
     assert!(offset_of!(SpineStepPlan, dispatch) == 0);
     assert!(offset_of!(SpineStepPlan, next_observe_mode) == 40);
     assert!(offset_of!(SpineStepPlan, veto_mask) == 41);
@@ -494,7 +536,7 @@ const _: () = {
     assert!(offset_of!(SpineStepPlan, reserved_align) == 44);
 };
 
-// SAFETY: `SpineStepPlan` is `#[repr(C, align(16))]`, exact size 48 bytes with zero implicit padding.
+// SAFETY: `SpineStepPlan` is `#[repr(C, align(64))]`, exact size 64 bytes with zero implicit padding.
 unsafe impl Pod for SpineStepPlan {}
 
 impl SpineStepPlan {
@@ -648,6 +690,17 @@ impl SystemSpineState {
             reserved_mid: [0; 6],
             last_executed_mask: 0,
         }
+    }
+
+    /// Constructs a canonical [`SystemSpineState`] initialized with `guard_hold_tokens` (`0` = hold
+    /// full turn) and `max_observe_stride` (`0` normalized defensively to `1`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_policy(guard_hold_tokens: u8, max_observe_stride: u8) -> Self {
+        let mut spine = Self::new();
+        spine.guard_hold_tokens = guard_hold_tokens;
+        spine.set_max_observe_stride(max_observe_stride);
+        spine
     }
 
     /// Raises both permanent host baseline pins (`baseline_pinned_compute_mask`) and active
@@ -1357,6 +1410,35 @@ mod tests {
         assert!(!calm.repulsion_active());
         assert!(calm.pre_bypass_enabled());
         assert_eq!(calm.exit_reward_override_q7(), SPINE_SENTINEL_AUTO_U8);
+
+        // Zero-initialized (`memset(0)`) SpineDecodeInput must leave exit_reward_override_q7 automatic (`0xFF`).
+        let zero_init = SpineDecodeInput::default();
+        assert_eq!(zero_init.flags, 0);
+        assert_eq!(zero_init.exit_reward_override_q7, 0);
+        assert_eq!(
+            SpineDecodeSignal::exit_reward_override_q7(&zero_init),
+            SPINE_SENTINEL_AUTO_U8
+        );
+
+        // Even non-zero raw `exit_reward_override_q7` stays ignored until `SPINE_DECODE_FLAG_REWARD_OVERRIDE` is set.
+        let mut unflagged = zero_init;
+        unflagged.exit_reward_override_q7 = 42;
+        assert_eq!(
+            SpineDecodeSignal::exit_reward_override_q7(&unflagged),
+            SPINE_SENTINEL_AUTO_U8
+        );
+
+        // Flagged reward override honors `0..=127` and clamps out-of-range `> 127` values to `127`.
+        let ov_zero = calm.with_exit_reward_override_q7(0);
+        assert_ne!(ov_zero.flags & SPINE_DECODE_FLAG_REWARD_OVERRIDE, 0);
+        assert_eq!(SpineDecodeSignal::exit_reward_override_q7(&ov_zero), 0);
+        let ov_clamped = calm.with_exit_reward_override_q7(250);
+        assert_eq!(SpineDecodeSignal::exit_reward_override_q7(&ov_clamped), 127);
+        let ov_cleared = ov_clamped.without_exit_reward_override();
+        assert_eq!(
+            SpineDecodeSignal::exit_reward_override_q7(&ov_cleared),
+            SPINE_SENTINEL_AUTO_U8
+        );
 
         let boundary = SpineDecodeInput::from_observed_entropy_f32(p, 1, 0.78, 12, false, true);
         assert_eq!(boundary.exit_entropy_lacuna(), Lacuna::Exterior);

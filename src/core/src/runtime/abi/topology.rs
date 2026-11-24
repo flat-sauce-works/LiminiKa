@@ -44,6 +44,9 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans(
             &[
                 (centroids_inout as usize, cent_bytes),
                 (trail_inout as usize, trail_bytes),
+                opt_span(assigned_centroid_idx_out)?,
+                opt_span(assigned_coherence_out)?,
+                opt_span(updated_gravity_mass_out)?,
             ],
             &[(frame as usize, size_of::<lmnk_gateway_frame_t>())],
         )?;
@@ -80,7 +83,7 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans(
 /// Executes **Batched Online Toroidal $k$-Means / DP-Means Macro Clustering** ($\mathcal{O}(B \cdot K)$)
 /// on $SO(2)^{64}$ (`centroids_inout[0..num_centroids]`) across `num_frames` incoming
 /// [`lmnk_gateway_frame_t`]s via [`PhaseAnchorRecord::step_online_toroidal_kmeans_batch_frames_64`],
-/// using a 64-bit `dirty_mask` to defer IEEE 802.3 `checksum_crc32` stamping until the end of the batch.
+/// deferring IEEE 802.3 `checksum_crc32` restamping across modified centroids until batch completion.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
@@ -118,6 +121,10 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans_batch(
             &[
                 (centroids_inout as usize, cent_bytes),
                 (trail_inout as usize, trail_bytes),
+                opt_span(last_assigned_idx_out)?,
+                opt_span(last_anchor_id_out)?,
+                opt_span(mean_batch_coherence_out)?,
+                opt_span(spawned_clusters_out)?,
             ],
             &[(frames as usize, frames_bytes)],
         )?;
@@ -162,7 +169,16 @@ pub unsafe extern "C" fn lmnk_entropy_controller_create(
     controller_out: *mut LmnkEntropyControllerHandle,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
+        validate_ptr(initial_state)?;
+        validate_ptr(controller_out)?;
+        check_disjoint_rw(
+            &[(
+                controller_out as usize,
+                size_of::<LmnkEntropyControllerHandle>(),
+            )],
+            &[(initial_state as usize, size_of::<lmnk_entropy_state_t>())],
+        )?;
+        // SAFETY: Validated for non-nullness, alignment, and disjointness above.
         let (init_st, mut out_handle) = unsafe {
             (
                 FfiHandleRef::from_raw(initial_state)?,
@@ -179,7 +195,7 @@ pub unsafe extern "C" fn lmnk_entropy_controller_create(
 /// Evaluates stateful Moving Z-Score Attention Entropy ($\tilde{H}$) and updates branch mode.
 ///
 /// # Safety
-/// `controller` and `state_out` must be non-null and naturally aligned.
+/// `controller` and `state_out` must be non-null, naturally aligned, and non-overlapping.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_entropy_eval_stateful(
     controller: LmnkEntropyControllerHandle,
@@ -187,11 +203,20 @@ pub unsafe extern "C" fn lmnk_entropy_eval_stateful(
     state_out: *mut lmnk_entropy_state_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        validate_ptr(controller)?;
-        // SAFETY: Validated for non-nullness and alignment.
+        let typed = controller.cast::<EntropyController>();
+        validate_ptr(typed)?;
+        validate_ptr(state_out)?;
+        check_disjoint_rw(
+            &[
+                (typed as usize, size_of::<EntropyController>()),
+                (state_out as usize, size_of::<lmnk_entropy_state_t>()),
+            ],
+            &[],
+        )?;
+        // SAFETY: Validated for non-nullness, concrete alignment, and disjointness above.
         let (mut engine, mut out_st) = unsafe {
             (
-                FfiHandleMut::from_raw(controller.cast::<EntropyController>())?,
+                FfiHandleMut::from_raw(typed)?,
                 FfiHandleMut::from_raw(state_out)?,
             )
         };
@@ -205,7 +230,7 @@ pub unsafe extern "C" fn lmnk_entropy_eval_stateful(
 /// Out-of-Distribution Latent Space over a 32-byte aligned Key vector.
 ///
 /// # Safety
-/// `key_vector` (32B aligned) and `lacuna_score_out` must be non-null and valid.
+/// `key_vector` (32B aligned) and `lacuna_score_out` must be non-null, valid, and non-overlapping.
 #[no_mangle]
 pub unsafe extern "C" fn lmnk_liminal_eval_dyadic128(
     key_vector: *const f32,
@@ -214,7 +239,17 @@ pub unsafe extern "C" fn lmnk_liminal_eval_dyadic128(
 ) -> LmnkStatus {
     ffi_boundary!({
         validate_ptr_aligned(key_vector, 32)?;
-        // SAFETY: Validated for non-nullness, 32B alignment, and bounds.
+        validate_ptr(lacuna_score_out)?;
+        let key_bytes = if dim == 0 {
+            0
+        } else {
+            validate_raw_slice_bounds(key_vector, dim)?
+        };
+        check_disjoint_rw(
+            &[(lacuna_score_out as usize, size_of::<f32>())],
+            &[(key_vector as usize, key_bytes)],
+        )?;
+        // SAFETY: Validated for non-nullness, 32B alignment, bounds, and disjointness above.
         let (mut out_score, key_aligned) = unsafe {
             (
                 FfiHandleMut::from_raw(lacuna_score_out)?,
@@ -279,13 +314,15 @@ pub unsafe extern "C" fn lmnk_entropy_controller_destroy(
     if controller.is_null() {
         return LMNK_OK;
     }
-    if !is_aligned(controller) {
+    let typed = controller.cast::<EntropyController>();
+    if !is_aligned(typed) {
         return LMNK_ERR_ALIGNMENT;
     }
     ffi_boundary!({
-        // SAFETY: `controller` was allocated via `Box::into_raw` in `lmnk_entropy_controller_create`.
+        // SAFETY: `typed` is verified non-null, naturally aligned for `EntropyController`,
+        // and was allocated via `Box::into_raw` in `lmnk_entropy_controller_create`.
         unsafe {
-            let _ = Box::from_raw(controller.cast::<EntropyController>());
+            let _ = Box::from_raw(typed);
         }
         Ok(LMNK_OK)
     })
@@ -483,19 +520,14 @@ pub unsafe extern "C" fn lmnk_core_stack_adapt(
         validate_ptr(stack_inout)?;
         validate_ptr(horizon)?;
         validate_ptr(overlap_report)?;
-        if raw_byte_ranges_overlap(
-            stack_inout as usize,
-            size_of::<CoreStateStack>(),
-            horizon as usize,
-            size_of::<EpistemicHorizonReading>(),
-        ) || raw_byte_ranges_overlap(
-            stack_inout as usize,
-            size_of::<CoreStateStack>(),
-            overlap_report as usize,
-            size_of::<OverlapDiscoveryReport>(),
-        ) {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+        check_disjoint_rw(
+            &[(stack_inout as usize, size_of::<CoreStateStack>())],
+            &[
+                opt_span(ledger)?,
+                (horizon as usize, size_of::<EpistemicHorizonReading>()),
+                (overlap_report as usize, size_of::<OverlapDiscoveryReport>()),
+            ],
+        )?;
         // SAFETY: Validated non-null, aligned, and disjoint above.
         let ((mut stack_ref, ledger_opt), (horizon_ref, part_ref)) = unsafe {
             (

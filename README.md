@@ -4,7 +4,7 @@
 
 > **A lightweight local LLM core engine and DSL for long-term dialogue—bridging boundaries to connect with non-real entities.**
 
-[![Status: Experimental WIP (v0.2.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.2.0%29-orange.svg)](#current-status-and-early-notes)
+[![Status: Experimental WIP (v0.3.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.3.0%29-orange.svg)](#current-status-and-early-notes)
 [![Core: no_std Rust](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust-informational.svg)](#architecture-at-a-glance)
 [![Archive Paper: GCSO](https://img.shields.io/badge/Archive%20Paper-GCSO-blue.svg)](./docs/paper/en/GCSO.md)
 [![License: MIT / Apache-2.0](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue.svg)](./LICENSE.md)
@@ -12,7 +12,7 @@
 **LiminiKa** is a core engine and declarative DSL for long-term dialogue with character personas on small local machines (target: 2–4 GB of VRAM). Instead of rewriting base weights, it steers the model's latent phase field from outside (RoPE phase steering, rank-1 adapters, sub-head routing) and stores memory in compact, portable containers.
 
 > [!WARNING]
-> **Pre-1.0 experimental prototype.** APIs, formats, and results below describe `v0.2.0` and may change without notice, with no commitment to ongoing maintenance or updates. Please view this repository as a personal experiment rather than a production tool.
+> **Pre-1.0 experimental prototype.** APIs, formats, and results below describe `v0.3.0` and may change without notice, with no commitment to ongoing maintenance or updates. Please view this repository as a personal experiment rather than a production tool.
 
 ---
 
@@ -43,7 +43,7 @@ flowchart LR
 ```
 
 - **Non-invasive steering & Hot/Cold split**: `PhaseSteering`, `SubheadRouter`, and `Rank1Adapter` modulate inference without touching base weights; a zero-allocation Hot Path runs per token while recall and container writes stay on the Cold Path.
-- **`#![no_std]` core & C-ABI (`v0.2.0` / `0x0000_0200`)**: `liminika-core` is strictly `#![no_std]` with a fixed `v0.2.0` C-ABI in [`include/liminika/`](./include/liminika/) (living spec alongside Rustdoc; [`docs/paper/`](./docs/paper/en/GCSO.md) and older `docs/architecture/` are archival documents).
+- **`#![no_std]` core & C-ABI (`v0.3.0` / `0x0000_0300`)**: `liminika-core` is strictly `#![no_std]` with a fixed `v0.3.0` C-ABI in [`include/liminika/`](./include/liminika/) (living spec alongside Rustdoc; [`docs/paper/`](./docs/paper/en/GCSO.md) and older `docs/architecture/` are archival documents).
 - **2 Primitives × 2 Drivers**: `Liminal` (boundary types and 4-state `Lacuna`) and `Stigmergy` (environmental traces) pair with `SystemSpine` (baseline & whole-token bypass) and `Ego` (coherent intentional deviation).
 - **Container stack**: `.lmnk` (declarative DSL) → `.lmnkc` (64 B-aligned compiled cache) → `.lmnkp` (64 B-aligned uncompressed Store ZIP package).
 
@@ -113,7 +113,7 @@ For optional local GPU evaluation (requires model weights separately), see [`exa
 
 ## Current Status and Early Notes
 
-- **What works today (`v0.2.0`)**: `#![no_std]` core + `v0.2.0` C-ABI, `.lmnkc`/`.lmnkp` containers, DSL parser + `liminika` CLI, CMake/CTest, and the Rust test suites (workspace and evaluation harness).
+- **What works today (`v0.3.0`)**: `#![no_std]` core + `v0.3.0` C-ABI, `.lmnkc`/`.lmnkp` containers, DSL parser + `liminika` CLI, CMake/CTest, and the Rust test suites (workspace and evaluation harness).
 - **Early local evaluation**: Small-scale local GPU checks on a curated short-context fixture showed reduced input token counts, suppressed out-of-distribution (OOD) bleed, and working multi-turn `.lmnkc` round-trips, with a modest decode-speed overhead relative to the baseline. Sample size is small and raw long-context ingestion is still under development.
 - **Boundary safety & current limits**: Defensive pointer/span checks and CRC32 structural integrity are implemented, but **cryptographic signing/authentication is not implemented**—do not load untrusted containers.
 - **Still in progress**: Raw unedited long-context Cold-Path scaling, DSL-to-container compilation, and external signing/verification layers.
@@ -158,7 +158,7 @@ The name combines *Limina*—Latin for "boundaries" or "thresholds"—with **Mon
 - **Persona is a trajectory, not a body.** Rather than overwriting static base weights (the "body"), a persona emerges from chains of pointers, environmental traces (`Stigmergy`), and coherent intentional deviations (`Ego`) measured against a baseline trajectory (`SystemSpine`).
 
 > 🎂 **Special Milestone (September 22nd):**
-> September 22nd is Monika's birthday and the anniversary of *Doki Doki Literature Club!*. The first theory and whitepaper were released on that day as a blueprint; since then the repository has grown into a working `v0.2.0` core while remaining a living, work-in-progress blueprint for connecting across boundaries.
+> September 22nd is Monika's birthday and the anniversary of *Doki Doki Literature Club!*. The first theory and whitepaper were released on that day as a blueprint; since then the repository has grown into a working `v0.3.0` core while remaining a living, work-in-progress blueprint for connecting across boundaries.
 
 ---
 

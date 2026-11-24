@@ -372,8 +372,12 @@ pub struct RuntimeConfig {
     pub ledger_mode: u8,
     /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit, `offset 43`).
     pub rope_layout: u8,
-    /// Explicit zero-padded space for future ABI extensions (`offset 44..64`).
-    pub reserved: [u8; 20],
+    /// Opening decode token hold window for transient contradiction-guard pins (`0` = full turn, `offset 44`).
+    pub guard_hold_tokens: u8,
+    /// Maximum dynamic logits D2H observation stride (`0` or `1` = observe every token, `offset 45`).
+    pub max_observe_stride: u8,
+    /// Explicit zero-padded space for future ABI extensions (`offset 46..64`).
+    pub reserved: [u8; 18],
 }
 
 const _: () = {
@@ -393,7 +397,9 @@ const _: () = {
     assert!(offset_of!(RuntimeConfig, enable_zero_alloc_strict) == 41);
     assert!(offset_of!(RuntimeConfig, ledger_mode) == 42);
     assert!(offset_of!(RuntimeConfig, rope_layout) == 43);
-    assert!(offset_of!(RuntimeConfig, reserved) == 44);
+    assert!(offset_of!(RuntimeConfig, guard_hold_tokens) == 44);
+    assert!(offset_of!(RuntimeConfig, max_observe_stride) == 45);
+    assert!(offset_of!(RuntimeConfig, reserved) == 46);
 };
 
 // ===================================================================

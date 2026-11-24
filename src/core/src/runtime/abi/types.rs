@@ -10,22 +10,29 @@
 //! - **Portable Device-Ready PODs**: Power-of-two `16 B..=128 B` structures using fixed-width
 //!   types with `0` implicit padding and 64 B-aligned `[PhaseQ7; 64]` arrays directly consumable
 //!   as `u32x16` / `u64x8` (WGSL, Vulkan `std430`, Metal, CUDA, x86_64 64 B CL, ARM64 128 B CL).
-//! - **Host FFI Descriptors**: Host-only pointer-carrying structs (`Rank1Descriptor`, `Config`
-//!   wrappers) are classified separately from cross-device buffer PODs.
+//! - **Host FFI Descriptors & Inline Sub-Records**: Host-only pointer-carrying structs
+//!   (`Rank1Descriptor`, `Config` wrappers) and fixed-width inline sub-records embedded inside
+//!   power-of-two parent PODs (`SystemPressureReading` `8 B` inside `SpineDecodeInput` `32 B`,
+//!   `ComputeDispatchMask` `40 B` inside `SpineStepPlan` `64 B`) are classified explicitly alongside
+//!   standalone cross-device buffer PODs.
 
 use super::*;
 
 pub use crate::drivers::{
     ComputeDispatchMask, DistortionDelta, DistortionTension, EgoIntentAxes, EntropyController,
     EntropyState, LiminalEgoState, SpineDecodeInput, SpineStepPlan, SystemPressureReading,
-    SystemSpineState, SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_KNOWN_MASK,
-    SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
-    SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID, SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT,
-    SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED, SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED,
-    SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE, SPINE_CONTROL_KNOWN_FLAGS,
+    SystemSpineState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_GUARD_ACTIVE,
+    SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID,
+    SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT, SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED,
+    SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED, SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE,
+    SPINE_CONTROL_KNOWN_FLAGS, SPINE_DECODE_FLAG_REWARD_OVERRIDE,
     SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING, SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED,
-    SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE, SPINE_MIN_DYNAMIC_OBSERVE_STRIDE,
-    SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN, SPINE_STEP_EVENT_GUARD_REESCALATED,
+    SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE, SPINE_DECODE_INPUT_FLAG_REWARD_OVERRIDE,
+    SPINE_ENTROPY_CALM_THRESH_Q15, SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE,
+    SPINE_ENTROPY_REWARD_LOW_THRESH_Q15, SPINE_ENTROPY_SURGE_THRESH_Q15,
+    SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_MIN_DYNAMIC_OBSERVE_STRIDE, SPINE_SENTINEL_AUTO_U8,
+    SPINE_STEP_EVENT_BOUNDARY_CHURN, SPINE_STEP_EVENT_GUARD_REESCALATED,
     SPINE_STEP_EVENT_INSTABILITY_RECOVERY, SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED,
     SPINE_STEP_EVENT_NONE, SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
 };
@@ -159,13 +166,13 @@ pub type lmnk_core_primitive_state_t = CorePrimitiveState;
 pub type lmnk_distortion_delta_t = DistortionDelta;
 /// 32-byte Asymmetric Homeostatic Tension (`DistortionTension`).
 pub type lmnk_distortion_tension_t = DistortionTension;
-/// 8-byte External System Gauge-Zero Pressure Reading (`SystemPressureReading`).
+/// 8-byte Inline Sub-Record: External System Gauge-Zero Pressure Reading (`SystemPressureReading`).
 pub type lmnk_system_pressure_reading_t = SystemPressureReading;
-/// 40-byte Pre-Execution Anonymous Compute Dispatch Mask (`ComputeDispatchMask`).
+/// 40-byte Inline Sub-Record: Pre-Execution Anonymous Compute Dispatch Mask (`ComputeDispatchMask`).
 pub type lmnk_compute_dispatch_mask_t = ComputeDispatchMask;
-/// 16-byte Spine Decode Signal Input (`SpineDecodeInput`).
+/// 32-byte Spine Decode Signal Input (`SpineDecodeInput`).
 pub type lmnk_spine_decode_input_t = SpineDecodeInput;
-/// 48-byte Pre-Execution Spine Decode Step Plan (`SpineStepPlan`).
+/// 64-byte Pre-Execution Spine Decode Step Plan (`SpineStepPlan`).
 pub type lmnk_spine_step_plan_t = SpineStepPlan;
 /// 64-byte Mechanical Execution Spine State (`SystemSpineState`).
 pub type lmnk_spine_state_t = SystemSpineState;
@@ -220,6 +227,9 @@ const _: () = {
     assert!(offset_of!(lmnk_config_t, execution_flags) == 40);
     assert!(offset_of!(lmnk_config_t, ledger_mode) == 42);
     assert!(offset_of!(lmnk_config_t, rope_layout) == 43);
+    assert!(offset_of!(lmnk_config_t, guard_hold_tokens) == 44);
+    assert!(offset_of!(lmnk_config_t, max_observe_stride) == 45);
+    assert!(offset_of!(lmnk_config_t, reserved) == 46);
 
     assert!(size_of::<lmnk_entropy_state_t>() == 32 && align_of::<lmnk_entropy_state_t>() == 32);
     assert!(offset_of!(lmnk_entropy_state_t, moving_z_entropy) == 0);
@@ -467,21 +477,24 @@ const _: () = {
     assert!(offset_of!(lmnk_compute_dispatch_mask_t, whole_token_steering_bypass) == 39);
 
     assert!(
-        size_of::<lmnk_spine_decode_input_t>() == 16
+        size_of::<lmnk_spine_decode_input_t>() == 32
             && align_of::<lmnk_spine_decode_input_t>() == 16
     );
     assert!(offset_of!(lmnk_spine_decode_input_t, observed_exit_entropy_q15) == 8);
     assert!(offset_of!(lmnk_spine_decode_input_t, exit_entropy_lacuna_code) == 12);
     assert!(offset_of!(lmnk_spine_decode_input_t, flags) == 15);
+    assert!(offset_of!(lmnk_spine_decode_input_t, exit_reward_override_q7) == 16);
+    assert!(offset_of!(lmnk_spine_decode_input_t, reserved) == 17);
 
     assert!(
-        size_of::<lmnk_spine_step_plan_t>() == 48 && align_of::<lmnk_spine_step_plan_t>() == 16
+        size_of::<lmnk_spine_step_plan_t>() == 64 && align_of::<lmnk_spine_step_plan_t>() == 64
     );
     assert!(offset_of!(lmnk_spine_step_plan_t, dispatch) == 0);
     assert!(offset_of!(lmnk_spine_step_plan_t, next_observe_mode) == 40);
     assert!(offset_of!(lmnk_spine_step_plan_t, veto_mask) == 41);
     assert!(offset_of!(lmnk_spine_step_plan_t, event_flags) == 42);
     assert!(offset_of!(lmnk_spine_step_plan_t, effective_observe_stride) == 43);
+    assert!(offset_of!(lmnk_spine_step_plan_t, reserved_align) == 44);
 
     assert!(
         size_of::<lmnk_distortion_delta_t>() == 128 && align_of::<lmnk_distortion_delta_t>() == 64
