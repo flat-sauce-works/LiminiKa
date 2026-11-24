@@ -457,13 +457,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             return;
         }
 
-        let fact_idxs: Vec<usize> = ctx
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.role == AttractorRole::Fact)
-            .map(|(i, _)| i)
-            .collect();
+        let fact_idxs = ctx.neighborhood_stats.role_indices(AttractorRole::Fact);
         if fact_idxs.len() < 2 {
             return;
         }
@@ -478,7 +472,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         }
 
         let Some((pair, excl_single_scores)) =
-            evaluate_role_coalition_pair(&signal.token_deposits, &signal.d_to_q_scores, &fact_idxs)
+            evaluate_role_coalition_pair(&signal.token_deposits, &signal.d_to_q_scores, fact_idxs)
         else {
             return;
         };
@@ -544,7 +538,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             .min(fact_idxs.len());
         if hop_cap >= 3 {
             let mut best_third: Option<(usize, f32)> = None;
-            for &k in &fact_idxs {
+            for &k in fact_idxs {
                 if k == first_idx || k == second_idx {
                     continue;
                 }
@@ -789,23 +783,17 @@ impl RecallStratum for LocalTokenResonanceStratum {
             if role == AttractorRole::Fact && signal.decomposition_triggered {
                 continue;
             }
-            let idxs: Vec<usize> = ctx
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.role == role)
-                .map(|(i, _)| i)
-                .collect();
+            let idxs = ctx.neighborhood_stats.role_indices(role);
             if idxs.len() <= 1 {
                 continue;
             }
             let Some((g_r_idx, g_r_top1, _g_r_top2, g_r_mean, g_r_std, g_r_sharp)) =
-                Self::channel_sharpness_on_indices(&signal.candidate_scores, &idxs, 0.05)
+                Self::channel_sharpness_on_indices(&signal.candidate_scores, idxs, 0.05)
             else {
                 continue;
             };
             let Some((l_r_idx, l_r_top1, l_r_top2, l_r_mean, l_r_std, l_r_sharp)) =
-                Self::channel_sharpness_on_indices(&signal.local_token_scores, &idxs, 0.035)
+                Self::channel_sharpness_on_indices(&signal.local_token_scores, idxs, 0.035)
             else {
                 continue;
             };
@@ -848,7 +836,7 @@ impl RecallStratum for LocalTokenResonanceStratum {
             } else {
                 g_r_std.max(0.03)
             };
-            for &i in &idxs {
+            for &i in idxs {
                 let z_loc = ((signal.local_token_scores[i] - l_r_mean) / l_r_std).clamp(-2.0, 3.0);
                 let matched_loc = g_r_mean + z_loc * scale;
                 signal.candidate_scores[i] =
@@ -870,17 +858,11 @@ impl RecallStratum for LocalTokenResonanceStratum {
             && signal.d_to_q_scores.len() == n_entries
             && signal.q_to_d_scores.len() == n_entries
         {
-            let guard_idxs: Vec<usize> = ctx
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.role == AttractorRole::Guard)
-                .map(|(i, _)| i)
-                .collect();
+            let guard_idxs = ctx.neighborhood_stats.role_indices(AttractorRole::Guard);
             if let Some((g_pair, _)) = evaluate_role_coalition_pair(
                 &signal.token_deposits,
                 &signal.d_to_q_scores,
-                &guard_idxs,
+                guard_idxs,
             ) {
                 let g_bimodal = g_pair.joint_excl >= 0.040
                     && g_pair.second_contrib >= 0.015

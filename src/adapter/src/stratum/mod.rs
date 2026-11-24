@@ -19,8 +19,8 @@ pub use coalition::{
 pub use workers::{HeadAngleWorkerStratum, LocalFeatureWorkerStratum, PerspectiveHubnessStratum};
 
 use crate::{
-    AsymmetricHubnessPerspective, CoherenceGuardGate, RecallBoundaryMetrics, RecallGateDecision,
-    RecallPolicy, TextAttractorEntry,
+    AsymmetricHubnessPerspective, CoherenceGuardGate, NeighborhoodStatsProvider,
+    RecallBoundaryMetrics, RecallGateDecision, RecallPolicy, TextAttractorEntry,
 };
 use liminika_core::abi::lmnk_pointer_trail_t;
 use liminika_core::liminal::{LmnkResult, NUM_STIGMERGIC_GRANULES};
@@ -190,8 +190,12 @@ pub struct StratumContext<'a> {
     pub raw_sig: &'a [f32],
     /// Common-mode-projected normalized query signature.
     pub query_sig: &'a [f32],
-    /// Common-mode-projected normalized corpus signatures.
-    pub entry_sigs: &'a [Vec<f32>],
+    /// Flat row-major common-mode-projected normalized corpus signatures (`entries.len() * projected_sig_dim`).
+    pub projected_sigs_flat: &'a [f32],
+    /// Fixed dimension of each projected corpus signature row (`0` when unavailable).
+    pub projected_sig_dim: usize,
+    /// Precomputed role-scoped neighborhood statistics and role index partitions.
+    pub neighborhood_stats: &'a dyn NeighborhoodStatsProvider,
     /// Rotary dimension per steered layer chunk (`q_rot_len`).
     pub layer_chunk_dim: usize,
     /// Number of query attention heads (`H_Q`) inside each steered layer chunk.
@@ -200,6 +204,20 @@ pub struct StratumContext<'a> {
     pub rotary_dim: usize,
     /// Active recall policy thresholds.
     pub policy: &'a RecallPolicy,
+}
+
+impl<'a> StratumContext<'a> {
+    /// Returns the common-mode-projected signature slice for `entry_idx` from the flat buffer.
+    #[inline]
+    #[must_use]
+    pub fn projected_entry_sig(&self, entry_idx: usize) -> Option<&'a [f32]> {
+        if self.projected_sig_dim == 0 {
+            return None;
+        }
+        let start = entry_idx.checked_mul(self.projected_sig_dim)?;
+        let end = start.checked_add(self.projected_sig_dim)?;
+        self.projected_sigs_flat.get(start..end)
+    }
 }
 
 /// Pluggable hierarchical layer in a multi-stratum recall/steering stack (`n - 1 <-> n <-> n + 1`).

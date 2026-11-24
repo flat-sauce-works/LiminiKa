@@ -21,10 +21,11 @@ use crate::eval::{
 use crate::model::{LogitsFetchMode, ResonantAnchors};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
-    CompiledTokenCorpus, CorpusRecallEscalationProvider, FrameTransitionMetrics,
-    LacunaBoundaryState, LmnkTimeline, ManifoldReflectionEvaluator, ReflectionCritique,
-    ReflectionGateInput, ReflectionPolicy, ReflectionSelection, SequenceActivationPooler,
-    SourceTextRecord, TimelineStepContext, TokenSequenceEntry, TrajectoryManifoldSnapshot,
+    CompiledTokenCorpus, CorpusRecallEscalationProvider, EntryTokenObservation,
+    FrameTransitionMetrics, LacunaBoundaryState, LmnkTimeline, ManifoldReflectionEvaluator,
+    ReflectionCritique, ReflectionGateInput, ReflectionPolicy, ReflectionSelection,
+    SequenceActivationPooler, SourceTextRecord, TimelineStepContext, TokenSequenceEntry,
+    TrajectoryManifoldSnapshot,
 };
 use liminika_core::runtime::{
     AdaptiveThresholdPolicy, CognitiveCircuitThresholdPolicy, ObjectiveFact, RamPhaseKvCacheOps,
@@ -120,6 +121,7 @@ pub(crate) fn run_step2_evaluation(
         .map_err(|e| format!("alias prefix encode error: {e}"))?
         .get_ids()
         .to_vec();
+    let mut split_token_observations: Vec<EntryTokenObservation> = Vec::new();
     for (entry_idx, entry) in staged_entries.iter().enumerate() {
         if entry.role != AttractorRole::Fact {
             continue;
@@ -166,14 +168,14 @@ pub(crate) fn run_step2_evaluation(
                 .into_iter()
                 .map(|layer| layer[start..end].to_vec())
                 .collect();
-            compiled.register_bpe_prefix_alias_tokens(
-                adapter,
+            split_token_observations.push(EntryTokenObservation {
                 entry_idx,
-                &sliced_qs,
-                ids_spaced.len(),
-            )?;
+                seq_len: ids_spaced.len(),
+                per_layer_token_qs: sliced_qs,
+            });
         }
     }
+    compiled.append_entry_token_observations(adapter, &split_token_observations)?;
     let compile_ms = t_compile.elapsed().as_secs_f64() * 1000.0;
     println!(
         "Compiled {} natural-language attractors (two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}",

@@ -2177,6 +2177,7 @@ fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&e1, 0.85), (&e2, 0.72)],
         recalled_personas: Vec::new(),
+        top_guard: None,
         lacuna_partition: LacunaPartition8::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
@@ -2888,6 +2889,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&fact, 0.85)],
         recalled_personas: Vec::new(),
+        top_guard: None,
         lacuna_partition: LacunaPartition8::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
@@ -3115,6 +3117,7 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
         telemetry: StratumProbeTelemetry::default(),
         recalled_facts: vec![(&fact, 0.70)],
         recalled_personas: Vec::new(),
+        top_guard: None,
         lacuna_partition: LacunaPartition8::default(),
         exterior_sandbox_facts: Vec::new(),
         is_known_unknown_exterior: false,
@@ -3515,4 +3518,493 @@ fn guard_repulsion_boundary_writes_nonzero_antiphase_to_auto_repulsion_lane() {
         lane_phases, &expected_antiphase,
         "auto_repulsion lane must store non-zero anti-phase `-guard` without double negation"
     );
+
+    // TrajectoryManifoldSnapshot::from_recall captures observed `top_guard_q7` directly.
+    let snap = TrajectoryManifoldSnapshot::from_recall(&recall);
+    assert_eq!(snap.top_guard_q7, Some(guard_q7));
+}
+
+#[test]
+fn corpus_recall_escalation_writes_antiphase_for_guard_and_stays_unobserved_without_guard() {
+    use liminika_core::liminal::EpistemicRegime;
+    use liminika_core::runtime::{
+        HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput,
+    };
+    use liminika_core::stigmergy::WORKBENCH_LANE_FLAG_REPULSION;
+
+    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let q_len = adapter.geometry().q_rot_len();
+    let head_rot = adapter.geometry().rotary_dim;
+    let half = head_rot / 2;
+    let num_heads = adapter.geometry().num_q_heads;
+    let num_layers = adapter.geometry().num_layers;
+
+    let mut centroid = vec![0.0_f32; q_len];
+    let mut fact_vec = vec![0.0_f32; q_len];
+    let mut guard_vec = vec![0.0_f32; q_len];
+    for h in 0..num_heads {
+        let base = h * head_rot;
+        centroid[base] = 1.0;
+        fact_vec[base] = 0.85;
+        fact_vec[base + half] = 0.52;
+        guard_vec[base] = 0.60;
+        guard_vec[base + half] = -0.80;
+    }
+    let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+    // 1. Fact-only corpus must return Ok(None) under WORKBENCH_LANE_FLAG_REPULSION (zero leakage).
+    let mut fact_only_corpus = TextAttractorCorpus::new();
+    fact_only_corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Fact only",
+            &vec![fact_vec.as_slice(); num_layers],
+            &refs,
+            2.0,
+        )
+        .expect("ingest fact");
+    let mut fact_only_esc = CorpusRecallEscalationProvider::new(&fact_only_corpus);
+    let rep_req = HorizonEscalationRequest {
+        trigger: HorizonTriggerInput {
+            repulsion_severity: 0.75,
+            epistemic_regime: EpistemicRegime::InternalConflict as u8,
+            ..HorizonTriggerInput::default()
+        },
+        lane_flags: WORKBENCH_LANE_FLAG_REPULSION,
+        layer_scale_q7: 127,
+        ..HorizonEscalationRequest::default()
+    };
+    let mut out_phases = [99_i8; MAX_ATTENTION_HEADS];
+    let res_none = fact_only_esc
+        .try_escalate_horizon(&rep_req, &mut out_phases)
+        .expect("fact-only repulsion escalation");
+    assert!(res_none.is_none());
+    assert_eq!(fact_only_esc.escalation_calls, 0);
+
+    // 2. Corpus with Guard writes saturating anti-phase (`-R`) matching auto_repulsion contract.
+    let mut guard_corpus = TextAttractorCorpus::new();
+    guard_corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Guard,
+            "Repulsive guard",
+            &vec![guard_vec.as_slice(); num_layers],
+            &refs,
+            2.4,
+        )
+        .expect("ingest guard");
+    let guard_q7 = guard_corpus.entries()[0]
+        .per_layer_q7
+        .last()
+        .copied()
+        .expect("guard q7");
+    assert!(guard_q7.iter().any(|&v| v != 0));
+    let mut expected_anti = [0_i8; MAX_ATTENTION_HEADS];
+    for (dst, &src) in expected_anti.iter_mut().zip(guard_q7.iter()) {
+        *dst = src.saturating_neg();
+    }
+
+    let mut guard_esc = CorpusRecallEscalationProvider::new(&guard_corpus);
+    let mut esc_phases = [0_i8; MAX_ATTENTION_HEADS];
+    let weight = guard_esc
+        .try_escalate_horizon(&rep_req, &mut esc_phases)
+        .expect("guard repulsion escalation")
+        .expect("guard selected");
+    assert!(weight >= 2.4 - 1e-5);
+    assert_eq!(esc_phases, expected_anti);
+    assert_eq!(guard_esc.escalation_calls, 1);
+
+    // 3. Single-layer i8::MIN Guard pole saturates to +127 without overflow wraparound.
+    let mut single_layer_geom = RopeGeometry::phi4_mini();
+    single_layer_geom.num_layers = 1;
+    single_layer_geom.layer_rope_mask = 1;
+    let sl_adapter = ModelSteeringAdapter::new(single_layer_geom).expect("single-layer adapter");
+    let mut opp_vec = vec![0.0_f32; q_len];
+    for h in 0..num_heads {
+        opp_vec[h * head_rot] = -1.0;
+    }
+    let mut sl_corpus = TextAttractorCorpus::new();
+    sl_corpus
+        .ingest_text_activations(
+            &sl_adapter,
+            AttractorRole::Guard,
+            "Opposite pole guard",
+            &[opp_vec.as_slice()],
+            &[centroid.as_slice()],
+            2.0,
+        )
+        .expect("ingest opposite guard");
+    let sl_raw = sl_corpus.entries()[0].per_layer_q7[0];
+    let mut sl_expected = [0_i8; MAX_ATTENTION_HEADS];
+    for (dst, &src) in sl_expected.iter_mut().zip(sl_raw.iter()) {
+        *dst = src.saturating_neg();
+    }
+    let mut sl_esc = CorpusRecallEscalationProvider::new(&sl_corpus);
+    let mut sl_out = [0_i8; MAX_ATTENTION_HEADS];
+    let _ = sl_esc
+        .try_escalate_horizon(&rep_req, &mut sl_out)
+        .expect("single-layer guard escalation")
+        .expect("guard selected");
+    assert_eq!(sl_out, sl_expected);
+    assert!(sl_out.iter().all(|&v| v != i8::MIN));
+}
+
+#[test]
+fn text_attractor_corpus_lazy_flat_cache_invalidation_clone_and_mock_provider() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<TextAttractorCorpus>();
+    assert_send_sync::<CompiledTokenCorpus>();
+
+    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let q_len = adapter.geometry().q_rot_len();
+    let num_layers = adapter.geometry().num_layers;
+    let centroid = vec![0.0_f32; q_len];
+    let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+    let make_basis_vec = |slot_a: usize, w_a: f32, slot_b: usize, w_b: f32| -> Vec<f32> {
+        let mut v = vec![0.0_f32; q_len];
+        v[slot_a] = w_a;
+        v[slot_b] = w_b;
+        v
+    };
+    let f0 = make_basis_vec(0, 1.0, 2, 0.25);
+    let f1 = make_basis_vec(0, 0.95, 4, 0.30);
+    let f2 = make_basis_vec(0, 0.92, 6, 0.35);
+    let f3 = make_basis_vec(1, 1.0, 8, 0.15);
+    let p0 = make_basis_vec(10, 1.0, 12, 0.20);
+
+    let mut corpus = TextAttractorCorpus::new();
+    assert!(!corpus.is_recall_cache_populated());
+    for (role, text, vec_q) in [
+        (AttractorRole::Fact, "Hub 0", &f0),
+        (AttractorRole::Fact, "Hub 1", &f1),
+        (AttractorRole::Fact, "Hub 2", &f2),
+        (AttractorRole::Fact, "Periph 3", &f3),
+        (AttractorRole::Persona, "Persona 0", &p0),
+    ] {
+        corpus
+            .ingest_text_activations(
+                &adapter,
+                role,
+                text,
+                &vec![vec_q.as_slice(); num_layers],
+                &refs,
+                1.5,
+            )
+            .expect("ingest");
+    }
+    assert!(!corpus.is_recall_cache_populated());
+
+    let policy = RecallPolicy {
+        min_coherence: 0.25,
+        boundary_margin: 0.02,
+        guard_suppress_margin: 0.0,
+        top_k_facts: 2,
+        top_k_personas: 1,
+    };
+    let query = make_basis_vec(0, 0.60, 1, 0.58);
+    let q_slices: Vec<&[f32]> = vec![query.as_slice(); num_layers];
+
+    // 1. First recall populates the flat cache; second recall reuses the exact allocation.
+    let r1 = corpus
+        .recall_for_query(&adapter, &q_slices, &refs, &policy)
+        .expect("recall 1");
+    assert!(corpus.is_recall_cache_populated());
+    let ptr1 = corpus.recall_cache() as *const _;
+    assert_eq!(
+        corpus.recall_cache().projected_sigs_flat.len(),
+        corpus.entries().len() * corpus.recall_cache().sig_dim
+    );
+    let r2 = corpus
+        .recall_for_query(&adapter, &q_slices, &refs, &policy)
+        .expect("recall 2");
+    let ptr2 = corpus.recall_cache() as *const _;
+    assert_eq!(ptr1, ptr2, "second recall must reuse OnceLock cache");
+    assert_eq!(r1.top1_fact_score.to_bits(), r2.top1_fact_score.to_bits());
+    assert_eq!(r1.top2_fact_score.to_bits(), r2.top2_fact_score.to_bits());
+    assert_eq!(
+        r1.min_local_lacuna_depth.to_bits(),
+        r2.min_local_lacuna_depth.to_bits()
+    );
+
+    // 2. Cloned corpus starts with an empty lazy cache and rebuilds bit-identical results.
+    let cloned = corpus.clone();
+    assert!(!cloned.is_recall_cache_populated());
+    let r_clone = cloned
+        .recall_for_query(&adapter, &q_slices, &refs, &policy)
+        .expect("cloned recall");
+    assert!(cloned.is_recall_cache_populated());
+    assert_eq!(
+        r1.top1_fact_score.to_bits(),
+        r_clone.top1_fact_score.to_bits()
+    );
+    assert_eq!(
+        r1.top2_fact_score.to_bits(),
+        r_clone.top2_fact_score.to_bits()
+    );
+
+    // 3. Every mutator invalidates the cache and subsequent recall rebuilds cleanly.
+    corpus.fit_common_mode_subspace(2);
+    assert!(!corpus.is_recall_cache_populated());
+    let _ = corpus
+        .recall_for_query(&adapter, &q_slices, &refs, &policy)
+        .expect("recall after fit");
+    assert!(corpus.is_recall_cache_populated());
+
+    let extra_dir = vec![1.0_f32; corpus.entries()[0].residual_sig.len()];
+    corpus.extend_common_mode_basis(&[extra_dir], 4);
+    assert!(!corpus.is_recall_cache_populated());
+    let _ = corpus
+        .recall_for_query(&adapter, &q_slices, &refs, &policy)
+        .expect("recall after extend");
+    assert!(corpus.is_recall_cache_populated());
+
+    let extra_fact = make_basis_vec(20, 1.0, 22, 0.25);
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Extra fact",
+            &vec![extra_fact.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("ingest extra");
+    assert!(!corpus.is_recall_cache_populated());
+    let _ = corpus
+        .recall_for_query(&adapter, &q_slices, &refs, &policy)
+        .expect("recall after ingest");
+    assert!(corpus.is_recall_cache_populated());
+    assert_eq!(
+        corpus
+            .recall_cache()
+            .role_indices(AttractorRole::Fact)
+            .len(),
+        5
+    );
+
+    // 4. Mock NeighborhoodStatsProvider swaps cleanly into StratumContext & PerspectiveHubnessStratum.
+    struct MockStatsProvider {
+        fact_idxs: Vec<usize>,
+        persona_idxs: Vec<usize>,
+        guard_idxs: Vec<usize>,
+        per_entry: Vec<EntryNeighborhoodStats>,
+        global_fact_mean: f32,
+    }
+    impl NeighborhoodStatsProvider for MockStatsProvider {
+        fn entry_stats(&self, entry_idx: usize) -> EntryNeighborhoodStats {
+            self.per_entry.get(entry_idx).copied().unwrap_or_default()
+        }
+        fn role_global_mean(&self, role: AttractorRole) -> f32 {
+            match role {
+                AttractorRole::Fact => self.global_fact_mean,
+                AttractorRole::Persona | AttractorRole::Guard => 0.0,
+            }
+        }
+        fn role_indices(&self, role: AttractorRole) -> &[usize] {
+            match role {
+                AttractorRole::Fact => &self.fact_idxs,
+                AttractorRole::Persona => &self.persona_idxs,
+                AttractorRole::Guard => &self.guard_idxs,
+            }
+        }
+    }
+
+    let entries = corpus.entries();
+    let mock = MockStatsProvider {
+        fact_idxs: vec![0, 1, 2, 3, 5],
+        persona_idxs: vec![4],
+        guard_idxs: vec![],
+        per_entry: vec![
+            EntryNeighborhoodStats {
+                neighbor_mean_cosine: 0.90,
+                neighbor_std_cosine: 0.10,
+            },
+            EntryNeighborhoodStats {
+                neighbor_mean_cosine: 0.10,
+                neighbor_std_cosine: 0.10,
+            },
+            EntryNeighborhoodStats::default(),
+            EntryNeighborhoodStats::default(),
+            EntryNeighborhoodStats::default(),
+            EntryNeighborhoodStats::default(),
+        ],
+        global_fact_mean: 0.50,
+    };
+    let ctx = StratumContext {
+        entries,
+        raw_sig: &[],
+        query_sig: &[],
+        projected_sigs_flat: &[],
+        projected_sig_dim: 0,
+        neighborhood_stats: &mock,
+        layer_chunk_dim: q_len,
+        num_q_heads: adapter.geometry().num_q_heads,
+        rotary_dim: adapter.geometry().rotary_dim,
+        policy: &policy,
+    };
+    let mut signal = StratumSignal {
+        candidate_scores: vec![0.50; entries.len()],
+        local_token_scores: Vec::new(),
+        q_to_d_scores: Vec::new(),
+        d_to_q_scores: Vec::new(),
+        token_deposits: Vec::new(),
+        linked_fact_indices: Vec::new(),
+        decomposition_triggered: false,
+        local_lacuna_depths: vec![0.0; entries.len()],
+        stigmergic_weights: vec![1.0; entries.len()],
+        boundary_metrics: RecallBoundaryMetrics {
+            top1_fact_score: -1.0,
+            top2_fact_score: -1.0,
+            top1_persona_score: -1.0,
+            max_guard_score: -1.0,
+            guard_conflict_margin: 0.0,
+        },
+        gate_decision: RecallGateDecision {
+            lacuna_state: LacunaBoundaryState::LiminalExterior,
+            suppress_fact_injection: true,
+        },
+        action_decision: StigmergicActionDecision::PassiveSidecar,
+        gateway_frame: GatewayFrame::default(),
+        swarm_report: Default::default(),
+        local_channel_preferred: false,
+        telemetry: StratumProbeTelemetry::default(),
+    };
+    let perspective = AsymmetricHubnessPerspective::default();
+    let stratum = PerspectiveHubnessStratum {
+        perspective: &perspective,
+    };
+    stratum
+        .infer_up(&ctx, &mut signal)
+        .expect("mock provider infer_up");
+    // Entry 0 has high hubness (0.90 > 0.50) so it is damped; Entry 1 has low hubness (0.10 < 0.50) so it wins.
+    assert!(
+        signal.candidate_scores[1] > signal.candidate_scores[0] + 0.30,
+        "expected mock hubness stats to damp entry 0 ({}) below entry 1 ({})",
+        signal.candidate_scores[0],
+        signal.candidate_scores[1]
+    );
+}
+
+#[test]
+fn zero_copy_common_mode_subspace_matches_explicit_deflation() {
+    fn explicit_deflated_reference(sigs: &[Vec<f32>], max_components: usize) -> Vec<Vec<f32>> {
+        let mut basis: Vec<Vec<f32>> = Vec::new();
+        if sigs.len() < 4 || max_components == 0 {
+            return basis;
+        }
+        let dim = sigs[0].len();
+        let rank_cap = max_components.min(sigs.len() / 3);
+        let mut work = sigs.to_vec();
+        let normalize = |v: &mut [f32]| {
+            let n = v
+                .iter()
+                .map(|&x| f64::from(x) * f64::from(x))
+                .sum::<f64>()
+                .sqrt();
+            if n > 1e-12 {
+                let inv = (1.0 / n) as f32;
+                for x in v.iter_mut() {
+                    *x *= inv;
+                }
+            }
+        };
+        for _ in 0..rank_cap {
+            let mut v = vec![0.0_f32; dim];
+            for w in &work {
+                for (d, &s) in v.iter_mut().zip(w.iter()) {
+                    *d += s;
+                }
+            }
+            for dir in &basis {
+                let dot: f64 = v
+                    .iter()
+                    .zip(dir.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let d = dot as f32;
+                for (dst, &c) in v.iter_mut().zip(dir.iter()) {
+                    *dst -= d * c;
+                }
+            }
+            normalize(&mut v);
+            if v.iter().all(|&x| x == 0.0) {
+                break;
+            }
+            for _ in 0..8 {
+                let mut next = vec![0.0_f32; dim];
+                for w in &work {
+                    let dot: f64 = w
+                        .iter()
+                        .zip(v.iter())
+                        .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                        .sum();
+                    let d = dot as f32;
+                    for (dst, &src) in next.iter_mut().zip(w.iter()) {
+                        *dst += d * src;
+                    }
+                }
+                for dir in &basis {
+                    let dot: f64 = next
+                        .iter()
+                        .zip(dir.iter())
+                        .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                        .sum();
+                    let d = dot as f32;
+                    for (dst, &c) in next.iter_mut().zip(dir.iter()) {
+                        *dst -= d * c;
+                    }
+                }
+                let norm_sq: f64 = next.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+                if norm_sq < 1e-12 {
+                    break;
+                }
+                normalize(&mut next);
+                v = next;
+            }
+            let norm_sq: f64 = v.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+            if norm_sq < 0.5 {
+                break;
+            }
+            for w in &mut work {
+                let dot: f64 = w
+                    .iter()
+                    .zip(v.iter())
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum();
+                let d = dot as f32;
+                for (dst, &c) in w.iter_mut().zip(v.iter()) {
+                    *dst -= d * c;
+                }
+            }
+            basis.push(v);
+        }
+        basis
+    }
+
+    let dim = 24;
+    let sigs: Vec<Vec<f32>> = (0..12)
+        .map(|i| {
+            let mut v = vec![0.0_f32; dim];
+            v[0] = 0.80 + 0.02 * (i as f32);
+            v[1] = if i % 2 == 0 { 0.55 } else { -0.35 };
+            v[2 + (i % 8)] = 0.45;
+            v[12 + (i % 6)] = -0.25;
+            v
+        })
+        .collect();
+    let sig_refs: Vec<&[f32]> = sigs.iter().map(Vec::as_slice).collect();
+    let zero_copy = TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&sig_refs, 3);
+    let reference = explicit_deflated_reference(&sigs, 3);
+
+    assert_eq!(zero_copy.len(), reference.len());
+    assert_eq!(zero_copy.len(), 3);
+    for (k, (zc, rf)) in zero_copy.iter().zip(reference.iter()).enumerate() {
+        let cos = TextAttractorCorpus::cosine_f32(zc, rf).abs();
+        assert!(
+            cos > 0.99999,
+            "basis component {k} diverged from explicit deflation: |cos|={cos}"
+        );
+    }
 }

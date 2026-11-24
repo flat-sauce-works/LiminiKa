@@ -83,7 +83,8 @@ impl RecallStratum for LocalFeatureWorkerStratum {
         let expected = ctx.layer_chunk_dim;
         let use_projected = !ctx.query_sig.is_empty()
             && ctx.query_sig.len() == ctx.raw_sig.len()
-            && ctx.entry_sigs.len() == n_entries;
+            && ctx.projected_sig_dim == ctx.query_sig.len()
+            && ctx.projected_sigs_flat.len() == n_entries.saturating_mul(ctx.projected_sig_dim);
         let query_vec = if use_projected {
             ctx.query_sig
         } else {
@@ -96,7 +97,7 @@ impl RecallStratum for LocalFeatureWorkerStratum {
                 let mut layer_cos: Vec<Vec<f32>> = vec![vec![0.0_f32; num_steered]; n_entries];
                 for (i, entry) in ctx.entries.iter().enumerate() {
                     let entry_vec: &[f32] = if use_projected {
-                        &ctx.entry_sigs[i]
+                        ctx.projected_entry_sig(i).unwrap_or(&[])
                     } else {
                         &entry.residual_sig
                     };
@@ -118,16 +119,10 @@ impl RecallStratum for LocalFeatureWorkerStratum {
                     AttractorRole::Persona,
                     AttractorRole::Guard,
                 ] {
-                    let idxs: Vec<usize> = ctx
-                        .entries
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, e)| e.role == role)
-                        .map(|(i, _)| i)
-                        .collect();
+                    let idxs = ctx.neighborhood_stats.role_indices(role);
                     apply_loo_top_k_contrast_on_indices(
                         &layer_cos,
-                        &idxs,
+                        idxs,
                         num_steered,
                         top_l,
                         self.layer_contrast_gain,
@@ -189,7 +184,8 @@ impl RecallStratum for HeadAngleWorkerStratum {
         let r_dim = ctx.rotary_dim;
         let use_projected = !ctx.query_sig.is_empty()
             && ctx.query_sig.len() == ctx.raw_sig.len()
-            && ctx.entry_sigs.len() == n_entries;
+            && ctx.projected_sig_dim == ctx.query_sig.len()
+            && ctx.projected_sigs_flat.len() == n_entries.saturating_mul(ctx.projected_sig_dim);
         let query_vec = if use_projected {
             ctx.query_sig
         } else {
@@ -209,7 +205,7 @@ impl RecallStratum for HeadAngleWorkerStratum {
         let mut head_cos: Vec<Vec<f32>> = vec![vec![0.0_f32; n_heads]; n_entries];
         for (i, entry) in ctx.entries.iter().enumerate() {
             let entry_vec: &[f32] = if use_projected {
-                &ctx.entry_sigs[i]
+                ctx.projected_entry_sig(i).unwrap_or(&[])
             } else {
                 &entry.residual_sig
             };
@@ -245,16 +241,10 @@ impl RecallStratum for HeadAngleWorkerStratum {
             AttractorRole::Persona,
             AttractorRole::Guard,
         ] {
-            let idxs: Vec<usize> = ctx
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.role == role)
-                .map(|(i, _)| i)
-                .collect();
+            let idxs = ctx.neighborhood_stats.role_indices(role);
             apply_loo_top_k_contrast_on_indices(
                 &head_cos,
-                &idxs,
+                idxs,
                 n_heads,
                 top_k_heads,
                 self.head_contrast_gain,
@@ -294,7 +284,6 @@ impl RecallStratum for PerspectiveHubnessStratum<'_> {
     }
 
     fn infer_up(&self, ctx: &StratumContext<'_>, signal: &mut StratumSignal) -> Result<(), String> {
-        let n_entries = ctx.entries.len();
         let (query_mean_cosine, query_std_cosine) = if signal.candidate_scores.is_empty() {
             (0.0_f32, 0.05_f32)
         } else {
@@ -309,69 +298,15 @@ impl RecallStratum for PerspectiveHubnessStratum<'_> {
             (mean, var.sqrt())
         };
 
-        let mut neighbor_stats: Vec<(f32, f32)> = vec![(0.0, 0.05); n_entries];
-        let mut role_global_means = [0.0_f32; 3];
-        for role in [
-            AttractorRole::Fact,
-            AttractorRole::Persona,
-            AttractorRole::Guard,
-        ] {
-            let role_indices: Vec<usize> = ctx
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.role == role)
-                .map(|(i, _)| i)
-                .collect();
-            if role_indices.len() <= 1 {
-                continue;
-            }
-            let neighbor_k = (role_indices.len() - 1).clamp(1, 4);
-            let mut sum_k_mean = 0.0_f32;
-            for &i in &role_indices {
-                let mut sims: Vec<f32> = role_indices
-                    .iter()
-                    .copied()
-                    .filter(|&j| j != i)
-                    .map(|j| {
-                        TextAttractorCorpus::cosine_f32(&ctx.entry_sigs[i], &ctx.entry_sigs[j])
-                    })
-                    .collect();
-                sims.sort_by(|a, b| b.total_cmp(a));
-                let top_slice = &sims[..neighbor_k.min(sims.len())];
-                let k_len = top_slice.len().max(1) as f32;
-                let k_mean = top_slice.iter().sum::<f32>() / k_len;
-                let all_mean = sims.iter().sum::<f32>() / (sims.len().max(1) as f32);
-                let all_var = sims
-                    .iter()
-                    .map(|&s| (s - all_mean) * (s - all_mean))
-                    .sum::<f32>()
-                    / (sims.len().max(1) as f32);
-                neighbor_stats[i] = (k_mean, all_var.sqrt());
-                sum_k_mean += k_mean;
-            }
-            let role_slot = match role {
-                AttractorRole::Fact => 0,
-                AttractorRole::Persona => 1,
-                AttractorRole::Guard => 2,
-            };
-            role_global_means[role_slot] = sum_k_mean / (role_indices.len() as f32);
-        }
-
         for (idx, entry) in ctx.entries.iter().enumerate() {
-            let (neighbor_mean_cosine, neighbor_std_cosine) = neighbor_stats[idx];
-            let role_slot = match entry.role {
-                AttractorRole::Fact => 0,
-                AttractorRole::Persona => 1,
-                AttractorRole::Guard => 2,
-            };
+            let stats = ctx.neighborhood_stats.entry_stats(idx);
             let reading = self.perspective.measure_perspective(
                 &AttractorPerspectiveContext {
                     entry,
                     raw_cosine: signal.candidate_scores[idx],
-                    neighbor_mean_cosine,
-                    neighbor_std_cosine,
-                    global_neighbor_mean: role_global_means[role_slot],
+                    neighbor_mean_cosine: stats.neighbor_mean_cosine,
+                    neighbor_std_cosine: stats.neighbor_std_cosine,
+                    global_neighbor_mean: ctx.neighborhood_stats.role_global_mean(entry.role),
                     query_mean_cosine,
                     query_std_cosine,
                 },

@@ -1,4 +1,4 @@
-// name: src/adapter/src/pooling.rs
+// name: src/adapter/src/pooling/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Model-agnostic unsupervised sequence-token pooling and two-pass corpus compilation.
@@ -9,9 +9,18 @@
 //! BOS/attention-sink normalization, and zero-overfitting unsupervised novelty weighting across all
 //! backends and CLI entrypoints.
 
+mod calibrator;
+#[cfg(test)]
+mod tests;
+
+pub use calibrator::{
+    AdaptiveTokenSpecificityCalibrator, TokenCalibrationStats, TokenSpecificityCalibrator,
+    EXACT_TOKEN_STATS_LIMIT,
+};
+
 use crate::{
     AttractorRole, DynamicAttractorRecall, LocalChannelObservation, ModelSteeringAdapter,
-    RecallPolicy, StratumPipeline, TextAttractorCorpus, TextAttractorEntry, TokenResonanceDeposit,
+    RecallPolicy, StratumPipeline, TextAttractorCorpus, TokenResonanceDeposit,
 };
 use liminika_core::foundation::load_q7_words_64;
 use liminika_core::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
@@ -248,6 +257,17 @@ pub struct TokenSequenceEntry {
     pub per_layer_token_qs: Vec<Vec<f32>>,
 }
 
+/// Auxiliary per-token Q activation observation to append into an existing compiled corpus entry.
+#[derive(Debug, Clone)]
+pub struct EntryTokenObservation {
+    /// Target corpus entry index inside [`CompiledTokenCorpus::entry_token_sigs`].
+    pub entry_idx: usize,
+    /// Number of observed tokens (`S`).
+    pub seq_len: usize,
+    /// Per-layer flattened row-major token activations `[seq_len * q_rot_len]`.
+    pub per_layer_token_qs: Vec<Vec<f32>>,
+}
+
 /// Startup base-model attractor profile distilled from unsteered baseline generations/prompts.
 ///
 /// Captures the host model's own background linguistic gravity (layer-wise mean direction, global
@@ -330,8 +350,9 @@ impl ModelBaseAttractorProfile {
             )?);
         }
 
+        let pooled_sig_refs: Vec<&[f32]> = pooled_sigs.iter().map(Vec::as_slice).collect();
         let pooled_common_mode_basis =
-            TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&pooled_sigs, 3);
+            TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&pooled_sig_refs, 3);
         let token_common_mode_basis =
             CompiledTokenCorpus::fit_cross_entry_token_common_mode(&raw_tok_sigs, 6);
 
@@ -419,12 +440,15 @@ impl CompiledTokenCorpus {
         if per_entry_tok_sigs.len() < 3 || max_components == 0 {
             return Vec::new();
         }
-        let flat_sigs: Vec<Vec<f32>> = per_entry_tok_sigs
-            .iter()
-            .flat_map(|toks| toks.iter().cloned())
-            .collect();
+        let total_toks: usize = per_entry_tok_sigs.iter().map(Vec::len).sum();
+        let mut flat_refs: Vec<&[f32]> = Vec::with_capacity(total_toks);
+        for toks in per_entry_tok_sigs {
+            for tok in toks {
+                flat_refs.push(tok.as_slice());
+            }
+        }
         let candidates =
-            TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&flat_sigs, max_components);
+            TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&flat_refs, max_components);
         let min_entry_support = (per_entry_tok_sigs.len() / 2).max(2);
         candidates
             .into_iter()
@@ -464,23 +488,6 @@ impl CompiledTokenCorpus {
         }
         let norm_sq: f64 = work.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
         norm_sq.sqrt().clamp(0.0, 1.0) as f32
-    }
-
-    fn compute_unweighted_maxsim(query_tokens: &[Vec<f32>], doc_tokens: &[Vec<f32>]) -> f32 {
-        if query_tokens.is_empty() || doc_tokens.is_empty() {
-            return 0.0;
-        }
-        let mut sum = 0.0_f32;
-        for q_tok in query_tokens {
-            let max_sim = doc_tokens
-                .iter()
-                .map(|d_tok| TextAttractorCorpus::cosine_f32(q_tok, d_tok))
-                .fold(f32::NEG_INFINITY, f32::max);
-            if max_sim.is_finite() {
-                sum += max_sim;
-            }
-        }
-        sum / (query_tokens.len() as f32)
     }
 
     fn build_raw_token_sigs_for_entry(
@@ -529,26 +536,21 @@ impl CompiledTokenCorpus {
         Ok(out)
     }
 
-    fn extract_salient_token_sigs_indexed(
+    fn extract_salient_token_sigs_from_raw(
         adapter: &ModelSteeringAdapter,
         per_layer_token_qs: &[Vec<f32>],
-        seq_len: usize,
+        raw_tok_sigs: &[Vec<f32>],
         novelty_reference_per_layer: &[Vec<f32>],
         token_common_mode_basis: &[Vec<f32>],
         max_tokens: usize,
         pooler: SequenceActivationPooler,
-    ) -> Result<Vec<(usize, Vec<f32>, f32)>, String> {
+    ) -> Vec<(usize, Vec<f32>, f32)> {
         let geom = adapter.geometry();
         let dim = geom.q_rot_len();
+        let seq_len = raw_tok_sigs.len();
         if seq_len == 0 || max_tokens == 0 {
-            return Ok(Vec::new());
+            return Vec::new();
         }
-        let raw_tok_sigs = Self::build_raw_token_sigs_for_entry(
-            adapter,
-            per_layer_token_qs,
-            seq_len,
-            novelty_reference_per_layer,
-        )?;
         let mut token_scores: Vec<(usize, f32)> = Vec::with_capacity(seq_len);
         let (power, floor) = match pooler.mode {
             SequencePoolingMode::UniformMean => (0.0_f32, 1.0_f32),
@@ -599,8 +601,38 @@ impl CompiledTokenCorpus {
             );
             out.push((t, proj_tok_sig, w));
         }
-        Ok(out)
+        out
     }
+
+    fn extract_salient_token_sigs_indexed(
+        adapter: &ModelSteeringAdapter,
+        per_layer_token_qs: &[Vec<f32>],
+        seq_len: usize,
+        novelty_reference_per_layer: &[Vec<f32>],
+        token_common_mode_basis: &[Vec<f32>],
+        max_tokens: usize,
+        pooler: SequenceActivationPooler,
+    ) -> Result<Vec<(usize, Vec<f32>, f32)>, String> {
+        if seq_len == 0 || max_tokens == 0 {
+            return Ok(Vec::new());
+        }
+        let raw_tok_sigs = Self::build_raw_token_sigs_for_entry(
+            adapter,
+            per_layer_token_qs,
+            seq_len,
+            novelty_reference_per_layer,
+        )?;
+        Ok(Self::extract_salient_token_sigs_from_raw(
+            adapter,
+            per_layer_token_qs,
+            &raw_tok_sigs,
+            novelty_reference_per_layer,
+            token_common_mode_basis,
+            max_tokens,
+            pooler,
+        ))
+    }
+
     fn merge_orthonormal_basis(
         base: &[Vec<f32>],
         extra: &[Vec<f32>],
@@ -754,7 +786,8 @@ impl CompiledTokenCorpus {
         let recall_policy = corpus.calibrate_recall_policy(top_k_facts, top_k_personas);
 
         // Estimate unsupervised token-space common mode across entries (distinct from pooled
-        // document PCA) so BOS/attention-sink/template token directions are removed before MaxSim.
+        // document PCA) so BOS/attention-sink/template token directions are removed before MaxSim,
+        // then reuse `per_entry_raw_toks` directly during salient token extraction (zero rebuild).
         let mut per_entry_raw_toks: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
         for entry in entries {
             per_entry_raw_toks.push(Self::build_raw_token_sigs_for_entry(
@@ -772,21 +805,25 @@ impl CompiledTokenCorpus {
         };
 
         let mut entry_token_sigs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let salient = Self::extract_salient_token_sigs_indexed(
+        for (entry, raw_toks) in entries.iter().zip(per_entry_raw_toks) {
+            let salient = Self::extract_salient_token_sigs_from_raw(
                 adapter,
                 &entry.per_layer_token_qs,
-                entry.seq_len,
+                &raw_toks,
                 &novelty_reference_per_layer,
                 &token_common_mode_basis,
                 24,
                 pooler,
-            )?;
+            );
             entry_token_sigs.push(salient.into_iter().map(|(_, sig, _)| sig).collect());
         }
 
-        let (entry_token_weights, entry_token_hub_bias, global_token_hub_mean) =
-            Self::recompute_token_specificity_and_hubness(&entry_token_sigs, corpus.entries());
+        let TokenCalibrationStats {
+            entry_token_weights,
+            entry_token_hub_bias,
+            global_token_hub_mean,
+        } = AdaptiveTokenSpecificityCalibrator::default()
+            .calibrate_token_stats(&entry_token_sigs, corpus.entries());
 
         let geom = adapter.geometry();
         let steered_layers = (0..geom.num_layers)
@@ -817,115 +854,78 @@ impl CompiledTokenCorpus {
         })
     }
 
-    fn recompute_token_specificity_and_hubness(
-        entry_token_sigs: &[Vec<Vec<f32>>],
-        entries: &[TextAttractorEntry],
-    ) -> (Vec<Vec<f32>>, Vec<f32>, f32) {
-        // Estimate same-role cross-entry doc-token specificity weights
-        // (`1 / (1 + sum_{j!=i, role_j == role_i} max_sim_+^2)`) so contrastive Guards echoing
-        // factual entity names do not dilute factual token specificity, alongside leave-one-out
-        // empirical MaxSim hubness baselines.
-        let n_entries = entry_token_sigs.len();
-        let mut entry_token_weights: Vec<Vec<f32>> = Vec::with_capacity(n_entries);
-        for i in 0..n_entries {
-            let role_i = entries.get(i).map(|e| e.role);
-            let mut weights_i = Vec::with_capacity(entry_token_sigs[i].len());
-            for d_tok in &entry_token_sigs[i] {
-                let mut other_sim_sq = 0.0_f32;
-                for (j, other_toks) in entry_token_sigs.iter().enumerate() {
-                    let same_role = role_i
-                        .zip(entries.get(j).map(|e| e.role))
-                        .is_none_or(|(ri, rj)| ri == rj);
-                    if i == j || other_toks.is_empty() || !same_role {
-                        continue;
-                    }
-                    let best_j = other_toks
-                        .iter()
-                        .map(|od| TextAttractorCorpus::cosine_f32(d_tok, od))
-                        .fold(0.0_f32, f32::max);
-                    // Only accumulate genuine cross-entry overlap above random cosine noise floor.
-                    let excess = (best_j - 0.30).max(0.0);
-                    other_sim_sq += excess * excess;
-                }
-                let spec = (1.0 / (1.0 + 3.0 * other_sim_sq)).clamp(0.10, 1.0);
-                weights_i.push(spec);
-            }
-            entry_token_weights.push(weights_i);
-        }
-
-        let mut entry_token_hub_bias = vec![0.0_f32; n_entries];
-        let mut global_token_hub_mean = 0.0_f32;
-        if n_entries >= 2 {
-            let denom = (n_entries - 1) as f32;
-            for j in 0..n_entries {
-                let mut sum = 0.0_f32;
-                for i in 0..n_entries {
-                    if i == j {
-                        continue;
-                    }
-                    sum +=
-                        Self::compute_unweighted_maxsim(&entry_token_sigs[i], &entry_token_sigs[j]);
-                }
-                entry_token_hub_bias[j] = sum / denom;
-            }
-            global_token_hub_mean = entry_token_hub_bias.iter().sum::<f32>() / (n_entries as f32);
-        }
-
-        (
-            entry_token_weights,
-            entry_token_hub_bias,
-            global_token_hub_mean,
-        )
+    /// Recomputes token specificity weights and empirical hubness baselines using a caller-supplied
+    /// [`TokenSpecificityCalibrator`].
+    pub fn recalibrate_token_stats(&mut self, calibrator: &dyn TokenSpecificityCalibrator) {
+        let stats = calibrator.calibrate_token_stats(&self.entry_token_sigs, self.corpus.entries());
+        self.entry_token_weights = stats.entry_token_weights;
+        self.entry_token_hub_bias = stats.entry_token_hub_bias;
+        self.global_token_hub_mean = stats.global_token_hub_mean;
     }
 
-    /// Appends auxiliary per-layer token Q activations (such as a space-prefixed BPE alias of a
-    /// sentence-initial token) into `entry_idx`'s salient token cloud without altering `pooled_q`
-    /// or `corpus_centroid_per_layer`, then recalibrates cross-entry token specificity weights.
+    /// Appends a batch of auxiliary per-token Q observations into their target corpus entries
+    /// without altering pooled entry signatures or centroids, then recalibrates token specificity
+    /// and hubness statistics once at the end of the batch.
+    ///
+    /// Validation and feature extraction run before mutating `self`, so any error leaves the corpus
+    /// unchanged.
     ///
     /// # Errors
-    /// Returns an error if `entry_idx` is out of range or `alias_token_qs` mismatches `adapter`.
-    pub fn register_bpe_prefix_alias_tokens(
+    /// Returns an error if any observation's `entry_idx` is out of range or its activation tensor
+    /// shape disagrees with `adapter`.
+    pub fn append_entry_token_observations(
         &mut self,
         adapter: &ModelSteeringAdapter,
-        entry_idx: usize,
-        alias_token_qs: &[Vec<f32>],
-        alias_seq_len: usize,
+        observations: &[EntryTokenObservation],
     ) -> Result<(), String> {
-        if entry_idx >= self.entry_token_sigs.len() {
-            return Err(format!(
-                "entry_idx {entry_idx} out of range (len={})",
-                self.entry_token_sigs.len()
-            ));
-        }
-        let num_layers = adapter.geometry().num_layers;
-        if alias_token_qs.len() != num_layers {
-            return Err(format!(
-                "alias layer count mismatch: expected {num_layers}, got {}",
-                alias_token_qs.len()
-            ));
-        }
-        if alias_seq_len == 0 {
+        if observations.is_empty() {
             return Ok(());
         }
-        let salient = Self::extract_salient_token_sigs_indexed(
-            adapter,
-            alias_token_qs,
-            alias_seq_len,
-            &self.novelty_reference_per_layer,
-            &self.token_common_mode_basis,
-            alias_seq_len,
-            self.pooler,
-        )?;
-        for (_, sig, _) in salient {
-            self.entry_token_sigs[entry_idx].push(sig);
+        let num_layers = adapter.geometry().num_layers;
+        let mut staged: Vec<(usize, Vec<Vec<f32>>)> = Vec::with_capacity(observations.len());
+        let mut appended_any = false;
+
+        for obs in observations {
+            if obs.entry_idx >= self.entry_token_sigs.len() {
+                return Err(format!(
+                    "entry_idx {} out of range (len={})",
+                    obs.entry_idx,
+                    self.entry_token_sigs.len()
+                ));
+            }
+            if obs.per_layer_token_qs.len() != num_layers {
+                return Err(format!(
+                    "observation layer count mismatch: expected {num_layers}, got {}",
+                    obs.per_layer_token_qs.len()
+                ));
+            }
+            if obs.seq_len == 0 {
+                continue;
+            }
+            let salient = Self::extract_salient_token_sigs_indexed(
+                adapter,
+                &obs.per_layer_token_qs,
+                obs.seq_len,
+                &self.novelty_reference_per_layer,
+                &self.token_common_mode_basis,
+                obs.seq_len,
+                self.pooler,
+            )?;
+            let sigs: Vec<Vec<f32>> = salient.into_iter().map(|(_, sig, _)| sig).collect();
+            if !sigs.is_empty() {
+                appended_any = true;
+                staged.push((obs.entry_idx, sigs));
+            }
         }
-        let (weights, hub_bias, global_hub_mean) = Self::recompute_token_specificity_and_hubness(
-            &self.entry_token_sigs,
-            self.corpus.entries(),
-        );
-        self.entry_token_weights = weights;
-        self.entry_token_hub_bias = hub_bias;
-        self.global_token_hub_mean = global_hub_mean;
+
+        if !appended_any {
+            return Ok(());
+        }
+
+        for (entry_idx, sigs) in staged {
+            self.entry_token_sigs[entry_idx].extend(sigs);
+        }
+        self.recalibrate_token_stats(&AdaptiveTokenSpecificityCalibrator::default());
         Ok(())
     }
 
@@ -1204,606 +1204,5 @@ impl CompiledTokenCorpus {
                 Some(obs),
                 prior_circuit,
             )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{LacunaBoundaryState, RopeGeometry};
-
-    #[test]
-    fn novelty_sif_pooling_resists_attention_sink_norm_spike_and_boilerplate() {
-        let dim = 8;
-        // Reference represents boilerplate direction [1, 0, 0, ...].
-        let ref_dir = vec![1.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        // Sequence:
-        //   token 0: huge 25x BOS/sink spike along boilerplate axis [25, 0, ...]
-        //   token 1..3: normal boilerplate tokens [1, 0, ...]
-        //   token 4: rare entity signal along orthogonal axis [0, 0, 1, 0, ...]
-        let mut seq = Vec::new();
-        seq.extend_from_slice(&[25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        for _ in 0..3 {
-            seq.extend_from_slice(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-        }
-        seq.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
-
-        let pooler = SequenceActivationPooler::default();
-        let pooled_sif = pooler
-            .pool_layer(&seq, 5, dim, Some(&ref_dir))
-            .expect("sif pool");
-        let pooled_mean =
-            SequenceActivationPooler::uniform_unit_mean(&seq, 5, dim).expect("mean pool");
-
-        // Novelty weighting must amplify the distinctive entity coordinate (`idx = 2`) well above
-        // uniform mean, while the 25x magnitude sink at token 0 cannot blow up `idx = 0`.
-        assert!(
-            pooled_sif[2] > pooled_mean[2] * 2.5,
-            "expected SIF novelty boost on idx=2: sif={} mean={}",
-            pooled_sif[2],
-            pooled_mean[2]
-        );
-        assert!(pooled_sif[2] > pooled_sif[0]);
-    }
-
-    #[test]
-    fn novelty_sif_pooling_is_token_order_invariant() {
-        let dim = 4;
-        let ref_dir = vec![1.0_f32, 0.0, 0.0, 0.0];
-        let a = [1.0_f32, 0.1, 0.0, 0.0];
-        let b = [0.2_f32, 0.9, 0.3, 0.0];
-        let c = [0.1_f32, 0.0, 0.0, 1.0];
-
-        let mut fwd = Vec::new();
-        fwd.extend_from_slice(&a);
-        fwd.extend_from_slice(&b);
-        fwd.extend_from_slice(&c);
-
-        let mut rev = Vec::new();
-        rev.extend_from_slice(&c);
-        rev.extend_from_slice(&a);
-        rev.extend_from_slice(&b);
-
-        let pooler = SequenceActivationPooler::default();
-        let p1 = pooler.pool_layer(&fwd, 3, dim, Some(&ref_dir)).expect("p1");
-        let p2 = pooler.pool_layer(&rev, 3, dim, Some(&ref_dir)).expect("p2");
-        for (x, y) in p1.iter().zip(p2.iter()) {
-            assert!((x - y).abs() < 1e-6, "order variance detected: {x} vs {y}");
-        }
-    }
-
-    #[test]
-    fn compiled_token_corpus_recovers_diluted_entity_while_rejecting_ood() {
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
-        let num_layers = adapter.geometry().num_layers;
-        let dim = adapter.geometry().q_rot_len();
-
-        let make_seq = |boilerplate_tokens: usize, entity_dim: usize| -> Vec<Vec<f32>> {
-            let mut layer_buf = vec![0.0_f32; (boilerplate_tokens + 1) * dim];
-            for t in 0..boilerplate_tokens {
-                layer_buf[t * dim] = 1.0;
-            }
-            let e_off = boilerplate_tokens * dim;
-            layer_buf[e_off + entity_dim] = 1.0;
-            vec![layer_buf; num_layers]
-        };
-
-        let entries = vec![
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Entity A".to_string(),
-                energy: 2.0,
-                seq_len: 7,
-                per_layer_token_qs: make_seq(6, 1),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Entity B".to_string(),
-                energy: 2.0,
-                seq_len: 7,
-                per_layer_token_qs: make_seq(6, 2),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Entity C".to_string(),
-                energy: 2.0,
-                seq_len: 7,
-                per_layer_token_qs: make_seq(6, 3),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Entity D".to_string(),
-                energy: 2.0,
-                seq_len: 7,
-                per_layer_token_qs: make_seq(6, 4),
-            },
-        ];
-
-        let compiled = CompiledTokenCorpus::compile(
-            &adapter,
-            &entries,
-            SequenceActivationPooler::default(),
-            1,
-            1,
-        )
-        .expect("compile");
-
-        // In-domain diluted query targeting Entity C (entity_dim = 3) recovers #3.
-        let query_c = make_seq(6, 3);
-        let recall_c = compiled
-            .recall_token_sequence(&adapter, &query_c, 7)
-            .expect("recall C");
-        assert_eq!(
-            recall_c.recalled_facts.first().map(|(e, _)| e.anchor_id),
-            Some(3)
-        );
-
-        // Completely out-of-domain entity (entity_dim = 500) must fall in Liminal.
-        let query_ood = make_seq(6, 500);
-        let recall_ood = compiled
-            .recall_token_sequence(&adapter, &query_ood, 7)
-            .expect("recall OOD");
-        assert_eq!(
-            recall_ood.lacuna_state,
-            LacunaBoundaryState::LiminalExterior
-        );
-        assert!(recall_ood.recalled_facts.is_empty());
-    }
-
-    #[test]
-    fn stratum_signal_maps_to_core_gateway_blanket_frame() {
-        use crate::{
-            RecallBoundaryMetrics, RecallGateDecision, StratumProbeTelemetry, StratumSignal,
-            TextAttractorEntry,
-        };
-        use liminika_core::stigmergy::StigmergicActionDecision;
-
-        let entries = vec![
-            TextAttractorEntry {
-                anchor_id: 7,
-                role: AttractorRole::Fact,
-                text: "Fact 7".to_string(),
-                per_layer_q7: vec![[12_i8; 64]],
-                energy: 2.0,
-                residual_sig: vec![],
-            },
-            TextAttractorEntry {
-                anchor_id: 101,
-                role: AttractorRole::Persona,
-                text: "Persona 101".to_string(),
-                per_layer_q7: vec![[5_i8; 64]],
-                energy: 1.5,
-                residual_sig: vec![],
-            },
-        ];
-        let signal = StratumSignal {
-            candidate_scores: vec![0.45, 0.30],
-            local_token_scores: vec![0.60, 0.25],
-            q_to_d_scores: vec![],
-            d_to_q_scores: vec![],
-            token_deposits: vec![],
-            linked_fact_indices: vec![],
-            decomposition_triggered: false,
-            local_lacuna_depths: vec![0.0, 0.0],
-            stigmergic_weights: vec![1.2, 1.0],
-            boundary_metrics: RecallBoundaryMetrics {
-                top1_fact_score: 0.45,
-                top2_fact_score: 0.10,
-                top1_persona_score: 0.30,
-                max_guard_score: -0.2,
-                guard_conflict_margin: -0.65,
-            },
-            gate_decision: RecallGateDecision {
-                lacuna_state: LacunaBoundaryState::InsideBasin,
-                suppress_fact_injection: false,
-            },
-            action_decision: StigmergicActionDecision::CrystallizeMacroBasin,
-            gateway_frame: Default::default(),
-            swarm_report: Default::default(),
-            local_channel_preferred: false,
-            telemetry: StratumProbeTelemetry::default(),
-        };
-
-        let mapped = signal.map_to_gateway(&entries, 0);
-        assert_eq!(mapped.fact.map(|f| f.anchor_id), Some(7));
-        assert_eq!(mapped.persona.map(|p| p.anchor_id), Some(101));
-        assert_eq!(mapped.frame.target_anchor_id, 7);
-    }
-
-    #[test]
-    fn compiled_token_corpus_assigns_lower_specificity_to_shared_tokens() {
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
-        let geom = adapter.geometry();
-        let dim = geom.q_rot_len();
-        let num_layers = geom.num_layers;
-
-        let make_seq_with_tokens = |token_dims: &[usize]| -> Vec<Vec<f32>> {
-            let s = token_dims.len();
-            let mut per_layer = vec![vec![0.0_f32; s * dim]; num_layers];
-            for layer_buf in &mut per_layer {
-                for (t, &d_idx) in token_dims.iter().enumerate() {
-                    let pos = d_idx % dim;
-                    layer_buf[t * dim + pos] = 1.0;
-                    layer_buf[t * dim + ((pos + 1) % dim)] = 0.25;
-                }
-            }
-            per_layer
-        };
-
-        // Dimension `10` is shared across 3 entries; dimension `25` appears only in entry 0.
-        let e0 = TokenSequenceEntry {
-            role: AttractorRole::Fact,
-            text: "Shared 10 and unique 25".to_string(),
-            energy: 2.0,
-            seq_len: 2,
-            per_layer_token_qs: make_seq_with_tokens(&[10, 25]),
-        };
-        let e1 = TokenSequenceEntry {
-            role: AttractorRole::Fact,
-            text: "Shared 10 and unique 40".to_string(),
-            energy: 2.0,
-            seq_len: 2,
-            per_layer_token_qs: make_seq_with_tokens(&[10, 40]),
-        };
-        let e2 = TokenSequenceEntry {
-            role: AttractorRole::Fact,
-            text: "Shared 10 and unique 55".to_string(),
-            energy: 2.0,
-            seq_len: 2,
-            per_layer_token_qs: make_seq_with_tokens(&[10, 55]),
-        };
-        let compiled = CompiledTokenCorpus::compile(
-            &adapter,
-            &[e0, e1, e2],
-            SequenceActivationPooler::default(),
-            2,
-            1,
-        )
-        .expect("compile");
-        assert_eq!(compiled.entry_token_weights.len(), 3);
-        let min_w0 = compiled.entry_token_weights[0]
-            .iter()
-            .copied()
-            .fold(f32::INFINITY, f32::min);
-        let max_w0 = compiled.entry_token_weights[0]
-            .iter()
-            .copied()
-            .fold(0.0_f32, f32::max);
-        assert!(
-            max_w0 > min_w0 * 1.25,
-            "unique token must have strictly higher specificity weight than cross-entry shared token: min={min_w0} max={max_w0}"
-        );
-    }
-
-    #[test]
-    fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
-        let geom = adapter.geometry();
-        let dim = geom.q_rot_len();
-        let num_layers = geom.num_layers;
-
-        let make_seq_with_tokens = |token_dims: &[usize]| -> Vec<Vec<f32>> {
-            let s = token_dims.len();
-            let mut per_layer = vec![vec![0.0_f32; s * dim]; num_layers];
-            for layer_buf in &mut per_layer {
-                for (t, &d_idx) in token_dims.iter().enumerate() {
-                    let pos = d_idx % dim;
-                    layer_buf[t * dim + pos] = 1.0;
-                    layer_buf[t * dim + ((pos + 2) % dim)] = 0.25;
-                }
-            }
-            per_layer
-        };
-
-        let entries = vec![
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Overview Hub (10, 12, 14)".to_string(),
-                energy: 2.0,
-                seq_len: 3,
-                per_layer_token_qs: make_seq_with_tokens(&[10, 12, 14]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Shared Sibling (10, 20)".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq_with_tokens(&[10, 20]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Specialist Alpha (35, 39)".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq_with_tokens(&[35, 39]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Specialist Beta (55, 59)".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq_with_tokens(&[55, 59]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Guard,
-                text: "Forbidden Guard (75, 79)".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq_with_tokens(&[75, 79]),
-            },
-        ];
-
-        let compiled = CompiledTokenCorpus::compile(
-            &adapter,
-            &entries,
-            SequenceActivationPooler::default(),
-            2,
-            1,
-        )
-        .expect("compile");
-
-        // Query asks about shared domain framing (10, 10) plus both Alpha (35) and Beta (55).
-        let q_seq = make_seq_with_tokens(&[10, 10, 35, 55]);
-        let recall = compiled
-            .recall_token_sequence(&adapter, &q_seq, 4)
-            .expect("bimodal recall");
-        let recalled_ids: Vec<u32> = recall
-            .recalled_facts
-            .iter()
-            .map(|(e, _)| e.anchor_id)
-            .collect();
-        assert_eq!(recalled_ids.len(), 2, "got {recalled_ids:?}");
-        assert!(
-            recalled_ids.contains(&3) && recalled_ids.contains(&4),
-            "expected Alpha(#3) and Beta(#4), got {recalled_ids:?}"
-        );
-    }
-
-    #[test]
-    fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_prior() {
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
-        let geom = adapter.geometry();
-        let dim = geom.q_rot_len();
-        let num_layers = geom.num_layers;
-
-        let make_seq = |tok_specs: &[(usize, f32)]| -> Vec<Vec<f32>> {
-            let s = tok_specs.len();
-            let mut per_layer = vec![vec![0.0_f32; s * dim]; num_layers];
-            for layer_buf in &mut per_layer {
-                for (t, &(d_idx, framing_strength)) in tok_specs.iter().enumerate() {
-                    layer_buf[t * dim] = framing_strength;
-                    let pos = d_idx % dim;
-                    layer_buf[t * dim + pos] = 1.0;
-                }
-            }
-            per_layer
-        };
-
-        // Six baseline unsteered samples spanning two distinct model regimes (`20` and `60`)
-        // plus shared model framing along dimension `0`.
-        let base_samples = vec![
-            TokenSequenceEntry {
-                role: AttractorRole::Persona,
-                text: "Base regime A sample 1".to_string(),
-                energy: 1.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(20, 0.85), (21, 0.70)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Persona,
-                text: "Base regime A sample 2".to_string(),
-                energy: 1.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(20, 0.80), (21, 0.65)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Persona,
-                text: "Base regime A sample 3".to_string(),
-                energy: 1.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(20, 0.90), (21, 0.75)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Persona,
-                text: "Base regime B sample 1".to_string(),
-                energy: 1.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(60, 0.85), (61, 0.70)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Persona,
-                text: "Base regime B sample 2".to_string(),
-                energy: 1.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(60, 0.80), (61, 0.65)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Persona,
-                text: "Base regime B sample 3".to_string(),
-                energy: 1.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(60, 0.90), (61, 0.75)]),
-            },
-        ];
-
-        let prior = ModelBaseAttractorProfile::extract(
-            &adapter,
-            &base_samples,
-            SequenceActivationPooler::default(),
-            0.50,
-        )
-        .expect("extract prior");
-        assert_eq!(prior.sample_count, 6);
-        assert_eq!(
-            prior.sub_attractors.len(),
-            2,
-            "expected two distinct base sub-attractors, got {}",
-            prior.sub_attractors.len()
-        );
-        assert!(
-            !prior.pooled_common_mode_basis.is_empty(),
-            "expected at least one global base-model framing component"
-        );
-
-        // Compile external facts with the base-model prior and verify recall selects target #2.
-        let facts = vec![
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Fact Alpha".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(30, 0.85), (31, 0.65)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Fact Beta".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(80, 0.85), (81, 0.65)]),
-            },
-        ];
-        let compiled = CompiledTokenCorpus::compile_with_base_prior(
-            &adapter,
-            &facts,
-            SequenceActivationPooler::default(),
-            2,
-            1,
-            Some(&prior),
-        )
-        .expect("compile with base prior");
-        let query = make_seq(&[(80, 0.90), (81, 0.75)]);
-        let recall = compiled
-            .recall_token_sequence(&adapter, &query, 2)
-            .expect("recall with base prior");
-        assert_eq!(
-            recall.recalled_facts.first().map(|(e, _)| e.anchor_id),
-            Some(2)
-        );
-    }
-
-    #[test]
-    fn register_bpe_prefix_alias_tokens_preserves_pooled_sigs_and_enables_split_token_recall() {
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
-        let num_layers = adapter.geometry().num_layers;
-        let dim = adapter.geometry().q_rot_len();
-        let make_seq = |toks: &[(usize, f32)]| -> Vec<Vec<f32>> {
-            let mut per_layer = Vec::with_capacity(num_layers);
-            for _ in 0..num_layers {
-                let mut flat = vec![0.0_f32; toks.len() * dim];
-                for (t, &(slot, amp)) in toks.iter().enumerate() {
-                    flat[t * dim + slot] = amp;
-                    flat[t * dim + (slot + 1) % dim] = 0.20;
-                }
-                per_layer.push(flat);
-            }
-            per_layer
-        };
-
-        let entries = vec![
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Overview Fact".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(10, 0.9), (12, 0.7)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Initial-split Fact".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(40, 0.9), (12, 0.7)]),
-            },
-        ];
-
-        let mut compiled = CompiledTokenCorpus::compile(
-            &adapter,
-            &entries,
-            SequenceActivationPooler::default(),
-            2,
-            1,
-        )
-        .expect("compile");
-        let before_sig = compiled.corpus.entries()[1].residual_sig.clone();
-
-        // Register space-prefixed alias tokens at orthogonal dimensions (70, 72) for entry 1.
-        let alias_qs = make_seq(&[(70, 0.95), (72, 0.90)]);
-        compiled
-            .register_bpe_prefix_alias_tokens(&adapter, 1, &alias_qs, 2)
-            .expect("register alias");
-        assert_eq!(compiled.corpus.entries()[1].residual_sig, before_sig);
-        assert_eq!(compiled.entry_token_sigs[1].len(), 4);
-
-        let err = compiled.register_bpe_prefix_alias_tokens(&adapter, 9, &alias_qs, 2);
-        assert!(err.is_err());
-
-        let obs = compiled
-            .build_local_observation(&adapter, &alias_qs, 2)
-            .expect("obs");
-        assert!(
-            obs.q_to_d_scores[1] > obs.q_to_d_scores[0],
-            "expected entry 1 alias match ({}) > entry 0 ({})",
-            obs.q_to_d_scores[1],
-            obs.q_to_d_scores[0]
-        );
-    }
-
-    #[test]
-    fn same_role_token_specificity_ignores_contrastive_guard_echoes() {
-        let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
-        let num_layers = adapter.geometry().num_layers;
-        let dim = adapter.geometry().q_rot_len();
-        let make_seq = |toks: &[(usize, f32)]| -> Vec<Vec<f32>> {
-            let mut per_layer = Vec::with_capacity(num_layers);
-            for _ in 0..num_layers {
-                let mut flat = vec![0.0_f32; toks.len() * dim];
-                for (t, &(slot, amp)) in toks.iter().enumerate() {
-                    flat[t * dim + slot] = amp;
-                    flat[t * dim + (slot + 1) % dim] = 0.15;
-                }
-                per_layer.push(flat);
-            }
-            per_layer
-        };
-
-        // Entry 0 (Fact) and Entry 2 (Guard) share entity token slot 30, while Entry 1 (Fact)
-        // shares token slot 50 with nothing else; Guard echo must not dilute Entry 0's specificity.
-        let entries = vec![
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Entity Fact".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(30, 0.95), (70, 0.85)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Fact,
-                text: "Other Fact".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(50, 0.95), (90, 0.85)]),
-            },
-            TokenSequenceEntry {
-                role: AttractorRole::Guard,
-                text: "Contrastive Guard echoing entity".to_string(),
-                energy: 2.0,
-                seq_len: 2,
-                per_layer_token_qs: make_seq(&[(30, 0.95), (110, 0.85)]),
-            },
-        ];
-
-        let compiled = CompiledTokenCorpus::compile(
-            &adapter,
-            &entries,
-            SequenceActivationPooler::default(),
-            2,
-            1,
-        )
-        .expect("compile");
-        assert!(
-            compiled.entry_token_weights[0].iter().all(|&w| w > 0.85),
-            "Guard echo should not penalize Fact token specificity: {:?}",
-            compiled.entry_token_weights[0]
-        );
     }
 }

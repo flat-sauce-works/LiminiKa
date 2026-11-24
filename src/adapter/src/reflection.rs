@@ -112,6 +112,11 @@ pub struct TrajectoryManifoldSnapshot {
     pub top_fact_anchor: Option<u32>,
     /// Last-layer 64-head Q7 signature of `top_fact_anchor`, or zeros if unavailable.
     pub top_fact_q7: [i8; MAX_ATTENTION_HEADS],
+    /// Last-layer 64-head Q7 signature of the strongest observed Guard attractor, if any.
+    ///
+    /// Remains `None` when no repulsive Guard attractor has been observed so corrective reflection
+    /// leaves repulsive poles unobserved (zero-aperture) rather than borrowing attractive phases.
+    pub top_guard_q7: Option<[i8; MAX_ATTENTION_HEADS]>,
     /// Ordered list of recalled Fact anchor IDs.
     pub recalled_fact_anchors: Vec<u32>,
     /// Ordered `(anchor_id, last_layer_q7)` pairs for all recalled Fact basins in this trajectory.
@@ -133,6 +138,9 @@ impl TrajectoryManifoldSnapshot {
         let top_fact_q7 = top_entry
             .and_then(|e| e.per_layer_q7.last().copied())
             .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+        let top_guard_q7 = recall
+            .top_guard
+            .and_then(|(e, _)| e.per_layer_q7.last().copied());
         let recalled_fact_anchors = recall
             .recalled_facts
             .iter()
@@ -159,6 +167,7 @@ impl TrajectoryManifoldSnapshot {
             guard_conflict_margin: recall.guard_conflict_margin,
             top_fact_anchor,
             top_fact_q7,
+            top_guard_q7,
             recalled_fact_anchors,
             recalled_fact_q7s,
             action_decision: recall.action_decision,
@@ -452,9 +461,14 @@ impl ManifoldReflectionEvaluator {
     ) -> GatewayFrame {
         match trigger {
             ReflectionTriggerKind::GuardAttraction => {
-                let obstruction = (draft.guard_conflict_margin + 0.5).clamp(0.55, 1.0);
-                GuardPhaseAnchor::new(query.top_fact_q7, obstruction, 0.4)
-                    .synthesize_gateway_frame()
+                if let Some(guard_q7) = draft.top_guard_q7.or(query.top_guard_q7) {
+                    let obstruction = (draft.guard_conflict_margin + 0.5).clamp(0.55, 1.0);
+                    GuardPhaseAnchor::new(guard_q7, obstruction, 0.4).synthesize_gateway_frame()
+                } else {
+                    // No repulsive target phase was observed: emit a zero-aperture frame rather
+                    // than repurposing an attractive `top_fact_q7` pole for repulsion.
+                    GatewayFrame::default()
+                }
             }
             ReflectionTriggerKind::LacunaDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
                 let missing_ids = query.missing_coalition_anchors(draft);
@@ -771,6 +785,7 @@ mod tests {
             guard_conflict_margin: guard_margin,
             top_fact_anchor: anchors.first().copied(),
             top_fact_q7: [4_i8; MAX_ATTENTION_HEADS],
+            top_guard_q7: None,
             recalled_fact_anchors: anchors,
             recalled_fact_q7s,
             action_decision: StigmergicActionDecision::PassiveSidecar,
@@ -1185,5 +1200,64 @@ mod tests {
             ..calm
         };
         assert!(eval.should_trigger_reflection(&guard_trap));
+    }
+
+    #[test]
+    fn reflection_guard_attraction_uses_observed_guard_antiphase_and_zero_aperture_when_unobserved()
+    {
+        let eval = ManifoldReflectionEvaluator;
+        let recall_policy = RecallPolicy::default();
+        let policy = ReflectionPolicy::default();
+
+        let mut query = make_snapshot(LacunaBoundaryState::InsideBasin, 0.72, 0.40, -0.25, vec![1]);
+        query.top_fact_q7 = [42_i8; MAX_ATTENTION_HEADS];
+        query.top_guard_q7 = None;
+
+        // 1. Unobserved guard pole -> zero-aperture GatewayFrame::default() without borrowing top_fact_q7.
+        let mut draft_unobserved =
+            make_snapshot(LacunaBoundaryState::InsideBasin, 0.45, 0.35, 0.20, vec![1]);
+        draft_unobserved.top_guard_q7 = None;
+        let crit_unobs = eval.assess_trajectory(&query, &draft_unobserved, &recall_policy, &policy);
+        assert_eq!(crit_unobs.trigger, ReflectionTriggerKind::GuardAttraction);
+        assert_eq!(crit_unobs.gateway_frame, GatewayFrame::default());
+        assert_eq!(
+            crit_unobs.gateway_frame.phase_deltas,
+            [0_i8; MAX_ATTENTION_HEADS]
+        );
+        assert!(!crit_unobs.gateway_frame.is_repulsed());
+        assert_eq!(crit_unobs.gateway_frame.effective_energy, 0.0);
+
+        // 2. Observed guard pole (including i8::MIN saturation) -> saturating anti-phase `-guard`.
+        let mut guard_pole = [0_i8; MAX_ATTENTION_HEADS];
+        guard_pole[0] = 35;
+        guard_pole[1] = -28;
+        guard_pole[2] = i8::MIN;
+        let mut draft_observed = draft_unobserved.clone();
+        draft_observed.top_guard_q7 = Some(guard_pole);
+        let crit_obs = eval.assess_trajectory(&query, &draft_observed, &recall_policy, &policy);
+        assert_eq!(crit_obs.trigger, ReflectionTriggerKind::GuardAttraction);
+        assert!(crit_obs.gateway_frame.is_repulsed());
+        let mut expected_anti = [0_i8; MAX_ATTENTION_HEADS];
+        expected_anti[0] = -35;
+        expected_anti[1] = 28;
+        expected_anti[2] = 127;
+        assert_eq!(crit_obs.gateway_frame.phase_deltas, expected_anti);
+        assert_ne!(crit_obs.gateway_frame.phase_deltas[0], -42);
+
+        // 3. Query-side observed guard pole is used when draft did not carry one.
+        let mut query_with_guard = query;
+        query_with_guard.top_guard_q7 = Some(guard_pole);
+        let crit_query_guard = eval.assess_trajectory(
+            &query_with_guard,
+            &draft_unobserved,
+            &recall_policy,
+            &policy,
+        );
+        assert_eq!(
+            crit_query_guard.trigger,
+            ReflectionTriggerKind::GuardAttraction
+        );
+        assert!(crit_query_guard.gateway_frame.is_repulsed());
+        assert_eq!(crit_query_guard.gateway_frame.phase_deltas, expected_anti);
     }
 }

@@ -317,7 +317,9 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
         if !req.trigger.is_destabilized() || self.corpus.entries().is_empty() {
             return Ok(None);
         }
-        let prefer_guard = req.trigger.epistemic_regime == EpistemicRegime::InternalConflict as u8
+        let repulsion_lane = (req.lane_flags & WORKBENCH_LANE_FLAG_REPULSION) != 0;
+        let prefer_guard = repulsion_lane
+            || req.trigger.epistemic_regime == EpistemicRegime::InternalConflict as u8
             || req.trigger.repulsion_severity > 0.25;
         let preferred_role = if prefer_guard {
             AttractorRole::Guard
@@ -332,11 +334,17 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
             .filter(|e| e.role == preferred_role && !e.per_layer_q7.is_empty())
             .max_by(|a, b| a.energy.total_cmp(&b.energy))
             .or_else(|| {
-                self.corpus
-                    .entries()
-                    .iter()
-                    .filter(|e| !e.per_layer_q7.is_empty())
-                    .max_by(|a, b| a.energy.total_cmp(&b.energy))
+                if repulsion_lane {
+                    // Never borrow an attractive Fact/Persona into a repulsion-flagged lane
+                    // when no repulsive Guard attractor has been observed in the corpus.
+                    None
+                } else {
+                    self.corpus
+                        .entries()
+                        .iter()
+                        .filter(|e| !e.per_layer_q7.is_empty())
+                        .max_by(|a, b| a.energy.total_cmp(&b.energy))
+                }
             });
 
         let Some(entry) = selected else {
@@ -358,8 +366,20 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
             let a0 = &entry.per_layer_q7[idx0];
             let a1 = &entry.per_layer_q7[idx1];
             for (dst, (&v0, &v1)) in slot_phase_out.iter_mut().zip(a0.iter().zip(a1.iter())) {
-                let interp = (i32::from(v0) * w0 + i32::from(v1) * frac + 63) / 127;
+                let num = i32::from(v0) * w0 + i32::from(v1) * frac;
+                let interp = if num >= 0 {
+                    (num + 63) / 127
+                } else {
+                    (num - 63) / 127
+                };
                 *dst = interp.clamp(-127, 127) as lmnk_q7_t;
+            }
+        }
+        if entry.role == AttractorRole::Guard {
+            // Workbench lanes are strictly additive in core orchestration; convert Guard poles
+            // into saturating anti-phase (`-R`, `i8::MIN -> +127`) matching `auto_repulsion`.
+            for dst in slot_phase_out.iter_mut() {
+                *dst = dst.saturating_neg();
             }
         }
         self.escalation_calls = self.escalation_calls.saturating_add(1);

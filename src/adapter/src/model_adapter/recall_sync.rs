@@ -202,25 +202,28 @@ impl ModelSteeringAdapter {
 
         let lane_budget = usize::from(preset.recommended_lane_budget());
         let mut specs: Vec<WorkbenchSlotSpec> = Vec::with_capacity(lane_budget);
-        let repulsion_spec =
-            (has_guard_conflict || recall.gateway_frame.is_repulsed()).then(|| {
+        let repulsion_spec = (has_guard_conflict || recall.gateway_frame.is_repulsed())
+            .then_some(())
+            .and_then(|()| {
                 let rep_phases = if recall.gateway_frame.is_repulsed() {
                     // Repulsed frames already carry saturating anti-phase (`-guard`); avoid double negation.
-                    recall.gateway_frame.phase_deltas
+                    Some(recall.gateway_frame.phase_deltas)
                 } else {
-                    let mut negated = [0_i8; MAX_ATTENTION_HEADS];
-                    for (dst, &src) in negated
-                        .iter_mut()
-                        .zip(recall.gateway_frame.phase_deltas.iter())
-                    {
-                        *dst = src.saturating_neg();
-                    }
-                    negated
-                };
-                WorkbenchSlotSpec::auto_repulsion(
+                    recall
+                        .top_guard
+                        .and_then(|(entry, _)| entry.per_layer_q7.last().copied())
+                        .map(|guard_q7| {
+                            let mut negated = [0_i8; MAX_ATTENTION_HEADS];
+                            for (dst, &src) in negated.iter_mut().zip(guard_q7.iter()) {
+                                *dst = src.saturating_neg();
+                            }
+                            negated
+                        })
+                }?;
+                Some(WorkbenchSlotSpec::auto_repulsion(
                     recall.guard_conflict_margin.clamp(0.35, 1.0),
                     rep_phases,
-                )
+                ))
             });
         if preset.prioritizes_repulsion() {
             if let Some(spec) = repulsion_spec {
