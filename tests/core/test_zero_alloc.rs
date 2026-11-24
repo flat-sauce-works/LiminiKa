@@ -472,5 +472,27 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
         &tension,
         &mut pframe_target,
     );
+    let solo_guard = liminika_core::runtime::GuardPhaseAnchor::new([i8::MIN; 64], 0.85, 0.50);
+    let solo_rep_frame =
+        liminika_core::runtime::ManifoldGatewaySignal::synthesize_gateway_frame(&solo_guard);
+    assert!(solo_rep_frame.is_repulsed());
+    assert_eq!(solo_rep_frame.phase_deltas, [127i8; 64]);
+
+    let mut attract_arr = [0i8; 64];
+    attract_arr[..32].fill(40);
+    let mut repel_arr = [0i8; 64];
+    repel_arr[32..].fill(32);
+    let sys_sig = liminika_core::runtime::SystemConstraint::new((), 0.0, 0.0, 0xFF);
+    let attract_sig = liminika_core::runtime::ObjectiveFact::new(attract_arr, 2.0, 0, 7);
+    let repel_sig = liminika_core::runtime::GuardPhaseAnchor::new(repel_arr, 0.85, 0.50);
+    let combo_frame = liminika_core::runtime::synthesize_multi_origin_gateway_frame(
+        Some(&sys_sig),
+        Some(&attract_sig),
+        None::<&liminika_core::runtime::SubjectivePersona<[i8; 64]>>,
+        Some(&repel_sig),
+    );
+    assert!(combo_frame.is_repulsed());
+    assert_eq!(combo_frame.phase_deltas[0], 40);
+    assert_eq!(combo_frame.phase_deltas[32], -32);
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));
 }

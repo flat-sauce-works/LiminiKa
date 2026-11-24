@@ -3413,3 +3413,106 @@ fn load_from_path_recognizes_uppercase_lmnkp_extension() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn guard_repulsion_boundary_writes_nonzero_antiphase_to_auto_repulsion_lane() {
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let len = adapter.geometry().q_rot_len();
+    let head_rot = adapter.geometry().rotary_dim;
+    let num_heads = adapter.geometry().num_q_heads;
+    let num_layers = adapter.geometry().num_layers;
+
+    // Reference vector places unit energy on each head's (0, half) rotary pair so Procrustes
+    // baking produces a strictly non-zero per-head Q7 phase profile for the Guard attractor.
+    let half = head_rot / 2;
+    let mut centroid = vec![0.0_f32; len];
+    let mut fact_vec = vec![0.0_f32; len];
+    let mut guard_vec = vec![0.0_f32; len];
+    for h in 0..num_heads {
+        let base = h * head_rot;
+        centroid[base] = 1.0;
+        fact_vec[base] = 0.85;
+        fact_vec[base + half] = 0.52;
+        guard_vec[base] = 0.60;
+        guard_vec[base + half] = -0.80;
+    }
+    // Keep fact and guard strongly separated in residual space while matching query to guard.
+    fact_vec[1] = 2.0;
+    guard_vec[2] = 2.0;
+    let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+    let mut corpus = TextAttractorCorpus::new();
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Reference attractive anchor",
+            &vec![fact_vec.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("ingest fact");
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Guard,
+            "Reference repulsive guard anchor",
+            &vec![guard_vec.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("ingest guard");
+
+    let guard_q7 = corpus
+        .entries()
+        .iter()
+        .find(|e| e.role == AttractorRole::Guard)
+        .and_then(|e| e.per_layer_q7.last().copied())
+        .expect("baked guard q7");
+    assert!(
+        guard_q7.iter().any(|&v| v != 0),
+        "baked guard anchor must have non-zero Q7 phase deltas"
+    );
+
+    let policy = RecallPolicy {
+        min_coherence: 0.20,
+        boundary_margin: 0.04,
+        guard_suppress_margin: 0.0,
+        top_k_facts: 1,
+        top_k_personas: 1,
+    };
+    let recall = corpus
+        .recall_for_query(
+            &adapter,
+            &vec![guard_vec.as_slice(); num_layers],
+            &refs,
+            &policy,
+        )
+        .expect("guard repulsion recall");
+    assert_eq!(
+        recall.action_decision,
+        StigmergicActionDecision::RepulsionEscape
+    );
+    assert!(recall.gateway_frame.is_repulsed());
+
+    let mut expected_antiphase = [0i8; MAX_ATTENTION_HEADS];
+    for (dst, &src) in expected_antiphase.iter_mut().zip(guard_q7.iter()) {
+        *dst = src.saturating_neg();
+    }
+    assert_eq!(recall.gateway_frame.phase_deltas, expected_antiphase);
+    assert!(recall.gateway_frame.phase_deltas.iter().any(|&v| v != 0));
+
+    let _ = adapter.sync_core_layers_from_recall(&recall, None);
+    let rep_mask = adapter.substrate().repulsion_lane_mask();
+    assert_ne!(
+        rep_mask, 0,
+        "expected an active WorkbenchSlotSpec::auto_repulsion lane"
+    );
+    let rep_lane = rep_mask.trailing_zeros() as usize;
+    let start = rep_lane * MAX_ATTENTION_HEADS;
+    let lane_phases = &adapter.substrate().slot_phase_bank.data[start..start + MAX_ATTENTION_HEADS];
+    assert_eq!(
+        lane_phases, &expected_antiphase,
+        "auto_repulsion lane must store non-zero anti-phase `-guard` without double negation"
+    );
+}

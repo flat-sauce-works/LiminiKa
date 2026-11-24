@@ -1104,6 +1104,14 @@ pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         true
     }
+
+    /// Projects the repulsive pole's positive phase words on $SO(2)^{64}$, or all zeros when this
+    /// guard operates purely as a phase-less candidate detector (such as a Bloom filter or scalar
+    /// obstruction guard).
+    #[inline(always)]
+    fn project_repulsive_pole_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        self.project_grounding_words_64()
+    }
 }
 
 impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
@@ -1127,6 +1135,11 @@ impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
     #[inline(always)]
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         (**self).requires_phase_slice_for_repulsion()
+    }
+
+    #[inline(always)]
+    fn project_repulsive_pole_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        (**self).project_repulsive_pole_words_64()
     }
 }
 

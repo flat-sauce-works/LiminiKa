@@ -3031,3 +3031,157 @@ fn test_runtime_context_new_boxed_and_zeroize_in_place() {
     assert_eq!(boxed.sandbox_workbench_lane(), None);
     assert_eq!(boxed.last_sandbox_event(), SandboxLifecycleEvent::Idle);
 }
+
+#[test]
+fn test_guard_phase_anchor_solo_repulsion_and_i8_min_saturation() {
+    let mut pole = [0i8; MAX_ATTENTION_HEADS];
+    for (idx, slot) in pole.iter_mut().enumerate() {
+        *slot = if idx % 2 == 0 { 42 } else { -36 };
+    }
+    let guard = GuardPhaseAnchor::new(pole, 0.85, 0.50);
+    let (frame, words) = guard.synthesize_gateway_frame_with_words();
+    assert!(frame.is_repulsed());
+    assert_eq!(frame.dominant_slot, ATTRACTOR_SLOT_REPULSION);
+    assert_eq!(frame.action_mode_flags, ACTION_PRESET_REPULSION_ESCAPE);
+    assert_eq!(frame.attribution_tag, ROOT_CAUSE_COHOMOLOGY_REPULSION);
+    assert!(frame.effective_energy >= 0.85);
+    assert_eq!(words, load_q7_words_64(&frame.phase_deltas));
+    for (idx, &delta) in frame.phase_deltas.iter().enumerate() {
+        let expected = if idx % 2 == 0 { -42 } else { 36 };
+        assert_eq!(delta, expected, "solo anti-phase mismatch at head {idx}");
+    }
+
+    // Saturating negation of `i8::MIN` (`-128`) must clamp to `+127` without wraparound.
+    let min_guard = GuardPhaseAnchor::new([i8::MIN; MAX_ATTENTION_HEADS], 0.85, 0.50);
+    let min_frame = min_guard.synthesize_gateway_frame();
+    assert!(min_frame.is_repulsed());
+    assert_eq!(min_frame.phase_deltas, [127i8; MAX_ATTENTION_HEADS]);
+
+    // Below threshold, a solo guard pole remains quiescent with zero phase delta.
+    let quiet_guard = GuardPhaseAnchor::new(pole, 0.20, 0.50);
+    let quiet_frame = quiet_guard.synthesize_gateway_frame();
+    assert!(!quiet_frame.is_repulsed());
+    assert_eq!(quiet_frame.phase_deltas, [0i8; MAX_ATTENTION_HEADS]);
+}
+
+#[test]
+fn test_simultaneous_attractive_and_repulsive_poles_preserve_orthogonal_attraction() {
+    // 1. Disjoint-head attractive pole `A` (heads 0..32) + repulsive pole `R` (heads 32..64,
+    //    including `i8::MIN` on head 63): `A` must remain positive and `R` must emit `-R`.
+    let mut attract_arr = [0i8; MAX_ATTENTION_HEADS];
+    for slot in &mut attract_arr[..32] {
+        *slot = 50;
+    }
+    let mut repel_arr = [0i8; MAX_ATTENTION_HEADS];
+    for slot in &mut repel_arr[32..63] {
+        *slot = 40;
+    }
+    repel_arr[63] = i8::MIN;
+
+    let sys = SystemConstraint::new((), 0.0, 0.0, 0xFF);
+    let attract = ObjectiveFact::new(attract_arr, 2.0, 0, 101);
+    let attract_pair = SubjectivePersona::new(attract_arr, 2.0, 0, 102);
+    let repel = GuardPhaseAnchor::new(repel_arr, 0.85, 0.50);
+
+    let frame = synthesize_multi_origin_gateway_frame(
+        Some(&sys),
+        Some(&attract),
+        None::<&SubjectivePersona<[i8; MAX_ATTENTION_HEADS]>>,
+        Some(&repel),
+    );
+    assert!(frame.is_repulsed());
+    assert_eq!(frame.dominant_slot, ATTRACTOR_SLOT_REPULSION);
+    for (idx, &delta) in frame.phase_deltas.iter().enumerate() {
+        let expected = if idx < 32 {
+            50
+        } else if idx < 63 {
+            -40
+        } else {
+            127
+        };
+        assert_eq!(delta, expected, "disjoint pole mismatch at head {idx}");
+    }
+
+    // Core-layer pair path (`apply_sys_and_guard_to_pair_frame`) must uphold the same geometry.
+    let stack = CoreStateStack::new();
+    let delta = LiminalBoundaryDelta::default();
+    let horizon = EpistemicHorizonReading {
+        total_memory_support: 1.5,
+        peak_positive_affinity: 1.0,
+        horizon_gate: 1.0,
+        regime_code: EpistemicRegime::KnownCoherent as u8,
+        ..EpistemicHorizonReading::default()
+    };
+    let overlap = OverlapDiscoveryReport {
+        overlap_core_mask: 0xFF,
+        ..OverlapDiscoveryReport::default()
+    };
+    let (pair_frame, _) = (sys, attract, attract_pair, repel)
+        .synthesize_gateway_with_core_layers_readonly(&stack, &delta, &horizon, &overlap);
+    assert!(pair_frame.is_repulsed());
+    assert!(pair_frame.phase_deltas[..32].iter().all(|&d| d > 0));
+    assert!(pair_frame.phase_deltas[32..63].iter().all(|&d| d < 0));
+    assert_eq!(pair_frame.phase_deltas[63], 127);
+
+    // 2. Non-disjoint orthogonal poles (`<A, R> == 0`): output preserves positive projection onto
+    //    `A` while adding strictly repulsive projection onto `-R`.
+    let orth_a = [40i8; MAX_ATTENTION_HEADS];
+    let mut orth_r = [0i8; MAX_ATTENTION_HEADS];
+    for (idx, slot) in orth_r.iter_mut().enumerate() {
+        *slot = if idx % 2 == 0 { 40 } else { -40 };
+    }
+    let orth_frame = synthesize_multi_origin_gateway_frame(
+        Some(&sys),
+        Some(&ObjectiveFact::new(orth_a, 2.0, 0, 201)),
+        None::<&SubjectivePersona<[i8; MAX_ATTENTION_HEADS]>>,
+        Some(&GuardPhaseAnchor::new(orth_r, 0.85, 0.50)),
+    );
+    let dot_a: i32 = orth_frame
+        .phase_deltas
+        .iter()
+        .zip(orth_a.iter())
+        .map(|(&o, &a)| i32::from(o) * i32::from(a))
+        .sum();
+    let dot_r: i32 = orth_frame
+        .phase_deltas
+        .iter()
+        .zip(orth_r.iter())
+        .map(|(&o, &r)| i32::from(o) * i32::from(r))
+        .sum();
+    assert!(dot_a > 0, "attractive pole was inverted: dot_a={dot_a}");
+    assert!(
+        dot_r < 0,
+        "repulsive pole failed to push away: dot_r={dot_r}"
+    );
+
+    // 3. `ResonantSignalSlice<GuardPhaseAnchor>` must project raw positive `+R` (no zero fallback
+    //    when obstruction is 0, and no double negation when obstruction exceeds threshold).
+    let guards_zero_obs = [GuardPhaseAnchor::new(repel_arr, 0.0, 0.72)];
+    let guard_slice = ResonantSignalSlice::from_q7_probe(&guards_zero_obs, &repel_arr);
+    let slice_frame = (sys, attract, attract_pair, guard_slice).synthesize_gateway_frame();
+    assert!(slice_frame.is_repulsed());
+    assert!(slice_frame.phase_deltas[..32].iter().all(|&d| d == 50));
+    assert!(slice_frame.phase_deltas[32..63].iter().all(|&d| d == -40));
+    assert_eq!(slice_frame.phase_deltas[63], 127);
+
+    let guards_active_obs = [GuardPhaseAnchor::new(repel_arr, 0.90, 0.50)];
+    let guard_slice_obs = ResonantSignalSlice::from_q7_probe(&guards_active_obs, &repel_arr);
+    let slice_obs_frame = (sys, attract, attract_pair, guard_slice_obs).synthesize_gateway_frame();
+    assert!(slice_obs_frame.is_repulsed());
+    assert!(slice_obs_frame.phase_deltas[32..63]
+        .iter()
+        .all(|&d| d == -40));
+    assert_eq!(slice_obs_frame.phase_deltas[63], 127);
+
+    // 4. Phase-less candidate detectors (`ContradictionGuard<()>`) keep candidate-phase negation.
+    let scalar_guard = ContradictionGuard::new((), 0.85, 3);
+    let detector_frame = synthesize_multi_origin_gateway_frame(
+        Some(&sys),
+        Some(&attract),
+        None::<&SubjectivePersona<[i8; MAX_ATTENTION_HEADS]>>,
+        Some(&scalar_guard),
+    );
+    assert!(detector_frame.is_repulsed());
+    assert!(detector_frame.phase_deltas[..32].iter().all(|&d| d == -50));
+    assert!(detector_frame.phase_deltas[32..].iter().all(|&d| d == 0));
+}

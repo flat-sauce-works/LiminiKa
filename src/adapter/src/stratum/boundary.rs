@@ -365,7 +365,12 @@ impl StratumSignal {
                 .get(layer_idx)
                 .copied()
                 .or_else(|| entry.per_layer_q7.last().copied())?;
-            let obs = (self.boundary_metrics.guard_conflict_margin + 0.5).max(0.0);
+            let raw_obs = (self.boundary_metrics.guard_conflict_margin + 0.5).max(0.0);
+            let obs = if is_repulsion {
+                raw_obs.max(0.55)
+            } else {
+                raw_obs
+            };
             Some(GuardPhaseAnchor::new(q7, obs, 0.5))
         });
 

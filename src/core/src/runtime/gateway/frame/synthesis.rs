@@ -15,15 +15,15 @@ use crate::foundation::{
     branchless_phase_coherence_inv_temp_scale, branchless_rad_to_phase_step_u8,
     branchless_relu_f32, coherence_from_uniform_words_x8,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
-    is_word_array_uniform_64, pack_action_slot_tag, swar_q7_circular_add_x8,
-    swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
+    is_word_array_uniform_64, pack_action_slot_tag, swar_or_avx2_q7_add_sat_words_64,
+    swar_q7_circular_add_x8, swar_q7_circular_diff_x8, swar_q7_mean_i8_from_words_64,
     swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_neg_sat_x8,
     swar_q7_phase_step_filter_words_with_uniform_flag_64, swar_q7_scale_le128_with_bias_x8,
-    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, words_to_q7_array_64, TaggedPtr,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_INERTIAL_SKIP,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
+    words_to_q7_array_64, TaggedPtr, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER,
+    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
     branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
@@ -35,6 +35,51 @@ use crate::stigmergy::{
     ATTRACTOR_SLOT_SYSTEM_BASELINE, DEFAULT_FACT_PHASE_CLAMP_RAD, DEFAULT_PERSONA_PHASE_CLAMP_RAD,
     MAX_ATTRACTOR_PULL_FORCE,
 };
+
+/// Applies saturating anti-phase repulsion to `blended_w` in-place and returns whether the
+/// resulting 64-head phase array is uniform across all 8 SWAR granules.
+///
+/// When `guard_w` carries a non-zero repulsive pole $R$, computes its saturating anti-phase $-R$
+/// (`i8::MIN -> +127`) and superposes it onto `blended_w` via saturating Q7 addition ($A + (-R)$),
+/// preserving orthogonal attractive heads without inversion while emitting $-R$ on the repulsive
+/// pole's heads (and exact $-R$ when `blended_w` is zero for a solo repulsive pole). When
+/// `guard_w` is all zeros (phase-less candidate detector such as a Bloom filter or scalar
+/// obstruction guard), falls back to saturating negation of `blended_w` ($-A$).
+#[inline]
+fn apply_repulsion_pole_words_64(
+    blended_w: &mut [u64; NUM_STIGMERGIC_GRANULES],
+    blended_uni: bool,
+    guard_w: &[u64; NUM_STIGMERGIC_GRANULES],
+) -> bool {
+    if swar_words_nonzero_64(guard_w) {
+        let anti_guard_w = [
+            swar_q7_neg_sat_x8(guard_w[0]),
+            swar_q7_neg_sat_x8(guard_w[1]),
+            swar_q7_neg_sat_x8(guard_w[2]),
+            swar_q7_neg_sat_x8(guard_w[3]),
+            swar_q7_neg_sat_x8(guard_w[4]),
+            swar_q7_neg_sat_x8(guard_w[5]),
+            swar_q7_neg_sat_x8(guard_w[6]),
+            swar_q7_neg_sat_x8(guard_w[7]),
+        ];
+        swar_or_avx2_q7_add_sat_words_64(blended_w, &anti_guard_w);
+        is_word_array_uniform_64(blended_w)
+    } else if blended_uni {
+        let neg0 = swar_q7_neg_sat_x8(blended_w[0]);
+        *blended_w = [neg0; NUM_STIGMERGIC_GRANULES];
+        true
+    } else {
+        blended_w[0] = swar_q7_neg_sat_x8(blended_w[0]);
+        blended_w[1] = swar_q7_neg_sat_x8(blended_w[1]);
+        blended_w[2] = swar_q7_neg_sat_x8(blended_w[2]);
+        blended_w[3] = swar_q7_neg_sat_x8(blended_w[3]);
+        blended_w[4] = swar_q7_neg_sat_x8(blended_w[4]);
+        blended_w[5] = swar_q7_neg_sat_x8(blended_w[5]);
+        blended_w[6] = swar_q7_neg_sat_x8(blended_w[6]);
+        blended_w[7] = swar_q7_neg_sat_x8(blended_w[7]);
+        false
+    }
+}
 
 #[inline]
 fn combine_pair_aperture_from_frames(
@@ -280,13 +325,13 @@ pub(super) fn apply_sys_and_guard_to_pair_frame<
         (rep_sev > 0.50) | ((prov_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0);
     if repulsion_triggered {
         prov_bits |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
-        let pw = frame.phase_words_mut();
-        let mut c = 0usize;
-        while c < NUM_STIGMERGIC_GRANULES {
-            pw[c] = swar_q7_neg_sat_x8(pw[c]);
-            c += 1;
-        }
-        frame.phase_deltas = words_to_q7_array_64(pw);
+        let guard_w = guard_opt.map_or(
+            [0u64; NUM_STIGMERGIC_GRANULES],
+            ContradictionGuardSignal::project_repulsive_pole_words_64,
+        );
+        let mut out_w = words;
+        let _ = apply_repulsion_pole_words_64(&mut out_w, false, &guard_w);
+        frame.phase_deltas = words_to_q7_array_64(&out_w);
         frame.dominant_slot = ATTRACTOR_SLOT_REPULSION;
         rep_sev = branchless_max_f32(rep_sev, 0.85);
         frame.action_mode_flags = ACTION_PRESET_REPULSION_ESCAPE;
@@ -638,22 +683,22 @@ where
     if repulsion_triggered {
         prov_bits |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
         avx_precomputed_tag = None;
-        if blended_uni {
-            blended_w = [swar_q7_neg_sat_x8(blended_w[0]); NUM_STIGMERGIC_GRANULES];
-        } else {
-            blended_w = [
-                swar_q7_neg_sat_x8(blended_w[0]),
-                swar_q7_neg_sat_x8(blended_w[1]),
-                swar_q7_neg_sat_x8(blended_w[2]),
-                swar_q7_neg_sat_x8(blended_w[3]),
-                swar_q7_neg_sat_x8(blended_w[4]),
-                swar_q7_neg_sat_x8(blended_w[5]),
-                swar_q7_neg_sat_x8(blended_w[6]),
-                swar_q7_neg_sat_x8(blended_w[7]),
-            ];
-        }
+        let (guard_w, guard_e) = match guard_opt {
+            Some(guard) => (
+                guard.project_repulsive_pole_words_64(),
+                branchless_flush_subnormal_f32(branchless_relu_f32(guard.grounding_base_energy())),
+            ),
+            None => ([0u64; NUM_STIGMERGIC_GRANULES], 0.0_f32),
+        };
+        blended_uni = apply_repulsion_pole_words_64(&mut blended_w, blended_uni, &guard_w);
         dom_slot = ATTRACTOR_SLOT_REPULSION;
         rep_sev = branchless_max_f32(rep_sev, 0.85);
+        if !(has_fact | has_persona) {
+            eff_energy = branchless_min_f32(
+                branchless_max_f32(guard_e, rep_sev),
+                MAX_ATTRACTOR_PULL_FORCE,
+            );
+        }
     }
     let phase_deltas = words_to_q7_array_64(&blended_w);
 

@@ -202,19 +202,26 @@ impl ModelSteeringAdapter {
 
         let lane_budget = usize::from(preset.recommended_lane_budget());
         let mut specs: Vec<WorkbenchSlotSpec> = Vec::with_capacity(lane_budget);
-        let repulsion_spec = has_guard_conflict.then(|| {
-            let mut rep_phases = [0_i8; MAX_ATTENTION_HEADS];
-            for (dst, &src) in rep_phases
-                .iter_mut()
-                .zip(recall.gateway_frame.phase_deltas.iter())
-            {
-                *dst = src.saturating_neg();
-            }
-            WorkbenchSlotSpec::auto_repulsion(
-                recall.guard_conflict_margin.clamp(0.35, 1.0),
-                rep_phases,
-            )
-        });
+        let repulsion_spec =
+            (has_guard_conflict || recall.gateway_frame.is_repulsed()).then(|| {
+                let rep_phases = if recall.gateway_frame.is_repulsed() {
+                    // Repulsed frames already carry saturating anti-phase (`-guard`); avoid double negation.
+                    recall.gateway_frame.phase_deltas
+                } else {
+                    let mut negated = [0_i8; MAX_ATTENTION_HEADS];
+                    for (dst, &src) in negated
+                        .iter_mut()
+                        .zip(recall.gateway_frame.phase_deltas.iter())
+                    {
+                        *dst = src.saturating_neg();
+                    }
+                    negated
+                };
+                WorkbenchSlotSpec::auto_repulsion(
+                    recall.guard_conflict_margin.clamp(0.35, 1.0),
+                    rep_phases,
+                )
+            });
         if preset.prioritizes_repulsion() {
             if let Some(spec) = repulsion_spec {
                 if specs.len() < lane_budget {
