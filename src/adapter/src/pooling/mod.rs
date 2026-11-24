@@ -10,12 +10,18 @@
 //! backends and CLI entrypoints.
 
 mod calibrator;
+mod encoder;
 #[cfg(test)]
 mod tests;
 
 pub use calibrator::{
     AdaptiveTokenSpecificityCalibrator, TokenCalibrationStats, TokenSpecificityCalibrator,
     EXACT_TOKEN_STATS_LIMIT,
+};
+pub use encoder::{
+    extract_leading_alias_word, CapturedTokenSequence, ContrastiveAnchorBank,
+    ContrastiveAnchorEntry, PooledSubtitleEncoder, PrefixAliasProbe, TokenSequenceEncoder,
+    DEFAULT_STARTUP_PRIOR_PROBES,
 };
 
 use crate::{
@@ -927,6 +933,57 @@ impl CompiledTokenCorpus {
         }
         self.recalibrate_token_stats(&AdaptiveTokenSpecificityCalibrator::default());
         Ok(())
+    }
+
+    /// Captures a slice of `(role, text, energy)` source records through `encoder` into raw
+    /// [`TokenSequenceEntry`] buffers ready for [`Self::compile`] or [`Self::compile_with_base_prior`].
+    ///
+    /// # Errors
+    /// Returns an error if `encoder` fails on any source text.
+    pub fn capture_entries<E: TokenSequenceEncoder + ?Sized>(
+        encoder: &mut E,
+        sources: &[(AttractorRole, &str, f32)],
+    ) -> Result<Vec<TokenSequenceEntry>, String> {
+        let mut staged = Vec::with_capacity(sources.len());
+        for &(role, text, energy) in sources {
+            let captured = encoder.encode_token_sequence(text)?;
+            staged.push(captured.into_token_sequence_entry(role, text, energy));
+        }
+        Ok(staged)
+    }
+
+    /// Probes every [`AttractorRole::Fact`] entry's leading word via `probe` for disjoint
+    /// space-prefixed subword aliases and atomically appends all discovered observations into this
+    /// compiled corpus, returning the number of alias observations appended.
+    ///
+    /// # Errors
+    /// Returns an error if `probe` fails or any captured observation disagrees with `adapter`.
+    pub fn append_leading_alias_observations<P: PrefixAliasProbe + ?Sized>(
+        &mut self,
+        adapter: &ModelSteeringAdapter,
+        entries: &[TokenSequenceEntry],
+        probe: &mut P,
+    ) -> Result<usize, String> {
+        let dim = adapter.geometry().q_rot_len();
+        let mut observations: Vec<EntryTokenObservation> = Vec::new();
+        for (entry_idx, entry) in entries.iter().enumerate() {
+            if entry.role != AttractorRole::Fact {
+                continue;
+            }
+            let Some(word) = extract_leading_alias_word(&entry.text) else {
+                continue;
+            };
+            if let Some(captured) = probe.probe_leading_alias(word, dim)? {
+                observations.push(EntryTokenObservation {
+                    entry_idx,
+                    seq_len: captured.seq_len,
+                    per_layer_token_qs: captured.per_layer_token_qs,
+                });
+            }
+        }
+        let count = observations.len();
+        self.append_entry_token_observations(adapter, &observations)?;
+        Ok(count)
     }
 
     /// Pools a raw query token sequence using the frozen pooler and recalls via the default

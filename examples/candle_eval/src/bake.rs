@@ -8,15 +8,124 @@ use std::path::Path;
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device};
 use liminika_adapter::{
-    AttractorRole, ModelBaseAttractorProfile, ModelSteeringAdapter, SequenceActivationPooler,
-    TokenSequenceEntry,
+    AttractorRole, CapturedTokenSequence, ContrastiveAnchorBank, ContrastiveAnchorEntry,
+    ModelBaseAttractorProfile, ModelSteeringAdapter, PrefixAliasProbe, SequenceActivationPooler,
+    TokenSequenceEncoder, TokenSequenceEntry, DEFAULT_STARTUP_PRIOR_PROBES,
 };
-use liminika_core::abi::lmnk_q7_t;
-use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
 
 use crate::model::{LogitsFetchMode, Phi3Config, Phi3Model};
+
+pub(crate) type BakedModelProfile = ContrastiveAnchorBank;
+
+pub(crate) struct Phi3TokenEncoder<'a> {
+    model: &'a mut Phi3Model,
+    tokenizer: &'a Tokenizer,
+    format_as_chat_prompt: bool,
+    capture_final_hidden: bool,
+}
+
+impl<'a> Phi3TokenEncoder<'a> {
+    pub(crate) fn new(model: &'a mut Phi3Model, tokenizer: &'a Tokenizer) -> Self {
+        Self {
+            model,
+            tokenizer,
+            format_as_chat_prompt: false,
+            capture_final_hidden: false,
+        }
+    }
+
+    pub(crate) const fn with_chat_prompt(mut self, enabled: bool) -> Self {
+        self.format_as_chat_prompt = enabled;
+        self
+    }
+
+    pub(crate) const fn with_final_hidden(mut self, enabled: bool) -> Self {
+        self.capture_final_hidden = enabled;
+        self
+    }
+}
+
+impl TokenSequenceEncoder for Phi3TokenEncoder<'_> {
+    fn encode_token_sequence(&mut self, text: &str) -> Result<CapturedTokenSequence, String> {
+        self.model.clear_cache();
+        let owned_prompt;
+        let input_text = if self.format_as_chat_prompt {
+            owned_prompt = format_phi4_prompt(text);
+            owned_prompt.as_str()
+        } else {
+            text
+        };
+        let ids = self
+            .tokenizer
+            .encode(input_text, false)
+            .map_err(|e| format!("encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let (_, layer_tok_qs, h_vec) = self
+            .model
+            .forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)
+            .map_err(|e| format!("forward error: {e}"))?;
+        let captured = CapturedTokenSequence::new(ids.len(), layer_tok_qs);
+        if self.capture_final_hidden {
+            Ok(captured.with_final_hidden(h_vec))
+        } else {
+            Ok(captured)
+        }
+    }
+}
+
+impl PrefixAliasProbe for Phi3TokenEncoder<'_> {
+    fn probe_leading_alias(
+        &mut self,
+        word: &str,
+        q_rot_len: usize,
+    ) -> Result<Option<CapturedTokenSequence>, String> {
+        let prefix_ids = self
+            .tokenizer
+            .encode("Item:", false)
+            .map_err(|e| format!("alias prefix encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let ids_raw = self
+            .tokenizer
+            .encode(word, false)
+            .map_err(|e| format!("alias raw encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let spaced_word = format!(" {word}");
+        let ids_spaced = self
+            .tokenizer
+            .encode(spaced_word.as_str(), false)
+            .map_err(|e| format!("alias spaced encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let disjoint_bpe_split = !ids_raw.is_empty()
+            && !ids_spaced.is_empty()
+            && ids_raw.iter().all(|id| !ids_spaced.contains(id));
+        if !disjoint_bpe_split {
+            return Ok(None);
+        }
+        let mut full_ids = prefix_ids.clone();
+        full_ids.extend_from_slice(&ids_spaced);
+        self.model.clear_cache();
+        let (_, alias_tok_qs, _) = self
+            .model
+            .forward_tokens(&full_ids, 0, None, false, true, LogitsFetchMode::FullLogits)
+            .map_err(|e| format!("alias forward error: {e}"))?;
+        let start = prefix_ids.len() * q_rot_len;
+        let end = full_ids.len() * q_rot_len;
+        let sliced_qs: Vec<Vec<f32>> = alias_tok_qs
+            .into_iter()
+            .map(|layer| layer[start..end].to_vec())
+            .collect();
+        Ok(Some(CapturedTokenSequence::new(
+            ids_spaced.len(),
+            sliced_qs,
+        )))
+    }
+}
 
 pub(crate) struct FixtureSuite {
     pub(crate) facts: Vec<String>,
@@ -245,16 +354,8 @@ pub(crate) fn sample_startup_base_prior(
     tokenizer: &Tokenizer,
     adapter: &ModelSteeringAdapter,
 ) -> Result<ModelBaseAttractorProfile, Box<dyn std::error::Error>> {
-    let probe_prompts = [
-        "Explain the basic design trade-offs of a modular systems architecture.",
-        "Summarize how memory alignment affects hardware cache performance.",
-        "Describe step by step how an algorithm filters noisy input signals.",
-        "Contrast deterministic engineering constraints with approximate heuristics.",
-        "What is the boiling point of water at standard atmospheric pressure?",
-        "Write a concise technical note defining a protocol boundary version.",
-    ];
-    let mut base_entries = Vec::with_capacity(probe_prompts.len());
-    for prompt in probe_prompts {
+    let mut base_entries = Vec::with_capacity(DEFAULT_STARTUP_PRIOR_PROBES.len());
+    for prompt in DEFAULT_STARTUP_PRIOR_PROBES {
         model.clear_cache();
         let formatted = format_phi4_prompt(prompt);
         let mut seq_ids = tokenizer
@@ -303,203 +404,24 @@ pub(crate) fn sample_startup_base_prior(
     .map_err(|e| e.into())
 }
 
-pub(crate) struct BakedModelProfile {
-    pub(crate) per_layer_q7: Vec<Vec<lmnk_q7_t>>,
-    pub(crate) fact_q7: Vec<Vec<lmnk_q7_t>>,
-    pub(crate) persona_q7: Vec<Vec<lmnk_q7_t>>,
-    pub(crate) neg_sum: Vec<Vec<f32>>,
-    pub(crate) pos_sum: Vec<Vec<f32>>,
-    pub(crate) fact_anchors_per_layer: Vec<Vec<ObjectiveFact<[i8; 64]>>>,
-    pub(crate) persona_anchors_per_layer: Vec<Vec<SubjectivePersona<[i8; 64]>>>,
-    pub(crate) guard_anchors_per_layer: Vec<Vec<GuardPhaseAnchor>>,
-    pub(crate) rank1_u: Vec<f32>,
-    pub(crate) rank1_v: Vec<f32>,
-}
-
-pub(crate) fn normalize_unit(v: &mut [f32]) {
-    let norm = v.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-8);
-    for x in v.iter_mut() {
-        *x /= norm;
-    }
-}
-
 pub(crate) fn bake_via_adapter(
     model: &mut Phi3Model,
     tokenizer: &Tokenizer,
     adapter: &ModelSteeringAdapter,
-    hidden_size: usize,
     suite: &FixtureSuite,
 ) -> Result<BakedModelProfile, Box<dyn std::error::Error>> {
-    let num_layers = adapter.geometry().num_layers;
-    let q_len = adapter.geometry().q_rot_len();
-    let mut fact_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut persona_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut pos_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut neg_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut pos_h = vec![0.0_f32; hidden_size];
-    let mut neg_h = vec![0.0_f32; hidden_size];
-
-    let fact_count = suite.facts.len().max(1) as f32;
-    let persona_count = suite.persona.len().max(1) as f32;
-    let pos_count = (suite.facts.len() + suite.persona.len()).max(1) as f32;
-    let neg_count = suite.guards.len().max(1) as f32;
-
-    let mut per_layer_fact_qs: Vec<Vec<Vec<f32>>> =
-        vec![Vec::with_capacity(suite.facts.len()); num_layers];
-    let mut per_layer_persona_qs: Vec<Vec<Vec<f32>>> =
-        vec![Vec::with_capacity(suite.persona.len()); num_layers];
-    let mut per_layer_guard_qs: Vec<Vec<Vec<f32>>> =
-        vec![Vec::with_capacity(suite.guards.len()); num_layers];
-
-    for text in &suite.facts {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(text.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, layer_tok_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
-            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
-            for ((f_dst, p_dst), &src) in fact_sum[l]
-                .iter_mut()
-                .zip(pos_sum[l].iter_mut())
-                .zip(q.iter())
-            {
-                *f_dst += src / fact_count;
-                *p_dst += src / pos_count;
-            }
-            per_layer_fact_qs[l].push(q);
-        }
-        for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
-            *dst += src / pos_count;
+    let mut encoder = Phi3TokenEncoder::new(model, tokenizer).with_final_hidden(true);
+    let total = suite.facts.len() + suite.persona.len() + suite.guards.len();
+    let mut entries = Vec::with_capacity(total);
+    for (role, texts) in [
+        (AttractorRole::Fact, suite.facts.as_slice()),
+        (AttractorRole::Persona, suite.persona.as_slice()),
+        (AttractorRole::Guard, suite.guards.as_slice()),
+    ] {
+        for text in texts {
+            let captured = encoder.encode_token_sequence(text.as_str())?;
+            entries.push(ContrastiveAnchorEntry { role, captured });
         }
     }
-
-    for text in &suite.persona {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(text.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, layer_tok_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
-            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
-            for ((per_dst, p_dst), &src) in persona_sum[l]
-                .iter_mut()
-                .zip(pos_sum[l].iter_mut())
-                .zip(q.iter())
-            {
-                *per_dst += src / persona_count;
-                *p_dst += src / pos_count;
-            }
-            per_layer_persona_qs[l].push(q);
-        }
-        for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
-            *dst += src / pos_count;
-        }
-    }
-
-    for guard in &suite.guards {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(guard.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, layer_tok_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
-            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
-            for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
-                *dst += src / neg_count;
-            }
-            per_layer_guard_qs[l].push(q);
-        }
-        for (dst, &src) in neg_h.iter_mut().zip(h_vec.iter()) {
-            *dst += src / neg_count;
-        }
-    }
-
-    let mut per_layer_q7 = Vec::with_capacity(num_layers);
-    let mut fact_q7 = Vec::with_capacity(num_layers);
-    let mut persona_q7 = Vec::with_capacity(num_layers);
-    let mut fact_anchors_per_layer = Vec::with_capacity(num_layers);
-    let mut persona_anchors_per_layer = Vec::with_capacity(num_layers);
-    let mut guard_anchors_per_layer = Vec::with_capacity(num_layers);
-    for l in 0..num_layers {
-        out_push_q7(&mut per_layer_q7, adapter, &neg_sum[l], &pos_sum[l])?;
-        out_push_q7(&mut fact_q7, adapter, &neg_sum[l], &fact_sum[l])?;
-        out_push_q7(&mut persona_q7, adapter, &neg_sum[l], &persona_sum[l])?;
-
-        let mut layer_anchors = Vec::with_capacity(per_layer_fact_qs[l].len());
-        for (fact_idx, q_fact) in per_layer_fact_qs[l].iter().enumerate() {
-            let q7 = adapter.bake_layer_procrustes_q7(&neg_sum[l], q_fact)?;
-            let mut arr64 = [0i8; 64];
-            let n = q7.len().min(64);
-            arr64[..n].copy_from_slice(&q7[..n]);
-            layer_anchors.push(ObjectiveFact::new(arr64, 2.5, 0, (fact_idx + 1) as u32));
-        }
-        fact_anchors_per_layer.push(layer_anchors);
-
-        let mut layer_personas = Vec::with_capacity(per_layer_persona_qs[l].len());
-        for (per_idx, q_per) in per_layer_persona_qs[l].iter().enumerate() {
-            let q7 = adapter.bake_layer_procrustes_q7(&neg_sum[l], q_per)?;
-            let mut arr64 = [0i8; 64];
-            let n = q7.len().min(64);
-            arr64[..n].copy_from_slice(&q7[..n]);
-            layer_personas.push(SubjectivePersona::new(
-                arr64,
-                1.5,
-                0,
-                (per_idx + 101) as u32,
-            ));
-        }
-        persona_anchors_per_layer.push(layer_personas);
-
-        let mut layer_guards = Vec::with_capacity(per_layer_guard_qs[l].len());
-        for q_guard in &per_layer_guard_qs[l] {
-            let q7 = adapter.bake_layer_procrustes_q7(&pos_sum[l], q_guard)?;
-            let mut arr64 = [0i8; 64];
-            let n = q7.len().min(64);
-            arr64[..n].copy_from_slice(&q7[..n]);
-            layer_guards.push(GuardPhaseAnchor::new(arr64, 0.0, 0.72));
-        }
-        guard_anchors_per_layer.push(layer_guards);
-    }
-
-    let mut rank1_u: Vec<f32> = pos_h
-        .iter()
-        .zip(neg_h.iter())
-        .map(|(&p, &n)| p - n)
-        .collect();
-    let mut rank1_v = rank1_u.clone();
-    normalize_unit(&mut rank1_u);
-    normalize_unit(&mut rank1_v);
-
-    Ok(BakedModelProfile {
-        per_layer_q7,
-        fact_q7,
-        persona_q7,
-        neg_sum,
-        pos_sum,
-        fact_anchors_per_layer,
-        persona_anchors_per_layer,
-        guard_anchors_per_layer,
-        rank1_u,
-        rank1_v,
-    })
-}
-
-pub(crate) fn out_push_q7(
-    out: &mut Vec<Vec<lmnk_q7_t>>,
-    adapter: &ModelSteeringAdapter,
-    neg: &[f32],
-    pos: &[f32],
-) -> Result<(), String> {
-    out.push(adapter.bake_layer_procrustes_q7(neg, pos)?);
-    Ok(())
+    ContrastiveAnchorBank::from_entries(adapter, &entries).map_err(Into::into)
 }

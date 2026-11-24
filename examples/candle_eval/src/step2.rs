@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use crate::bake::{
     format_phi4_prompt, query_nvidia_smi_vram, sample_startup_base_prior, FixtureSuite,
+    Phi3TokenEncoder,
 };
 use crate::cli::{
     build_step2_run_specs, mean_reply_bigram_jaccard, EvalCliConfig, EvalRuntime, Step2PassResult,
@@ -21,17 +22,14 @@ use crate::eval::{
 use crate::model::{LogitsFetchMode, ResonantAnchors};
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
-    CompiledTokenCorpus, CorpusRecallEscalationProvider, EntryTokenObservation,
-    FrameTransitionMetrics, LacunaBoundaryState, LmnkTimeline, ManifoldReflectionEvaluator,
-    ReflectionCritique, ReflectionGateInput, ReflectionPolicy, ReflectionSelection,
-    SequenceActivationPooler, SourceTextRecord, TimelineStepContext, TokenSequenceEntry,
-    TrajectoryManifoldSnapshot,
+    CompiledTokenCorpus, CorpusRecallEscalationProvider, FrameTransitionMetrics,
+    LacunaBoundaryState, LmnkTimeline, ManifoldReflectionEvaluator, ReflectionCritique,
+    ReflectionPolicy, ReflectionSelection, SequenceActivationPooler, SourceTextRecord,
+    TimelineStepContext, TurnOrchestrator, TurnPrepareInput,
 };
 use liminika_core::runtime::{
-    AdaptiveThresholdPolicy, CognitiveCircuitThresholdPolicy, ObjectiveFact, RamPhaseKvCacheOps,
-    StandardPhaseKvGopCache,
+    AdaptiveThresholdPolicy, RamPhaseKvCacheOps, StandardPhaseKvGopCache,
 };
-use liminika_core::stigmergy::{CognitiveCircuitBankOps, StigmergicActionDecision};
 
 pub(crate) struct Step2Output {
     pub(crate) compiled: CompiledTokenCorpus,
@@ -47,7 +45,6 @@ pub(crate) fn run_step2_evaluation(
     suite: &FixtureSuite,
     rt: &mut EvalRuntime<'_>,
 ) -> Result<Step2Output, Box<dyn std::error::Error>> {
-    let cfg = rt.cfg;
     let tokenizer = rt.tokenizer;
     let model = &mut *rt.model;
     let adapter = &mut *rt.adapter;
@@ -83,30 +80,18 @@ pub(crate) fn run_step2_evaluation(
     };
 
     let t_compile = Instant::now();
-    let mut staged_entries: Vec<TokenSequenceEntry> = Vec::new();
+    let mut corpus_sources: Vec<(AttractorRole, &str, f32)> = Vec::new();
     for (role, texts, energy) in [
         (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
         (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
         (AttractorRole::Guard, suite.guards.as_slice(), 2.0_f32),
     ] {
         for text in texts {
-            model.clear_cache();
-            let ids = tokenizer
-                .encode(text.as_str(), false)
-                .map_err(|e| format!("encode error: {e}"))?
-                .get_ids()
-                .to_vec();
-            let (_, layer_tok_qs, _) =
-                model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-            staged_entries.push(TokenSequenceEntry {
-                role,
-                text: text.clone(),
-                energy,
-                seq_len: ids.len(),
-                per_layer_token_qs: layer_tok_qs,
-            });
+            corpus_sources.push((role, text.as_str(), energy));
         }
     }
+    let mut encoder = Phi3TokenEncoder::new(model, tokenizer);
+    let staged_entries = CompiledTokenCorpus::capture_entries(&mut encoder, &corpus_sources)?;
 
     let mut compiled = CompiledTokenCorpus::compile_with_base_prior(
         adapter,
@@ -116,66 +101,7 @@ pub(crate) fn run_step2_evaluation(
         1,
         base_prior.as_ref(),
     )?;
-    let prefix_ids = tokenizer
-        .encode("Item:", false)
-        .map_err(|e| format!("alias prefix encode error: {e}"))?
-        .get_ids()
-        .to_vec();
-    let mut split_token_observations: Vec<EntryTokenObservation> = Vec::new();
-    for (entry_idx, entry) in staged_entries.iter().enumerate() {
-        if entry.role != AttractorRole::Fact {
-            continue;
-        }
-        let first_word = entry
-            .text
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .trim_end_matches([',', '.', ':', ';']);
-        if first_word.len() < 2 {
-            continue;
-        }
-        let ids_raw = tokenizer
-            .encode(first_word, false)
-            .map_err(|e| format!("alias raw encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let spaced_word = format!(" {first_word}");
-        let ids_spaced = tokenizer
-            .encode(spaced_word.as_str(), false)
-            .map_err(|e| format!("alias spaced encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let disjoint_bpe_split = !ids_raw.is_empty()
-            && !ids_spaced.is_empty()
-            && ids_raw.iter().all(|id| !ids_spaced.contains(id));
-        if disjoint_bpe_split {
-            let mut full_ids = prefix_ids.clone();
-            full_ids.extend_from_slice(&ids_spaced);
-            model.clear_cache();
-            let (_, alias_tok_qs, _) = model.forward_tokens(
-                &full_ids,
-                0,
-                None,
-                false,
-                true,
-                LogitsFetchMode::FullLogits,
-            )?;
-            let dim = adapter.geometry().q_rot_len();
-            let start = prefix_ids.len() * dim;
-            let end = full_ids.len() * dim;
-            let sliced_qs: Vec<Vec<f32>> = alias_tok_qs
-                .into_iter()
-                .map(|layer| layer[start..end].to_vec())
-                .collect();
-            split_token_observations.push(EntryTokenObservation {
-                entry_idx,
-                seq_len: ids_spaced.len(),
-                per_layer_token_qs: sliced_qs,
-            });
-        }
-    }
-    compiled.append_entry_token_observations(adapter, &split_token_observations)?;
+    compiled.append_leading_alias_observations(adapter, &staged_entries, &mut encoder)?;
     let compile_ms = t_compile.elapsed().as_secs_f64() * 1000.0;
     println!(
         "Compiled {} natural-language attractors (two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}",
@@ -318,17 +244,23 @@ pub(crate) fn run_step2_evaluation(
                 prompt_q_cache.insert(prompt.clone(), q_toks.clone());
                 q_toks
             };
-            let prior_circuit = active_persona_bank
-                .as_ref()
-                .map(CognitiveCircuitBankOps::to_consolidated_ledger);
-            let t_recall = Instant::now();
-            let recall = compiled.recall_token_sequence_with_circuit(
+            let t_prep = Instant::now();
+            let plan = TurnOrchestrator::prepare_turn(
+                &compiled,
                 adapter,
-                &query_tok_qs,
-                q_ids.len(),
-                prior_circuit,
+                &mut ram_kv_cache,
+                &TurnPrepareInput {
+                    query_token_qs: &query_tok_qs,
+                    query_seq_len: q_ids.len(),
+                    turn_index: (idx + 1) as u32,
+                    kv_policy: &kv_policy,
+                    kv_min_resonance_override: kv_min_res,
+                    persona_bank: active_persona_bank.as_ref(),
+                    layer_steer_mask_override: None,
+                },
             )?;
-            let recall_ms = t_recall.elapsed().as_secs_f64() * 1000.0;
+            let prep_elapsed = t_prep.elapsed();
+            let recall_ms = prep_elapsed.as_secs_f64() * 1000.0;
             step2_recall_ms_sum += recall_ms;
 
             let turn_role = match slot.as_str() {
@@ -351,11 +283,11 @@ pub(crate) fn run_step2_evaluation(
                     energy: 1.5,
                 },
                 &FrameTransitionMetrics {
-                    phase_l1_delta: (1.0 - recall.top1_fact_score).clamp(0.0, 1.0) * 0.25,
-                    lacuna_state: recall.lacuna_state,
+                    phase_l1_delta: (1.0 - plan.top1_fact_score()).clamp(0.0, 1.0) * 0.25,
+                    lacuna_state: plan.lacuna_state(),
                     frames_since_keyframe,
                     new_cluster_spawned: matches!(
-                        recall.lacuna_state,
+                        plan.lacuna_state(),
                         LacunaBoundaryState::LiminalExterior
                     ),
                 },
@@ -366,93 +298,64 @@ pub(crate) fn run_step2_evaluation(
                 frames_since_keyframe + 1
             };
 
-            let recalled_ctx = recall.recalled_context_text();
-            let fact_ctx = recall.recalled_facts_only_context_text();
-            let ext_ctx = recall.exterior_pointer_context_text();
-            if recall.is_known_unknown_exterior && slot != "VOID" && slot != "LVOID" {
+            let fact_ctx = plan.self_ref_context();
+            let persona_ctx = plan.persona_context();
+            let ext_ctx = plan.exterior_context();
+            let recalled_ctx = match (fact_ctx.is_empty(), persona_ctx.is_empty()) {
+                (false, false) => format!("{fact_ctx} {persona_ctx}"),
+                (false, true) => fact_ctx.to_string(),
+                (true, false) => persona_ctx.to_string(),
+                (true, true) => String::new(),
+            };
+            if plan.is_known_unknown_exterior() && slot != "VOID" && slot != "LVOID" {
                 ext_rescue_hits += 1;
             }
 
-            let mut dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
-            if recall.recalled_facts.is_empty() && recall.is_known_unknown_exterior {
-                for (l, layer_facts) in dyn_facts.iter_mut().enumerate().take(cfg.num_hidden_layers)
-                {
-                    for &(entry, score) in &recall.exterior_sandbox_facts {
-                        if let Some(&arr) = entry.per_layer_q7.get(l) {
-                            let scaled_e = (entry.energy * score.clamp(0.25, 0.90) * 0.5).max(0.20);
-                            layer_facts.push(ObjectiveFact::new(arr, scaled_e, 0, entry.anchor_id));
-                        }
-                    }
-                }
-            }
-            let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
-            let mut query_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
-            if let Some(ref bank) = active_persona_bank {
-                let cons = bank.to_consolidated_ledger();
-                query_snap.cognitive_trajectory = cons.compose_persona_circuit(
-                    &query_snap.cognitive_trajectory,
-                    kv_policy.kv_circuit_blend_q7(&recall.gateway_frame),
-                );
-            }
-            let ctx_hash = recall.context_fingerprint_u64();
-            let t_kv = Instant::now();
-            let kv_outcome = ram_kv_cache
-                .step_with_gateway_and_override(
-                    ctx_hash,
-                    q_ids.len() as u32,
-                    &recall.gateway_frame,
-                    &mut query_snap.cognitive_trajectory,
-                    recall.telemetry.layer_activation,
-                    &kv_policy,
-                    kv_min_res,
-                    (idx + 1) as u32,
-                )
-                .map_err(|e| format!("ram_kv_cache error: {e}"))?;
-            let kv_note = kv_stats.record_outcome(
-                kv_outcome,
-                t_kv.elapsed().as_secs_f64() * 1_000_000.0,
-                &recall.gateway_frame.phase_deltas,
-            );
-            if active_persona_bank.is_some() {
-                adapter.set_active_circuit(query_snap.cognitive_trajectory);
+            // Keep `TurnSteeringPlan` strictly partitioned (`S & O` vs `O \ S`) while selecting
+            // the isolated exterior sandbox slice explicitly for RTX 4070 baseline parity.
+            let steer_facts = if plan.has_self_ref_anchors() {
+                plan.self_ref_anchors_per_layer()
+            } else if plan.is_known_unknown_exterior() {
+                plan.exterior_sandbox_anchors_per_layer()
             } else {
-                adapter.clear_active_circuit();
-            }
-            let (core_hor, core_overlap, ens_opt) =
-                adapter.sync_core_layers_from_recall(&recall, None);
+                plan.self_ref_anchors_per_layer()
+            };
+            let has_steer_facts = steer_facts.iter().any(|layer| !layer.is_empty());
+            let dyn_personas = plan.persona_anchors_per_layer();
+            let kv_note = kv_stats.record_outcome(
+                plan.kv_outcome(),
+                prep_elapsed.as_secs_f64() * 1_000_000.0,
+                &plan.gateway_frame().phase_deltas,
+            );
             let core_note = format!(
                 "reg={:?} l0={} l1={} ego={} sc={} ovlp=0x{:02X} ens={}",
-                core_hor.regime(),
+                plan.horizon().regime(),
                 adapter.threshold_state().adaptation_epochs,
                 adapter.stigmergic_granule_state().adaptation_epochs,
                 adapter.ego_state().intervention_epochs,
                 adapter.last_boundary_delta().stationary_shortcut_ready,
-                core_overlap.overlap_core_mask,
-                ens_opt.map_or(0, |r| r.active_fragment_count),
+                plan.overlap_report().overlap_core_mask,
+                plan.ensemble_report()
+                    .map_or(0, |r| r.active_fragment_count),
             );
-            let top_fact_preview = if recall.recalled_facts.is_empty() {
+            let top_fact_preview = if plan.self_ref_anchor_ids().is_empty() {
                 "none".to_string()
             } else {
-                recall
-                    .recalled_facts
+                plan.self_ref_anchor_ids()
                     .iter()
-                    .map(|(e, _)| format!("#{}", e.anchor_id))
+                    .map(|id| format!("#{id}"))
                     .collect::<Vec<_>>()
                     .join("+")
             };
-            let tlm = recall.telemetry;
-            let query_lacuna_state = recall.lacuna_state;
-            let query_action_decision = recall.action_decision;
-            let query_top1 = recall.top1_fact_score;
-            let query_top2 = recall.top2_fact_score;
-            let query_guard_m = recall.guard_conflict_margin;
+            let tlm = *plan.telemetry();
+            let query_lacuna_state = plan.lacuna_state();
+            let query_action_decision = plan.action_decision();
+            let query_top1 = plan.top1_fact_score();
+            let query_top2 = plan.top2_fact_score();
+            let query_guard_m = plan.guard_conflict_margin();
 
             let (text, reflect_note) = if let Some(baked) = baked_opt.as_ref() {
-                let is_guard_trap = query_guard_m > 0.05
-                    || matches!(
-                        query_action_decision,
-                        StigmergicActionDecision::RepulsionEscape
-                    );
+                let is_guard_trap = plan.is_guard_trap();
                 let active_prompt = if !run_cond.inject_fact_text() {
                     format_phi4_prompt(prompt)
                 } else if run_cond.inject_persona_and_guard_text() {
@@ -467,14 +370,11 @@ pub(crate) fn run_step2_evaluation(
                         ))
                     }
                 } else if run_cond.steering_enabled() {
-                    if matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
-                        && !is_guard_trap
-                        && !recall.is_known_unknown_exterior
-                    {
+                    if plan.is_unobserved_lacuna() && !is_guard_trap {
                         format_phi4_prompt(prompt)
                     } else if !fact_ctx.is_empty() {
                         format_phi4_prompt(&format!("[Context: {fact_ctx}]\n{prompt}"))
-                    } else if recall.is_known_unknown_exterior && !ext_ctx.is_empty() {
+                    } else if plan.is_known_unknown_exterior() && !ext_ctx.is_empty() {
                         format_phi4_prompt(&format!("[External Pointer: {ext_ctx}]\n{prompt}"))
                     } else {
                         format_phi4_prompt(prompt)
@@ -488,17 +388,14 @@ pub(crate) fn run_step2_evaluation(
                     format_phi4_prompt(&format!("[Context: {recalled_ctx}]\n{prompt}"))
                 };
 
-                let use_steer = run_cond.steering_enabled()
-                    && (is_guard_trap
-                        || !matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
-                        || recall.is_known_unknown_exterior);
+                let use_steer = run_cond.steering_enabled() && plan.steering_eligible();
                 let res_ctx = if use_steer {
                     Some(ResonantAnchors {
-                        facts: dyn_facts.as_slice(),
-                        personas: dyn_personas.as_slice(),
+                        facts: steer_facts,
+                        personas: dyn_personas,
                         guards: baked.guard_anchors_per_layer.as_slice(),
-                        negs: baked.neg_sum.as_slice(),
-                        poss: baked.pos_sum.as_slice(),
+                        negs: baked.repulsive_centroid_per_layer.as_slice(),
+                        poss: baked.attractive_centroid_per_layer.as_slice(),
                     })
                 } else {
                     None
@@ -588,19 +485,8 @@ pub(crate) fn run_step2_evaluation(
                     ReflectMode::Off => false,
                     ReflectMode::Always => true,
                     ReflectMode::Conditional => {
-                        let gate_in = ReflectionGateInput {
-                            boundary_sensitivity_q7: recall
-                                .lacuna_partition
-                                .boundary_sensitivity_q7,
-                            has_undigested_known_unknown: recall.is_known_unknown_exterior,
-                            exit_entropy_h_tilde: adapter.substrate().last_entropy_h_tilde,
-                            guard_conflict_margin: query_guard_m,
-                            is_unobserved_lacuna: matches!(
-                                query_lacuna_state,
-                                LacunaBoundaryState::LiminalExterior
-                            ) && !recall.is_known_unknown_exterior,
-                            ..ReflectionGateInput::default()
-                        };
+                        let gate_in =
+                            plan.reflection_gate_input(adapter.substrate().last_entropy_h_tilde);
                         let fire = ManifoldReflectionEvaluator.should_trigger_reflection(&gate_in);
                         if !fire {
                             reflect_gate_skipped += 1;
@@ -615,7 +501,7 @@ pub(crate) fn run_step2_evaluation(
                         tokenizer,
                         adapter,
                         &compiled,
-                        &query_snap,
+                        plan.query_snapshot(),
                         &text,
                         &reflection_policy,
                     )? {
@@ -624,9 +510,9 @@ pub(crate) fn run_step2_evaluation(
                             let cue = pass1_crit.corrective_instruction(&text).unwrap_or_default();
                             let retry_ctx = if run_cond.steering_enabled() {
                                 if !fact_ctx.is_empty() {
-                                    fact_ctx.as_str()
-                                } else if recall.is_known_unknown_exterior {
-                                    ext_ctx.as_str()
+                                    fact_ctx
+                                } else if plan.is_known_unknown_exterior() {
+                                    ext_ctx
                                 } else {
                                     recalled_ctx.as_str()
                                 }
@@ -643,15 +529,14 @@ pub(crate) fn run_step2_evaluation(
                                 ))
                             };
                             let retry_use_steer = !pass1_crit.directive.suppress_injection
-                                && (!dyn_facts.is_empty()
-                                    || pass1_crit.directive.inject_guard_repulsion);
+                                && (has_steer_facts || pass1_crit.directive.inject_guard_repulsion);
                             let retry_res = if retry_use_steer {
                                 Some(ResonantAnchors {
-                                    facts: dyn_facts.as_slice(),
-                                    personas: dyn_personas.as_slice(),
+                                    facts: steer_facts,
+                                    personas: dyn_personas,
                                     guards: baked.guard_anchors_per_layer.as_slice(),
-                                    negs: baked.neg_sum.as_slice(),
-                                    poss: baked.pos_sum.as_slice(),
+                                    negs: baked.repulsive_centroid_per_layer.as_slice(),
+                                    poss: baked.attractive_centroid_per_layer.as_slice(),
                                 })
                             } else {
                                 None
@@ -733,7 +618,7 @@ pub(crate) fn run_step2_evaluation(
                                 tokenizer,
                                 adapter,
                                 &compiled,
-                                &query_snap,
+                                plan.query_snapshot(),
                                 &p2_text,
                                 &reflection_policy,
                             )? {
@@ -778,18 +663,12 @@ pub(crate) fn run_step2_evaluation(
                     }
                 }
                 if let Some(ref mut bank) = active_persona_bank {
-                    if let Some(step) = recall.telemetry.cognitive_trajectory.latest_step() {
-                        bank.push_step_hierarchical(step);
-                    }
-                    if let Some(ref crit) = chosen_crit {
-                        let converged = matches!(
-                            crit.trigger,
-                            liminika_adapter::ReflectionTriggerKind::Converged
-                                | liminika_adapter::ReflectionTriggerKind::ConsistentLacunaAbstention
-                        );
-                        bank.reinforce_bank(&crit.layer_activation, converged);
-                    }
-                    adapter.set_active_circuit(bank.to_consolidated_ledger());
+                    TurnOrchestrator::commit_turn_circuit(
+                        adapter,
+                        &plan,
+                        bank,
+                        chosen_crit.as_ref(),
+                    );
                 }
                 (text, reflect_note)
             } else {
@@ -844,7 +723,7 @@ pub(crate) fn run_step2_evaluation(
             } else if slot == "VOID" || slot == "LVOID" {
                 ood_total += 1;
                 if !matches!(query_lacuna_state, LacunaBoundaryState::LiminalExterior)
-                    || recall.is_known_unknown_exterior
+                    || plan.is_known_unknown_exterior()
                     || p_sem_forb > 0
                 {
                     ood_bleed_hits += 1;
@@ -860,7 +739,7 @@ pub(crate) fn run_step2_evaluation(
                 let residual_phases = adapter.residual_spillover().active_spillover_residual_q7;
                 let _ = adapter.commit_spillover_experience(
                     &residual_phases,
-                    recall.top1_fact_score.max(0.1),
+                    plan.top1_fact_score().max(0.1),
                     resolved,
                 );
             }

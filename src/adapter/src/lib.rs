@@ -88,12 +88,14 @@ pub mod ego_intent;
 pub mod model_adapter;
 pub mod package;
 pub mod timeline;
+pub mod turn_orchestrator;
 
 pub use corpus_recall::*;
 pub use ego_intent::*;
 pub use model_adapter::*;
 pub use package::*;
 pub use timeline::*;
+pub use turn_orchestrator::*;
 
 #[cfg(test)]
 mod tests;

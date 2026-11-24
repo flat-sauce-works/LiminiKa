@@ -800,13 +800,12 @@ pub(crate) fn build_step2_run_specs(cli: &EvalCliConfig) -> Vec<Step2RunSpec> {
 }
 
 use crate::bake::BakedModelProfile;
-use crate::model::{Phi3Config, Phi3Model};
+use crate::model::Phi3Model;
 use liminika_adapter::ModelSteeringAdapter;
 use liminika_core::stigmergy::StandardCognitiveBank;
 use tokenizers::Tokenizer;
 
 pub(crate) struct EvalRuntime<'a> {
-    pub(crate) cfg: &'a Phi3Config,
     pub(crate) tokenizer: &'a Tokenizer,
     pub(crate) model: &'a mut Phi3Model,
     pub(crate) adapter: &'a mut ModelSteeringAdapter,

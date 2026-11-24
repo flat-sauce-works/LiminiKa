@@ -9,7 +9,8 @@
 //! manifold drift (`Liminal`), liminal ambiguity, or out-of-domain hallucination, and are strictly
 //! bounded by [`ReflectionPolicy::max_retries`].
 
-use crate::{DynamicAttractorRecall, LacunaBoundaryState, RecallPolicy};
+use crate::corpus_recall::AttractorRecallProjection;
+use crate::{DynamicAttractorRecall, LacunaBoundaryState, OwnedAttractorRecall, RecallPolicy};
 use liminika_core::drivers::{LiminalEgoState, EGO_TRIGGER_LIMINAL_EXTERIOR};
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
@@ -130,50 +131,57 @@ pub struct TrajectoryManifoldSnapshot {
 }
 
 impl TrajectoryManifoldSnapshot {
-    /// Captures an owned manifold snapshot from a borrowed [`DynamicAttractorRecall`].
-    #[must_use]
-    pub fn from_recall(recall: &DynamicAttractorRecall<'_>) -> Self {
-        let top_entry = recall.recalled_facts.first().map(|(e, _)| *e);
+    fn from_projection<R: AttractorRecallProjection + ?Sized>(recall: &R) -> Self {
+        let top_entry = recall.recalled_fact_at(0);
         let top_fact_anchor = top_entry.map(|e| e.anchor_id);
         let top_fact_q7 = top_entry
             .and_then(|e| e.per_layer_q7.last().copied())
             .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
         let top_guard_q7 = recall
-            .top_guard
-            .and_then(|(e, _)| e.per_layer_q7.last().copied());
-        let recalled_fact_anchors = recall
-            .recalled_facts
-            .iter()
-            .map(|(e, _)| e.anchor_id)
-            .collect();
-        let recalled_fact_q7s = recall
-            .recalled_facts
-            .iter()
-            .map(|(e, _)| {
-                (
+            .top_guard_ref()
+            .and_then(|e| e.per_layer_q7.last().copied());
+        let n_facts = recall.recalled_fact_len();
+        let mut recalled_fact_anchors = Vec::with_capacity(n_facts);
+        let mut recalled_fact_q7s = Vec::with_capacity(n_facts);
+        for i in 0..n_facts {
+            if let Some(e) = recall.recalled_fact_at(i) {
+                recalled_fact_anchors.push(e.anchor_id);
+                recalled_fact_q7s.push((
                     e.anchor_id,
                     e.per_layer_q7
                         .last()
                         .copied()
                         .unwrap_or([0_i8; MAX_ATTENTION_HEADS]),
-                )
-            })
-            .collect();
+                ));
+            }
+        }
         Self {
-            lacuna_state: recall.lacuna_state,
-            top1_fact_score: recall.top1_fact_score,
-            top2_fact_score: recall.top2_fact_score,
-            top1_persona_score: recall.top1_persona_score,
-            guard_conflict_margin: recall.guard_conflict_margin,
+            lacuna_state: recall.lacuna_state(),
+            top1_fact_score: recall.top1_fact_score(),
+            top2_fact_score: recall.top2_fact_score(),
+            top1_persona_score: recall.top1_persona_score(),
+            guard_conflict_margin: recall.guard_conflict_margin(),
             top_fact_anchor,
             top_fact_q7,
             top_guard_q7,
             recalled_fact_anchors,
             recalled_fact_q7s,
-            action_decision: recall.action_decision,
-            gateway_frame: recall.gateway_frame,
-            cognitive_trajectory: recall.telemetry.cognitive_trajectory,
+            action_decision: recall.action_decision(),
+            gateway_frame: *recall.gateway_frame(),
+            cognitive_trajectory: recall.telemetry().cognitive_trajectory,
         }
+    }
+
+    /// Captures an owned manifold snapshot from a borrowed [`DynamicAttractorRecall`].
+    #[must_use]
+    pub fn from_recall(recall: &DynamicAttractorRecall<'_>) -> Self {
+        Self::from_projection(recall)
+    }
+
+    /// Captures an owned manifold snapshot from an [`OwnedAttractorRecall`].
+    #[must_use]
+    pub fn from_owned_recall(recall: &OwnedAttractorRecall) -> Self {
+        Self::from_projection(recall)
     }
 
     /// Returns query Fact anchor IDs that were omitted from `draft.recalled_fact_anchors`.

@@ -88,8 +88,16 @@ fn calibrate_trial_adapter(
     base_entropies: &[f32],
 ) -> Result<liminika_core::runtime::ManifoldProbeBaseline, Box<dyn std::error::Error>> {
     adapter.set_layer_rope_mask(0xFFFF_0000);
-    let pos_slices: Vec<&[f32]> = baked.pos_sum.iter().map(Vec::as_slice).collect();
-    let neg_slices: Vec<&[f32]> = baked.neg_sum.iter().map(Vec::as_slice).collect();
+    let pos_slices: Vec<&[f32]> = baked
+        .attractive_centroid_per_layer
+        .iter()
+        .map(Vec::as_slice)
+        .collect();
+    let neg_slices: Vec<&[f32]> = baked
+        .repulsive_centroid_per_layer
+        .iter()
+        .map(Vec::as_slice)
+        .collect();
     Ok(adapter.calibrate_manifold_probe(&pos_slices, &neg_slices, base_entropies)?)
 }
 
@@ -191,7 +199,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let (baked_opt, base_entropies): (Option<BakedModelProfile>, Vec<f32>) = if !recall_only {
         let t_bake = Instant::now();
-        let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
+        let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, &suite)?;
         println!(
             "Baked {} x {} Q7 phase deltas + {}-dim Rank-1 residual vectors via ModelSteeringAdapter in {:.2?}.",
             baked.per_layer_q7.len(),
@@ -298,8 +306,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             facts: baked.fact_anchors_per_layer.as_slice(),
                             personas: baked.persona_anchors_per_layer.as_slice(),
                             guards: baked.guard_anchors_per_layer.as_slice(),
-                            negs: baked.neg_sum.as_slice(),
-                            poss: baked.pos_sum.as_slice(),
+                            negs: baked.repulsive_centroid_per_layer.as_slice(),
+                            poss: baked.attractive_centroid_per_layer.as_slice(),
                         })
                     } else {
                         None
@@ -548,8 +556,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             facts: baked.fact_anchors_per_layer.as_slice(),
                             personas: baked.persona_anchors_per_layer.as_slice(),
                             guards: baked.guard_anchors_per_layer.as_slice(),
-                            negs: baked.neg_sum.as_slice(),
-                            poss: baked.pos_sum.as_slice(),
+                            negs: baked.repulsive_centroid_per_layer.as_slice(),
+                            poss: baked.attractive_centroid_per_layer.as_slice(),
                         })
                     } else {
                         None
@@ -650,7 +658,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let mut trial_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
         let mut rt = EvalRuntime {
-            cfg: &cfg,
             tokenizer: &tokenizer,
             model: &mut model,
             adapter: &mut trial_adapter,

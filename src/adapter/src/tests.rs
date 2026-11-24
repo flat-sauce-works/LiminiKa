@@ -4008,3 +4008,491 @@ fn zero_copy_common_mode_subspace_matches_explicit_deflation() {
         );
     }
 }
+
+#[test]
+fn turn_orchestrator_mock_source_separates_self_ref_and_exterior_and_syncs_circuit() {
+    use liminika_core::runtime::{
+        AdaptiveThresholdPolicy, ManifoldGatewaySignal, ObjectiveFact, StandardPhaseKvGopCache,
+    };
+    use liminika_core::stigmergy::{
+        CognitiveOpKind, CognitiveStepOp, StandardCognitiveBank, StigmergicScaleGranularity,
+    };
+
+    let mut geom = RopeGeometry::phi4_mini();
+    geom.num_layers = 4;
+    geom.layer_rope_mask = 0xF;
+    let mut adapter = ModelSteeringAdapter::new(geom).expect("init adapter");
+    let mut kv_cache = StandardPhaseKvGopCache::new();
+    let kv_policy = AdaptiveThresholdPolicy::default();
+
+    struct MockRecallSource {
+        recall: OwnedAttractorRecall,
+    }
+    impl AttractorRecallSource for MockRecallSource {
+        fn recall_query(
+            &self,
+            _adapter: &ModelSteeringAdapter,
+            _query_token_qs: &[Vec<f32>],
+            _query_seq_len: usize,
+            _prior_circuit: Option<CognitiveTrajectoryLedger>,
+        ) -> Result<OwnedAttractorRecall, String> {
+            Ok(self.recall.clone())
+        }
+    }
+
+    let self_ref_q7 = [24_i8; MAX_ATTENTION_HEADS];
+    let exterior_q7 = [-32_i8; MAX_ATTENTION_HEADS];
+    let persona_q7 = [12_i8; MAX_ATTENTION_HEADS];
+    let frame = ObjectiveFact::new(self_ref_q7, 2.0, 3, 11).synthesize_gateway_frame();
+    let mut traj = CognitiveTrajectoryLedger::new();
+    traj.push_step(CognitiveStepOp::pack(
+        StigmergicScaleGranularity::CellTrail,
+        CognitiveOpKind::DecomposePeel,
+        6,
+    ));
+    let partition =
+        evaluate_lacuna_partition_branchless(0x0F, &[64, 64, 0, 0, 72, 72, 0, 0], &[8; 8], 28);
+
+    // Deliberately supply BOTH `recalled_facts` (S & O) AND `exterior_sandbox_facts` (O \ S)
+    // to prove `TurnSteeringPlan` never conflates them across channels.
+    let mock_both = MockRecallSource {
+        recall: OwnedAttractorRecall {
+            lacuna_state: LacunaBoundaryState::InsideBasin,
+            top1_fact_score: 0.72,
+            top2_fact_score: 0.25,
+            top1_persona_score: 0.45,
+            min_local_lacuna_depth: 0.0,
+            guard_conflict_margin: -0.35,
+            action_decision: StigmergicActionDecision::ExpressPhaseSteer,
+            gateway_frame: frame,
+            telemetry: StratumProbeTelemetry {
+                cognitive_trajectory: traj,
+                ..StratumProbeTelemetry::default()
+            },
+            recalled_facts: vec![RecalledAnchorRecord {
+                anchor_id: 11,
+                role: AttractorRole::Fact,
+                text: "SelfRef ground truth".to_string(),
+                per_layer_q7: vec![self_ref_q7; 4],
+                energy: 2.5,
+                score: 0.72,
+            }],
+            recalled_personas: vec![RecalledAnchorRecord {
+                anchor_id: 21,
+                role: AttractorRole::Persona,
+                text: "Concise style".to_string(),
+                per_layer_q7: vec![persona_q7; 4],
+                energy: 1.5,
+                score: 0.45,
+            }],
+            top_guard: None,
+            lacuna_partition: partition,
+            exterior_sandbox_facts: vec![RecalledAnchorRecord {
+                anchor_id: 99,
+                role: AttractorRole::Fact,
+                text: "Exterior known-unknown pointer".to_string(),
+                per_layer_q7: vec![exterior_q7; 4],
+                energy: 2.0,
+                score: 0.60,
+            }],
+            is_known_unknown_exterior: true,
+        },
+    };
+
+    let mut bank = StandardCognitiveBank::from_ledger(traj);
+    let plan = TurnOrchestrator::prepare_turn(
+        &mock_both,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput {
+            query_token_qs: &[],
+            query_seq_len: 4,
+            turn_index: 1,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: Some(&bank),
+            layer_steer_mask_override: Some(0x0000_000C),
+        },
+    )
+    .expect("prepare_turn with mock source");
+
+    // 1. Strict topological separation: S & O never contains O \ S anchor #99 or exterior text.
+    assert_eq!(plan.self_ref_anchor_ids(), &[11]);
+    assert_eq!(plan.self_ref_context(), "SelfRef ground truth");
+    assert_eq!(plan.persona_context(), "Concise style");
+    assert_eq!(plan.exterior_context(), "Exterior known-unknown pointer");
+    assert_eq!(plan.self_ref_anchors_per_layer().len(), 4);
+    assert_eq!(plan.exterior_sandbox_anchors_per_layer().len(), 4);
+    assert_eq!(plan.persona_anchors_per_layer().len(), 4);
+    for layer in 0..4 {
+        assert_eq!(plan.self_ref_anchors_per_layer()[layer].len(), 1);
+        assert_eq!(plan.self_ref_anchors_per_layer()[layer][0].anchor_id, 11);
+        assert_eq!(plan.exterior_sandbox_anchors_per_layer()[layer].len(), 1);
+        assert_eq!(
+            plan.exterior_sandbox_anchors_per_layer()[layer][0].anchor_id,
+            99
+        );
+        // Exterior sandbox anchor uses 0.5x damped energy (`2.0 * 0.60 * 0.5 = 0.60`).
+        assert!(
+            (plan.exterior_sandbox_anchors_per_layer()[layer][0].base_energy - 0.60).abs() < 1e-5
+        );
+        assert_eq!(plan.persona_anchors_per_layer()[layer].len(), 1);
+        assert_eq!(plan.persona_anchors_per_layer()[layer][0].anchor_id, 21);
+    }
+
+    // 2. LacunaPartition8, layer_steer_mask_override, top_guard zero-aperture, and active circuit synced.
+    assert_eq!(plan.lacuna_partition(), partition);
+    assert_eq!(*adapter.last_lacuna_partition(), partition);
+    assert_eq!(plan.layer_steer_mask_override(), Some(0x0000_000C));
+    assert_eq!(plan.effective_layer_steer_mask(&adapter), 0x0000_000C);
+    assert_eq!(plan.query_snapshot().top_guard_q7, None);
+    assert!(adapter.active_circuit().is_some());
+
+    // 3. Post-turn circuit commit reinforces bank and updates adapter active circuit.
+    TurnOrchestrator::commit_turn_circuit(&mut adapter, &plan, &mut bank, None);
+    assert!(adapter.active_circuit().is_some());
+
+    // 4. Preparing a turn without persona_bank clears the active circuit on adapter.
+    let plan_no_bank = TurnOrchestrator::prepare_turn(
+        &mock_both,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput {
+            query_token_qs: &[],
+            query_seq_len: 4,
+            turn_index: 2,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: None::<&StandardCognitiveBank>,
+            layer_steer_mask_override: None,
+        },
+    )
+    .expect("prepare_turn without bank");
+    assert!(adapter.active_circuit().is_none());
+    assert_eq!(
+        plan_no_bank.effective_layer_steer_mask(&adapter),
+        adapter.geometry().layer_rope_mask
+    );
+}
+
+#[test]
+fn turn_steering_plan_reflection_gate_input_respects_live_entropy_and_lacuna_regions() {
+    use liminika_core::runtime::{AdaptiveThresholdPolicy, StandardPhaseKvGopCache};
+    use liminika_core::stigmergy::StandardCognitiveBank;
+
+    let mut geom = RopeGeometry::phi4_mini();
+    geom.num_layers = 2;
+    geom.layer_rope_mask = 0x3;
+    let mut adapter = ModelSteeringAdapter::new(geom).expect("init adapter");
+    let mut kv_cache = StandardPhaseKvGopCache::new();
+    let kv_policy = AdaptiveThresholdPolicy::default();
+
+    struct StaticSource(OwnedAttractorRecall);
+    impl AttractorRecallSource for StaticSource {
+        fn recall_query(
+            &self,
+            _adapter: &ModelSteeringAdapter,
+            _query_token_qs: &[Vec<f32>],
+            _query_seq_len: usize,
+            _prior_circuit: Option<CognitiveTrajectoryLedger>,
+        ) -> Result<OwnedAttractorRecall, String> {
+            Ok(self.0.clone())
+        }
+    }
+
+    // Case A: Pure Unobserved OOD (`LiminalExterior`, `is_known_unknown_exterior = false`).
+    let unobserved_part = evaluate_lacuna_partition_branchless(0x0F, &[0; 8], &[8; 8], 28);
+    let ood_source = StaticSource(OwnedAttractorRecall {
+        lacuna_state: LacunaBoundaryState::LiminalExterior,
+        top1_fact_score: 0.05,
+        top2_fact_score: 0.02,
+        top1_persona_score: 0.01,
+        min_local_lacuna_depth: 0.30,
+        guard_conflict_margin: -0.20,
+        action_decision: StigmergicActionDecision::PassiveSidecar,
+        gateway_frame: GatewayFrame::default(),
+        telemetry: StratumProbeTelemetry::default(),
+        recalled_facts: Vec::new(),
+        recalled_personas: Vec::new(),
+        top_guard: None,
+        lacuna_partition: unobserved_part,
+        exterior_sandbox_facts: Vec::new(),
+        is_known_unknown_exterior: false,
+    });
+    let ood_plan = TurnOrchestrator::prepare_turn(
+        &ood_source,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput {
+            query_token_qs: &[],
+            query_seq_len: 3,
+            turn_index: 1,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: None::<&StandardCognitiveBank>,
+            layer_steer_mask_override: None,
+        },
+    )
+    .expect("ood plan");
+    assert!(ood_plan.is_unobserved_lacuna());
+    assert!(!ood_plan.steering_eligible());
+
+    let calm_gate = ood_plan.reflection_gate_input(0.25);
+    assert!(calm_gate.is_unobserved_lacuna);
+    assert!(!calm_gate.has_undigested_known_unknown);
+    assert!((calm_gate.exit_entropy_h_tilde - 0.25).abs() < 1e-6);
+    assert!(!ManifoldReflectionEvaluator.should_trigger_reflection(&calm_gate));
+
+    let spike_gate = ood_plan.reflection_gate_input(0.75);
+    assert!((spike_gate.exit_entropy_h_tilde - 0.75).abs() < 1e-6);
+    assert!(ManifoldReflectionEvaluator.should_trigger_reflection(&spike_gate));
+
+    // Case B: Validated Known Unknown (`O \ S`, `is_known_unknown_exterior = true`) triggers even
+    // under calm live entropy while leaving `self_ref_anchors_per_layer` strictly empty.
+    let ext_part =
+        evaluate_lacuna_partition_branchless(0x0F, &[64, 64, 0, 0, 80, 0, 0, 0], &[8; 8], 28);
+    let ext_source = StaticSource(OwnedAttractorRecall {
+        lacuna_state: LacunaBoundaryState::LiminalExterior,
+        top1_fact_score: 0.31,
+        top2_fact_score: 0.12,
+        top1_persona_score: 0.05,
+        min_local_lacuna_depth: 0.04,
+        guard_conflict_margin: -0.15,
+        action_decision: StigmergicActionDecision::PassiveSidecar,
+        gateway_frame: GatewayFrame::default(),
+        telemetry: StratumProbeTelemetry::default(),
+        recalled_facts: Vec::new(),
+        recalled_personas: Vec::new(),
+        top_guard: Some(RecalledAnchorRecord {
+            anchor_id: 77,
+            role: AttractorRole::Guard,
+            text: "Observed guard".to_string(),
+            per_layer_q7: vec![[19_i8; MAX_ATTENTION_HEADS]; 2],
+            energy: 2.0,
+            score: 0.16,
+        }),
+        lacuna_partition: ext_part,
+        exterior_sandbox_facts: vec![RecalledAnchorRecord {
+            anchor_id: 55,
+            role: AttractorRole::Fact,
+            text: "Known unknown target".to_string(),
+            per_layer_q7: vec![[40_i8; MAX_ATTENTION_HEADS]; 2],
+            energy: 2.2,
+            score: 0.31,
+        }],
+        is_known_unknown_exterior: true,
+    });
+    let ext_plan = TurnOrchestrator::prepare_turn(
+        &ext_source,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput {
+            query_token_qs: &[],
+            query_seq_len: 3,
+            turn_index: 2,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: None::<&StandardCognitiveBank>,
+            layer_steer_mask_override: None,
+        },
+    )
+    .expect("ext plan");
+    assert!(!ext_plan.is_unobserved_lacuna());
+    assert!(ext_plan.is_known_unknown_exterior());
+    assert!(ext_plan.steering_eligible());
+    assert!(!ext_plan.has_self_ref_anchors());
+    assert!(ext_plan.has_exterior_sandbox_anchors());
+    assert!(ext_plan.self_ref_context().is_empty());
+    assert_eq!(ext_plan.exterior_context(), "Known unknown target");
+    assert_eq!(
+        ext_plan.query_snapshot().top_guard_q7,
+        Some([19_i8; MAX_ATTENTION_HEADS])
+    );
+
+    let ext_gate = ext_plan.reflection_gate_input(0.20);
+    assert!(!ext_gate.is_unobserved_lacuna);
+    assert!(ext_gate.has_undigested_known_unknown);
+    assert!(ManifoldReflectionEvaluator.should_trigger_reflection(&ext_gate));
+}
+
+#[test]
+fn input_distillation_boundary_encoders_alias_probe_and_contrastive_bank() {
+    let mut geom = RopeGeometry::phi4_mini();
+    geom.num_layers = 2;
+    geom.num_q_heads = 8;
+    geom.num_kv_heads = 4;
+    geom.head_dim = 16;
+    geom.rotary_dim = 16;
+    geom.layer_rope_mask = 0x3;
+    let adapter = ModelSteeringAdapter::new(geom).expect("init compact adapter");
+    let q_len = adapter.geometry().q_rot_len();
+    let num_layers = adapter.geometry().num_layers;
+
+    assert_eq!(DEFAULT_STARTUP_PRIOR_PROBES.len(), 6);
+    assert_eq!(
+        extract_leading_alias_word("Alpha, beta gamma"),
+        Some("Alpha")
+    );
+    assert_eq!(extract_leading_alias_word("A: short"), None);
+    assert_eq!(extract_leading_alias_word("   "), None);
+
+    // 1. TokenSequenceEncoder + PooledSubtitleEncoder (resize pad and truncate).
+    struct SynthEncoder {
+        num_layers: usize,
+        q_len: usize,
+    }
+    impl SynthEncoder {
+        fn synth_layer(&self, seed: f32) -> Vec<f32> {
+            let mut flat = vec![0.0_f32; 2 * self.q_len];
+            for t in 0..2 {
+                let base = t * self.q_len;
+                for d in 0..self.q_len {
+                    let angle = seed + (d as f32) * 0.13 + (t as f32) * 0.05;
+                    flat[base + d] = angle.cos();
+                }
+            }
+            flat
+        }
+    }
+    impl TokenSequenceEncoder for SynthEncoder {
+        fn encode_token_sequence(&mut self, text: &str) -> Result<CapturedTokenSequence, String> {
+            let seed = text
+                .bytes()
+                .fold(0.1_f32, |acc, b| acc + f32::from(b) * 0.01);
+            let per_layer = (0..self.num_layers)
+                .map(|l| self.synth_layer(seed + (l as f32) * 0.2))
+                .collect();
+            let hidden = vec![seed.cos(), seed.sin(), 0.25, -0.5];
+            Ok(CapturedTokenSequence::new(2, per_layer).with_final_hidden(hidden))
+        }
+    }
+
+    let mut enc = SynthEncoder { num_layers, q_len };
+    let staged = CompiledTokenCorpus::capture_entries(
+        &mut enc,
+        &[
+            (AttractorRole::Fact, "Alpha, core manifold invariant.", 2.5),
+            (AttractorRole::Fact, "Beta: boundary staging rule.", 2.5),
+            (AttractorRole::Persona, "Calm concise tone.", 1.5),
+            (AttractorRole::Guard, "False overwrite claim.", 2.0),
+        ],
+    )
+    .expect("capture entries");
+    assert_eq!(staged.len(), 4);
+
+    let mut sub_enc =
+        PooledSubtitleEncoder::new(SynthEncoder { num_layers, q_len }, q_len, q_len + 8);
+    let rec = SourceTextRecord {
+        frame_index: 0,
+        timestamp_epoch_sec: 1,
+        role: AttractorRole::Fact,
+        text: "Alpha, core manifold invariant.".to_string(),
+        energy: 2.0,
+    };
+    let pooled_sub = sub_enc
+        .encode_subtitle_activations(&rec)
+        .expect("pooled subtitle");
+    assert_eq!(pooled_sub.len(), num_layers);
+    assert_eq!(pooled_sub[0].len(), q_len + 8);
+    assert!(pooled_sub[0][q_len..].iter().all(|&v| v == 0.0));
+
+    // 2. PrefixAliasProbe only probes Fact entries with leading words >= 2 chars.
+    struct MockAliasProbe {
+        probed_words: Vec<String>,
+        num_layers: usize,
+    }
+    impl PrefixAliasProbe for MockAliasProbe {
+        fn probe_leading_alias(
+            &mut self,
+            word: &str,
+            q_rot_len: usize,
+        ) -> Result<Option<CapturedTokenSequence>, String> {
+            self.probed_words.push(word.to_string());
+            if word == "Alpha" {
+                Ok(Some(CapturedTokenSequence::new(
+                    1,
+                    vec![vec![0.5_f32; q_rot_len]; self.num_layers],
+                )))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+    let mut compiled =
+        CompiledTokenCorpus::compile(&adapter, &staged, SequenceActivationPooler::default(), 2, 1)
+            .expect("compile");
+    let before_toks = compiled.entry_token_sigs[0].len();
+    let mut alias_probe = MockAliasProbe {
+        probed_words: Vec::new(),
+        num_layers,
+    };
+    let appended = compiled
+        .append_leading_alias_observations(&adapter, &staged, &mut alias_probe)
+        .expect("append alias observations");
+    assert_eq!(alias_probe.probed_words, vec!["Alpha", "Beta"]);
+    assert_eq!(appended, 1);
+    assert_eq!(compiled.entry_token_sigs[0].len(), before_toks + 1);
+
+    // 3. ContrastiveAnchorBank polarity separation: Fact/Persona vs Guard + Rank-1 normalization.
+    let head_rot = adapter.geometry().rotary_dim;
+    let half = head_rot / 2;
+    let num_heads = adapter.geometry().num_q_heads;
+    let mut fact_q = vec![0.0_f32; q_len];
+    let mut persona_q = vec![0.0_f32; q_len];
+    let mut guard_q = vec![0.0_f32; q_len];
+    for h in 0..num_heads {
+        let base = h * head_rot;
+        fact_q[base] = 0.80;
+        fact_q[base + half] = 0.60;
+        persona_q[base] = 0.90;
+        persona_q[base + half] = 0.44;
+        guard_q[base] = 0.60;
+        guard_q[base + half] = -0.80;
+    }
+    let entries = vec![
+        ContrastiveAnchorEntry {
+            role: AttractorRole::Fact,
+            captured: CapturedTokenSequence::new(1, vec![fact_q; num_layers])
+                .with_final_hidden(vec![1.0, 2.0, 0.0, 0.0]),
+        },
+        ContrastiveAnchorEntry {
+            role: AttractorRole::Persona,
+            captured: CapturedTokenSequence::new(1, vec![persona_q; num_layers])
+                .with_final_hidden(vec![1.0, 0.0, 2.0, 0.0]),
+        },
+        ContrastiveAnchorEntry {
+            role: AttractorRole::Guard,
+            captured: CapturedTokenSequence::new(1, vec![guard_q; num_layers])
+                .with_final_hidden(vec![-1.0, -1.0, 0.0, 0.0]),
+        },
+    ];
+    let bank = ContrastiveAnchorBank::from_entries(&adapter, &entries).expect("contrastive bank");
+    assert_eq!(bank.fact_anchors_per_layer.len(), num_layers);
+    assert_eq!(bank.persona_anchors_per_layer.len(), num_layers);
+    assert_eq!(bank.guard_anchors_per_layer.len(), num_layers);
+    assert_eq!(bank.fact_anchors_per_layer[0][0].anchor_id, 1);
+    assert_eq!(bank.persona_anchors_per_layer[0][0].anchor_id, 101);
+    // Attractive Fact delta (`neg -> fact`) and repulsive Guard delta (`pos -> guard`) must oppose in sign.
+    let fact_h0 = bank.fact_anchors_per_layer[0][0].payload[0];
+    let guard_h0 = bank.guard_anchors_per_layer[0][0].phase_deltas[0];
+    assert!(
+        i32::from(fact_h0) * i32::from(guard_h0) < 0,
+        "expected opposite geometric polarity between fact ({fact_h0}) and guard ({guard_h0})"
+    );
+    let u_norm = bank.rank1_u.iter().map(|&x| x * x).sum::<f32>().sqrt();
+    assert!(
+        (u_norm - 1.0).abs() < 1e-5,
+        "rank1_u must be unit normalized"
+    );
+    assert_eq!(bank.rank1_u, bank.rank1_v);
+
+    // Without `final_hidden`, rank1 vectors stay cleanly empty.
+    let no_hidden_entries = vec![ContrastiveAnchorEntry {
+        role: AttractorRole::Fact,
+        captured: CapturedTokenSequence::new(1, vec![vec![1.0_f32; q_len]; num_layers]),
+    }];
+    let bank_no_h =
+        ContrastiveAnchorBank::from_entries(&adapter, &no_hidden_entries).expect("no-hidden bank");
+    assert!(bank_no_h.rank1_u.is_empty());
+    assert!(bank_no_h.rank1_v.is_empty());
+}

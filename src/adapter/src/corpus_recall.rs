@@ -145,7 +145,307 @@ pub struct DynamicAttractorRecall<'a> {
     pub is_known_unknown_exterior: bool,
 }
 
+/// Lightweight zero-copy view over a recalled attractor anchor shared by borrowed
+/// ([`DynamicAttractorRecall`]) and owned ([`OwnedAttractorRecall`]) recall paths.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RecalledAnchorRef<'a> {
+    pub(crate) anchor_id: u32,
+    pub(crate) text: &'a str,
+    pub(crate) per_layer_q7: &'a [[lmnk_q7_t; MAX_ATTENTION_HEADS]],
+    pub(crate) energy: f32,
+    pub(crate) score: f32,
+}
+
+/// Crate-internal projection unifying borrowed [`DynamicAttractorRecall`] and owned
+/// [`OwnedAttractorRecall`] so core-layer sync, snapshot capture, and anchor materialization
+/// share a single implementation without cloning or dual APIs.
+pub(crate) trait AttractorRecallProjection {
+    fn lacuna_state(&self) -> LacunaBoundaryState;
+    fn top1_fact_score(&self) -> f32;
+    fn top2_fact_score(&self) -> f32;
+    fn top1_persona_score(&self) -> f32;
+    fn guard_conflict_margin(&self) -> f32;
+    fn action_decision(&self) -> StigmergicActionDecision;
+    fn gateway_frame(&self) -> &GatewayFrame;
+    fn telemetry(&self) -> &StratumProbeTelemetry;
+    fn lacuna_partition(&self) -> LacunaPartition8;
+    fn is_known_unknown_exterior(&self) -> bool;
+    fn recalled_fact_len(&self) -> usize;
+    fn recalled_fact_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>>;
+    fn recalled_persona_len(&self) -> usize;
+    fn recalled_persona_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>>;
+    fn exterior_sandbox_len(&self) -> usize;
+    fn exterior_sandbox_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>>;
+    fn top_guard_ref(&self) -> Option<RecalledAnchorRef<'_>>;
+}
+
+pub(crate) fn build_fact_anchors_per_layer_from_projection<
+    R: AttractorRecallProjection + ?Sized,
+>(
+    recall: &R,
+    num_layers: usize,
+) -> Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
+    let n_facts = recall.recalled_fact_len();
+    (0..num_layers)
+        .map(|l| {
+            (0..n_facts)
+                .filter_map(|i| recall.recalled_fact_at(i))
+                .filter_map(|anchor| {
+                    anchor.per_layer_q7.get(l).map(|&arr| {
+                        let scaled_e = (anchor.energy * anchor.score.clamp(0.25, 1.25)).max(0.25);
+                        ObjectiveFact::new(arr, scaled_e, 0, anchor.anchor_id)
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn build_exterior_sandbox_anchors_per_layer_from_projection<
+    R: AttractorRecallProjection + ?Sized,
+>(
+    recall: &R,
+    num_layers: usize,
+) -> Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
+    if !recall.is_known_unknown_exterior() || recall.exterior_sandbox_len() == 0 {
+        return vec![Vec::new(); num_layers];
+    }
+    let n_ext = recall.exterior_sandbox_len();
+    (0..num_layers)
+        .map(|l| {
+            (0..n_ext)
+                .filter_map(|i| recall.exterior_sandbox_at(i))
+                .filter_map(|anchor| {
+                    anchor.per_layer_q7.get(l).map(|&arr| {
+                        let scaled_e =
+                            (anchor.energy * anchor.score.clamp(0.25, 0.90) * 0.5).max(0.20);
+                        ObjectiveFact::new(arr, scaled_e, 0, anchor.anchor_id)
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn build_persona_anchors_per_layer_from_projection<
+    R: AttractorRecallProjection + ?Sized,
+>(
+    recall: &R,
+    num_layers: usize,
+) -> Vec<Vec<SubjectivePersona<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
+    let n_personas = recall.recalled_persona_len();
+    (0..num_layers)
+        .map(|l| {
+            (0..n_personas)
+                .filter_map(|i| recall.recalled_persona_at(i))
+                .filter_map(|anchor| {
+                    anchor.per_layer_q7.get(l).map(|&arr| {
+                        let scaled_e = (anchor.energy * anchor.score.clamp(0.25, 1.25)).max(0.25);
+                        SubjectivePersona::new(arr, scaled_e, 0, anchor.anchor_id)
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn join_fact_context_from_projection<R: AttractorRecallProjection + ?Sized>(
+    recall: &R,
+) -> String {
+    (0..recall.recalled_fact_len())
+        .filter_map(|i| recall.recalled_fact_at(i).map(|a| a.text))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn join_persona_context_from_projection<R: AttractorRecallProjection + ?Sized>(
+    recall: &R,
+) -> String {
+    (0..recall.recalled_persona_len())
+        .filter_map(|i| recall.recalled_persona_at(i).map(|a| a.text))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn join_exterior_context_from_projection<R: AttractorRecallProjection + ?Sized>(
+    recall: &R,
+) -> String {
+    (0..recall.exterior_sandbox_len())
+        .filter_map(|i| recall.exterior_sandbox_at(i).map(|a| a.text))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(crate) fn context_fingerprint_from_projection<R: AttractorRecallProjection + ?Sized>(
+    recall: &R,
+) -> u64 {
+    if matches!(recall.lacuna_state(), LacunaBoundaryState::LiminalExterior)
+        && !recall.is_known_unknown_exterior()
+    {
+        return 0;
+    }
+    let main_ctx = (0..recall.recalled_fact_len())
+        .filter_map(|i| recall.recalled_fact_at(i).map(|a| a.text))
+        .chain(
+            (0..recall.recalled_persona_len())
+                .filter_map(|i| recall.recalled_persona_at(i).map(|a| a.text)),
+        )
+        .collect::<Vec<_>>()
+        .join(" ");
+    let ctx = if main_ctx.is_empty() && recall.is_known_unknown_exterior() {
+        join_exterior_context_from_projection(recall)
+    } else {
+        main_ctx
+    };
+    if ctx.is_empty() {
+        return 0;
+    }
+    ctx.as_bytes()
+        .iter()
+        .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
+            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
+        })
+}
+
+impl AttractorRecallProjection for DynamicAttractorRecall<'_> {
+    #[inline]
+    fn lacuna_state(&self) -> LacunaBoundaryState {
+        self.lacuna_state
+    }
+    #[inline]
+    fn top1_fact_score(&self) -> f32 {
+        self.top1_fact_score
+    }
+    #[inline]
+    fn top2_fact_score(&self) -> f32 {
+        self.top2_fact_score
+    }
+    #[inline]
+    fn top1_persona_score(&self) -> f32 {
+        self.top1_persona_score
+    }
+    #[inline]
+    fn guard_conflict_margin(&self) -> f32 {
+        self.guard_conflict_margin
+    }
+    #[inline]
+    fn action_decision(&self) -> StigmergicActionDecision {
+        self.action_decision
+    }
+    #[inline]
+    fn gateway_frame(&self) -> &GatewayFrame {
+        &self.gateway_frame
+    }
+    #[inline]
+    fn telemetry(&self) -> &StratumProbeTelemetry {
+        &self.telemetry
+    }
+    #[inline]
+    fn lacuna_partition(&self) -> LacunaPartition8 {
+        self.lacuna_partition
+    }
+    #[inline]
+    fn is_known_unknown_exterior(&self) -> bool {
+        self.is_known_unknown_exterior
+    }
+    #[inline]
+    fn recalled_fact_len(&self) -> usize {
+        self.recalled_facts.len()
+    }
+    #[inline]
+    fn recalled_fact_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>> {
+        self.recalled_facts
+            .get(idx)
+            .map(|&(e, score)| RecalledAnchorRef {
+                anchor_id: e.anchor_id,
+                text: e.text.as_str(),
+                per_layer_q7: &e.per_layer_q7,
+                energy: e.energy,
+                score,
+            })
+    }
+    #[inline]
+    fn recalled_persona_len(&self) -> usize {
+        self.recalled_personas.len()
+    }
+    #[inline]
+    fn recalled_persona_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>> {
+        self.recalled_personas
+            .get(idx)
+            .map(|&(e, score)| RecalledAnchorRef {
+                anchor_id: e.anchor_id,
+                text: e.text.as_str(),
+                per_layer_q7: &e.per_layer_q7,
+                energy: e.energy,
+                score,
+            })
+    }
+    #[inline]
+    fn exterior_sandbox_len(&self) -> usize {
+        self.exterior_sandbox_facts.len()
+    }
+    #[inline]
+    fn exterior_sandbox_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>> {
+        self.exterior_sandbox_facts
+            .get(idx)
+            .map(|&(e, score)| RecalledAnchorRef {
+                anchor_id: e.anchor_id,
+                text: e.text.as_str(),
+                per_layer_q7: &e.per_layer_q7,
+                energy: e.energy,
+                score,
+            })
+    }
+    #[inline]
+    fn top_guard_ref(&self) -> Option<RecalledAnchorRef<'_>> {
+        self.top_guard.map(|(e, score)| RecalledAnchorRef {
+            anchor_id: e.anchor_id,
+            text: e.text.as_str(),
+            per_layer_q7: &e.per_layer_q7,
+            energy: e.energy,
+            score,
+        })
+    }
+}
+
 impl<'a> DynamicAttractorRecall<'a> {
+    /// Converts this borrowed recall outcome into a lifetime-free [`OwnedAttractorRecall`]
+    /// without copying un-recalled corpus entries or full-resolution residual signatures.
+    #[must_use]
+    pub fn to_owned_recall(&self) -> OwnedAttractorRecall {
+        OwnedAttractorRecall {
+            lacuna_state: self.lacuna_state,
+            top1_fact_score: self.top1_fact_score,
+            top2_fact_score: self.top2_fact_score,
+            top1_persona_score: self.top1_persona_score,
+            min_local_lacuna_depth: self.min_local_lacuna_depth,
+            guard_conflict_margin: self.guard_conflict_margin,
+            action_decision: self.action_decision,
+            gateway_frame: self.gateway_frame,
+            telemetry: self.telemetry,
+            recalled_facts: self
+                .recalled_facts
+                .iter()
+                .map(|&(e, s)| RecalledAnchorRecord::from_entry(e, s))
+                .collect(),
+            recalled_personas: self
+                .recalled_personas
+                .iter()
+                .map(|&(e, s)| RecalledAnchorRecord::from_entry(e, s))
+                .collect(),
+            top_guard: self
+                .top_guard
+                .map(|(e, s)| RecalledAnchorRecord::from_entry(e, s)),
+            lacuna_partition: self.lacuna_partition,
+            exterior_sandbox_facts: self
+                .exterior_sandbox_facts
+                .iter()
+                .map(|&(e, s)| RecalledAnchorRecord::from_entry(e, s))
+                .collect(),
+            is_known_unknown_exterior: self.is_known_unknown_exterior,
+        }
+    }
+
     /// Materializes per-layer `ObjectiveFact<[i8; 64]>` anchors for
     /// [`ResonantSignalSlice`](liminika_core::runtime::ResonantSignalSlice).
     #[must_use]
@@ -153,19 +453,7 @@ impl<'a> DynamicAttractorRecall<'a> {
         &self,
         num_layers: usize,
     ) -> Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
-        (0..num_layers)
-            .map(|l| {
-                self.recalled_facts
-                    .iter()
-                    .filter_map(|(entry, score)| {
-                        entry.per_layer_q7.get(l).map(|&arr| {
-                            let scaled_e = (entry.energy * score.clamp(0.25, 1.25)).max(0.25);
-                            ObjectiveFact::new(arr, scaled_e, 0, entry.anchor_id)
-                        })
-                    })
-                    .collect()
-            })
-            .collect()
+        build_fact_anchors_per_layer_from_projection(self, num_layers)
     }
 
     /// Materializes per-layer `SubjectivePersona<[i8; 64]>` anchors for
@@ -175,19 +463,7 @@ impl<'a> DynamicAttractorRecall<'a> {
         &self,
         num_layers: usize,
     ) -> Vec<Vec<SubjectivePersona<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
-        (0..num_layers)
-            .map(|l| {
-                self.recalled_personas
-                    .iter()
-                    .filter_map(|(entry, score)| {
-                        entry.per_layer_q7.get(l).map(|&arr| {
-                            let scaled_e = (entry.energy * score.clamp(0.25, 1.25)).max(0.25);
-                            SubjectivePersona::new(arr, scaled_e, 0, entry.anchor_id)
-                        })
-                    })
-                    .collect()
-            })
-            .collect()
+        build_persona_anchors_per_layer_from_projection(self, num_layers)
     }
 
     /// Concatenates all recalled Fact and Persona attractor texts in recall order.
@@ -204,48 +480,20 @@ impl<'a> DynamicAttractorRecall<'a> {
     /// Concatenates only recalled Fact attractor texts (delegating $S \cap O$ persona rules to steering).
     #[must_use]
     pub fn recalled_facts_only_context_text(&self) -> String {
-        self.recalled_facts
-            .iter()
-            .map(|(e, _)| e.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
+        join_fact_context_from_projection(self)
     }
 
     /// Concatenates non-copy Known Unknown ($O \setminus S$) exterior pointer texts staged via sandbox.
     #[must_use]
     pub fn exterior_pointer_context_text(&self) -> String {
-        self.exterior_sandbox_facts
-            .iter()
-            .map(|(e, _)| e.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
+        join_exterior_context_from_projection(self)
     }
 
     /// Computes a deterministic 64-bit FNV-1a context fingerprint across recalled attractors,
     /// returning `0` when the query lies in ungrounded `Liminal` or recalled text is empty.
     #[must_use]
     pub fn context_fingerprint_u64(&self) -> u64 {
-        if matches!(self.lacuna_state, LacunaBoundaryState::LiminalExterior)
-            && !self.is_known_unknown_exterior
-        {
-            return 0;
-        }
-        let ctx = {
-            let main_ctx = self.recalled_context_text();
-            if main_ctx.is_empty() && self.is_known_unknown_exterior {
-                self.exterior_pointer_context_text()
-            } else {
-                main_ctx
-            }
-        };
-        if ctx.is_empty() {
-            return 0;
-        }
-        ctx.as_bytes()
-            .iter()
-            .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
-                (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
-            })
+        context_fingerprint_from_projection(self)
     }
 }
 

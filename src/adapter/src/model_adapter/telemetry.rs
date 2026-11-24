@@ -244,7 +244,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Initializes per-turn mechanical spine policy on [`RuntimeContext`].
-    pub fn begin_turn_spine_policy(&mut self, guard_turn: bool, unobserved_locked: bool) {
+    pub(crate) fn begin_turn_spine_policy(&mut self, guard_turn: bool, unobserved_locked: bool) {
         self.ctx
             .begin_turn_spine_policy(guard_turn, unobserved_locked);
     }
@@ -679,12 +679,12 @@ impl ModelSteeringAdapter {
 
     /// Writes `circuit` into the embedded [`liminika_core::abi::lmnk_ledger_slot_t`] so every subsequent
     /// [`StigmergicSubstrate`] and the rank-1 residual step modulates [`GatewayFrame`] dynamically from this circuit.
-    pub fn set_active_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
+    pub(crate) fn set_active_circuit(&mut self, circuit: CognitiveTrajectoryLedger) {
         circuit.write_to_ledger_slot(self.ctx.ledger_slot_mut());
     }
 
     /// Clears the active [`CognitiveTrajectoryLedger`] flag and trajectory register from the adapter.
-    pub fn clear_active_circuit(&mut self) {
+    pub(crate) fn clear_active_circuit(&mut self) {
         let slot = self.ctx.ledger_slot_mut();
         slot.telemetry_mini_ledger = [0u8; 8];
         slot.auto_tune_flags &= !LEDGER_FLAG_COGNITIVE_TRAJECTORY;
@@ -731,11 +731,6 @@ impl ModelSteeringAdapter {
         &self.ctx.core_layers().liminal
     }
 
-    /// Returns a mutable reference to the live Core Layer 0 [`LiminalThresholdState`].
-    pub fn threshold_state_mut(&mut self) -> &mut LiminalThresholdState {
-        &mut self.ctx.core_layers_mut().liminal
-    }
-
     /// Returns a shared reference to the live Core Layer 1 [`StigmergicGranuleState`].
     #[must_use]
     pub fn stigmergic_granule_state(&self) -> &StigmergicGranuleState {
@@ -746,11 +741,6 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub fn core_layer_stack(&self) -> &CoreStateStack {
         self.ctx.core_layers()
-    }
-
-    /// Returns a mutable reference to the unified 3-layer [`CoreStateStack`].
-    pub fn core_layer_stack_mut(&mut self) -> &mut CoreStateStack {
-        self.ctx.core_layers_mut()
     }
 
     /// Returns the most recently observed [`EpistemicHorizonReading`].
@@ -769,11 +759,6 @@ impl ModelSteeringAdapter {
     #[must_use]
     pub fn ego_state(&self) -> &LiminalEgoState {
         &self.ctx.core_layers().ego
-    }
-
-    /// Returns a mutable reference to the live 64-byte Core Layer 2 [`LiminalEgoState`].
-    pub fn ego_state_mut(&mut self) -> &mut LiminalEgoState {
-        &mut self.ctx.core_layers_mut().ego
     }
 
     /// Replaces the adapter's active Core Layer 2 [`LiminalEgoState`].
