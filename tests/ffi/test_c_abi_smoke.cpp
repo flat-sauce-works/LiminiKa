@@ -190,14 +190,14 @@ void test_context_boxed_and_in_place_lifecycle() {
     LMNK_TEST_CHECK(restored_trail.step_count == 2U);
     LMNK_TEST_CHECK(restored_trail.prev_ptr == 42U);
 
-    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
-                        restored, 0x0000FFFFULL, 0x00000004ULL, 0x0000FFFCULL, 8000U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(restored, 0x0000FFFFULL, 0x00000004ULL,
+                                                        0x0000FFFCULL, 8000U) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_configure_spine(restored, 0x0081ULL, 3U, 4U, 1U) == LMNK_OK);
     // Passing 0 for baseline_pinned_compute_mask preserves existing host floor monotonically.
     LMNK_TEST_CHECK(lmnk_context_configure_spine(restored, 0ULL, 3U, 4U, 1U) == LMNK_OK);
     // Passing 0 for baseline_pressure_q15 preserves the re-anchored baseline pressure.
-    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
-                        restored, 0x0000FFFFULL, 0x00000004ULL, 0x0000FFFCULL, 0U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(restored, 0x0000FFFFULL, 0x00000004ULL,
+                                                        0x0000FFFCULL, 0U) == LMNK_OK);
     alignas(64) lmnk_spine_state_t spine_snap{};
     LMNK_TEST_CHECK(lmnk_context_get_spine_state(restored, &spine_snap) == LMNK_OK);
     LMNK_TEST_CHECK((spine_snap.baseline_pinned_compute_mask & 0x0081ULL) == 0x0081ULL);
@@ -236,12 +236,12 @@ void test_context_boxed_and_in_place_lifecycle() {
     lmnk_context_handle_t ctx_b = nullptr;
     LMNK_TEST_CHECK(lmnk_context_create(&cfg, &ctx_a) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_create(&cfg, &ctx_b) == LMNK_OK);
-    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
-                        ctx_a, 0x0000FFFFULL, 0x00000083ULL, 0xFFFFFFFFULL, 8000U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(ctx_a, 0x0000FFFFULL, 0x00000083ULL,
+                                                        0xFFFFFFFFULL, 8000U) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_configure_spine(ctx_a, 0x0081ULL, 3U, 4U, 1U) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_configure_spine(ctx_b, 0x0081ULL, 3U, 4U, 1U) == LMNK_OK);
-    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(
-                        ctx_b, 0x0000FFFFULL, 0x00000083ULL, 0xFFFFFFFFULL, 8000U) == LMNK_OK);
+    LMNK_TEST_CHECK(lmnk_context_configure_compute_pool(ctx_b, 0x0000FFFFULL, 0x00000083ULL,
+                                                        0xFFFFFFFFULL, 8000U) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_begin_turn_spine_policy(ctx_a, 0U, 0U) == LMNK_OK);
     LMNK_TEST_CHECK(lmnk_context_begin_turn_spine_policy(ctx_b, 0U, 0U) == LMNK_OK);
     alignas(64) lmnk_spine_state_t state_a{};
