@@ -672,6 +672,7 @@ impl EgoDifferentialNet {
     /// Cold-Path GOP maintenance: consolidates reinforced multi-hop P-Frame chains into an I-Frame
     /// [`PhaseAnchorRecord`] and evaporates stale unreinforced P-Frame nodes below `evaporation_floor_q7`.
     #[inline]
+    #[must_use]
     pub fn consolidate_and_evaporate_cold_path(
         &mut self,
         current_epoch: u32,

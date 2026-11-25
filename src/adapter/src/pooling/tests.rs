@@ -821,3 +821,124 @@ fn adaptive_token_calibrator_scales_deterministically_above_exact_limit() {
         assert!(hb.is_finite() && !hb.is_nan());
     }
 }
+
+#[test]
+fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mode() {
+    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let geom = adapter.geometry();
+    let dim = geom.q_rot_len();
+    let num_layers = geom.num_layers;
+
+    // Build 4 orthogonal domain Fact entries on dimensions 10..42, plus a shared common-mode
+    // carrier on dimension 0 that represents a generic base-model attractor.
+    let make_seq = |dims: &[(usize, f32)]| -> Vec<Vec<f32>> {
+        let mut per_layer = vec![vec![0.0_f32; 2 * dim]; num_layers];
+        for layer_buf in &mut per_layer {
+            for t in 0..2 {
+                for &(d, val) in dims {
+                    layer_buf[t * dim + ((d + t) % dim)] += val;
+                }
+            }
+        }
+        per_layer
+    };
+
+    let entries = vec![
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Domain fact alpha".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[(0, 0.30), (10, 1.0)]),
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Domain fact beta".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[(0, 0.30), (20, 1.0)]),
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Domain fact gamma".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[(0, 0.30), (30, 1.0)]),
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Domain fact delta".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[(0, 0.30), (40, 1.0)]),
+        },
+    ];
+
+    // 8 neutral base-prior calibration samples aligned strongly with common-mode dim 0 plus
+    // distinct neutral directions (60 + 4*i), completely disjoint from domain facts 10..40.
+    let neutral_entries: Vec<TokenSequenceEntry> = (0..8)
+        .map(|i| TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: format!("Neutral prior probe {i}"),
+            energy: 1.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[(0, 0.90), (60 + 4 * i, 0.45)]),
+        })
+        .collect();
+    let base_prior = ModelBaseAttractorProfile::extract(
+        &adapter,
+        &neutral_entries,
+        SequenceActivationPooler::default(),
+        0.92,
+    )
+    .expect("fit prior");
+    assert_eq!(base_prior.calibration_samples.len(), 8);
+
+    let compiled_no_prior = CompiledTokenCorpus::compile(
+        &adapter,
+        &entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+    )
+    .expect("compile no prior");
+    let compiled_with_prior = CompiledTokenCorpus::compile_with_base_prior(
+        &adapter,
+        &entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+        Some(&base_prior),
+    )
+    .expect("compile with prior");
+
+    let env = compiled_with_prior
+        .null_calibration
+        .expect("null calibration envelope must be populated");
+    assert_eq!(
+        env.sample_count, 8,
+        "2-fold cross-fitting must evaluate all 8 held-out base-prior samples"
+    );
+    assert!(
+        compiled_with_prior.recall_policy.min_coherence
+            >= compiled_no_prior.recall_policy.min_coherence - 1e-6,
+        "null calibration must not lower min_coherence below corpus floor"
+    );
+
+    // Pure common-mode OOD query (almost all energy on dim 0) must yield low `query_ortho_ratio`
+    // and be suppressed into `LiminalExterior`.
+    let common_mode_query = make_seq(&[(0, 1.0), (10, 0.05)]);
+    let recall = compiled_with_prior
+        .recall_token_sequence(&adapter, &common_mode_query, 2)
+        .expect("common mode recall");
+    assert!(
+        recall.telemetry.query_ortho_ratio < 0.35,
+        "common-mode OOD query must have low residual ortho ratio, got {}",
+        recall.telemetry.query_ortho_ratio
+    );
+    assert_eq!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior);
+    assert!(
+        recall.recalled_facts.is_empty(),
+        "common-mode OOD query must not recall domain facts"
+    );
+}

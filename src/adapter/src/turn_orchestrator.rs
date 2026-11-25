@@ -10,10 +10,10 @@
 
 use crate::corpus_recall::{
     build_exterior_sandbox_anchors_per_layer_from_projection,
-    build_fact_anchors_per_layer_from_projection, build_persona_anchors_per_layer_from_projection,
-    context_fingerprint_from_projection, join_exterior_context_from_projection,
-    join_fact_context_from_projection, join_persona_context_from_projection,
-    AttractorRecallProjection, RecalledAnchorRef,
+    build_fact_anchors_per_layer_from_projection, build_guard_anchors_per_layer_from_projection,
+    build_persona_anchors_per_layer_from_projection, context_fingerprint_from_projection,
+    join_exterior_context_from_projection, join_fact_context_from_projection,
+    join_persona_context_from_projection, AttractorRecallProjection, RecalledAnchorRef,
 };
 use crate::{
     AttractorRole, CompiledTokenCorpus, DynamicAttractorRecall, LacunaBoundaryState,
@@ -23,8 +23,8 @@ use crate::{
 use liminika_core::abi::lmnk_q7_t;
 use liminika_core::liminal::{LacunaPartition8, LmnkResult, MAX_ATTENTION_HEADS};
 use liminika_core::runtime::{
-    CognitiveCircuitThresholdPolicy, EpistemicHorizonReading, GatewayFrame, ObjectiveFact,
-    RamPhaseKvGopCache, RamPhaseKvStepOutcome, SubjectivePersona,
+    CognitiveCircuitThresholdPolicy, EpistemicHorizonReading, GatewayFrame, GuardPhaseAnchor,
+    ObjectiveFact, RamPhaseKvGopCache, RamPhaseKvStepOutcome, SubjectivePersona,
 };
 use liminika_core::stigmergy::{
     CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveTrajectoryLedger,
@@ -283,6 +283,7 @@ pub struct TurnSteeringPlan {
     self_ref_anchors_per_layer: Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>>,
     exterior_sandbox_anchors_per_layer: Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>>,
     persona_anchors_per_layer: Vec<Vec<SubjectivePersona<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>>,
+    guard_anchors_per_layer: Vec<Vec<GuardPhaseAnchor>>,
 }
 
 impl TurnSteeringPlan {
@@ -487,6 +488,14 @@ impl TurnSteeringPlan {
         &self.persona_anchors_per_layer
     }
 
+    /// Returns per-layer [`GuardPhaseAnchor`] poles carrying dynamic turn obstruction on Guard
+    /// traps or positive `guard_conflict_margin` turns (empty slices on non-Guard turns).
+    #[inline]
+    #[must_use]
+    pub fn guard_anchors_per_layer(&self) -> &[Vec<GuardPhaseAnchor>] {
+        &self.guard_anchors_per_layer
+    }
+
     /// Returns `true` if at least one $S \cap O$ (`SelfRef`) anchor is present.
     #[inline]
     #[must_use]
@@ -594,6 +603,7 @@ impl TurnOrchestrator {
     ///
     /// # Errors
     /// Returns an error if `source.recall_query` or `kv_cache.step_turn_kv` fails.
+    #[must_use = "turn steering plan carries recalled anchors, guard repulsion poles, and telemetry"]
     pub fn prepare_turn<S, K, P, B>(
         source: &S,
         adapter: &mut ModelSteeringAdapter,
@@ -664,6 +674,8 @@ impl TurnOrchestrator {
                 recall.action_decision,
                 StigmergicActionDecision::RepulsionEscape
             );
+        let guard_anchors_per_layer =
+            build_guard_anchors_per_layer_from_projection(&recall, num_layers, is_guard_trap);
 
         Ok(TurnSteeringPlan {
             query_snapshot,
@@ -684,6 +696,7 @@ impl TurnOrchestrator {
             self_ref_anchors_per_layer,
             exterior_sandbox_anchors_per_layer,
             persona_anchors_per_layer,
+            guard_anchors_per_layer,
         })
     }
 

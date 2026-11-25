@@ -67,7 +67,8 @@ pub(crate) fn print_help() {
     println!("  --bench-trials=<N>                 Run N independent benchmark trials after warmup and report median/spread (default: 1)");
     println!("  --step2-only                       Skip Step 1 sweeps and run Step 2 (+ Step 3) directly");
     println!("  --recall-only                      Run recall/timeline evaluation without LLM weight inference");
-    println!("  --base-prior                       Sample neutral base-model prior before corpus compilation");
+    println!("  --base-prior                       Enable 1-pass neutral base-model prior calibration (default: on)");
+    println!("  --no-base-prior                    Disable startup base-model prior calibration (A/B opt-out)");
     println!("  --no-reflect                       Disable reflection critique retries");
     println!("  --reflect-mode=<off|conditional|always>");
     println!("  --no-pre-bypass                    Disable whole-token pre-inference bypass");
@@ -128,6 +129,7 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "-h",
         "--recall-only",
         "--base-prior",
+        "--no-base-prior",
         "--no-reflect",
         "--no-pre-bypass",
         "--ablate-dual-axis",
@@ -173,7 +175,14 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
 impl EvalCliConfig {
     pub(crate) fn parse_from_args(cli_args: &[String]) -> Self {
         let recall_only = cli_args.iter().any(|a| a == "--recall-only");
-        let use_base_prior = cli_args.iter().any(|a| a == "--base-prior");
+        let mut use_base_prior = true;
+        for arg in cli_args {
+            if arg == "--no-base-prior" {
+                use_base_prior = false;
+            } else if arg == "--base-prior" {
+                use_base_prior = true;
+            }
+        }
         let no_reflect = cli_args.iter().any(|a| a == "--no-reflect");
         let reflect_mode = parse_reflect_mode(cli_args.iter().map(String::as_str));
         let enable_pre_bypass = !cli_args.iter().any(|a| a == "--no-pre-bypass");
@@ -900,12 +909,26 @@ mod tests {
         assert_eq!(EvalCliConfig::parse_from_args(&args_3).bench_trials, 3);
         let defaults = EvalCliConfig::parse_from_args(&["candle_eval".to_string()]);
         assert_eq!(defaults.bench_trials, 1);
+        assert!(defaults.use_base_prior);
         assert_eq!(defaults.probe_frame, ProbeCoordinateFrame::PreRope);
         assert_eq!(defaults.layer_steer_mask_override, None);
         assert_eq!(defaults.phase_clamp_rad, None);
         assert!(!defaults.random_push_control);
         assert_eq!(defaults.max_tokens, 64);
         assert!(!defaults.physics_eval);
+
+        assert!(find_unrecognized_args(["--no-base-prior", "--base-prior"]).is_empty());
+        let no_prior = EvalCliConfig::parse_from_args(&[
+            "candle_eval".to_string(),
+            "--no-base-prior".to_string(),
+        ]);
+        assert!(!no_prior.use_base_prior);
+        let re_enabled = EvalCliConfig::parse_from_args(&[
+            "candle_eval".to_string(),
+            "--no-base-prior".to_string(),
+            "--base-prior".to_string(),
+        ]);
+        assert!(re_enabled.use_base_prior);
 
         let bad = find_unrecognized_args([
             "--step2-only",

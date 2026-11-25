@@ -847,14 +847,30 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
         top_k_facts: 2,
         top_k_personas: 1,
     };
-    // Sharp unimodal winner just below strict min_coherence enters LiminalBoundary.
-    let liminal = gate.evaluate(
+    // Sub-threshold winner (`0.17 < min_coherence 0.19`) must NOT bypass `min_coherence`
+    // (the legacy 0.85x inversion is abolished; OOD noise below floor stays LiminalExterior).
+    let sub_floor = gate.evaluate(
         &RecallBoundaryMetrics {
             top1_fact_score: 0.17,
             top2_fact_score: 0.06,
             top1_persona_score: 0.05,
             max_guard_score: 0.02,
             guard_conflict_margin: -0.15,
+        },
+        &policy,
+    );
+    assert!(sub_floor.suppress_fact_injection);
+    assert_eq!(sub_floor.lacuna_state, LacunaBoundaryState::LiminalExterior);
+
+    // Above-threshold winner with narrow margin (`0.20 - 0.16 < boundary_margin 0.06`) enters
+    // `LiminalBoundary` while allowing fact injection.
+    let liminal = gate.evaluate(
+        &RecallBoundaryMetrics {
+            top1_fact_score: 0.20,
+            top2_fact_score: 0.16,
+            top1_persona_score: 0.05,
+            max_guard_score: 0.02,
+            guard_conflict_margin: -0.18,
         },
         &policy,
     );
@@ -1578,6 +1594,8 @@ fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_
                 token_phase_words: [0; 8],
             },
         ],
+        unexplained_token_ratio: 0.0,
+        query_seq_len: 0,
     };
 
     let recall = corpus
@@ -1617,6 +1635,8 @@ fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_
             entry_excess: vec![0.01, -0.01, 0.01, -0.01],
             token_phase_words: [0; 8],
         }],
+        unexplained_token_ratio: 0.0,
+        query_seq_len: 0,
     };
     let ood_recall = corpus
         .recall_for_query_with_strata_observation(
@@ -1736,6 +1756,8 @@ fn residual_peeling_decomposer_chains_three_disjoint_specialists_beyond_top_k_tw
                 token_phase_words: [0; 8],
             },
         ],
+        unexplained_token_ratio: 0.0,
+        query_seq_len: 0,
     };
 
     let recall = corpus
@@ -1865,6 +1887,8 @@ fn split_premise_guard_coalition_triggers_repulsion_while_preserving_counter_fac
                 token_phase_words: [0; 8],
             },
         ],
+        unexplained_token_ratio: 0.0,
+        query_seq_len: 0,
     };
 
     let recall = corpus
@@ -3843,6 +3867,8 @@ fn text_attractor_corpus_lazy_flat_cache_invalidation_clone_and_mock_provider() 
         num_q_heads: adapter.geometry().num_q_heads,
         rotary_dim: adapter.geometry().rotary_dim,
         policy: &policy,
+        query_seq_len: 0,
+        query_ortho_ratio: 1.0,
     };
     let mut signal = StratumSignal {
         candidate_scores: vec![0.50; entries.len()],
@@ -4328,7 +4354,7 @@ fn input_distillation_boundary_encoders_alias_probe_and_contrastive_bank() {
     let q_len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
 
-    assert_eq!(DEFAULT_STARTUP_PRIOR_PROBES.len(), 6);
+    assert_eq!(DEFAULT_STARTUP_PRIOR_PROBES.len(), 12);
     assert_eq!(
         extract_leading_alias_word("Alpha, beta gamma"),
         Some("Alpha")
@@ -4511,5 +4537,530 @@ fn adapter_reanchor_compute_pressure_and_reset_turn_decode_state_preserve_guard_
     assert!(
         adapter.system_spine().turn_guard_active(),
         "reset_turn_decode_state must preserve active turn guard pin"
+    );
+}
+
+#[test]
+fn slow_loop_crystallized_anchors_are_captured_in_bounded_fifo_and_drainable() {
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    adapter.configure_ego_from_preset(LiminalEgoPreset::High);
+    adapter.set_ego_max_hops(3);
+    assert!(adapter.crystallized_anchors().is_empty());
+
+    // Push more than `MAX_CRYSTALLIZED_ANCHOR_BUFFER` epochs with a consolidation-eligible
+    // 3-hop P-Frame node so we verify both live Slow-Loop capture and bounded FIFO eviction.
+    let total_to_crystallize = ModelSteeringAdapter::MAX_CRYSTALLIZED_ANCHOR_BUFFER + 5;
+    for i in 0..total_to_crystallize {
+        let mut node =
+            liminika_core::drivers::DistortionDelta::new_empty((i + 1) as u32, (i + 100) as u32);
+        node.hop_depth = 3;
+        node.reinforce_count = 6;
+        node.gain_q7 = 96;
+        node.pheromone_q7 = 96;
+        node.delta_phase_q7 = [24_i8; 64];
+        node.flags = liminika_core::drivers::DISTORTION_DELTA_FLAG_ACTIVE
+            | liminika_core::drivers::DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
+        {
+            let net = adapter.runtime_context_mut().ego_differential_net_mut();
+            net.consolidation_hop_limit = 2;
+            net.set_node(0, node);
+        }
+        // Populate >= 4 telemetry samples so `apply_slow_loop_telemetry_epoch(4)` triggers.
+        let horizon = EpistemicHorizonReading::default();
+        let delta = LiminalBoundaryDelta::default();
+        let overlap = OverlapDiscoveryReport::default();
+        let ego = *adapter.ego_state();
+        for _ in 0..4 {
+            adapter
+                .runtime_context_mut()
+                .telemetry_bank_mut()
+                .record_step(
+                    StigmergicActionDecision::FullOrchestration,
+                    &horizon,
+                    &delta,
+                    &overlap,
+                    &ego,
+                    0,
+                    0,
+                    0,
+                    false,
+                    false,
+                );
+        }
+        let adj = adapter.apply_slow_loop_telemetry_epoch(4);
+        assert!(adj.applied, "epoch {i} should apply slow-loop maintenance");
+    }
+
+    let buffered = adapter.crystallized_anchors();
+    assert_eq!(
+        buffered.len(),
+        ModelSteeringAdapter::MAX_CRYSTALLIZED_ANCHOR_BUFFER
+    );
+    // Oldest 5 records (`anchor_ref_id` 100..105) were evicted in FIFO order.
+    assert_eq!(buffered[0].anchor_id, 105);
+    assert_eq!(
+        buffered[buffered.len() - 1].anchor_id,
+        (total_to_crystallize - 1 + 100) as u32
+    );
+    assert!(buffered[0].verify_integrity());
+
+    let drained = adapter.drain_crystallized_anchors();
+    assert_eq!(
+        drained.len(),
+        ModelSteeringAdapter::MAX_CRYSTALLIZED_ANCHOR_BUFFER
+    );
+    assert_eq!(drained[0].anchor_id, 105);
+    assert!(adapter.crystallized_anchors().is_empty());
+}
+
+#[test]
+fn pure_guard_trap_fires_repulsion_escape_with_single_antiphase_rotation_and_no_double_negation() {
+    use liminika_core::runtime::ResonantSignalSlice;
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let geom = adapter.geometry().clone();
+    let q_len = geom.q_rot_len();
+    let num_heads = geom.num_q_heads;
+    let rot_dim = geom.rotary_dim;
+    let half = rot_dim / 2;
+
+    // Construct an attractive reference vector at angle 0 and a Guard pole rotated by +0.30 rad
+    // in HalfSplit RoPE coordinates across every head.
+    let theta_guard = 0.30_f32;
+    let mut non_guard_ref = vec![0.0_f32; q_len];
+    let mut guard_vec = vec![0.0_f32; q_len];
+    for h in 0..num_heads {
+        let base = h * rot_dim;
+        for i in 0..half {
+            non_guard_ref[base + i] = 1.0;
+            non_guard_ref[base + half + i] = 0.0;
+            guard_vec[base + i] = theta_guard.cos();
+            guard_vec[base + half + i] = theta_guard.sin();
+        }
+    }
+
+    let guard_q7_vec = adapter
+        .bake_layer_procrustes_q7(&non_guard_ref, &guard_vec)
+        .expect("bake guard q7");
+    let mut guard_q7 = [0_i8; MAX_ATTENTION_HEADS];
+    guard_q7[..num_heads].copy_from_slice(&guard_q7_vec[..num_heads]);
+    assert!(
+        guard_q7[..num_heads].iter().all(|&v| v > 0),
+        "positive Guard pole `non_guard -> guard` must have positive Q7 deltas: {:?}",
+        &guard_q7[..num_heads]
+    );
+
+    // Pure Guard trap: empty Facts & Personas, single active GuardPhaseAnchor (`obstruction > 0.50`).
+    let empty_facts: [ObjectiveFact<[i8; 64]>; 0] = [];
+    let empty_personas: [SubjectivePersona<[i8; 64]>; 0] = [];
+    let active_guard = [GuardPhaseAnchor::new(guard_q7, 0.80, 0.50)];
+    let probe = adapter
+        .bake_layer_procrustes_q7(&guard_vec, &guard_vec)
+        .expect("probe");
+    let fact_res = ResonantSignalSlice::from_q7_probe(&empty_facts, &probe);
+    let persona_res = ResonantSignalSlice::from_q7_probe(&empty_personas, &probe);
+    let guard_res = ResonantSignalSlice::from_q7_probe(&active_guard, &probe);
+    let sys_res = *adapter.system_constraint();
+    let composite = (sys_res, fact_res, persona_res, guard_res);
+
+    // Verify core `apply_sys_and_guard_to_pair_frame` path (via `synthesize_gateway_with_core_layers`)
+    // emits non-zero anti-phase (`-R`) with positive energy and zero double-negation.
+    let mut stack = *adapter.core_layer_stack();
+    let delta = *adapter.runtime_context().last_boundary_delta();
+    let horizon = *adapter.last_horizon();
+    let overlap = *adapter.last_overlap_report();
+    let (core_frame, _) =
+        composite.synthesize_gateway_with_core_layers(&mut stack, &delta, &horizon, &overlap);
+    assert!(core_frame.is_repulsed());
+    assert!(
+        core_frame.effective_energy >= 0.55,
+        "pure Guard trap must carry non-zero energy, got {}",
+        core_frame.effective_energy
+    );
+    let dot_core: i64 = guard_q7[..num_heads]
+        .iter()
+        .zip(core_frame.phase_deltas[..num_heads].iter())
+        .map(|(&g, &f)| i64::from(g) * i64::from(f))
+        .sum();
+    assert!(
+        dot_core < 0,
+        "core Guard frame must negate +R exactly once to -R (dot={dot_core})"
+    );
+
+    // Verify live RoPE steering via `orchestrate_layer_rope_with_substrate` selects `RepulsionEscape`
+    // and rotates a query currently at `guard_vec` strictly AWAY from `guard_vec` toward `non_guard_ref`.
+    let mut q_rot = guard_vec.clone();
+    let cos_to_ref_before = TextAttractorCorpus::cosine_f32(&q_rot, &non_guard_ref);
+    let cos_to_guard_before = TextAttractorCorpus::cosine_f32(&q_rot, &guard_vec);
+    let mut trail = lmnk_pointer_trail_t::default();
+    let (frame, _rep, decision) = adapter
+        .orchestrate_layer_rope_with_substrate(
+            16, &composite, &mut trail, None, 128, &mut q_rot, None,
+        )
+        .expect("orchestrate pure guard")
+        .expect("layer 16 active");
+    assert_eq!(decision, StigmergicActionDecision::RepulsionEscape);
+    assert!(frame.is_repulsed());
+    let cos_to_ref_after = TextAttractorCorpus::cosine_f32(&q_rot, &non_guard_ref);
+    let cos_to_guard_after = TextAttractorCorpus::cosine_f32(&q_rot, &guard_vec);
+    assert!(
+        cos_to_guard_after < cos_to_guard_before - 1e-4,
+        "repulsion must rotate q_rot away from Guard: before={cos_to_guard_before} after={cos_to_guard_after}"
+    );
+    assert!(
+        cos_to_ref_after > cos_to_ref_before + 1e-4,
+        "repulsion must rotate q_rot toward safe non-Guard pole: before={cos_to_ref_before} after={cos_to_ref_after}"
+    );
+}
+
+#[test]
+fn guard_centroid_stays_uncontaminated_and_duplicate_repulsion_escalation_is_suppressed() {
+    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let geom = adapter.geometry().clone();
+    let num_layers = geom.num_layers;
+    let q_len = geom.q_rot_len();
+    let rot_dim = geom.rotary_dim;
+    let half = rot_dim / 2;
+
+    let make_angle_seq = |theta: f32| -> Vec<Vec<f32>> {
+        let mut v = vec![0.0_f32; q_len];
+        for h in 0..geom.num_q_heads {
+            let base = h * rot_dim;
+            for i in 0..half {
+                v[base + i] = theta.cos();
+                v[base + half + i] = theta.sin();
+            }
+        }
+        vec![v; num_layers]
+    };
+
+    let fact_entry = TokenSequenceEntry {
+        role: AttractorRole::Fact,
+        text: "Safe factual anchor".to_string(),
+        energy: 2.5,
+        seq_len: 1,
+        per_layer_token_qs: make_angle_seq(0.0),
+    };
+    let guard_entry = TokenSequenceEntry {
+        role: AttractorRole::Guard,
+        text: "Forbidden guard claim".to_string(),
+        energy: 2.0,
+        seq_len: 1,
+        per_layer_token_qs: make_angle_seq(0.40),
+    };
+
+    // Compile with 1 Guard vs 6 identical Guards; Guard Q7 phase angle must stay invariant because
+    // Guards bake against the non-Guard (`Fact + Persona`) centroid.
+    let c1 = CompiledTokenCorpus::compile(
+        &adapter,
+        &[fact_entry.clone(), guard_entry.clone()],
+        SequenceActivationPooler::default(),
+        2,
+        1,
+    )
+    .expect("compile 1 guard");
+    let mut many_entries = vec![fact_entry];
+    for _ in 0..6 {
+        many_entries.push(guard_entry.clone());
+    }
+    let c6 = CompiledTokenCorpus::compile(
+        &adapter,
+        &many_entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+    )
+    .expect("compile 6 guards");
+    let g1_q7 = c1
+        .corpus
+        .entries()
+        .iter()
+        .find(|e| e.role == AttractorRole::Guard)
+        .expect("g1")
+        .per_layer_q7[0];
+    let g6_q7 = c6
+        .corpus
+        .entries()
+        .iter()
+        .find(|e| e.role == AttractorRole::Guard)
+        .expect("g6")
+        .per_layer_q7[0];
+    assert_eq!(
+        g1_q7, g6_q7,
+        "Guard Procrustes angle must not shrink as Guard ratio increases"
+    );
+
+    // Verify TurnSteeringPlan exposes non-empty guard anchors ONLY on Guard turns and suppresses
+    // duplicate repulsion escalation when `sync_core_layers_from_recall` already loaded a repulsion lane.
+    use liminika_core::runtime::StandardPhaseKvGopCache;
+    use liminika_core::stigmergy::StandardCognitiveBank;
+    let mut kv_cache = StandardPhaseKvGopCache::new();
+    let kv_policy = AdaptiveThresholdPolicy::default();
+    let guard_query = make_angle_seq(0.40);
+    let guard_plan = TurnOrchestrator::prepare_turn(
+        &c1,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput::<AdaptiveThresholdPolicy, StandardCognitiveBank> {
+            query_token_qs: &guard_query,
+            query_seq_len: 1,
+            turn_index: 1,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: None,
+            layer_steer_mask_override: None,
+        },
+    )
+    .expect("guard prepare_turn");
+    assert!(
+        guard_plan.is_guard_trap() || guard_plan.guard_conflict_margin() > 0.0,
+        "guard query should trigger guard conflict"
+    );
+    assert!(
+        !guard_plan.guard_anchors_per_layer()[0].is_empty(),
+        "guard turn must populate dynamic GuardPhaseAnchor"
+    );
+    let ga = guard_plan.guard_anchors_per_layer()[0][0];
+    assert!(ga.cohomology_obstruction >= 0.55);
+    assert_eq!(ga.obstruction_threshold, 0.50);
+
+    // Since `sync_core_layers_from_recall` already enabled a repulsion lane, escalation provider
+    // must NOT be invoked for a duplicate repulsion lane during layer orchestration.
+    assert_ne!(
+        adapter.substrate().slot_repulsion_mask & adapter.substrate().slot_enabled_mask,
+        0
+    );
+    let mut esc_provider = CorpusRecallEscalationProvider::new(&c1.corpus);
+    let mut q_rot = guard_query[16].clone();
+    let mut trail = lmnk_pointer_trail_t::default();
+    let _ = adapter
+        .orchestrate_layer_rope_with_spillover(
+            16,
+            &ga,
+            &mut esc_provider,
+            &mut trail,
+            None,
+            128,
+            &mut q_rot,
+            None,
+        )
+        .expect("spillover guard");
+    assert_eq!(
+        esc_provider.escalation_calls, 0,
+        "duplicate repulsion escalation must be suppressed when repulsion lane is already active"
+    );
+
+    // On a safe Fact turn, `guard_anchors_per_layer()` must be completely empty (zero misfire).
+    let fact_query = make_angle_seq(0.0);
+    let fact_plan = TurnOrchestrator::prepare_turn(
+        &c1,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput::<AdaptiveThresholdPolicy, StandardCognitiveBank> {
+            query_token_qs: &fact_query,
+            query_seq_len: 1,
+            turn_index: 2,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: None,
+            layer_steer_mask_override: None,
+        },
+    )
+    .expect("fact prepare_turn");
+    assert!(!fact_plan.is_guard_trap());
+    assert!(
+        fact_plan
+            .guard_anchors_per_layer()
+            .iter()
+            .all(Vec::is_empty),
+        "non-Guard turn must leave guard_anchors_per_layer empty"
+    );
+}
+
+#[test]
+fn short_query_finite_sample_shrinkage_attenuates_loo_contrast_and_two_axis_isolates_exterior() {
+    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let len = adapter.geometry().q_rot_len();
+    let num_layers = adapter.geometry().num_layers;
+    let centroid = vec![0.0_f32; len];
+    let refs: Vec<&[f32]> = vec![centroid.as_slice(); num_layers];
+
+    let num_heads = adapter.geometry().num_q_heads;
+    let rot_dim = adapter.geometry().rotary_dim;
+    let mut f0 = vec![0.0_f32; len];
+    let mut f1 = vec![0.0_f32; len];
+    let mut f2 = vec![0.0_f32; len];
+    for h in 0..num_heads {
+        let base = h * rot_dim;
+        f0[base] = 1.0;
+        f1[base + 1] = 1.0;
+        f2[base + 2] = 1.0;
+    }
+
+    let mut corpus = TextAttractorCorpus::new();
+    let id0 = corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Known concept alpha",
+            &vec![f0.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("f0");
+    let id1 = corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Known concept beta",
+            &vec![f1.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("f1");
+    let _id2 = corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Known concept gamma",
+            &vec![f2.as_slice(); num_layers],
+            &refs,
+            1.5,
+        )
+        .expect("f2");
+
+    let mut query = vec![0.0_f32; len];
+    for h in 0..num_heads {
+        let base = h * rot_dim;
+        query[base] = 0.45;
+        query[base + 1] = 0.35;
+        query[base + 6] = 0.82;
+    }
+    let policy = RecallPolicy {
+        min_coherence: 0.25,
+        boundary_margin: 0.04,
+        guard_suppress_margin: 0.0,
+        top_k_facts: 2,
+        top_k_personas: 1,
+    };
+
+    // 1. Finite-sample shrinkage: short query (`S=2`) must yield strictly lower top-1 score
+    //    than an otherwise identical long query (`S=32`) with the same LOO local scores.
+    let short_obs = LocalChannelObservation {
+        combined_scores: vec![0.30, 0.02, -0.05],
+        q_to_d_scores: vec![0.30, 0.02, -0.05],
+        d_to_q_scores: vec![0.10, 0.01, -0.02],
+        token_deposits: Vec::new(),
+        unexplained_token_ratio: 0.0,
+        query_seq_len: 2,
+    };
+    let long_obs = LocalChannelObservation {
+        query_seq_len: 32,
+        ..short_obs.clone()
+    };
+    let short_recall = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &vec![query.as_slice(); num_layers],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(short_obs),
+        )
+        .expect("short recall");
+    let long_recall = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &vec![query.as_slice(); num_layers],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(long_obs),
+        )
+        .expect("long recall");
+    assert!(
+        short_recall.top1_fact_score < long_recall.top1_fact_score,
+        "short query S=2 ({}) must shrink LOO boost below long query S=32 ({})",
+        short_recall.top1_fact_score,
+        long_recall.top1_fact_score
+    );
+
+    // 2. Two-axis `SelfRef` vs `Exterior`: semi-known query bridging 2 known facts (`id0`, `id1`)
+    //    with high `unexplained_token_ratio` (`0.74`, below the `0.80` foreign-OOD ceiling and
+    //    above the `0.72` sharp-unimodal cutoff) must isolate into `exterior_sandbox_facts`
+    //    with empty `recalled_facts` and disjoint IDs.
+    let exterior_obs = LocalChannelObservation {
+        combined_scores: vec![0.35, 0.30, -0.10],
+        q_to_d_scores: vec![0.35, 0.30, -0.10],
+        d_to_q_scores: vec![0.15, 0.12, -0.05],
+        token_deposits: Vec::new(),
+        unexplained_token_ratio: 0.74,
+        query_seq_len: 16,
+    };
+    let ext_recall = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &vec![query.as_slice(); num_layers],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(exterior_obs),
+        )
+        .expect("exterior recall");
+    assert!(
+        ext_recall.recalled_facts.is_empty(),
+        "semi-known exterior query must not populate SelfRef recalled_facts: \
+         top1={} unexp={} bridge={} ext_mask={:#x} sandbox={} action={:?}",
+        ext_recall.top1_fact_score,
+        ext_recall.telemetry.unexplained_token_ratio,
+        ext_recall.lacuna_partition.bridge_count,
+        ext_recall.lacuna_partition.exterior_mask,
+        ext_recall.lacuna_partition.is_sandbox_eligible(),
+        ext_recall.action_decision
+    );
+    assert!(
+        !ext_recall.exterior_sandbox_facts.is_empty(),
+        "semi-known exterior query must populate exterior_sandbox_facts"
+    );
+    let ext_ids: Vec<u32> = ext_recall
+        .exterior_sandbox_facts
+        .iter()
+        .map(|(e, _)| e.anchor_id)
+        .collect();
+    assert!(
+        ext_ids.contains(&id0) && ext_ids.contains(&id1),
+        "expected bridged anchors {id0}, {id1} in exterior_sandbox_facts, got {ext_ids:?}"
+    );
+    assert_eq!(
+        ext_recall.lacuna_state,
+        LacunaBoundaryState::LiminalExterior
+    );
+    assert!(ext_recall.telemetry.unexplained_token_ratio >= 0.60);
+
+    // Pure SelfRef query (low unexplained_token_ratio) stays in `recalled_facts`.
+    let self_obs = LocalChannelObservation {
+        combined_scores: vec![0.45, 0.05, -0.10],
+        q_to_d_scores: vec![0.45, 0.05, -0.10],
+        d_to_q_scores: vec![0.25, 0.02, -0.05],
+        token_deposits: Vec::new(),
+        unexplained_token_ratio: 0.10,
+        query_seq_len: 16,
+    };
+    let self_recall = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &vec![query.as_slice(); num_layers],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(self_obs),
+        )
+        .expect("self recall");
+    assert!(
+        !self_recall.recalled_facts.is_empty(),
+        "pure SelfRef query must retain recalled_facts"
+    );
+    assert!(
+        self_recall.exterior_sandbox_facts.is_empty(),
+        "pure SelfRef query must keep exterior_sandbox_facts empty"
     );
 }

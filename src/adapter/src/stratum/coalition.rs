@@ -435,6 +435,11 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         {
             return;
         }
+        // Foreign OOD queries whose salient tokens are overwhelmingly unexplained by corpus Facts
+        // must never fabricate multi-hop Fact coalitions (`floor_score >= min_coherence * 1.15`).
+        if ctx.query_seq_len > 0 && signal.telemetry.unexplained_token_ratio >= 0.72 {
+            return;
+        }
 
         let max_guard_raw = ctx
             .entries
@@ -507,8 +512,12 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             .map(|d| d.disc_weight.max(0.0) * d.entry_excess[cand_a].max(d.entry_excess[cand_b]))
             .sum::<f32>()
             / total_disc_w;
-        let basin_supported =
-            g_fact_top1_score >= ctx.policy.min_coherence * 0.55 || raw_joint_q_to_d >= 0.065;
+        let basin_supported = if ctx.query_seq_len > 0 {
+            g_fact_top1_score >= ctx.policy.min_coherence * 0.50
+                || (raw_joint_q_to_d >= 0.080 && signal.telemetry.unexplained_token_ratio < 0.68)
+        } else {
+            g_fact_top1_score >= ctx.policy.min_coherence * 0.55 || raw_joint_q_to_d >= 0.065
+        };
         let strictly_bimodal = joint_excl >= 0.040
             && second_contrib >= 0.015
             && second_contrib >= 0.25 * joint_excl
@@ -877,7 +886,15 @@ impl RecallStratum for LocalTokenResonanceStratum {
                         0.70 * signal.q_to_d_scores[i].max(0.0) + 0.20 * signal.d_to_q_scores[i]
                     })
                     .fold(0.0_f32, f32::max);
-                if g_bimodal && g_pair.pair_chamfer > best_fact_chamfer + 0.010 {
+                let guard_chamfer_floor = if ctx.query_seq_len > 0 { 0.045 } else { 0.0 };
+                let guard_tok_support = signal.q_to_d_scores[g_pair.cand_a] > 0.0
+                    && signal.q_to_d_scores[g_pair.cand_b] > 0.0
+                    && (ctx.query_seq_len == 0 || signal.telemetry.unexplained_token_ratio < 0.72);
+                if g_bimodal
+                    && guard_tok_support
+                    && g_pair.pair_chamfer >= guard_chamfer_floor
+                    && g_pair.pair_chamfer > best_fact_chamfer + 0.010
+                {
                     let max_fact_score = ctx
                         .entries
                         .iter()

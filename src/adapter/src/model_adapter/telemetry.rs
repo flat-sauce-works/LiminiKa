@@ -164,6 +164,7 @@ impl ModelSteeringAdapter {
         self.sandbox_settlement_streak = 0;
         self.prev_sandbox_coherence = 0.0;
         self.prev_sandbox_assim_drift = 1.0;
+        self.crystallized_anchors.clear();
         self.ctx.set_sandbox_settlements(0);
         self.ctx.reset_turn_bypass_state();
         let policy = self.ctx.telemetry_bank().policy();
@@ -325,6 +326,7 @@ impl ModelSteeringAdapter {
     /// Evaluates whether a transient contradiction-guard compute pin may safely relax toward
     /// low-cost bypass after holding the opening window, or re-escalates immediately if
     /// repulsion or exit entropy instability returns after relaxation.
+    #[must_use]
     pub fn evaluate_transient_guard_relaxation(
         &mut self,
         last_observed_entropy: f32,
@@ -387,6 +389,7 @@ impl ModelSteeringAdapter {
     /// Evaluates token-level whole-steering bypass on `obs` jointly with [`SystemSpineState`]
     /// physical `pinned` / guard / repulsion vetoes, returning the active `SPINE_BYPASS_VETO_*`
     /// bitmask.
+    #[must_use]
     pub fn evaluate_whole_token_bypass_with_spine(
         &mut self,
         mut obs: TokenBypassObservation,
@@ -509,6 +512,7 @@ impl ModelSteeringAdapter {
     /// Evaluates external `+ System` Gauge-Zero pressure jointly with [`SystemSpineState`]
     /// physical `pinned` / guard / repulsion vetoes and emits a pre-execution
     /// [`ComputeDispatchMask`] for this adapter's anonymous compute slots.
+    #[must_use]
     pub fn step_compute_dispatch_with_spine(
         &mut self,
         reading: SystemPressureReading,
@@ -527,6 +531,7 @@ impl ModelSteeringAdapter {
 
     /// Evaluates external `+ System` Gauge-Zero pressure and emits a pre-execution
     /// [`ComputeDispatchMask`] for this adapter's anonymous compute slots.
+    #[must_use]
     pub fn step_compute_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
         self.step_compute_dispatch_with_spine(reading, false)
     }
@@ -559,6 +564,7 @@ impl ModelSteeringAdapter {
 
     /// Evaluates bounded Slow-Loop epoch threshold adjustments over continuous `Standard`/`Detailed`
     /// samples without touching Hot-Path loops.
+    #[must_use]
     pub fn evaluate_slow_loop_telemetry(
         &mut self,
         min_samples: u64,
@@ -569,9 +575,30 @@ impl ModelSteeringAdapter {
             .evaluate_slow_loop_epoch(&base, min_samples)
     }
 
+    fn push_crystallized_anchor(&mut self, record: PhaseAnchorRecord) {
+        if self.crystallized_anchors.len() >= Self::MAX_CRYSTALLIZED_ANCHOR_BUFFER {
+            self.crystallized_anchors.remove(0);
+        }
+        self.crystallized_anchors.push(record);
+    }
+
+    /// Returns Cold-Path [`PhaseAnchorRecord`]s consolidated by [`EgoDifferentialNet`] during
+    /// Slow-Loop epochs (bounded FIFO up to [`Self::MAX_CRYSTALLIZED_ANCHOR_BUFFER`]).
+    #[must_use]
+    pub fn crystallized_anchors(&self) -> &[PhaseAnchorRecord] {
+        &self.crystallized_anchors
+    }
+
+    /// Drains and returns all buffered Cold-Path crystallized [`PhaseAnchorRecord`]s in FIFO order.
+    #[must_use]
+    pub fn drain_crystallized_anchors(&mut self) -> Vec<PhaseAnchorRecord> {
+        std::mem::take(&mut self.crystallized_anchors)
+    }
+
     /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`AdaptiveThresholdPolicy`],
     /// [`StigmergicSubstrate`] thresholds, [`DistortionTension`], and [`EgoDifferentialNet`] GOP
     /// maintenance when `applied == true`.
+    #[must_use]
     pub fn apply_slow_loop_telemetry_epoch(
         &mut self,
         min_samples: u64,
@@ -614,10 +641,13 @@ impl ModelSteeringAdapter {
                 spine.slow_loop_epoch = spine.slow_loop_epoch.saturating_add(1);
                 spine.slow_loop_epoch
             };
-            let _ = self
+            if let Some(anchor) = self
                 .ctx
                 .ego_differential_net_mut()
-                .consolidate_and_evaporate_cold_path(next_epoch);
+                .consolidate_and_evaporate_cold_path(next_epoch)
+            {
+                self.push_crystallized_anchor(anchor);
+            }
         }
         adj
     }

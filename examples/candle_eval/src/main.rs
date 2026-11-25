@@ -218,13 +218,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             shared.bake_elapsed,
         );
     }
+    let null_note = match shared.compiled.null_calibration {
+        Some(env) => format!(
+            " | null_cal(n={} offdiag={:.3} null_mean={:.3} null_max={:.3} null_hi={:.3} tok_exp={:.3} prior={:.1}ms)",
+            env.sample_count,
+            env.corpus_offdiag_floor,
+            env.ood_null_mean,
+            env.ood_null_max,
+            env.ood_null_high,
+            env.token_explain_threshold,
+            shared.prior_ms,
+        ),
+        None => String::new(),
+    };
     println!(
-        "Compiled {} natural-language attractors (single-pass shared capture, two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}",
+        "Compiled {} natural-language attractors (single-pass shared capture, two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}{}",
         shared.compiled.corpus.entries().len(),
         shared.used_base_prior,
         shared.compile_ms,
         shared.compiled.recall_policy.min_coherence,
         shared.compiled.recall_policy.boundary_margin,
+        null_note,
     );
 
     let baked_opt = shared.baked_opt;

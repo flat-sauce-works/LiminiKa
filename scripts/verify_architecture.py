@@ -1,1391 +1,93 @@
 # name: scripts/verify_architecture.py
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
-"""Architecture, Y-shaped 5-layer DAG, axiom orthogonality, and hotspot verification tool."""
+"""Thin orchestrator CLI for LiminiKa architecture checks, Mermaid maps, and meta-audit radar."""
 
 from __future__ import annotations
 
 import argparse
 import pathlib
-import re
 import sys
-from collections import Counter, defaultdict
 
-REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-CORE_SRC = REPO_ROOT / "src" / "core" / "src"
+_SCRIPTS_DIR = str(pathlib.Path(__file__).resolve().parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
-DAG_AND_AXIOM_RULES: list[tuple[str, str, re.Pattern[str]]] = [
-    (
-        "Lv.0 liminal -> Lv.1..4",
-        "liminal",
-        re.compile(
-            r"\b(?:crate::|(?:super::)+)"
-            r"(?:(foundation|stigmergy|drivers|runtime)\b"
-            r"|\{[^}]*\b(foundation|stigmergy|drivers|runtime)\b)"
-        ),
-    ),
-    (
-        "Lv.1 foundation -> Lv.2..4",
-        "foundation",
-        re.compile(
-            r"\b(?:crate::|(?:super::)+)"
-            r"(?:(stigmergy|drivers|runtime)\b"
-            r"|\{[^}]*\b(stigmergy|drivers|runtime)\b)"
-        ),
-    ),
-    (
-        "Lv.1 foundation -> liminal::axiom / Scoped",
-        "foundation",
-        re.compile(
-            r"\b(?:liminal::axiom\b|liminal::bitcut\b|BitCut(?:8|32|64)?\b|"
-            r"Scoped\s*<|Scoped::|ScopedCut\b|Indivisible\s*<|Indivisible::|"
-            r"Indivisible\b|IndivisiblePhase\b|\bAbstractDomain\b|Activatable\b|"
-            r"Groundable\b|ActiveScope\b|GroundedScope\b|GroundedOrigin\b|"
-            r"SpeculativeDiscovery\b|BoundaryViolation\b|VerifiedAligned\b|"
-            r"BridgedDiscovery\b)"
-        ),
-    ),
-    (
-        "Lv.0 liminal/axiom -> bitcut",
-        "liminal/axiom",
-        re.compile(r"\b(?:bitcut|BitCut(?:8|32|64)?)\b"),
-    ),
-    (
-        "Lv.2 stigmergy -> Lv.3..4",
-        "stigmergy",
-        re.compile(
-            r"\b(?:crate::|(?:super::)+)(?:(drivers|runtime)\b|\{[^}]*\b(drivers|runtime)\b)"
-        ),
-    ),
-    (
-        "Lv.3 drivers -> Lv.4",
-        "drivers",
-        re.compile(r"\b(?:crate::|(?:super::)+)(?:runtime\b|\{[^}]*\bruntime\b)"),
-    ),
-    (
-        "drivers/spine -> drivers/ego",
-        "drivers/spine",
-        re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:ego\b|\{[^}]*\bego\b)"),
-    ),
-    (
-        "drivers/ego -> drivers/spine",
-        "drivers/ego",
-        re.compile(r"\b(?:crate::drivers::|(?:super::)+)(?:spine\b|\{[^}]*\bspine\b)"),
-    ),
-    (
-        "Lv.0 axiom/cut -> axiom/lacuna",
-        "liminal/axiom/cut.rs",
-        re.compile(r"lacuna", re.IGNORECASE),
-    ),
-    (
-        "Lv.0 axiom/lacuna -> axiom/cut",
-        "liminal/axiom/lacuna.rs",
-        re.compile(
-            r"\b(?:(?:super::)+|axiom::|liminal::)cut\b|\b(?:Scoped|ScopedCut|"
-            r"Indivisible|IndivisiblePhase|Activatable|Groundable|ActiveScope|"
-            r"GroundedScope|Cuttable|Definite|BoundaryViolation|"
-            r"SpeculativeDiscovery)\b"
-        ),
-    ),
+from arch_checks import (  # noqa: E402
+    CORE_SRC,
+    REPO_ROOT,
+    bucket_for_path,
+    check_abstract_domain_invariant,
+    check_cross_observer_scoped_boundaries,
+    check_downstream_vocabulary,
+    check_file_hygiene_and_loc,
+    check_topology_matrix_parity,
+    check_vocabulary_ownership,
+    check_workspace_crate_gates,
+    collect_dag_metrics,
+    collect_liminal_map_metrics,
+    format_hotspots,
+    render_coupling_audit,
+    render_liminal_map,
+    render_mermaid,
+    render_mermaid_workspace,
+    run_core_checks,
+    run_workspace_checks,
+    scan_scoped_boundary_violations_in_source,
+    scan_vocabulary_ownership_in_source,
+)
+
+__all__ = [
+    "CORE_SRC",
+    "REPO_ROOT",
+    "bucket_for_path",
+    "check_abstract_domain_invariant",
+    "check_cross_observer_scoped_boundaries",
+    "check_downstream_vocabulary",
+    "check_file_hygiene_and_loc",
+    "check_topology_matrix_parity",
+    "check_vocabulary_ownership",
+    "check_workspace_crate_gates",
+    "collect_dag_metrics",
+    "collect_liminal_map_metrics",
+    "format_hotspots",
+    "main",
+    "parse_args",
+    "render_coupling_audit",
+    "render_liminal_map",
+    "render_mermaid",
+    "render_mermaid_workspace",
+    "run_checks",
+    "scan_scoped_boundary_violations_in_source",
+    "scan_vocabulary_ownership_in_source",
 ]
-
-RETIRED_LEGACY_PATHS: tuple[str, ...] = (
-    "traits",
-    "traits.rs",
-    "foundation/phase_field.rs",
-    "stigmergy/action_hub.rs",
-    "runtime/gateway/closed_loop.rs",
-    "stigmergy/attractor/field_engine.rs",
-    "stigmergy/attractor/multi_space.rs",
-    "stigmergy/attractor/snapshot.rs",
-    "stigmergy/crystal",
-    "stigmergy/attractor",
-    "runtime/abi/action_hub.rs",
-    "runtime/abi/entropy_attractor.rs",
-    "runtime/abi/storage.rs",
-)
-
-REQUIRED_CANONICAL_PATHS: tuple[str, ...] = (
-    "foundation/phase_ops/mod.rs",
-    "stigmergy/substrate/mod.rs",
-    "stigmergy/anchor/mod.rs",
-    "runtime/topology.rs",
-)
-
-PUB_TYPE_OR_TRAIT_RE = re.compile(
-    r"\bpub(?:\s*\([^)]*\))?\s+(?:(?:unsafe|auto)\s+)*"
-    r"(?:struct|enum|trait|type)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
-)
-
-PUB_ITEM_DECL_RE = re.compile(
-    r"\bpub(?:\s*\([^)]*\))?\s+(?:(?:unsafe|auto|const|async|extern(?:\s+r*#*\".*?\"#*)?)\s+)*"
-    r"(?:struct|enum|trait|type|fn|const|static)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
-)
-
-BANNED_LEGACY_DECL_TOKENS: frozenset[str] = frozenset(
-    {
-        "field",
-        "gcso",
-        "void",
-        "venn",
-        "serendipity",
-        "edbc",
-        "srl",
-        "pspm",
-        "pprc",
-        "zimms",
-        "daes",
-        "dpsr",
-        "ripa",
-        "qdps",
-        "action_hub",
-    }
-)
-
-DOWNSTREAM_BANNED_LEGACY_TOKENS: frozenset[str] = BANNED_LEGACY_DECL_TOKENS | frozenset(
-    {
-        "society",
-        "domino",
-    }
-)
-
-QUARANTINED_CLI_FILES: frozenset[str] = frozenset({"eval_samples.rs", "eval_runner.rs"})
-
-
-def split_ident_tokens(ident: str) -> set[str]:
-    """Split a snake_case or CamelCase identifier into lowercase semantic tokens."""
-    tokens: set[str] = set()
-    for seg in ident.split("_"):
-        if not seg:
-            continue
-        sub = re.findall(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|\d+", seg)
-        tokens.update(s.lower() for s in sub)
-    if "action_hub" in ident.lower():
-        tokens.add("action_hub")
-    return tokens
-
-
-ALLOWED_SUBSTRATE_DECLS: dict[str, tuple[str, ...]] = {
-    "StigmergicSubstrate": ("stigmergy/substrate/mod.rs",),
-    "SubstrateStepReport": ("stigmergy/substrate/mod.rs",),
-    "PointerSubstrate": ("stigmergy/trail/traits.rs",),
-    "StigmergicSubstrateOps": ("stigmergy/trail/traits.rs",),
-    "SubstrateGatewayExt": ("runtime/gateway/orchestrator.rs",),
-    "LmnkSubstrateOpaque": ("runtime/abi/handles.rs",),
-    "LmnkSubstrateHandle": ("runtime/abi/handles.rs",),
-    "lmnk_substrate_handle_t": ("runtime/abi/handles.rs",),
-    "lmnk_substrate_step_report_t": ("runtime/abi/types.rs",),
-}
-
-SCOPED_BOUNDARY_TYPE_RE = re.compile(
-    r"\b(?:Scoped\s*<|ScopedCut\b|VerifiedAligned\s*<|BoundaryViolation\s*<"
-    r"|SpeculativeDiscovery\s*<|BridgedDiscovery\s*<)"
-)
-PUB_TRAIT_START_RE = re.compile(
-    r"pub(?:\s*\([^)]*\))?\s+(?:(?:unsafe|auto)\s+)*trait\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
-)
-FN_START_RE = re.compile(
-    r"(?P<vis>pub(?:\s*\([^)]*\))?\s+)?"
-    r"(?:(?:default|const|async|unsafe|extern(?:\s+r*#*\".*?\"#*)?)\s+)*"
-    r"fn\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b"
-)
-CRATE_DEP_RE = re.compile(r"\bcrate::(liminal|foundation|stigmergy|drivers(?:::(?:spine|ego))?|runtime)\b")
-
-
-CFG_TEST_ATTR_RE = re.compile(r"^#\[\s*cfg\s*\(\s*test\s*\)\s*\]$")
-MOD_DECL_RE = re.compile(r"^(?:pub(?:\s*\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\b")
-OUTER_ATTR_START_RE = re.compile(r"^#\[")
-
-ADAPTER_MUT_BACKDOOR_RE = re.compile(
-    r"\.\s*(?:runtime_context_mut|substrate_mut|compute_pool_mut|"
-    r"entropy_controller_mut|residual_adapter_mut)\s*\("
-)
-CORE_MUTABLE_ENGINE_RE = re.compile(
-    r"\bliminika_core::(?:runtime::RuntimeContext\b|"
-    r"runtime::CoreStateStack\b|"
-    r"drivers::(?:SystemSpineState|AnonymousComputePool|EntropyController|"
-    r"EgoDifferentialNet|DistortionTension)\b|"
-    r"stigmergy::(?:PhaseSteeringEngine|ResidualAdapterEngine)\b)"
-    r"|\b(?:RuntimeContext|CoreStateStack|SystemSpineState|AnonymousComputePool|"
-    r"EntropyController|EgoDifferentialNet|DistortionTension|"
-    r"PhaseSteeringEngine|ResidualAdapterEngine|StigmergicSubstrate)::(?:new|new_boxed|new_empty)\b"
-    r"|\.\s*(?:reanchor_baseline_pressure|reset_turn_bypass_state|"
-    r"begin_turn_spine_policy|step_hot_path_branchless|"
-    r"evaluate_whole_token_steering_bypass_with_spine|"
-    r"apply_preset_lanes|allocate_lane|release_all_lanes)\s*\("
-)
-RAW_C_ABI_CALL_RE = re.compile(r"\blmnk_[a-z0-9_]+\s*\(")
-CORE_ABI_FN_PATH_RE = re.compile(r"\bliminika_core::abi::(lmnk_[a-z0-9_]+)\b")
-DSL_CORE_REF_RE = re.compile(r"\bliminika_core\b")
-ADAPTER_MUT_GATE_CALL_RE = re.compile(
-    r"\b(?:TurnOrchestrator::(?:prepare_turn|commit_turn_circuit)|"
-    r"ModelSteeringAdapter::new|"
-    r"LmnkTimeline::(?:new|load_from_path|from_bytes|save_to_path|record_step|resume_or_rebake)|"
-    r"LmnkPackageOwned::load_from_path|"
-    r"CompiledTokenCorpus::(?:capture_entries|compile|compile_with_base_prior)|"
-    r"ContrastiveAnchorBank::from_entries)\b"
-    r"|\.\s*(?:step_decode_control|reanchor_compute_pressure|reset_turn_decode_state|"
-    r"orchestrate_layer_rope_with_substrate|orchestrate_layer_rope_with_spillover|"
-    r"steer_layer_with_gateway|steer_layer_q_rot|apply_rank1_with_gateway_mut|"
-    r"apply_rank1_hidden_fused|orchestrate_layer_rank1_with_substrate|"
-    r"calibrate_manifold_probe|apply_slow_loop_telemetry_epoch|"
-    r"commit_spillover_experience|reset_horizon_and_core_state|"
-    r"step_compute_dispatch_with_spine|commit_compute_exit_reward|"
-    r"measure_entropy_state|step_entropy_logits|set_layer_rope_mask|"
-    r"set_ego_max_hops|set_guard_hold_tokens|set_max_observe_stride|"
-    r"set_pre_bypass_enabled|configure_ego_from_preset|configure_ego_from_natural_language|"
-    r"bake_logical_pframe_topology)\s*\("
-)
-CORE_CRATE_LAYER_RE = re.compile(
-    r"\bliminika_core::(liminal|foundation|stigmergy|drivers|runtime|abi)\b"
-)
-
-
-def _find_cfg_test_module_lines(lines: list[str]) -> set[int]:
-    """Return 0-based line indices belonging exclusively to `#[cfg(test)] mod ...` items."""
-    if not lines or not any("cfg" in line and "test" in line for line in lines):
-        return set()
-    clean_text = strip_literals_preserve_lines(strip_comments_preserve_lines("\n".join(lines)))
-    clean_lines = clean_text.splitlines()
-    while len(clean_lines) < len(lines):
-        clean_lines.append("")
-
-    excluded: set[int] = set()
-    n = len(clean_lines)
-    i = 0
-    while i < n:
-        if not CFG_TEST_ATTR_RE.match(clean_lines[i].strip()):
-            i += 1
-            continue
-
-        # Look past blank lines and stacked attributes (e.g. `#[allow(...)]`) for a `mod ` item.
-        j = i + 1
-        while j < n:
-            stripped = clean_lines[j].strip()
-            if not stripped:
-                j += 1
-                continue
-            if OUTER_ATTR_START_RE.match(stripped):
-                bracket_depth = stripped.count("[") - stripped.count("]")
-                j += 1
-                while j < n and bracket_depth > 0:
-                    bracket_depth += clean_lines[j].count("[") - clean_lines[j].count("]")
-                    j += 1
-                continue
-            break
-
-        if j >= n or not MOD_DECL_RE.match(clean_lines[j].lstrip()):
-            # Item-level `#[cfg(test)]` (e.g. helper `fn`) — do NOT discard subsequent prod code.
-            i += 1
-            continue
-
-        # Exclude either `mod foo;` (single declaration) or `mod foo { ... }` (brace-balanced block).
-        brace_depth = 0
-        saw_open_brace = False
-        k = j
-        while k < n:
-            line_clean = clean_lines[k]
-            if not saw_open_brace:
-                brace_pos = line_clean.find("{")
-                semi_pos = line_clean.find(";")
-                if semi_pos != -1 and (brace_pos == -1 or semi_pos < brace_pos):
-                    excluded.update(range(i, k + 1))
-                    k += 1
-                    break
-                if brace_pos != -1:
-                    saw_open_brace = True
-                    for ch in line_clean[brace_pos:]:
-                        if ch == "{":
-                            brace_depth += 1
-                        elif ch == "}":
-                            brace_depth -= 1
-                    if brace_depth <= 0:
-                        excluded.update(range(i, k + 1))
-                        k += 1
-                        break
-            else:
-                for ch in line_clean:
-                    if ch == "{":
-                        brace_depth += 1
-                    elif ch == "}":
-                        brace_depth -= 1
-                if brace_depth <= 0:
-                    excluded.update(range(i, k + 1))
-                    k += 1
-                    break
-            k += 1
-        else:
-            excluded.update(range(i, n))
-            k = n
-        i = k
-
-    return excluded
-
-
-def strip_cfg_test_tail(lines: list[str]) -> list[tuple[int, str]]:
-    """Return `(1-based lineno, line)` pairs excluding `#[cfg(test)] mod ...` blocks/declarations."""
-    excluded = _find_cfg_test_module_lines(lines)
-    return [(idx, line) for idx, line in enumerate(lines, 1) if (idx - 1) not in excluded]
-
-
-def _blank_cfg_test_modules(source: str) -> str:
-    """Replace `#[cfg(test)] mod ...` lines with empty lines to preserve 1-based line numbers."""
-    lines = source.splitlines()
-    excluded = _find_cfg_test_module_lines(lines)
-    return "\n".join("" if idx in excluded else line for idx, line in enumerate(lines))
-
-
-def advance_past_literal(text: str, idx: int) -> int | None:
-    """If `text[idx]` starts a string, raw string, or char literal, return the index after it."""
-    n = len(text)
-    if idx >= n:
-        return None
-
-    prev_is_ident = idx > 0 and (text[idx - 1].isalnum() or text[idx - 1] == "_")
-    ch = text[idx]
-
-    # 1. Raw string literal: r"...", r#"..."#, br"...", br#"..."#, cr"...", cr#"..."#
-    if not prev_is_ident:
-        r_idx = -1
-        if ch == "r":
-            r_idx = idx
-        elif ch in ("b", "c") and idx + 1 < n and text[idx + 1] == "r":
-            r_idx = idx + 1
-        if r_idx != -1:
-            j = r_idx + 1
-            hashes = 0
-            while j < n and text[j] == "#":
-                hashes += 1
-                j += 1
-            if j < n and text[j] == '"':
-                closing = '"' + ("#" * hashes)
-                end = text.find(closing, j + 1)
-                return n if end == -1 else end + len(closing)
-
-    # 2. Standard, byte, or C string literal: "...", b"...", c"..."
-    str_quote_idx = -1
-    if ch == '"':
-        str_quote_idx = idx
-    elif not prev_is_ident and ch in ("b", "c") and idx + 1 < n and text[idx + 1] == '"':
-        str_quote_idx = idx + 1
-    if str_quote_idx != -1:
-        j = str_quote_idx + 1
-        while j < n:
-            if text[j] == "\\":
-                j += 2
-            elif text[j] == '"':
-                return j + 1
-            else:
-                j += 1
-        return n
-
-    # 3. Char or byte-char literal ('x', '\n', '\x7f', '\u{...}', b'x') vs. lifetime ('a, 'static, '_)
-    char_quote_idx = -1
-    if ch == "'" and not prev_is_ident:
-        char_quote_idx = idx
-    elif not prev_is_ident and ch == "b" and idx + 1 < n and text[idx + 1] == "'":
-        char_quote_idx = idx + 1
-    if char_quote_idx != -1:
-        q = char_quote_idx
-        if q + 1 < n and text[q + 1] == "\\":
-            j = q + 2
-            while j < n:
-                if text[j] == "\\":
-                    j += 2
-                elif text[j] == "'":
-                    return j + 1
-                elif text[j] == "\n":
-                    break
-                else:
-                    j += 1
-        elif q + 2 < n and text[q + 1] not in ("'", "\\", "\n", "\r") and text[q + 2] == "'":
-            return q + 3
-
-    return None
-
-
-def strip_comments_preserve_lines(text: str) -> str:
-    """Replace `//` line comments and nested `/* ... */` block comments with spaces, preserving `\n`."""
-    n = len(text)
-    out: list[str] = []
-    i = 0
-    while i < n:
-        if text[i:i + 2] == "//":
-            j = text.find("\n", i + 2)
-            if j == -1:
-                out.append(" " * (n - i))
-                break
-            out.append(" " * (j - i))
-            i = j
-            continue
-
-        if text[i:i + 2] == "/*":
-            depth = 1
-            out.append("  ")
-            i += 2
-            while i < n and depth > 0:
-                if text[i:i + 2] == "/*":
-                    depth += 1
-                    out.append("  ")
-                    i += 2
-                elif text[i:i + 2] == "*/":
-                    depth -= 1
-                    out.append("  ")
-                    i += 2
-                else:
-                    out.append("\n" if text[i] == "\n" else " ")
-                    i += 1
-            continue
-
-        next_i = advance_past_literal(text, i)
-        if next_i is not None:
-            out.append(text[i:next_i])
-            i = next_i
-            continue
-
-        out.append(text[i])
-        i += 1
-
-    return "".join(out)
-
-
-def scan_until_top_level_terminator(text: str, start_idx: int) -> tuple[int, str]:
-    """Scan from `start_idx` until `{` or `;` at `paren_depth == 0 and bracket_depth == 0 and angle_depth == 0`."""
-    n = len(text)
-    paren_depth = 0
-    bracket_depth = 0
-    angle_depth = 0
-    j = start_idx
-
-    while j < n:
-        next_j = advance_past_literal(text, j)
-        if next_j is not None:
-            j = next_j
-            continue
-
-        two = text[j:j + 2]
-        if two in ("->", "=>"):
-            j += 2
-            continue
-
-        ch = text[j]
-        if ch == "(":
-            paren_depth += 1
-        elif ch == ")":
-            paren_depth = max(0, paren_depth - 1)
-        elif ch == "[":
-            bracket_depth += 1
-        elif ch == "]":
-            bracket_depth = max(0, bracket_depth - 1)
-        elif ch == "<":
-            angle_depth += 1
-        elif ch == ">":
-            angle_depth = max(0, angle_depth - 1)
-        elif ch in ("{", ";") and paren_depth == 0 and bracket_depth == 0 and angle_depth == 0:
-            return j, ch
-
-        j += 1
-
-    return n, ""
-
-
-def check_abstract_domain_invariant(core_src: pathlib.Path) -> list[str]:
-    """Verify `AbstractDomain` open trait contract and unconstrained `Indivisible<C, T>`."""
-    violations: list[str] = []
-    cut_rs = core_src / "liminal" / "axiom" / "cut.rs"
-    if not cut_rs.is_file():
-        return [f"AbstractDomain check: missing {cut_rs.as_posix()}"]
-
-    text = cut_rs.read_text(encoding="utf-8")
-    if not re.search(r"\bpub trait AbstractDomain\b", text):
-        violations.append(f"AbstractDomain missing `pub trait AbstractDomain` in {cut_rs.as_posix()}")
-    if not re.search(r"pub const fn domain_id\(&self\)\s*->\s*&'static str", text):
-        violations.append(f"AbstractDomain missing `Indivisible::domain_id` in {cut_rs.as_posix()}")
-
-    struct_match = re.search(r"pub struct Indivisible<([^>{]+)>", text)
-    if not struct_match:
-        violations.append(f"AbstractDomain check: could not locate `pub struct Indivisible` in {cut_rs.as_posix()}")
-    elif "AbstractDomain" in struct_match.group(1):
-        violations.append(
-            "AbstractDomain check: `Indivisible<C, T>` itself must not require "
-            f"`T: AbstractDomain` ({cut_rs.as_posix()})"
-        )
-    return violations
-
-
-def scan_scoped_boundary_violations_in_source(source: str, source_label: str = "<memory>") -> list[str]:
-    """Scan non-test Rust source text for public cross-observer `Scoped<` or `*_scoped*` signatures."""
-    violations: list[str] = []
-    truncated_source = _blank_cfg_test_modules(source)
-    clean_text = strip_comments_preserve_lines(truncated_source)
-
-    n = len(clean_text)
-    brace_depth = 0
-    pub_trait_depths: list[int] = []
-    i = 0
-
-    while i < n:
-        next_i = advance_past_literal(clean_text, i)
-        if next_i is not None:
-            i = next_i
-            continue
-
-        ch = clean_text[i]
-        if ch == "{":
-            brace_depth += 1
-            i += 1
-            continue
-        if ch == "}":
-            brace_depth = max(0, brace_depth - 1)
-            while pub_trait_depths and pub_trait_depths[-1] > brace_depth:
-                pub_trait_depths.pop()
-            i += 1
-            continue
-
-        prev_is_ident = i > 0 and (clean_text[i - 1].isalnum() or clean_text[i - 1] == "_")
-        if not prev_is_ident and (ch.isalpha() or ch == "_"):
-            trait_match = PUB_TRAIT_START_RE.match(clean_text, i)
-            if trait_match is not None:
-                term_idx, term_ch = scan_until_top_level_terminator(clean_text, trait_match.end())
-                if term_ch == "{":
-                    brace_depth += 1
-                    pub_trait_depths.append(brace_depth)
-                i = term_idx + 1
-                continue
-
-            fn_match = FN_START_RE.match(clean_text, i)
-            if fn_match is not None:
-                sig_name = fn_match.group("name")
-                has_pub_vis = fn_match.group("vis") is not None
-                in_pub_trait = bool(pub_trait_depths) and brace_depth == pub_trait_depths[-1]
-                is_public_sig = has_pub_vis or in_pub_trait
-
-                term_idx, term_ch = scan_until_top_level_terminator(clean_text, fn_match.end())
-                if is_public_sig:
-                    sig_start_line = clean_text.count("\n", 0, fn_match.start()) + 1
-                    header = " ".join(clean_text[fn_match.start():term_idx].split())
-                    if "_scoped" in sig_name:
-                        violations.append(
-                            f"Retired `*_scoped*` signature: {source_label}:{sig_start_line}: fn {sig_name}"
-                        )
-                    if SCOPED_BOUNDARY_TYPE_RE.search(header):
-                        violations.append(
-                            f"Cross-observer `Scoped<` signature leak: {source_label}:{sig_start_line}: {header}"
-                        )
-                if term_ch == "{":
-                    brace_depth += 1
-                i = term_idx + 1
-                continue
-
-            while i < n and (clean_text[i].isalnum() or clean_text[i] == "_"):
-                i += 1
-            continue
-
-        i += 1
-
-    return violations
-
-
-def strip_literals_preserve_lines(clean_text: str) -> str:
-    """Replace string and char literals with spaces while preserving line numbers."""
-    out: list[str] = []
-    n = len(clean_text)
-    i = 0
-    while i < n:
-        next_i = advance_past_literal(clean_text, i)
-        if next_i is not None:
-            nl_count = clean_text.count("\n", i, next_i)
-            out.append("\n" * nl_count if nl_count else " ")
-            i = next_i
-            continue
-        out.append(clean_text[i])
-        i += 1
-    return "".join(out)
-
-
-def _extract_non_test_code(source: str) -> str:
-    """Strip `#[cfg(test)]` modules, comments, and string literals preserving line numbers."""
-    truncated = _blank_cfg_test_modules(source)
-    clean_text = strip_comments_preserve_lines(truncated)
-    return strip_literals_preserve_lines(clean_text)
-
-
-def _find_function_line_span(code_only: str, fn_name: str) -> set[int]:
-    """Return 1-based line numbers spanning `fn <fn_name>(...) { ... }` in stripped code."""
-    match = re.search(rf"\bfn\s+{re.escape(fn_name)}\b", code_only)
-    if match is None:
-        return set()
-    brace_start = code_only.find("{", match.end())
-    if brace_start == -1:
-        return set()
-    depth = 0
-    end_idx = len(code_only)
-    for pos in range(brace_start, len(code_only)):
-        ch = code_only[pos]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end_idx = pos + 1
-                break
-    start_line = code_only.count("\n", 0, match.start()) + 1
-    end_line = code_only.count("\n", 0, end_idx) + 1
-    return set(range(start_line, end_line + 1))
-
-
-def check_workspace_crate_gates(repo_root: pathlib.Path) -> list[str]:
-    """Enforce inter-crate boundaries across `src/dsl/`, `src/cli/`, and `examples/candle_eval/`."""
-    violations: list[str] = []
-
-    # (a) `src/dsl/` must remain completely isolated from `liminika_core`.
-    dsl_src = repo_root / "src" / "dsl" / "src"
-    if dsl_src.is_dir():
-        for rs_file in sorted(dsl_src.rglob("*.rs")):
-            if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
-                continue
-            rel_path = rs_file.relative_to(repo_root).as_posix()
-            code_only = _extract_non_test_code(rs_file.read_text(encoding="utf-8"))
-            for match in DSL_CORE_REF_RE.finditer(code_only):
-                lineno = code_only.count("\n", 0, match.start()) + 1
-                violations.append(
-                    f"Workspace gate (dsl -> liminika_core): {rel_path}:{lineno}: "
-                    "disallowed `liminika_core` reference in `liminika-dsl`"
-                )
-
-    # (b) `src/cli/` and `examples/candle_eval/` must route mutable state through `liminika-adapter`.
-    host_roots = [
-        ("cli", repo_root / "src" / "cli" / "src"),
-        ("candle_eval", repo_root / "examples" / "candle_eval" / "src"),
-    ]
-    for crate_tag, src_dir in host_roots:
-        if not src_dir.is_dir():
-            continue
-        for rs_file in sorted(src_dir.rglob("*.rs")):
-            if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
-                continue
-            if crate_tag == "cli" and rs_file.name in QUARANTINED_CLI_FILES:
-                continue
-            rel_path = rs_file.relative_to(repo_root).as_posix()
-            raw_text = rs_file.read_text(encoding="utf-8")
-            code_only = _extract_non_test_code(raw_text)
-            raw_lines = raw_text.splitlines()
-
-            smoke_allowed_lines: set[int] = set()
-            if rel_path == "src/cli/src/main.rs":
-                smoke_allowed_lines = _find_function_line_span(
-                    code_only, "run_default_c_abi_smoke"
-                )
-
-            for match in ADAPTER_MUT_BACKDOOR_RE.finditer(code_only):
-                lineno = code_only.count("\n", 0, match.start()) + 1
-                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
-                violations.append(
-                    f"Workspace gate (adapter *_mut backdoor): {rel_path}:{lineno}: {snippet}"
-                )
-
-            for match in CORE_MUTABLE_ENGINE_RE.finditer(code_only):
-                lineno = code_only.count("\n", 0, match.start()) + 1
-                if lineno in smoke_allowed_lines:
-                    continue
-                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
-                violations.append(
-                    f"Workspace gate (direct core mutable state): {rel_path}:{lineno}: {snippet}"
-                )
-
-            for match in RAW_C_ABI_CALL_RE.finditer(code_only):
-                lineno = code_only.count("\n", 0, match.start()) + 1
-                if lineno in smoke_allowed_lines:
-                    continue
-                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
-                violations.append(
-                    f"Workspace gate (raw C-ABI call outside allowlist): {rel_path}:{lineno}: "
-                    f"{snippet}"
-                )
-
-            for match in CORE_ABI_FN_PATH_RE.finditer(code_only):
-                sym = match.group(1)
-                if sym.endswith("_t"):
-                    continue
-                lineno = code_only.count("\n", 0, match.start()) + 1
-                if lineno in smoke_allowed_lines:
-                    continue
-                snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
-                violations.append(
-                    f"Workspace gate (raw C-ABI symbol outside allowlist): {rel_path}:{lineno}: "
-                    f"{snippet}"
-                )
-
-    return violations
-
-
-def _find_banned_public_decls(
-    code_only: str,
-    rel_path: str,
-    banned_tokens: frozenset[str],
-    label: str,
-) -> list[str]:
-    """Return violations for any public item declaration whose identifier hits `banned_tokens`."""
-    violations: list[str] = []
-    for match in PUB_ITEM_DECL_RE.finditer(code_only):
-        name = match.group("name")
-        lineno = code_only.count("\n", 0, match.start()) + 1
-        banned_hits = sorted(split_ident_tokens(name) & banned_tokens)
-        if banned_hits:
-            violations.append(
-                f"{label} (banned legacy token {', '.join(banned_hits)}): "
-                f"{rel_path}:{lineno}: disallowed public declaration `{name}`"
-            )
-    return violations
-
-
-def scan_vocabulary_ownership_in_source(source: str, rel_path: str) -> list[str]:
-    """Verify legacy declared-identifier bans and `*Substrate*` (`stigmergy`-only) ownership."""
-    norm_rel = rel_path.replace("\\", "/").lstrip("/")
-    if norm_rel.startswith("src/core/src/"):
-        norm_rel = norm_rel[len("src/core/src/"):]
-    if norm_rel.endswith("tests.rs") or "/tests/" in f"/{norm_rel}":
-        return []
-
-    code_only = _extract_non_test_code(source)
-    violations = _find_banned_public_decls(
-        code_only, norm_rel, BANNED_LEGACY_DECL_TOKENS, "Vocabulary ownership"
-    )
-
-    for match in PUB_TYPE_OR_TRAIT_RE.finditer(code_only):
-        name = match.group("name")
-        lineno = code_only.count("\n", 0, match.start()) + 1
-        if "Substrate" in name:
-            allowed_paths = ALLOWED_SUBSTRATE_DECLS.get(name, ())
-            if norm_rel not in allowed_paths:
-                violations.append(
-                    f"Vocabulary ownership (Substrate=stigmergy-only): {norm_rel}:{lineno}: "
-                    f"disallowed public declaration `{name}`"
-                )
-    return violations
-
-
-def check_vocabulary_ownership(core_src: pathlib.Path) -> list[str]:
-    """Verify legacy declared-identifier bans and `Substrate` (`stigmergy`-only) ownership."""
-    violations: list[str] = []
-    for rs_file in sorted(core_src.rglob("*.rs")):
-        if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
-            continue
-        rel_path = rs_file.relative_to(core_src).as_posix()
-        source = rs_file.read_text(encoding="utf-8")
-        violations.extend(scan_vocabulary_ownership_in_source(source, rel_path))
-    return violations
-
-
-def check_downstream_vocabulary(repo_root: pathlib.Path) -> list[str]:
-    """Verify legacy declared-identifier bans across `src/adapter/src/` and `src/cli/src/`."""
-    violations: list[str] = []
-    for crate in ("adapter", "cli"):
-        crate_src = repo_root / "src" / crate / "src"
-        if not crate_src.is_dir():
-            continue
-        for rs_file in sorted(crate_src.rglob("*.rs")):
-            if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
-                continue
-            if crate == "cli" and rs_file.name in QUARANTINED_CLI_FILES:
-                continue
-            rel_path = rs_file.relative_to(repo_root).as_posix()
-            code_only = _extract_non_test_code(rs_file.read_text(encoding="utf-8"))
-            violations.extend(
-                _find_banned_public_decls(
-                    code_only,
-                    rel_path,
-                    DOWNSTREAM_BANNED_LEGACY_TOKENS,
-                    "Downstream vocabulary",
-                )
-            )
-    return violations
-
-
-def check_cross_observer_scoped_boundaries(core_src: pathlib.Path) -> list[str]:
-    """Verify Lv.2..Lv.4 public cross-observer APIs do not leak `Scoped<` or retired `*_scoped*` forwarders."""
-    violations: list[str] = []
-    for layer in ("stigmergy", "drivers", "runtime"):
-        layer_dir = core_src / layer
-        if not layer_dir.is_dir():
-            continue
-        for rs_file in sorted(layer_dir.rglob("*.rs")):
-            if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
-                continue
-            source = rs_file.read_text(encoding="utf-8")
-            violations.extend(scan_scoped_boundary_violations_in_source(source, rs_file.as_posix()))
-    return violations
-
-
-def check_topology_matrix_parity(core_src: pathlib.Path) -> list[str]:
-    """Verify `CORE_TOPOLOGY` constants in `runtime/topology.rs` match the enforced 5-layer DAG."""
-    topo_rs = core_src / "runtime" / "topology.rs"
-    if not topo_rs.is_file():
-        return [f"Topology parity check: missing {topo_rs.as_posix()}"]
-
-    text = topo_rs.read_text(encoding="utf-8")
-    violations: list[str] = []
-
-    layer_m = re.search(
-        r"pub\s+const\s+LMNK_TOPOLOGY_LAYER_COUNT:\s*u8\s*=\s*(\d+)\s*;",
-        text,
-    )
-    if layer_m is None or int(layer_m.group(1)) != 5:
-        got = layer_m.group(1) if layer_m else "missing"
-        violations.append(
-            f"Topology parity: LMNK_TOPOLOGY_LAYER_COUNT expected 5, got {got} ({topo_rs.as_posix()})"
-        )
-
-    chan_m = re.search(
-        r"pub\s+const\s+LMNK_TOPOLOGY_CHANNEL_COUNT:\s*u8\s*=\s*(\d+)\s*;",
-        text,
-    )
-    if chan_m is None or int(chan_m.group(1)) != 8:
-        got = chan_m.group(1) if chan_m else "missing"
-        violations.append(
-            f"Topology parity: LMNK_TOPOLOGY_CHANNEL_COUNT expected 8, got {got} ({topo_rs.as_posix()})"
-        )
-
-    mat_m = re.search(
-        r"pub\s+const\s+LMNK_TOPOLOGY_DAG_EDGE_MATRIX:\s*\[u8;\s*8\]\s*=\s*\[([^\]]+)\]\s*;",
-        text,
-        re.DOTALL,
-    )
-    expected_edges = [0b00000, 0b00001, 0b00011, 0b00111, 0b01111, 0, 0, 0]
-    if mat_m is None:
-        violations.append(
-            f"Topology parity: missing LMNK_TOPOLOGY_DAG_EDGE_MATRIX ({topo_rs.as_posix()})"
-        )
-    else:
-        raw_items = [tok.strip().replace("_", "") for tok in mat_m.group(1).split(",") if tok.strip()]
-        try:
-            parsed_edges = [int(tok, 0) for tok in raw_items]
-        except ValueError:
-            parsed_edges = []
-        if parsed_edges != expected_edges:
-            violations.append(
-                f"Topology parity: LMNK_TOPOLOGY_DAG_EDGE_MATRIX expected "
-                f"{expected_edges}, got {parsed_edges} ({topo_rs.as_posix()})"
-            )
-
-    return violations
 
 
 def run_checks(core_src: pathlib.Path) -> list[str]:
-    """Run all architecture invariants and return a list of violation descriptions."""
-    violations: list[str] = []
-
-    for rel in RETIRED_LEGACY_PATHS:
-        legacy = core_src / rel
-        if legacy.exists():
-            violations.append(f"Deprecated legacy path exists: {legacy.as_posix()}")
-
-    for rel in REQUIRED_CANONICAL_PATHS:
-        canon = core_src / rel
-        if not canon.exists():
-            violations.append(f"Missing required canonical path: {canon.as_posix()}")
-
-    for label, sub, pat in DAG_AND_AXIOM_RULES:
-        sub_path = core_src / sub
-        if sub_path.is_file():
-            rs_files = [sub_path]
-        elif sub_path.is_dir():
-            rs_files = sorted(sub_path.rglob("*.rs"))
-        else:
-            rs_files = []
-
-        if not rs_files:
-            violations.append(f"{label}: path {sub_path.as_posix()} is missing or contains no .rs files")
-            continue
-
-        for rs_file in rs_files:
-            text = rs_file.read_text(encoding="utf-8")
-            lines = text.splitlines()
-            for match in pat.finditer(text):
-                lineno = text.count("\n", 0, match.start()) + 1
-                snippet = lines[lineno - 1].strip() if 1 <= lineno <= len(lines) else match.group(0)
-                violations.append(f"{label}: {rs_file.as_posix()}:{lineno}: {snippet}")
-
-    violations.extend(check_abstract_domain_invariant(core_src))
-    violations.extend(check_cross_observer_scoped_boundaries(core_src))
-    violations.extend(check_vocabulary_ownership(core_src))
+    """Run all hard-error architecture invariants and return violation descriptions."""
+    violations = run_core_checks(core_src)
     repo_root = core_src.parent.parent.parent
-    violations.extend(check_downstream_vocabulary(repo_root))
-    violations.extend(check_workspace_crate_gates(repo_root))
-    violations.extend(check_topology_matrix_parity(core_src))
+    violations.extend(run_workspace_checks(repo_root))
     return violations
-
-
-def bucket_for_path(core_src: pathlib.Path, rs_file: pathlib.Path) -> str | None:
-    """Map a core source file to its Y-shaped DAG node bucket."""
-    rel = rs_file.relative_to(core_src).parts
-    if not rel:
-        return None
-    top = rel[0]
-    if top == "drivers" and len(rel) >= 2 and rel[1] in ("spine", "ego"):
-        return f"drivers::{rel[1]}"
-    if top in ("liminal", "foundation", "stigmergy", "drivers", "runtime"):
-        return top
-    return None
-
-
-def collect_dag_metrics(
-    core_src: pathlib.Path,
-) -> tuple[Counter[str], Counter[str], dict[tuple[str, str], int]]:
-    """Collect per-layer file counts, LOC, and inter-layer `crate::` import edge counts."""
-    files_per_node: Counter[str] = Counter()
-    loc_per_node: Counter[str] = Counter()
-    edge_counts: dict[tuple[str, str], int] = defaultdict(int)
-
-    for rs_file in sorted(core_src.rglob("*.rs")):
-        src_bucket = bucket_for_path(core_src, rs_file)
-        if src_bucket is None:
-            continue
-        text = rs_file.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        files_per_node[src_bucket] += 1
-        loc_per_node[src_bucket] += len(lines)
-        for _lineno, line in strip_cfg_test_tail(lines):
-            code = line.split("//", 1)[0]
-            for target in CRATE_DEP_RE.findall(code):
-                dst_bucket = target if target in ("drivers::spine", "drivers::ego") else target.split("::")[0]
-                if dst_bucket == "drivers" and src_bucket in ("drivers::spine", "drivers::ego"):
-                    dst_bucket = "drivers"
-                if dst_bucket != src_bucket:
-                    edge_counts[(src_bucket, dst_bucket)] += 1
-
-    return files_per_node, loc_per_node, edge_counts
-
-
-def render_mermaid(core_src: pathlib.Path) -> str:
-    """Render the live Y-shaped 5-layer DAG as a Mermaid `flowchart TD` diagram."""
-    files_per_node, loc_per_node, edge_counts = collect_dag_metrics(core_src)
-
-    def node_label(key: str, title: str) -> str:
-        return f'{title} - {files_per_node[key]} files, {loc_per_node[key]} LOC'
-
-    node_ids = {
-        "liminal": "L0_liminal",
-        "foundation": "L1_foundation",
-        "stigmergy": "L2_stigmergy",
-        "drivers::spine": "L3_spine",
-        "drivers::ego": "L3_ego",
-        "drivers": "L3_drivers_hub",
-        "runtime": "L4_runtime",
-    }
-
-    lines = [
-        "flowchart TD",
-        f'    L0_liminal["{node_label("liminal", "Lv.0 liminal (Boundary Axioms & AbstractDomain)")}"]',
-        f'    L1_foundation["{node_label("foundation", "Lv.1 foundation (Pure SWAR, RoPE & Cohomology)")}"]',
-        f'    L2_stigmergy["{node_label("stigmergy", "Lv.2 stigmergy (Substrate & PhaseAnchors)")}"]',
-        '    subgraph L3_drivers["Lv.3 drivers (Orthogonal Axes & Tension)"]',
-        f'        L3_spine["{node_label("drivers::spine", "drivers/spine (Reflex & EntropyController)")}"]',
-        f'        L3_ego["{node_label("drivers::ego", "drivers/ego (Intent & EgoDifferentialNet)")}"]',
-        f'        L3_drivers_hub["{node_label("drivers", "drivers/mod (DistortionTension)")}"]',
-        "    end",
-        f'    L4_runtime["{node_label("runtime", "Lv.4 runtime (Context, Gateway, Horizon, ABI)")}"]',
-        "",
-    ]
-
-    ordered_pairs = [
-        ("liminal", "foundation"),
-        ("liminal", "stigmergy"),
-        ("foundation", "stigmergy"),
-        ("liminal", "drivers::spine"),
-        ("foundation", "drivers::spine"),
-        ("stigmergy", "drivers::spine"),
-        ("liminal", "drivers::ego"),
-        ("foundation", "drivers::ego"),
-        ("stigmergy", "drivers::ego"),
-        ("drivers", "drivers::spine"),
-        ("drivers", "drivers::ego"),
-        ("liminal", "runtime"),
-        ("foundation", "runtime"),
-        ("stigmergy", "runtime"),
-        ("drivers::spine", "runtime"),
-        ("drivers::ego", "runtime"),
-        ("drivers", "runtime"),
-    ]
-    for provider, consumer in ordered_pairs:
-        refs = edge_counts.get((consumer, provider), 0)
-        if refs > 0:
-            lines.append(f"    {node_ids[provider]} -->|{refs} refs| {node_ids[consumer]}")
-
-    return "\n".join(lines) + "\n"
-
-
-def _scan_crate_prod_stats(
-    src_dir: pathlib.Path,
-    skip_names: frozenset[str] = frozenset(),
-) -> tuple[int, int, str]:
-    """Return `(prod_files, prod_loc, combined_non_test_code)` for a Rust crate `src/` dir."""
-    files = 0
-    prod_loc = 0
-    chunks: list[str] = []
-    if not src_dir.is_dir():
-        return 0, 0, ""
-    for rs_file in sorted(src_dir.rglob("*.rs")):
-        if rs_file.name == "tests.rs" or "tests" in rs_file.parts or rs_file.name in skip_names:
-            continue
-        raw = rs_file.read_text(encoding="utf-8")
-        files += 1
-        prod_loc += len(strip_cfg_test_tail(raw.splitlines()))
-        chunks.append(_extract_non_test_code(raw))
-    return files, prod_loc, "\n".join(chunks)
-
-
-def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
-    """Render workspace crates -> adapter canonical gates -> core 5-layer DAG as Mermaid."""
-    core_src = repo_root / "src" / "core" / "src"
-    files_per_node, loc_per_node, core_edges = collect_dag_metrics(core_src)
-
-    dsl_files, dsl_loc, _ = _scan_crate_prod_stats(repo_root / "src" / "dsl" / "src")
-    cli_files, cli_loc, cli_code = _scan_crate_prod_stats(
-        repo_root / "src" / "cli" / "src", QUARANTINED_CLI_FILES
-    )
-    eval_files, eval_loc, eval_code = _scan_crate_prod_stats(
-        repo_root / "examples" / "candle_eval" / "src"
-    )
-    ad_files, ad_loc, ad_code = _scan_crate_prod_stats(repo_root / "src" / "adapter" / "src")
-
-    cli_dsl_refs = len(re.findall(r"\bliminika_dsl\b", cli_code))
-    cli_adapter_gates = len(ADAPTER_MUT_GATE_CALL_RE.findall(cli_code))
-    cli_core_vals = len(CORE_CRATE_LAYER_RE.findall(cli_code))
-    cli_cabi_smoke = len(RAW_C_ABI_CALL_RE.findall(cli_code))
-
-    eval_adapter_gates = len(ADAPTER_MUT_GATE_CALL_RE.findall(eval_code))
-    eval_core_vals = len(CORE_CRATE_LAYER_RE.findall(eval_code))
-
-    ad_core_counts: Counter[str] = Counter(CORE_CRATE_LAYER_RE.findall(ad_code))
-    ad_runtime_gates = ad_core_counts["runtime"]
-    ad_liminal_vals = ad_core_counts["liminal"]
-    ad_foundation_vals = ad_core_counts["foundation"]
-    ad_stigmergy_vals = ad_core_counts["stigmergy"]
-    ad_drivers_vals = ad_core_counts["drivers"]
-
-    def plural_files(count: int) -> str:
-        return f"{count} file" if count == 1 else f"{count} files"
-
-    def core_label(key: str, title: str) -> str:
-        return f"{title} - {plural_files(files_per_node[key])}, {loc_per_node[key]} LOC"
-
-    lines = [
-        "flowchart TD",
-        '    %% Legend: solid arrow (-->) = Mutable State Gate; dashed arrow (-.->) = Value/Pod Ref',
-        '    subgraph WS_HOSTS["Workspace Host Crates & Evaluation Harness"]',
-        f'        W_dsl["liminika-dsl (Parser/AST) - {plural_files(dsl_files)}, {dsl_loc} prod LOC"]',
-        f'        W_cli["liminika-cli (CLI & C-ABI Smoke) - {plural_files(cli_files)}, {cli_loc} prod LOC"]',
-        (
-            f'        W_eval["candle_eval (Thin Eval Harness) - '
-            f'{plural_files(eval_files)}, {eval_loc} prod LOC"]'
-        ),
-        "    end",
-        '    subgraph WS_ADAPTER["Canonical Adapter Gate (liminika-adapter)"]',
-        (
-            '        W_adapter["ModelSteeringAdapter + TurnOrchestrator + CompiledTokenCorpus '
-            f'- {plural_files(ad_files)}, {ad_loc} prod LOC"]'
-        ),
-        "    end",
-        '    subgraph WS_CORE["liminika-core (#![no_std] 5-Layer Unidirectional DAG)"]',
-        f'        L0_liminal["{core_label("liminal", "Lv.0 liminal (Axioms & Lacuna)")}"]',
-        f'        L1_foundation["{core_label("foundation", "Lv.1 foundation (SWAR, RoPE, Pod)")}"]',
-        f'        L2_stigmergy["{core_label("stigmergy", "Lv.2 stigmergy (Substrate & Anchors)")}"]',
-        '        subgraph WS_L3["Lv.3 drivers (Orthogonal Axes & Tension)"]',
-        f'            L3_spine["{core_label("drivers::spine", "Lv.3 drivers/spine (Spine SSOT)")}"]',
-        f'            L3_ego["{core_label("drivers::ego", "Lv.3 drivers/ego (Ego P-Frame)")}"]',
-        f'            L3_drivers_hub["{core_label("drivers", "Lv.3 drivers/mod (Tension)")}"]',
-        "        end",
-        f'        L4_runtime["{core_label("runtime", "Lv.4 runtime (Context, Gateway, ABI)")}"]',
-        "    end",
-        "",
-    ]
-
-    # Host -> DSL / Adapter / Core edges
-    if cli_dsl_refs > 0:
-        lines.append(f'    W_cli -.->|"Value/AST ({cli_dsl_refs} refs)"| W_dsl')
-    lines.append(f'    W_cli -->|"Mutable Gate ({cli_adapter_gates} calls)"| W_adapter')
-    if cli_core_vals > 0:
-        lines.append(f'    W_cli -.->|"Value/Pod & Inspect ({cli_core_vals} refs)"| L4_runtime')
-    if cli_cabi_smoke > 0:
-        lines.append(
-            f'    W_cli -.->|"C-ABI Smoke Allowlist ({cli_cabi_smoke} calls)"| L4_runtime'
-        )
-    lines.append(f'    W_eval -->|"Mutable Gate ({eval_adapter_gates} calls)"| W_adapter')
-    if eval_core_vals > 0:
-        lines.append(f'    W_eval -.->|"Value/Pod & Anchors ({eval_core_vals} refs)"| L4_runtime')
-
-    # Adapter -> Core edges (Mutable RuntimeContext gate vs Value/Pod/Trait refs)
-    lines.append(f'    W_adapter -->|"Mutable RuntimeContext Gate ({ad_runtime_gates} refs)"| L4_runtime')
-    if ad_liminal_vals > 0:
-        lines.append(f'    W_adapter -.->|"Value/Pod ({ad_liminal_vals} refs)"| L0_liminal')
-    if ad_foundation_vals > 0:
-        lines.append(f'    W_adapter -.->|"Value/Trait ({ad_foundation_vals} refs)"| L1_foundation')
-    if ad_stigmergy_vals > 0:
-        lines.append(f'    W_adapter -.->|"Value/Trait ({ad_stigmergy_vals} refs)"| L2_stigmergy')
-    if ad_drivers_vals > 0:
-        lines.append(f'    W_adapter -.->|"Value/Pod ({ad_drivers_vals} refs)"| L3_spine')
-
-    # Core internal 5-layer DAG edges
-    node_ids = {
-        "liminal": "L0_liminal",
-        "foundation": "L1_foundation",
-        "stigmergy": "L2_stigmergy",
-        "drivers::spine": "L3_spine",
-        "drivers::ego": "L3_ego",
-        "drivers": "L3_drivers_hub",
-        "runtime": "L4_runtime",
-    }
-    ordered_pairs = [
-        ("liminal", "foundation"),
-        ("liminal", "stigmergy"),
-        ("foundation", "stigmergy"),
-        ("liminal", "drivers::spine"),
-        ("foundation", "drivers::spine"),
-        ("stigmergy", "drivers::spine"),
-        ("liminal", "drivers::ego"),
-        ("foundation", "drivers::ego"),
-        ("stigmergy", "drivers::ego"),
-        ("drivers", "drivers::spine"),
-        ("drivers", "drivers::ego"),
-        ("liminal", "runtime"),
-        ("foundation", "runtime"),
-        ("stigmergy", "runtime"),
-        ("drivers::spine", "runtime"),
-        ("drivers::ego", "runtime"),
-        ("drivers", "runtime"),
-    ]
-    for provider, consumer in ordered_pairs:
-        refs = core_edges.get((consumer, provider), 0)
-        if refs > 0:
-            lines.append(f"    {node_ids[provider]} -->|{refs} refs| {node_ids[consumer]}")
-
-    # Invisible rank links keep WS_CORE ordered Lv.0 -> Lv.1 -> Lv.2 -> Lv.3 -> Lv.4.
-    lines.append("    L2_stigmergy ~~~ L3_drivers_hub")
-    lines.append("    L3_spine ~~~ L4_runtime")
-    lines.append("    L3_ego ~~~ L4_runtime")
-
-    return "\n".join(lines) + "\n"
-
-
-def format_hotspots(core_src: pathlib.Path, top_n: int = 12) -> str:
-    """Analyze complexity, `unsafe`, and boundary density across production files in `src/core/src`."""
-    rows: list[tuple[int, int, int, int, int, str]] = []
-    for rs_file in sorted(core_src.rglob("*.rs")):
-        if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
-            continue
-        lines = rs_file.read_text(encoding="utf-8").splitlines()
-        total_loc = len(lines)
-        non_test = strip_cfg_test_tail(lines)
-        prod_loc = len(non_test)
-        unsafe_hits = 0
-        raw_mask_hits = 0
-        scoped_refs = 0
-        for _lineno, line in non_test:
-            code = line.split("//", 1)[0]
-            if re.search(r"\bunsafe\b", code):
-                unsafe_hits += 1
-            if "& !" in code:
-                raw_mask_hits += 1
-            if re.search(r"\b(?:Scoped|Indivisible)\b", code):
-                scoped_refs += 1
-        rel = rs_file.relative_to(core_src).as_posix()
-        rows.append((prod_loc, total_loc, unsafe_hits, raw_mask_hits, scoped_refs, rel))
-
-    rows.sort(reverse=True)
-    header = [
-        f"Core Architecture Hotspots (top {min(top_n, len(rows))} production files by non-test LOC):",
-        f"{'File':<46} | {'ProdLOC':>7} | {'TotalLOC':>8} | {'Unsafe':>6} | {'Raw&!':>5} | {'Axiom':>5}",
-        "-" * 92,
-    ]
-    for prod_loc, total_loc, unsafe_hits, raw_mask_hits, scoped_refs, rel in rows[:top_n]:
-        header.append(
-            f"{rel:<46} | {prod_loc:>7} | {total_loc:>8} | {unsafe_hits:>6} | {raw_mask_hits:>5} | {scoped_refs:>5}"
-        )
-    total_files = len(rows)
-    total_prod = sum(r[0] for r in rows)
-    total_all = sum(r[1] for r in rows)
-    total_unsafe = sum(r[2] for r in rows)
-    header.append("-" * 92)
-    header.append(
-        f"Summary: {total_files} prod files | {total_prod} prod LOC "
-        f"({total_all} total LOC) | {total_unsafe} non-test unsafe tokens"
-    )
-    return "\n".join(header) + "\n"
-
-
-def collect_liminal_map_metrics(core_src: pathlib.Path) -> dict[str, int]:
-    """Scan live `src/core/src` production files for Abstraction <-> Concretion metrics."""
-    metrics: dict[str, int] = {
-        "foundation_files": 0,
-        "foundation_prod_loc": 0,
-        "axiom_files": 0,
-        "axiom_gate_refs": 0,
-        "grounded_iframe_refs": 0,
-        "active_concretion_refs": 0,
-        "abstract_bypass_refs": 0,
-        "exterior_sandbox_refs": 0,
-        "pframe_ego_refs": 0,
-        "runtime_gate_refs": 0,
-    }
-    patterns = {
-        "axiom_gate_refs": re.compile(
-            r"\b(?:Scoped|Indivisible|rescope_from_|cut_by_lacuna|"
-            r"bridge_to_shared|BitCut(?:8|32|64)?)\b"
-        ),
-        "grounded_iframe_refs": re.compile(
-            r"\b(?:Grounded|PhaseAnchorRecord|PhaseProfile64|PhaseProfileRef64|"
-            r"PhaseWordsRef64)\b"
-        ),
-        "active_concretion_refs": re.compile(
-            r"\b(?:ActiveScope|PhaseSteeringEngine|ResidualAdapterEngine|"
-            r"PhaseDeltaSlice|ResidualScale|Indivisible\s*<\s*Active)\b"
-        ),
-        "abstract_bypass_refs": re.compile(
-            r"\b(?:Lacuna::Unobserved|Lacuna::SelfRef|"
-            r"stationary_shortcut_ready|whole_token_steering_bypass)\b"
-        ),
-        "exterior_sandbox_refs": re.compile(
-            r"\b(?:Lacuna::Exterior|slot_sandbox_mask|settle_sandbox_lane|"
-            r"SandboxLifecycleEvent)\b"
-        ),
-        "pframe_ego_refs": re.compile(
-            r"\b(?:DistortionDelta|EgoDifferentialNet|DistortionTension)\b"
-        ),
-        "runtime_gate_refs": re.compile(
-            r"\b(?:LmnkContainerView|SystemSpineState|pinned_compute_mask|"
-            r"CORE_TOPOLOGY)\b"
-        ),
-    }
-
-    for rs_file in sorted(core_src.rglob("*.rs")):
-        if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
-            continue
-        rel = rs_file.relative_to(core_src).parts
-        non_test = strip_cfg_test_tail(rs_file.read_text(encoding="utf-8").splitlines())
-        if rel and rel[0] == "foundation":
-            metrics["foundation_files"] += 1
-            metrics["foundation_prod_loc"] += len(non_test)
-        if len(rel) >= 2 and rel[0] == "liminal" and rel[1] == "axiom":
-            metrics["axiom_files"] += 1
-        for _lineno, line in non_test:
-            code = line.split("//", 1)[0]
-            for key, pat in patterns.items():
-                metrics[key] += len(pat.findall(code))
-
-    return metrics
-
-
-def render_liminal_map(core_src: pathlib.Path) -> str:
-    """Render the static `liminal` Abstraction <-> Concretion Mermaid map and table."""
-    m = collect_liminal_map_metrics(core_src)
-    lines = [
-        "```mermaid",
-        "flowchart LR",
-        '    subgraph ABS["Abstract Realm (Low-Cost Ground State)"]',
-        (
-            '        ABS_FND["Lv.1 foundation/ Pure Compute '
-            f'({m["foundation_files"]} files, {m["foundation_prod_loc"]} prod LOC)"]'
-        ),
-        (
-            '        ABS_IFR["Indivisible(Grounded) I-Frame PhaseAnchorRecord '
-            f'({m["grounded_iframe_refs"]} refs)"]'
-        ),
-        (
-            '        ABS_BYP["Lacuna::Unobserved and SelfRef Bypass '
-            f'({m["abstract_bypass_refs"]} refs)"]'
-        ),
-        "    end",
-        '    subgraph LIM["liminal Boundary Gates (Lv.0 Axiom + Lv.4 Runtime)"]',
-        (
-            '        LIM_AX["Lv.0 liminal/axiom seal / rescope / BitCut '
-            f'({m["axiom_files"]} files, {m["axiom_gate_refs"]} refs)"]'
-        ),
-        (
-            '        LIM_RT["Lv.4 LmnkContainerView + SystemSpineState '
-            f'({m["runtime_gate_refs"]} refs)"]'
-        ),
-        "    end",
-        '    subgraph CON["Concrete Realm (High-Cost Excited State)"]',
-        (
-            '        CON_ACT["Scoped + Indivisible(Active) RoPE / Rank-1 '
-            f'({m["active_concretion_refs"]} refs)"]'
-        ),
-        (
-            '        CON_EGO["EgoDifferentialNet P-Frame + DistortionTension '
-            f'({m["pframe_ego_refs"]} refs)"]'
-        ),
-        (
-            '        CON_EXT["Lacuna::Exterior Isolated Sandbox Lanes '
-            f'({m["exterior_sandbox_refs"]} refs)"]'
-        ),
-        "    end",
-        '    ABS_FND -.->|"Pure Kernel Supply (Zero-Scoped)"| CON_ACT',
-        '    ABS_IFR <-->|"seal / ground I-Frame"| LIM_AX',
-        '    ABS_BYP <-->|"4p(1-p) Aperture & Spine Bypass"| LIM_RT',
-        '    LIM_AX -->|"rescope_from_delta / Activate"| CON_ACT',
-        '    LIM_RT <-->|"Host Pin Floor & Tension Damping"| CON_EGO',
-        '    LIM_AX <-->|"cut_by_lacuna / settle_sandbox_lane"| CON_EXT',
-        "```",
-        "",
-        "## Static `liminal` Abstraction <-> Concretion Correspondence Table",
-        "",
-        (
-            "| Abstract Realm (Ground State) | `liminal` Boundary Gate / Op | "
-            "Concrete Realm (Excited State) | Live `src/core/src` Counts | "
-            "`CoreTelemetryBank` Counter |"
-        ),
-        "| :--- | :--- | :--- | ---: | :--- |",
-        (
-            "| Lv.1 `foundation/` non-`Scoped` pure compute | "
-            "Direct pure kernel call (no `liminal/axiom` import) | "
-            "Lv.2+ `Indivisible(Active)` RoPE / Rank-1 engines | "
-            f"{m['foundation_files']} files / {m['foundation_prod_loc']} LOC -> "
-            f"{m['active_concretion_refs']} active refs | "
-            "`stigmergy.decision_counts[0..7]` |"
-        ),
-        (
-            "| `Indivisible(Grounded)` I-Frame `PhaseAnchorRecord` | "
-            "`seal` / `rescope_from_boundary` / `CORE_TOPOLOGY` | "
-            "`EgoDifferentialNet` P-Frame `DistortionDelta` | "
-            f"{m['grounded_iframe_refs']} grounded refs <-> "
-            f"{m['pframe_ego_refs']} P-Frame/tension refs | "
-            "`pframe_chain_evals`, `pframe_total_hops`, `ego.intervention_count` |"
-        ),
-        (
-            "| `Lacuna::SelfRef` stationary bypass | "
-            "`SystemSpineState` + `pinned_compute_mask` | "
-            "`DistortionTension` damped/excited steering | "
-            f"{m['abstract_bypass_refs']} bypass refs <-> "
-            f"{m['runtime_gate_refs']} spine/container refs | "
-            "`whole_token_bypass_events`, `liminal.stationary_shortcut_hits`, "
-            "`immediate_tension_damps`, `slow_tension_excites` |"
-        ),
-        (
-            "| `Lacuna::Unobserved` zero-aperture | "
-            "`cut_by_lacuna` / `LacunaPartition8` | "
-            "`Lacuna::Exterior` sandbox (`slot_sandbox_mask`) | "
-            f"{m['axiom_gate_refs']} axiom gate refs <-> "
-            f"{m['exterior_sandbox_refs']} sandbox refs | "
-            "`unobserved_aperture_zeros`, `exterior_sandbox_stages`, "
-            "`liminal.slide_in_count`, `liminal.slide_out_count` |"
-        ),
-    ]
-    return "\n".join(lines) + "\n"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        description="Verify LiminiKa 5-layer Y-shaped DAG, axiom boundaries, Mermaid graph, and hotspots."
+        description="Verify LiminiKa 5-layer Y-shaped DAG, workspace gates, Mermaid maps, and meta-audit."
     )
     parser.add_argument(
         "--check",
         action="store_true",
         help=(
-            "Verify DAG, isolation, axiom orthogonality, AbstractDomain, "
-            "Scoped boundary, legacy declared-identifier bans, and Substrate ownership rules."
+            "Verify DAG, isolation, axiom orthogonality, AbstractDomain, Scoped boundary, "
+            "workspace gates, legacy bans, Substrate ownership, and file hygiene."
         ),
+    )
+    parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="Emit non-blocking meta-audit warnings (always exits 0).",
     )
     parser.add_argument(
         "--mermaid",
@@ -1419,6 +121,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if not (
         args.check
+        or args.audit
         or args.mermaid
         or args.mermaid_workspace
         or args.hotspots
@@ -1426,6 +129,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ):
         args.check = True
     return args
+
+
+def _emit_diagram(
+    content: str,
+    output_path: pathlib.Path | None,
+    write_to_file: bool,
+    label: str,
+    printed_any: bool,
+) -> bool:
+    if output_path is not None and write_to_file:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(content.encode("utf-8"))
+        print(f"\nWrote {label} to {output_path.as_posix()}")
+        return printed_any
+    if printed_any:
+        print()
+    print(content, end="")
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1448,8 +169,14 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 "All 5-layer DAG, spine/ego isolation, axiom orthogonality, "
                 "AbstractDomain, Scoped boundary, workspace gate, legacy declared-identifier bans, "
-                "and Substrate ownership invariants passed (0 violations)."
+                "Substrate ownership, and file hygiene invariants passed (0 violations)."
             )
+        printed_any = True
+
+    if args.audit:
+        if printed_any:
+            print()
+        print(render_coupling_audit(REPO_ROOT), end="")
         printed_any = True
 
     if args.hotspots:
@@ -1461,40 +188,31 @@ def main(argv: list[str] | None = None) -> int:
     diagram_flags = int(args.mermaid) + int(args.mermaid_workspace) + int(args.liminal_map)
 
     if args.mermaid:
-        diagram = render_mermaid(CORE_SRC)
-        if args.output is not None and diagram_flags == 1:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_bytes(diagram.encode("utf-8"))
-            print(f"\nWrote Mermaid diagram to {args.output.as_posix()}")
-        else:
-            if printed_any:
-                print()
-            print(diagram, end="")
-            printed_any = True
+        printed_any = _emit_diagram(
+            render_mermaid(CORE_SRC),
+            args.output,
+            diagram_flags == 1,
+            "Mermaid diagram",
+            printed_any,
+        )
 
     if args.mermaid_workspace:
-        ws_diagram = render_mermaid_workspace(REPO_ROOT)
-        if args.output is not None and diagram_flags == 1:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_bytes(ws_diagram.encode("utf-8"))
-            print(f"\nWrote workspace Mermaid diagram to {args.output.as_posix()}")
-        else:
-            if printed_any:
-                print()
-            print(ws_diagram, end="")
-            printed_any = True
+        printed_any = _emit_diagram(
+            render_mermaid_workspace(REPO_ROOT),
+            args.output,
+            diagram_flags == 1,
+            "workspace Mermaid diagram",
+            printed_any,
+        )
 
     if args.liminal_map:
-        liminal_doc = render_liminal_map(CORE_SRC)
-        if args.output is not None and diagram_flags == 1:
-            args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_bytes(liminal_doc.encode("utf-8"))
-            print(f"\nWrote liminal boundary map to {args.output.as_posix()}")
-        else:
-            if printed_any:
-                print()
-            print(liminal_doc, end="")
-            printed_any = True
+        printed_any = _emit_diagram(
+            render_liminal_map(CORE_SRC),
+            args.output,
+            diagram_flags == 1,
+            "liminal boundary map",
+            printed_any,
+        )
 
     return exit_code
 

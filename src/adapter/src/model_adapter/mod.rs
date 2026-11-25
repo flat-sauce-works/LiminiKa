@@ -411,6 +411,7 @@ pub struct ModelSteeringAdapter {
     sandbox_settlement_streak: u8,
     prev_sandbox_coherence: f32,
     prev_sandbox_assim_drift: f32,
+    crystallized_anchors: Vec<PhaseAnchorRecord>,
 }
 
 impl Drop for ModelSteeringAdapter {
@@ -421,11 +422,16 @@ impl Drop for ModelSteeringAdapter {
         self.coherence_guard_slot = CoherenceHorizonGuardSlot::default();
         *self.residual_spillover = DefaultResidualSpilloverSlot::default();
         self.last_ensemble_report = None;
+        self.crystallized_anchors.clear();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
 }
 
 impl ModelSteeringAdapter {
+    /// Maximum number of Cold-Path crystallized [`PhaseAnchorRecord`] entries retained in the
+    /// bounded FIFO capture queue before oldest entries are evicted.
+    pub const MAX_CRYSTALLIZED_ANCHOR_BUFFER: usize = 64;
+
     /// Default decode-token hold window before a transient contradiction-guard compute pin may
     /// relax toward low-cost bypass (`0` holds the entire turn; opt-in via `--guard-hold-tokens=<N>`).
     pub const DEFAULT_GUARD_HOLD_TOKENS: u8 = 0;
@@ -525,6 +531,7 @@ impl ModelSteeringAdapter {
             sandbox_settlement_streak: 0,
             prev_sandbox_coherence: 0.0,
             prev_sandbox_assim_drift: 1.0,
+            crystallized_anchors: Vec::new(),
         })
     }
 }

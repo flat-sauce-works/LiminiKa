@@ -355,6 +355,11 @@ impl ModelSteeringAdapter {
             let num_layers_denom = this.geometry.num_layers.saturating_sub(1).max(1);
             let layer_scale_q7 = ((layer_idx * 127) / num_layers_denom).min(127) as u8;
             let conflict_active = pre_trigger.repulsion_severity > 0.25;
+            let repulsion_lane_already_active = (this.ctx.substrate().slot_repulsion_mask
+                & this.ctx.substrate().slot_enabled_mask)
+                != 0;
+            let suppress_duplicate_repulsion_escalation =
+                conflict_active && repulsion_lane_already_active;
             let esc_req = HorizonEscalationRequest {
                 trigger: pre_trigger,
                 placement: WorkbenchLanePlacement::AutoFree,
@@ -370,10 +375,11 @@ impl ModelSteeringAdapter {
             let lane_active = this.ctx.escalated_workbench_lane().is_some_and(|l| {
                 l < 8 && (this.ctx.substrate().slot_enabled_mask & (1u8 << l)) != 0
             });
-            let should_check_escalation = this.escalation_boundary_dirty
-                || pre_trigger.epistemic_regime != this.last_escalated_regime
-                || (lane_active && pre_trigger.can_retract())
-                || (!lane_active && pre_trigger.is_destabilized());
+            let should_check_escalation = !suppress_duplicate_repulsion_escalation
+                && (this.escalation_boundary_dirty
+                    || pre_trigger.epistemic_regime != this.last_escalated_regime
+                    || (lane_active && pre_trigger.can_retract())
+                    || (!lane_active && pre_trigger.is_destabilized()));
             let escalated = if should_check_escalation {
                 let mut esc_lane = this.ctx.escalated_workbench_lane();
                 let sw = this

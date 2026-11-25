@@ -293,7 +293,7 @@ pub(super) fn apply_sys_and_guard_to_pair_frame<
 ) -> GatewayFrame {
     let mut prov_bits =
         frame.lineage_flags | sys.causal_provenance_bits() | CAUSAL_AXIS_SYSTEM_CONSTRAINT;
-    let active_swarm_mask = frame.active_swarm_cell_mask & sys.active_swarm_cells_mask();
+    let mut active_swarm_mask = frame.active_swarm_cell_mask & sys.active_swarm_cells_mask();
     let force_skip = sys.recommend_layer_skip();
     let min_step_rad = branchless_max_f32(0.0, sys.phase_step_min_rad_override());
     let sys_sev = branchless_clamp_f32(sys.causal_anomaly_severity(), 0.0, 1.0);
@@ -325,15 +325,27 @@ pub(super) fn apply_sys_and_guard_to_pair_frame<
         (rep_sev > 0.50) | ((prov_bits & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0);
     if repulsion_triggered {
         prov_bits |= CAUSAL_CAUSE_COHOMOLOGY_REPULSION;
-        let guard_w = guard_opt.map_or(
-            [0u64; NUM_STIGMERGIC_GRANULES],
-            ContradictionGuardSignal::project_repulsive_pole_words_64,
-        );
+        let (guard_w, guard_e) = match guard_opt {
+            Some(guard) => (
+                guard.project_repulsive_pole_words_64(),
+                branchless_flush_subnormal_f32(branchless_relu_f32(guard.grounding_base_energy())),
+            ),
+            None => ([0u64; NUM_STIGMERGIC_GRANULES], 0.0_f32),
+        };
         let mut out_w = words;
         let _ = apply_repulsion_pole_words_64(&mut out_w, false, &guard_w);
         frame.phase_deltas = words_to_q7_array_64(&out_w);
         frame.dominant_slot = ATTRACTOR_SLOT_REPULSION;
         rep_sev = branchless_max_f32(rep_sev, 0.85);
+        if frame.effective_energy <= DEFAULT_ENTROPY_EPS {
+            frame.effective_energy = branchless_min_f32(
+                branchless_max_f32(guard_e, rep_sev),
+                MAX_ATTRACTOR_PULL_FORCE,
+            );
+        }
+        if active_swarm_mask == 0 {
+            active_swarm_mask = sys.active_swarm_cells_mask();
+        }
         frame.action_mode_flags = ACTION_PRESET_REPULSION_ESCAPE;
         frame.attribution_tag = ROOT_CAUSE_COHOMOLOGY_REPULSION;
         frame.effective_inv_temp = 0.75;
@@ -693,7 +705,7 @@ where
         blended_uni = apply_repulsion_pole_words_64(&mut blended_w, blended_uni, &guard_w);
         dom_slot = ATTRACTOR_SLOT_REPULSION;
         rep_sev = branchless_max_f32(rep_sev, 0.85);
-        if !(has_fact | has_persona) {
+        if !(has_fact | has_persona) || eff_energy <= DEFAULT_ENTROPY_EPS {
             eff_energy = branchless_min_f32(
                 branchless_max_f32(guard_e, rep_sev),
                 MAX_ATTRACTOR_PULL_FORCE,

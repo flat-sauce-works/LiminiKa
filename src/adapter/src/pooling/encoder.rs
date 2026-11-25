@@ -15,15 +15,23 @@ use liminika_core::abi::lmnk_q7_t;
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
 
-/// Default neutral prompts used to sample a host model's unsteered background gravity prior
-/// before compiling external attractor corpora.
-pub const DEFAULT_STARTUP_PRIOR_PROBES: [&str; 6] = [
+/// Default neutral prompts spanning six general domains (technical, arithmetic, factual, code,
+/// daily conversation, and summarization; two per category interleaved for balanced 2-fold
+/// cross-fitting) used to sample a host model's unsteered background gravity prior before
+/// compiling external attractor corpora.
+pub const DEFAULT_STARTUP_PRIOR_PROBES: [&str; 12] = [
     "Explain the basic design trade-offs of a modular systems architecture.",
     "Summarize how memory alignment affects hardware cache performance.",
-    "Describe step by step how an algorithm filters noisy input signals.",
-    "Contrast deterministic engineering constraints with approximate heuristics.",
-    "What is the boiling point of water at standard atmospheric pressure?",
-    "Write a concise technical note defining a protocol boundary version.",
+    "What is 23 multiplied by 4?",
+    "Calculate the remainder when 50 is divided by 7.",
+    "Which ocean lies between Europe and North America?",
+    "How many seconds are in a single hour?",
+    "Write a short function signature in C that returns the square of an integer.",
+    "What does a hash table use to map keys to array slots?",
+    "Suggest two quick ways to keep fresh herbs crisp in the refrigerator.",
+    "How can someone politely follow up on an unanswered email?",
+    "Briefly explain how evaporation cools a liquid surface.",
+    "Define the term algorithm in one clear sentence.",
 ];
 
 /// Raw per-token, per-layer pre-RoPE query activations captured from one text sequence,

@@ -249,6 +249,34 @@ pub(crate) fn build_persona_anchors_per_layer_from_projection<
         .collect()
 }
 
+pub(crate) fn build_guard_anchors_per_layer_from_projection<
+    R: AttractorRecallProjection + ?Sized,
+>(
+    recall: &R,
+    num_layers: usize,
+    is_guard_trap: bool,
+) -> Vec<Vec<GuardPhaseAnchor>> {
+    let margin = recall.guard_conflict_margin();
+    if !(is_guard_trap || margin > 0.0) {
+        return vec![Vec::new(); num_layers];
+    }
+    let Some(guard) = recall.top_guard_ref() else {
+        return vec![Vec::new(); num_layers];
+    };
+    let obstruction = (0.55 + margin.max(0.0)).clamp(0.55, 1.0);
+    const OBSTRUCTION_THRESHOLD: f32 = 0.50;
+    (0..num_layers)
+        .map(|l| match guard.per_layer_q7.get(l) {
+            Some(&arr) => vec![GuardPhaseAnchor::new(
+                arr,
+                obstruction,
+                OBSTRUCTION_THRESHOLD,
+            )],
+            None => Vec::new(),
+        })
+        .collect()
+}
+
 pub(crate) fn join_fact_context_from_projection<R: AttractorRecallProjection + ?Sized>(
     recall: &R,
 ) -> String {
@@ -703,26 +731,22 @@ impl RecallBoundaryGate for CoherenceGuardGate {
         metrics: &RecallBoundaryMetrics,
         policy: &RecallPolicy,
     ) -> RecallGateDecision {
-        if metrics.guard_conflict_margin > policy.guard_suppress_margin {
+        let guard_floor = policy.min_coherence * 0.70;
+        if metrics.max_guard_score >= guard_floor
+            && metrics.guard_conflict_margin > policy.guard_suppress_margin
+        {
             return RecallGateDecision {
                 lacuna_state: LacunaBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             };
         }
         let margin = metrics.top1_fact_score - metrics.top2_fact_score;
-        let sharp_liminal_match = metrics.top1_fact_score >= policy.min_coherence * 0.85
-            && metrics.top1_fact_score >= metrics.top1_persona_score
-            && margin >= policy.boundary_margin
-            && metrics.top1_fact_score >= metrics.top2_fact_score.max(0.0) * 1.5;
-
-        if metrics.top1_fact_score < policy.min_coherence && !sharp_liminal_match {
+        if metrics.top1_fact_score < policy.min_coherence {
             RecallGateDecision {
                 lacuna_state: LacunaBoundaryState::LiminalExterior,
                 suppress_fact_injection: true,
             }
-        } else if sharp_liminal_match && metrics.top1_fact_score < policy.min_coherence
-            || margin < policy.boundary_margin
-        {
+        } else if margin < policy.boundary_margin {
             RecallGateDecision {
                 lacuna_state: LacunaBoundaryState::LiminalBoundary,
                 suppress_fact_injection: false,
@@ -743,6 +767,9 @@ pub(crate) struct CorpusRecallCache {
     pub(crate) projected_sigs_flat: Vec<f32>,
     /// Fixed dimension of each projected signature row (`0` when empty or non-uniform).
     pub(crate) sig_dim: usize,
+    /// Lower-quartile orthogonal residual ratio (`||P_perp(e)|| / ||e||`) across corpus entries,
+    /// anchoring query orthogonal-residual attenuation without hardcoded magic thresholds.
+    pub(crate) corpus_ortho_ref: f32,
     /// Ordered corpus entry indices partitioned by [`AttractorRole::slot_index`].
     role_indices: [Vec<usize>; 3],
     /// Precomputed role-scoped neighborhood mean/std per corpus entry.
@@ -760,16 +787,25 @@ impl CorpusRecallCache {
             .filter_nonzero_if_uniform(entries);
 
         let mut projected_sigs_flat = Vec::with_capacity(n_entries.saturating_mul(sig_dim));
+        let mut entry_ortho_ratios: Vec<f32> = Vec::with_capacity(n_entries);
         if sig_dim > 0 {
             for entry in entries {
                 let start = projected_sigs_flat.len();
                 projected_sigs_flat.extend_from_slice(&entry.residual_sig);
-                TextAttractorCorpus::project_and_normalize_in_place(
+                let ratio = TextAttractorCorpus::project_and_normalize_in_place_with_ratio(
                     &mut projected_sigs_flat[start..start + sig_dim],
                     common_mode_basis,
                 );
+                entry_ortho_ratios.push(ratio);
             }
         }
+        let corpus_ortho_ref = if common_mode_basis.is_empty() || entry_ortho_ratios.is_empty() {
+            1.0
+        } else {
+            entry_ortho_ratios.sort_by(f32::total_cmp);
+            let q25_idx = entry_ortho_ratios.len() / 4;
+            entry_ortho_ratios[q25_idx].clamp(0.15, 1.0)
+        };
 
         let mut role_indices: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
         for (i, entry) in entries.iter().enumerate() {
@@ -831,6 +867,7 @@ impl CorpusRecallCache {
         Self {
             projected_sigs_flat,
             sig_dim,
+            corpus_ortho_ref,
             role_indices,
             entry_stats,
             role_global_means,
@@ -1007,30 +1044,53 @@ impl TextAttractorCorpus {
         }
     }
 
-    fn project_and_normalize_in_place(out: &mut [f32], basis: &[Vec<f32>]) {
-        if !basis.is_empty() {
-            for dir in basis {
-                if dir.len() != out.len() {
-                    continue;
-                }
-                let dot: f64 = out
-                    .iter()
-                    .zip(dir.iter())
-                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
-                    .sum();
-                let d = dot as f32;
-                for (x, &c) in out.iter_mut().zip(dir.iter()) {
-                    *x -= d * c;
-                }
-            }
-            Self::l2_normalize_in_place(out);
+    fn project_and_normalize_in_place_with_ratio(out: &mut [f32], basis: &[Vec<f32>]) -> f32 {
+        if basis.is_empty() || out.is_empty() {
+            return 1.0;
         }
+        let raw_norm_sq: f64 = out.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        let raw_norm = raw_norm_sq.sqrt();
+        for dir in basis {
+            if dir.len() != out.len() {
+                continue;
+            }
+            let dot: f64 = out
+                .iter()
+                .zip(dir.iter())
+                .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                .sum();
+            let d = dot as f32;
+            for (x, &c) in out.iter_mut().zip(dir.iter()) {
+                *x -= d * c;
+            }
+        }
+        let perp_norm_sq: f64 = out.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        let perp_norm = perp_norm_sq.sqrt();
+        let ratio = if raw_norm > 1e-12 {
+            (perp_norm / raw_norm).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        };
+        if perp_norm > 1e-12 {
+            let inv = (1.0 / perp_norm) as f32;
+            for x in out.iter_mut() {
+                *x *= inv;
+            }
+        }
+        ratio
+    }
+
+    pub(crate) fn project_and_normalize_with_ratio(
+        v: &[f32],
+        basis: &[Vec<f32>],
+    ) -> (Vec<f32>, f32) {
+        let mut out = v.to_vec();
+        let ratio = Self::project_and_normalize_in_place_with_ratio(&mut out, basis);
+        (out, ratio)
     }
 
     pub(crate) fn project_and_normalize(v: &[f32], basis: &[Vec<f32>]) -> Vec<f32> {
-        let mut out = v.to_vec();
-        Self::project_and_normalize_in_place(&mut out, basis);
-        out
+        Self::project_and_normalize_with_ratio(v, basis).0
     }
 
     fn orthogonalize_against_basis(v: &mut [f32], basis: &[Vec<f32>]) {
@@ -1243,15 +1303,47 @@ impl TextAttractorCorpus {
         baseline_ref_per_layer: &[&[f32]],
         energy: f32,
     ) -> Result<u32, String> {
-        if per_layer_q.len() != baseline_ref_per_layer.len() {
+        self.ingest_text_activations_with_phase_ref(
+            adapter,
+            role,
+            text,
+            per_layer_q,
+            baseline_ref_per_layer,
+            baseline_ref_per_layer,
+            energy,
+        )
+    }
+
+    /// Compiles and appends a text chunk while allowing a role-specific Procrustes phase baseline
+    /// (`phase_ref_per_layer`, e.g. non-Guard centroid for `Guard` poles) separate from the unified
+    /// recall residual centering reference (`residual_ref_per_layer`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if layer counts or per-layer `q_rot` lengths mismatch `adapter.geometry()`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ingest_text_activations_with_phase_ref(
+        &mut self,
+        adapter: &ModelSteeringAdapter,
+        role: AttractorRole,
+        text: impl Into<String>,
+        per_layer_q: &[&[f32]],
+        residual_ref_per_layer: &[&[f32]],
+        phase_ref_per_layer: &[&[f32]],
+        energy: f32,
+    ) -> Result<u32, String> {
+        if per_layer_q.len() != residual_ref_per_layer.len()
+            || per_layer_q.len() != phase_ref_per_layer.len()
+        {
             return Err(format!(
-                "layer count mismatch: per_layer_q={}, baseline={}",
+                "layer count mismatch: per_layer_q={}, residual_ref={}, phase_ref={}",
                 per_layer_q.len(),
-                baseline_ref_per_layer.len()
+                residual_ref_per_layer.len(),
+                phase_ref_per_layer.len()
             ));
         }
         let mut per_layer_q7 = Vec::with_capacity(per_layer_q.len());
-        for (q, r) in per_layer_q.iter().zip(baseline_ref_per_layer.iter()) {
+        for (q, r) in per_layer_q.iter().zip(phase_ref_per_layer.iter()) {
             let q7 = adapter.bake_layer_procrustes_q7(r, q)?;
             let mut arr64 = [0i8; MAX_ATTENTION_HEADS];
             let n = q7.len().min(MAX_ATTENTION_HEADS);
@@ -1261,7 +1353,7 @@ impl TextAttractorCorpus {
         let residual_sig = Self::build_steered_residual_sig(
             adapter.geometry(),
             per_layer_q,
-            baseline_ref_per_layer,
+            residual_ref_per_layer,
         );
         let id = self.next_anchor_id;
         self.next_anchor_id = self.next_anchor_id.saturating_add(1);
@@ -1438,14 +1530,37 @@ impl TextAttractorCorpus {
         }
         let raw_sig =
             Self::build_steered_residual_sig(geom, query_per_layer_q, baseline_ref_per_layer);
-        let query_sig = Self::project_and_normalize(&raw_sig, &self.common_mode_basis);
+        let (query_sig, query_ortho_ratio) =
+            Self::project_and_normalize_with_ratio(&raw_sig, &self.common_mode_basis);
         let cache = self.recall_cache();
+        let ortho_gate = if self.common_mode_basis.is_empty() {
+            1.0_f32
+        } else {
+            // Only attenuate degenerate near-pure-common-mode queries (`query_ortho_ratio` below
+            // ~0.25, i.e. >93.75% squared energy in the removed common-mode subspace) so legitimate
+            // question prompts (`rho ~ 0.30..0.45`) preserve full cosine sensitivity.
+            let ortho_knee = (cache.corpus_ortho_ref * 0.45).clamp(0.15, 0.25);
+            (query_ortho_ratio / ortho_knee).clamp(0.0, 1.0)
+        };
         let n_entries = self.entries.len();
         let raw_cosines: Vec<f32> = (0..n_entries)
-            .map(|i| Self::cosine_f32(&query_sig, cache.projected_sig(i)))
+            .map(|i| {
+                let c = Self::cosine_f32(&query_sig, cache.projected_sig(i));
+                if c > 0.0 {
+                    c * ortho_gate
+                } else {
+                    c
+                }
+            })
             .collect();
-        let (token_channel, q_to_d_scores, d_to_q_scores, token_deposits) = match local_observation
-        {
+        let (
+            token_channel,
+            q_to_d_scores,
+            d_to_q_scores,
+            token_deposits,
+            unexplained_token_ratio,
+            query_seq_len,
+        ) = match local_observation {
             Some(obs) => {
                 if obs.combined_scores.len() != n_entries {
                     return Err(format!(
@@ -1458,9 +1573,11 @@ impl TextAttractorCorpus {
                     obs.q_to_d_scores,
                     obs.d_to_q_scores,
                     obs.token_deposits,
+                    obs.unexplained_token_ratio.clamp(0.0, 1.0),
+                    obs.query_seq_len,
                 )
             }
-            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
+            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0.0_f32, 0),
         };
         let initial_signal = StratumSignal {
             candidate_scores: raw_cosines.clone(),
@@ -1492,6 +1609,8 @@ impl TextAttractorCorpus {
             local_channel_preferred: false,
             telemetry: StratumProbeTelemetry {
                 cognitive_trajectory: prior_circuit.unwrap_or_default(),
+                query_ortho_ratio,
+                unexplained_token_ratio,
                 ..StratumProbeTelemetry::default()
             },
         };
@@ -1505,6 +1624,8 @@ impl TextAttractorCorpus {
             layer_chunk_dim: expected,
             num_q_heads: geom.num_q_heads,
             rotary_dim: geom.rotary_dim,
+            query_seq_len,
+            query_ortho_ratio,
             policy,
         };
         let (signal, directive) = pipeline.evaluate(&stratum_ctx, initial_signal)?;
@@ -1635,7 +1756,7 @@ impl TextAttractorCorpus {
             || signal.gate_decision.suppress_fact_injection;
         let has_grounded_counter_fact = directive.repulse_guard
             && signal.boundary_metrics.top1_fact_score >= policy.min_coherence * 0.65;
-        let recalled_facts = if has_grounded_counter_fact {
+        let mut recalled_facts = if has_grounded_counter_fact {
             // Surface the strongest grounded counter-fact so downstream generation and reflection
             // can actively refute the false premise while preserving `RepulsionEscape` gating.
             fact_scores.into_iter().take(1).collect()
@@ -1664,29 +1785,62 @@ impl TextAttractorCorpus {
                 .collect()
         };
 
-        // Route validated Known Unknown (`O \ S`) misses via `S & O` bridge without copying into `recalled_facts`.
+        // Foreign OOD token guard + Two-axis `SelfRef` (`S & O`) vs `Exterior` (`O \ S`) partition:
+        // - If `unexplained_token_ratio >= 0.80` (4/5 of salient tokens unexplained by corpus
+        //   Facts, calibrated from out-of-sample base-prior probes), the query lies strictly in
+        //   unobserved space (`LiminalExterior`, empty `recalled_facts` & `exterior_sandbox_facts`).
+        // - Otherwise, Axis 1 (`bridge_count >= 2`, `is_sandbox_eligible()`) + Axis 2
+        //   (`unexplained_token_ratio` in `[0.59, 0.80)` or sub-threshold bridge) isolates
+        //   semi-known queries into `exterior_sandbox_facts` without conflation into `recalled_facts`.
+        let mut final_lacuna_state = signal.gate_decision.lacuna_state;
+        let mut final_action_decision = signal.action_decision;
         let mut exterior_sandbox_facts = Vec::new();
-        if recalled_facts.is_empty()
-            && !directive.repulse_guard
-            && signal.boundary_metrics.guard_conflict_margin <= 0.0
-            && !signal.telemetry.channel_disagreement
-            && signal.boundary_metrics.top1_fact_score >= signal.boundary_metrics.top1_persona_score
-            && lacuna_partition.is_sandbox_eligible()
-            && lacuna_partition.bridge_count >= 2
-        {
-            if let Some((entry, score)) = top1_fact_candidate {
-                let meets_floor = signal.boundary_metrics.top1_fact_score
-                    >= policy.min_coherence * 0.88
-                    && signal.telemetry.local_top1_score >= policy.min_coherence * 0.75;
-                if meets_floor {
-                    exterior_sandbox_facts.push((entry, score));
+        let foreign_ood_tokens =
+            !directive.repulse_guard && query_seq_len > 0 && unexplained_token_ratio >= 0.80;
+        if foreign_ood_tokens {
+            recalled_facts.clear();
+            final_lacuna_state = LacunaBoundaryState::LiminalExterior;
+            if matches!(
+                final_action_decision,
+                StigmergicActionDecision::SubHeadRoute
+                    | StigmergicActionDecision::CrystallizeMacroBasin
+                    | StigmergicActionDecision::FullOrchestration
+            ) {
+                final_action_decision = StigmergicActionDecision::PassiveSidecar;
+            }
+        } else {
+            let bridge_eligible = !directive.repulse_guard
+                && signal.boundary_metrics.guard_conflict_margin <= 0.0
+                && lacuna_partition.is_sandbox_eligible()
+                && lacuna_partition.bridge_count >= 2;
+            if bridge_eligible {
+                if let Some((entry, score)) = top1_fact_candidate {
+                    let top1_s = signal.boundary_metrics.top1_fact_score;
+                    let top2_s = signal.boundary_metrics.top2_fact_score;
+                    let unimodal_margin = (top1_s - top2_s).max(0.0);
+                    let sharp_unimodal_lock = unimodal_margin >= policy.boundary_margin * 2.0
+                        && top1_s >= policy.min_coherence * 1.20;
+                    let sub_threshold_bridged = recalled_facts.is_empty()
+                        && top1_s >= policy.min_coherence * 0.90
+                        && (0.59..0.80).contains(&unexplained_token_ratio);
+                    let semi_known_cutoff = if sharp_unimodal_lock { 0.72 } else { 0.59 };
+                    let semi_known_high_unexplained = !recalled_facts.is_empty()
+                        && unexplained_token_ratio >= semi_known_cutoff
+                        && top1_s < 0.90;
+                    if sub_threshold_bridged {
+                        final_lacuna_state = LacunaBoundaryState::LiminalExterior;
+                        exterior_sandbox_facts.push((entry, score));
+                    } else if semi_known_high_unexplained {
+                        final_lacuna_state = LacunaBoundaryState::LiminalExterior;
+                        exterior_sandbox_facts.append(&mut recalled_facts);
+                    }
                 }
             }
         }
         let is_known_unknown_exterior = !exterior_sandbox_facts.is_empty();
 
         // Persona grounding operates orthogonally to factual `Liminal` gating and is suppressed only on Guard repulsion.
-        let recalled_personas = if directive.repulse_guard {
+        let recalled_personas = if directive.repulse_guard || foreign_ood_tokens {
             Vec::new()
         } else {
             persona_scores
@@ -1697,13 +1851,13 @@ impl TextAttractorCorpus {
         };
 
         Ok(DynamicAttractorRecall {
-            lacuna_state: signal.gate_decision.lacuna_state,
+            lacuna_state: final_lacuna_state,
             top1_fact_score: signal.boundary_metrics.top1_fact_score,
             top2_fact_score: signal.boundary_metrics.top2_fact_score,
             top1_persona_score: signal.boundary_metrics.top1_persona_score,
             min_local_lacuna_depth: directive.min_local_lacuna_depth,
             guard_conflict_margin: signal.boundary_metrics.guard_conflict_margin,
-            action_decision: signal.action_decision,
+            action_decision: final_action_decision,
             gateway_frame: signal.gateway_frame,
             telemetry: signal.telemetry,
             recalled_facts,

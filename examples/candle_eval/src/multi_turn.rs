@@ -220,7 +220,7 @@ pub(crate) fn run_multi_turn_and_step3(
                         Some(ResonantAnchors {
                             facts: steer_facts,
                             personas: dyn_personas,
-                            guards: baked.guard_anchors_per_layer.as_slice(),
+                            guards: plan.guard_anchors_per_layer(),
                             negs: baked.repulsive_centroid_per_layer.as_slice(),
                             poss: baked.attractive_centroid_per_layer.as_slice(),
                         })
@@ -363,7 +363,7 @@ pub(crate) fn run_multi_turn_and_step3(
                                         Some(ResonantAnchors {
                                             facts: steer_facts,
                                             personas: dyn_personas,
-                                            guards: baked.guard_anchors_per_layer.as_slice(),
+                                            guards: plan.guard_anchors_per_layer(),
                                             negs: baked.repulsive_centroid_per_layer.as_slice(),
                                             poss: baked.attractive_centroid_per_layer.as_slice(),
                                         })

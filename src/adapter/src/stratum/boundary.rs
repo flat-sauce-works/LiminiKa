@@ -54,7 +54,15 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
         let top1_fact_score = fact_scores.first().copied().unwrap_or(-1.0);
         let top2_fact_score = fact_scores.get(1).copied().unwrap_or(-1.0);
         let top1_persona_score = persona_scores.first().copied().unwrap_or(-1.0);
-        let guard_conflict_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
+        let raw_guard_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
+        // Require the winning Guard attractor to exceed the Guard activation floor so sub-floor
+        // OOD noise (`max_guard_score` near 0 or negative) cannot trigger false `RepulsionEscape`.
+        let guard_floor = ctx.policy.min_coherence * 0.70;
+        let guard_conflict_margin = if max_guard_score >= guard_floor {
+            raw_guard_margin
+        } else {
+            raw_guard_margin.min(0.0)
+        };
 
         let metrics = RecallBoundaryMetrics {
             top1_fact_score,
@@ -67,7 +75,8 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
         signal.boundary_metrics = metrics;
         signal.gate_decision = decision;
 
-        let repulsed_by_guard = guard_conflict_margin > ctx.policy.guard_suppress_margin;
+        let repulsed_by_guard = max_guard_score >= guard_floor
+            && guard_conflict_margin > ctx.policy.guard_suppress_margin;
         if repulsed_by_guard {
             signal.action_decision = StigmergicActionDecision::RepulsionEscape;
         }

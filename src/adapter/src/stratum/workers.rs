@@ -9,6 +9,18 @@ use crate::{
     AttractorBoundaryPerspective, AttractorPerspectiveContext, AttractorRole, TextAttractorCorpus,
 };
 
+/// Finite-sample shrinkage factor `sqrt(S / (S + 2))` attenuating noisy LOO viewing-angle
+/// contrast boosts on very short queries (`S == 0` leaves single-vector callers unshrunk).
+#[inline]
+fn short_query_contrast_shrinkage(query_seq_len: usize) -> f32 {
+    if query_seq_len == 0 {
+        1.0
+    } else {
+        let s = query_seq_len as f32;
+        (s / (s + 2.0)).sqrt()
+    }
+}
+
 /// Applies leave-one-out top-k viewing-angle contrast across a subset of corpus `indices`
 /// to eliminate `1/N` self-dilution bias across differently sized role populations.
 #[allow(clippy::too_many_arguments)]
@@ -114,6 +126,8 @@ impl RecallStratum for LocalFeatureWorkerStratum {
                     }
                 }
                 let top_l = (num_steered / 4).max(1);
+                let eff_gain =
+                    self.layer_contrast_gain * short_query_contrast_shrinkage(ctx.query_seq_len);
                 for role in [
                     AttractorRole::Fact,
                     AttractorRole::Persona,
@@ -125,7 +139,7 @@ impl RecallStratum for LocalFeatureWorkerStratum {
                         idxs,
                         num_steered,
                         top_l,
-                        self.layer_contrast_gain,
+                        eff_gain,
                         false,
                         0.5,
                         1.5,
@@ -236,6 +250,8 @@ impl RecallStratum for HeadAngleWorkerStratum {
         }
 
         let top_k_heads = (n_heads / 6).max(2).min(n_heads);
+        let eff_head_gain =
+            self.head_contrast_gain * short_query_contrast_shrinkage(ctx.query_seq_len);
         for role in [
             AttractorRole::Fact,
             AttractorRole::Persona,
@@ -247,7 +263,7 @@ impl RecallStratum for HeadAngleWorkerStratum {
                 idxs,
                 n_heads,
                 top_k_heads,
-                self.head_contrast_gain,
+                eff_head_gain,
                 true,
                 0.4,
                 2.0,

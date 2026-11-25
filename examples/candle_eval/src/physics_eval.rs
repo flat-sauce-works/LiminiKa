@@ -357,7 +357,7 @@ fn run_axis1_persistent_kv_drift(
                 Some(ResonantAnchors {
                     facts: steer_facts,
                     personas: plan.persona_anchors_per_layer(),
-                    guards: baked.guard_anchors_per_layer.as_slice(),
+                    guards: plan.guard_anchors_per_layer(),
                     negs: baked.repulsive_centroid_per_layer.as_slice(),
                     poss: baked.attractive_centroid_per_layer.as_slice(),
                 })
@@ -526,7 +526,16 @@ fn run_axis2_ood_selectivity(
         if is_unobs {
             unobserved_count += 1;
         } else {
-            leaked_indices.push(format!("#{}:{}", idx + 1, probe.category));
+            leaked_indices.push(format!(
+                "#{}:{}(top1={:.3},gm={:+.3},rho={:.2},unexp={:.2},ku={})",
+                idx + 1,
+                probe.category,
+                plan.top1_fact_score(),
+                plan.guard_conflict_margin(),
+                plan.telemetry().query_ortho_ratio,
+                plan.telemetry().unexplained_token_ratio,
+                plan.is_known_unknown_exterior(),
+            ));
         }
 
         let raw_prompt = format_phi4_prompt(&probe.prompt);
@@ -605,7 +614,7 @@ fn run_axis2_ood_selectivity(
                 Some(ResonantAnchors {
                     facts: steer_facts,
                     personas: plan.persona_anchors_per_layer(),
-                    guards: baked.guard_anchors_per_layer.as_slice(),
+                    guards: plan.guard_anchors_per_layer(),
                     negs: baked.repulsive_centroid_per_layer.as_slice(),
                     poss: baked.attractive_centroid_per_layer.as_slice(),
                 })
@@ -895,7 +904,7 @@ fn run_axis3_repulsion_polarity(
             resonant_ctx: Some(ResonantAnchors {
                 facts: steer_facts,
                 personas: plan.persona_anchors_per_layer(),
-                guards: baked.guard_anchors_per_layer.as_slice(),
+                guards: plan.guard_anchors_per_layer(),
                 negs: baked.repulsive_centroid_per_layer.as_slice(),
                 poss: baked.attractive_centroid_per_layer.as_slice(),
             }),
@@ -940,7 +949,7 @@ fn run_axis3_repulsion_polarity(
                 Some(ResonantAnchors {
                     facts: steer_facts,
                     personas: plan.persona_anchors_per_layer(),
-                    guards: baked.guard_anchors_per_layer.as_slice(),
+                    guards: plan.guard_anchors_per_layer(),
                     negs: baked.repulsive_centroid_per_layer.as_slice(),
                     poss: baked.attractive_centroid_per_layer.as_slice(),
                 })
@@ -1186,7 +1195,7 @@ fn run_axis4_partition_non_conflation(
                     resonant_ctx: Some(ResonantAnchors {
                         facts: steer_facts,
                         personas: plan.persona_anchors_per_layer(),
-                        guards: baked.guard_anchors_per_layer.as_slice(),
+                        guards: plan.guard_anchors_per_layer(),
                         negs: baked.repulsive_centroid_per_layer.as_slice(),
                         poss: baked.attractive_centroid_per_layer.as_slice(),
                     }),
@@ -1225,13 +1234,16 @@ fn run_axis4_partition_non_conflation(
         }
 
         println!(
-            "  [P{:02}:{:?}] disjoint={} lacuna={:?} top1={:.3} self_ids={} ext_ids={} \
-             known_unk={} unobs={} ({})",
+            "  [P{:02}:{:?}] disjoint={} lacuna={:?} top1={:.3} unexp={:.2} br={} rho={:.2} \
+             self_ids={} ext_ids={} known_unk={} unobs={} ({})",
             idx + 1,
             probe.class,
             is_disjoint,
             plan.lacuna_state(),
             plan.top1_fact_score(),
+            plan.telemetry().unexplained_token_ratio,
+            plan.lacuna_partition().bridge_count,
+            plan.telemetry().query_ortho_ratio,
             self_ids.len(),
             ext_ids.len(),
             plan.is_known_unknown_exterior(),
@@ -1391,6 +1403,68 @@ mod tests {
                 "partition probe must not verbatim-copy gcso_eval_samples.txt: {}",
                 pp.prompt
             );
+        }
+    }
+
+    #[test]
+    fn startup_prior_probes_have_zero_overlap_with_all_eval_fixtures() {
+        use liminika_adapter::DEFAULT_STARTUP_PRIOR_PROBES;
+
+        let root = repo_root();
+        let gcso = load_fixture(&root.join("tests/fixtures/gcso_eval_samples.txt"))
+            .expect("load gcso fixture");
+        let ood = load_ood_probes(&root.join("tests/fixtures/ood_selectivity_probes.txt"))
+            .expect("load ood fixture");
+        let phys =
+            load_steering_physics_probes(&root.join("tests/fixtures/steering_physics_probes.txt"))
+                .expect("load steering physics fixture");
+
+        assert!(
+            (10..=12).contains(&DEFAULT_STARTUP_PRIOR_PROBES.len()),
+            "expected 10..=12 neutral startup prior probes, got {}",
+            DEFAULT_STARTUP_PRIOR_PROBES.len()
+        );
+
+        let mut fixture_lines: HashSet<String> = HashSet::new();
+        for s in gcso
+            .facts
+            .iter()
+            .chain(gcso.persona.iter())
+            .chain(gcso.guards.iter())
+        {
+            fixture_lines.insert(s.trim().to_ascii_lowercase());
+        }
+        for (_, prompt, _, _) in &gcso.probes {
+            fixture_lines.insert(prompt.trim().to_ascii_lowercase());
+        }
+        for p in &ood {
+            fixture_lines.insert(p.prompt.trim().to_ascii_lowercase());
+        }
+        for rp in &phys.repulsion_probes {
+            fixture_lines.insert(rp.prompt.trim().to_ascii_lowercase());
+        }
+        for pp in &phys.partition_probes {
+            fixture_lines.insert(pp.prompt.trim().to_ascii_lowercase());
+        }
+
+        let mut unique_prior: HashSet<String> = HashSet::new();
+        for prompt in DEFAULT_STARTUP_PRIOR_PROBES {
+            let norm = prompt.trim().to_ascii_lowercase();
+            assert!(!norm.is_empty());
+            assert!(
+                unique_prior.insert(norm.clone()),
+                "duplicate startup prior probe: {prompt}"
+            );
+            assert!(
+                !fixture_lines.contains(&norm),
+                "startup prior probe overlaps eval fixture: {prompt}"
+            );
+            for term in ["gcso", "liminika", "zimms", "cstl", "ripa", "edbc", "pprc"] {
+                assert!(
+                    !norm.contains(term),
+                    "startup prior probe contains domain term `{term}`: {prompt}"
+                );
+            }
         }
     }
 }

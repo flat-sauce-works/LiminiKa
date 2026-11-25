@@ -53,6 +53,10 @@ pub struct LocalChannelObservation {
     pub d_to_q_scores: Vec<f32>,
     /// Uncollapsed per-query-token resonance deposits evaluated by the stigmergic swarm.
     pub token_deposits: Vec<TokenResonanceDeposit>,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens not explained by corpus Facts.
+    pub unexplained_token_ratio: f32,
+    /// Original query token sequence length (`S`, `0` when single-vector or unspecified).
+    pub query_seq_len: usize,
 }
 
 /// [`StigmergicReceptor`] tracking multi-trail pointer emergence when
@@ -112,6 +116,11 @@ pub struct StratumProbeTelemetry {
     pub cognitive_trajectory: CognitiveTrajectoryLedger,
     /// Latest stigmergic cognitive circuit gating activation computed from trajectory history.
     pub layer_activation: CognitiveCircuitActivation,
+    /// Orthogonal residual norm ratio `||P_perp(q - mu)|| / ||q - mu||` (`0.0..=1.0`) after
+    /// common-mode projection.
+    pub query_ortho_ratio: f32,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens unexplained by corpus Facts.
+    pub unexplained_token_ratio: f32,
 }
 
 /// Bottom-up and top-down signal flowing across a hierarchical [`StratumPipeline`].
@@ -202,6 +211,11 @@ pub struct StratumContext<'a> {
     pub num_q_heads: usize,
     /// Active rotated dimensions per attention head (`rotary_dim`).
     pub rotary_dim: usize,
+    /// Query token sequence length (`S`, `0` when unspecified/single-vector) for finite-sample
+    /// shrinkage of short-query viewing-angle contrast boosts.
+    pub query_seq_len: usize,
+    /// Orthogonal residual norm ratio `||P_perp(q - mu)|| / ||q - mu||` (`0.0..=1.0`).
+    pub query_ortho_ratio: f32,
     /// Active recall policy thresholds.
     pub policy: &'a RecallPolicy,
 }

@@ -370,62 +370,14 @@ pub(crate) fn sample_startup_base_prior(
     tokenizer: &Tokenizer,
     adapter: &ModelSteeringAdapter,
 ) -> Result<ModelBaseAttractorProfile, Box<dyn std::error::Error>> {
+    // Generation-free 1-pass IsolatedProbe capture across neutral startup prompts matching the
+    // raw query tokenization frame used by `CompiledTokenCorpus` and `TurnOrchestrator`.
+    let mut encoder = Phi3TokenEncoder::new(model, tokenizer);
     let mut base_entries = Vec::with_capacity(DEFAULT_STARTUP_PRIOR_PROBES.len());
     for prompt in DEFAULT_STARTUP_PRIOR_PROBES {
-        model.clear_cache();
-        let formatted = format_phi4_prompt(prompt);
-        let mut seq_ids = tokenizer
-            .encode(formatted.as_str(), false)
-            .map_err(|e| format!("base prior encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (prefill_out, _, _) = model.forward_tokens(
-            &seq_ids,
-            0,
-            None,
-            false,
-            false,
-            LogitsFetchMode::FullLogits,
-            KvCacheMode::Append,
-        )?;
-        let mut logits = prefill_out.into_full_logits()?;
-        let mut gen_ids = Vec::with_capacity(8);
-        for offset in (seq_ids.len()..).take(8) {
-            let next = argmax(&logits);
-            if next == 199999 {
-                break;
-            }
-            gen_ids.push(next);
-            let (next_out, _, _) = model.forward_tokens(
-                &[next],
-                offset,
-                None,
-                false,
-                false,
-                LogitsFetchMode::FullLogits,
-                KvCacheMode::Append,
-            )?;
-            logits = next_out.into_full_logits()?;
-        }
-        seq_ids.extend_from_slice(&gen_ids);
-        let (_, layer_tok_qs, _) = model.forward_tokens(
-            &seq_ids,
-            0,
-            None,
-            false,
-            true,
-            LogitsFetchMode::FullLogits,
-            KvCacheMode::IsolatedProbe,
-        )?;
-        base_entries.push(TokenSequenceEntry {
-            role: AttractorRole::Persona,
-            text: prompt.to_string(),
-            energy: 1.0,
-            seq_len: seq_ids.len(),
-            per_layer_token_qs: layer_tok_qs,
-        });
+        let captured = encoder.encode_token_sequence(prompt)?;
+        base_entries.push(captured.into_token_sequence_entry(AttractorRole::Persona, prompt, 1.0));
     }
-    model.clear_cache();
     ModelBaseAttractorProfile::extract(
         adapter,
         &base_entries,
@@ -440,6 +392,7 @@ pub(crate) struct SharedFixtureArtifacts {
     pub(crate) compiled: CompiledTokenCorpus,
     pub(crate) bake_elapsed: std::time::Duration,
     pub(crate) compile_ms: f64,
+    pub(crate) prior_ms: f64,
     pub(crate) used_base_prior: bool,
 }
 
@@ -455,20 +408,21 @@ pub(crate) fn capture_and_build_shared_corpus(
     use_base_prior: bool,
 ) -> Result<SharedFixtureArtifacts, Box<dyn std::error::Error>> {
     adapter.set_layer_rope_mask(0xFFFF_0000);
-    let base_prior = if use_base_prior {
+    let (base_prior, prior_ms) = if use_base_prior {
         let t_prior = Instant::now();
         let profile = sample_startup_base_prior(model, tokenizer, adapter)?;
+        let elapsed_ms = t_prior.elapsed().as_secs_f64() * 1000.0;
         println!(
-            "[BasePrior] samples={} sub_attractors={} pooled_basis={} token_basis={} elapsed={:.2?}",
+            "[BasePrior] 1-pass IsolatedProbe samples={} sub_attractors={} pooled_basis={} token_basis={} elapsed={:.1}ms",
             profile.sample_count,
             profile.sub_attractors.len(),
             profile.pooled_common_mode_basis.len(),
             profile.token_common_mode_basis.len(),
-            t_prior.elapsed()
+            elapsed_ms
         );
-        Some(profile)
+        (Some(profile), elapsed_ms)
     } else {
-        None
+        (None, 0.0)
     };
 
     let t_capture = Instant::now();
@@ -528,6 +482,7 @@ pub(crate) fn capture_and_build_shared_corpus(
         compiled,
         bake_elapsed,
         compile_ms,
+        prior_ms,
         used_base_prior: base_prior.is_some(),
     })
 }

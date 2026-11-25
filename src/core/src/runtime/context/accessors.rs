@@ -278,6 +278,7 @@ impl RuntimeContext {
     /// Evaluates external `+ System` Gauge-Zero pressure and emits a pre-execution
     /// [`ComputeDispatchMask`] without heap allocation or `fdiv`.
     #[inline]
+    #[must_use]
     pub fn step_compute_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
         self.compute_pool
             .step_dispatch(reading, self.system_spine.pinned_compute_mask)
@@ -653,6 +654,7 @@ impl RuntimeContext {
     /// Evaluates whole-token steering bypass jointly with [`SystemSpineState`] physical vetoes
     /// and records telemetry when bypass activates.
     #[inline]
+    #[must_use]
     pub fn evaluate_whole_token_bypass_with_spine(
         &mut self,
         obs: TokenBypassObservation,
@@ -699,6 +701,7 @@ impl RuntimeContext {
     /// Advances the isolated exterior-only sandbox workbench lifecycle in [`StigmergicSubstrate`]
     /// and updates `last_sandbox_event`.
     #[inline]
+    #[must_use]
     pub fn step_sandbox_hypothesis_lifecycle(
         &mut self,
         decision: StigmergicActionDecision,
