@@ -28,6 +28,7 @@ pub(crate) type LayerResonantSlices<'a> = (
 
 mod bake;
 mod cli;
+mod equilibrium_bench;
 mod eval;
 mod long_doc_bench;
 mod metrics;
@@ -313,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             adapter.substrate().thresholds.rank1_inject_density_thresh,
         );
 
-        if !step2_only && !cli.physics_eval {
+        if !step2_only && !cli.physics_eval && !cli.equilibrium_bench {
             // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs StigmergicSubstrate.
             // tuple: (label, layer_mask, rope_rad, rank1_scale, use_resonant_slice)
             let configs: [(&str, u64, f32, f32, bool); 6] = [
@@ -733,6 +734,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             active_persona_bank: &mut phys_persona_bank,
         };
         physics_eval::run_physics_eval(&cli, &repo_root, &mut rt)?;
+        return Ok(());
+    }
+
+    if cli.equilibrium_bench {
+        let Some(ref baked) = baked_opt else {
+            return Err(
+                "--equilibrium-bench requires live model weights (disable --recall-only)".into(),
+            );
+        };
+        let work_dir = repo_root.join(".scratch/bench/v0.3.0/p2c");
+        std::fs::create_dir_all(&work_dir)?;
+        equilibrium_bench::run_equilibrium_benchmark(
+            &cli,
+            &cfg,
+            baked,
+            &compiled,
+            &base_entropies,
+            &mut model,
+            &tokenizer,
+            &work_dir,
+        )?;
         return Ok(());
     }
 

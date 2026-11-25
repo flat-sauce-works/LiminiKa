@@ -53,7 +53,7 @@ pub fn phase_profile_bitcut64(phase_profile: &[i8; MAX_ATTENTION_HEADS]) -> BitC
 /// signatures using constant-time bitwise population counts (`0` allocations).
 #[inline]
 #[must_use]
-fn bitcut64_polarity_similarity(a: BitCut64, b: BitCut64) -> f32 {
+pub(crate) fn bitcut64_polarity_similarity(a: BitCut64, b: BitCut64) -> f32 {
     let a_active = a.inside | a.outside;
     let b_active = b.inside | b.outside;
     let union_count = (a_active | b_active).count_ones();
@@ -68,7 +68,10 @@ fn bitcut64_polarity_similarity(a: BitCut64, b: BitCut64) -> f32 {
 /// Computes exact 64-head Q7 cosine similarity in `[-1.0, 1.0]` for Top-K candidate reranking.
 #[inline]
 #[must_use]
-fn phase_profile_cosine_q7(a: &[i8; MAX_ATTENTION_HEADS], b: &[i8; MAX_ATTENTION_HEADS]) -> f32 {
+pub(crate) fn phase_profile_cosine_q7(
+    a: &[i8; MAX_ATTENTION_HEADS],
+    b: &[i8; MAX_ATTENTION_HEADS],
+) -> f32 {
     let mut dot = 0_i64;
     let mut na = 0_i64;
     let mut nb = 0_i64;
@@ -175,13 +178,18 @@ impl AnchorSlotEntry {
     }
 
     #[inline]
-    fn retention_priority(&self) -> f32 {
+    pub(crate) fn retention_priority(&self) -> f32 {
         let mass = if self.record.phase_gravity_mass.is_finite() {
             self.record.phase_gravity_mass.max(0.0)
         } else {
             0.0
         };
-        self.excitation + 0.25 * mass
+        let exc = if self.excitation.is_finite() {
+            self.excitation.max(0.0)
+        } else {
+            0.0
+        };
+        exc + 0.25 * mass
     }
 }
 
@@ -277,6 +285,118 @@ impl AnchorWorkingSetPager {
             tension: DistortionTension::new(true),
             stats: AnchorPagerStats::default(),
         }
+    }
+
+    /// Creates an empty [`AnchorWorkingSetPager`] bound to an explicit `topology_crc32`.
+    #[must_use]
+    pub(crate) fn with_topology_crc32(config: AnchorPagerConfig, topology_crc32: u32) -> Self {
+        let mut pager = Self::new(config);
+        pager.topology_crc32 = topology_crc32;
+        pager
+    }
+
+    /// Returns a read-only slice over all entries currently held in the backing bank.
+    #[inline]
+    #[must_use]
+    pub fn backing_entries(&self) -> &[AnchorSlotEntry] {
+        &self.backing_bank
+    }
+
+    /// Replaces the backing bank atomically and recomputes dense resident working-set slots.
+    ///
+    /// All `pinned` entries are placed into the resident working set first (failing closed if
+    /// pinned count exceeds `config.working_set_capacity`), followed by the highest-retention
+    /// `Lacuna::SelfRef` entries up to capacity. `Lacuna::Exterior` and `Unobserved` entries are
+    /// never promoted into `SelfRef` residency here.
+    pub(crate) fn replace_backing_entries(
+        &mut self,
+        mut entries: Vec<AnchorSlotEntry>,
+    ) -> Result<(), String> {
+        let pinned_count = entries.iter().filter(|e| e.pinned).count();
+        if pinned_count > self.config.working_set_capacity {
+            return Err(format!(
+                "pinned anchor count {pinned_count} exceeds working set capacity {}",
+                self.config.working_set_capacity
+            ));
+        }
+        for entry in &mut entries {
+            entry.signature = phase_profile_bitcut64(&entry.record.phase_profile);
+            if !entry.excitation.is_finite() || entry.excitation < 0.0 {
+                entry.excitation = 0.0;
+            }
+            if entry.record.checksum_crc32 == 0 {
+                entry.record.stamp_crc32();
+            }
+        }
+        let mut id_map = HashMap::with_capacity(entries.len());
+        let mut deduped = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let aid = entry.record.anchor_id;
+            if let Some(&pos) = id_map.get(&aid) {
+                deduped[pos] = entry;
+            } else {
+                let pos = deduped.len();
+                id_map.insert(aid, pos);
+                deduped.push(entry);
+            }
+        }
+        let mut resident_flags = vec![false; deduped.len()];
+        let mut resident_indices = Vec::with_capacity(self.config.working_set_capacity);
+
+        // 1. Place Spine-pinned anchors first in deterministic anchor_id order.
+        let mut pinned_order: Vec<(usize, u32)> = deduped
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.pinned)
+            .map(|(idx, e)| (idx, e.record.anchor_id))
+            .collect();
+        pinned_order.sort_by_key(|&(_, id)| id);
+        for (idx, _) in pinned_order {
+            resident_flags[idx] = true;
+            resident_indices.push(idx);
+        }
+
+        // 2. Fill remaining working-set capacity with highest-retention SelfRef entries.
+        let remaining = self
+            .config
+            .working_set_capacity
+            .saturating_sub(resident_indices.len());
+        if remaining > 0 {
+            let mut ranked: Vec<(usize, f32, u64, u32)> = deduped
+                .iter()
+                .enumerate()
+                .filter(|(idx, e)| {
+                    !resident_flags[*idx] && matches!(e.lacuna_state, Lacuna::SelfRef)
+                })
+                .map(|(idx, e)| (idx, e.retention_priority(), e.last_step, e.record.anchor_id))
+                .collect();
+            ranked.sort_by(|a, b| {
+                b.1.total_cmp(&a.1)
+                    .then_with(|| b.2.cmp(&a.2))
+                    .then_with(|| a.3.cmp(&b.3))
+            });
+            for (idx, _, _, _) in ranked.into_iter().take(remaining) {
+                resident_flags[idx] = true;
+                resident_indices.push(idx);
+            }
+        }
+
+        self.backing_bank = deduped;
+        self.id_to_bank_idx = id_map;
+        self.resident_flags = resident_flags;
+        self.resident_indices = resident_indices;
+        Ok(())
+    }
+
+    /// Feeds homeostatic churn pressure back into the pager's [`DistortionTension`] controller.
+    pub(crate) fn record_tension_feedback(&mut self, churn_q7: u8, boundary_sens_q7: u8) {
+        self.tension.step_hot_path_branchless(
+            churn_q7.min(127),
+            boundary_sens_q7.min(127),
+            0,
+            0,
+            false,
+        );
     }
 
     /// Returns the active sanitized [`AnchorPagerConfig`].

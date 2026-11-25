@@ -52,7 +52,7 @@ PUB_CONTROL_FN_RE = re.compile(
 DOWNWARD_SIGNAL_RE = re.compile(
     r"\b(?:TurnSteeringPlan|SpineStepPlan|ComputeDispatchMask|GatewayFrame|"
     r"CoreStateStack|LacunaPartition8|RecallPolicy|CompiledTokenCorpus|"
-    r"GuardPhaseAnchor|ObjectiveFact|SubjectivePersona)\b"
+    r"GuardPhaseAnchor|ObjectiveFact|SubjectivePersona|EquilibriumState)\b"
 )
 UPWARD_FEEDBACK_RE = re.compile(
     r"\b(?:step_decode_control|commit_turn_circuit|commit_compute_exit_reward|"
@@ -61,7 +61,9 @@ UPWARD_FEEDBACK_RE = re.compile(
     r"consolidate_and_evaporate_cold_path|step_sandbox_hypothesis_lifecycle|"
     r"reinforce_active_circuit_with_bank|calibrate_manifold_probe|"
     r"signal_compute_instability|update_environment_telemetry|"
-    r"step_distortion_tension_hot_path|step_working_set|step_hot_path_branchless)\b"
+    r"step_distortion_tension_hot_path|step_working_set|step_hot_path_branchless|"
+    r"ingest_crystallized_anchors|sync_equilibrium_state|restore_from_equilibrium|"
+    r"record_tension_feedback)\b"
 )
 
 

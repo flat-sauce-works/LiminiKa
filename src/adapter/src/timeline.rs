@@ -578,6 +578,55 @@ impl LmnkTimeline {
         )
     }
 
+    /// Constructs a domain-agnostic [`EquilibriumState`] seeded from this timeline's latest
+    /// keyframe anchor bank.
+    ///
+    /// # Errors
+    /// Returns an error if no valid keyframe anchor bank is available in the timeline.
+    pub fn build_equilibrium_state(
+        &self,
+        config: EquilibriumConfig,
+    ) -> Result<EquilibriumState, String> {
+        let pager = self.load_anchor_pager(config.pager)?;
+        Ok(EquilibriumState::from_pager(pager, config))
+    }
+
+    /// Extracts an embedded 512-byte standalone `RuntimeContext` snapshot container from a
+    /// unified `.lmnkc` byte stream carrying `LMNK_SECTION_RUNTIME_SNAPSHOT`, or returns `Ok(None)`
+    /// for containers without a runtime snapshot section.
+    ///
+    /// # Errors
+    /// Returns [`LmnkTimelineError`] on container corruption or topology mismatch.
+    pub fn extract_runtime_snapshot_from_bytes(
+        bytes: &[u8],
+    ) -> Result<Option<[u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES]>, LmnkTimelineError> {
+        let view = LmnkContainerView::parse(bytes).map_err(|e| map_container_err(bytes, e))?;
+        let Some(payload) = view.section_bytes(LMNK_SECTION_RUNTIME_SNAPSHOT) else {
+            return Ok(None);
+        };
+        let sections = [LmnkSectionInput {
+            kind: LMNK_SECTION_RUNTIME_SNAPSHOT,
+            flags: 0,
+            payload,
+        }];
+        let mut out = [0_u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES];
+        let written = write_container_sections_to_bytes(
+            LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
+            view.header().timestamp_epoch_sec,
+            &sections,
+            &mut out,
+        )
+        .map_err(|e| {
+            LmnkTimelineError::Corrupted(format!("runtime snapshot rewrap failed: {e}"))
+        })?;
+        if written != LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES {
+            return Err(LmnkTimelineError::Corrupted(format!(
+                "invalid runtime snapshot size {written} != {LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES}"
+            )));
+        }
+        Ok(Some(out))
+    }
+
     /// Returns frame indices of all I-Frame keyframes in the seek table.
     #[must_use]
     pub fn keyframe_positions(&self) -> &[usize] {
@@ -947,6 +996,19 @@ impl LmnkTimeline {
     /// # Errors
     /// Returns [`LmnkTimelineError`] if any inner payload or container boundary rule is violated.
     pub fn to_container_bytes(&self, container_flags: u32) -> Result<Vec<u8>, LmnkTimelineError> {
+        self.to_container_bytes_with_snapshot(container_flags, None)
+    }
+
+    /// Serializes this timeline into a unified v2 `.lmnkc` container while optionally embedding
+    /// an `LMNK_SECTION_RUNTIME_SNAPSHOT` payload extracted from a 512-byte snapshot container.
+    ///
+    /// # Errors
+    /// Returns [`LmnkTimelineError`] if the optional snapshot or container boundary rules fail.
+    pub fn to_container_bytes_with_snapshot(
+        &self,
+        container_flags: u32,
+        runtime_snapshot_512: Option<&[u8]>,
+    ) -> Result<Vec<u8>, LmnkTimelineError> {
         let mut anchor_sec: Option<Vec<u8>> = None;
         let mut trail_sec: Option<Vec<u8>> = None;
         let mut bloom_sec: Option<Vec<u8>> = None;
@@ -989,6 +1051,21 @@ impl LmnkTimeline {
             ledger_sec = Some(slot.as_bytes().to_vec());
         }
 
+        let snap_sec = if let Some(snap_bytes) = runtime_snapshot_512 {
+            let snap_view = LmnkContainerView::parse(snap_bytes)
+                .map_err(|e| map_container_err(snap_bytes, e))?;
+            let payload = snap_view
+                .section_bytes(LMNK_SECTION_RUNTIME_SNAPSHOT)
+                .ok_or_else(|| {
+                    LmnkTimelineError::Corrupted(
+                        "missing LMNK_SECTION_RUNTIME_SNAPSHOT in snapshot container".to_string(),
+                    )
+                })?;
+            Some(payload.to_vec())
+        } else {
+            None
+        };
+
         let pframes_sec = if self.logical_pframe_topology.is_empty() {
             None
         } else {
@@ -996,7 +1073,16 @@ impl LmnkTimeline {
         };
         let recall_meta_sec = self.encode_recall_metadata_payload()?;
 
-        let mut sections: Vec<LmnkSectionInput<'_>> = Vec::with_capacity(7);
+        let mut sections: Vec<LmnkSectionInput<'_>> = Vec::with_capacity(8);
+        let mut effective_flags = container_flags;
+        if let Some(ref bytes) = snap_sec {
+            effective_flags |= LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT;
+            sections.push(LmnkSectionInput {
+                kind: LMNK_SECTION_RUNTIME_SNAPSHOT,
+                flags: 0,
+                payload: bytes,
+            });
+        }
         if let Some(ref bytes) = anchor_sec {
             sections.push(LmnkSectionInput {
                 kind: LMNK_SECTION_PHASE_ANCHORS,
@@ -1053,7 +1139,7 @@ impl LmnkTimeline {
             .map_err(|e| LmnkTimelineError::Corrupted(format!("container sizing failed: {e}")))?;
         let mut out = vec![0_u8; req_len];
         let written =
-            write_container_sections_to_bytes(container_flags, latest_ts, &sections, &mut out)
+            write_container_sections_to_bytes(effective_flags, latest_ts, &sections, &mut out)
                 .map_err(|e| {
                     LmnkTimelineError::Corrupted(format!("container write failed: {e}"))
                 })?;

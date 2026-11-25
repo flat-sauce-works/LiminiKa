@@ -43,6 +43,7 @@ pub(crate) struct EvalCliConfig {
     pub(crate) max_tokens: usize,
     pub(crate) prefill_chunk_size: usize,
     pub(crate) long_doc_bench: Option<PathBuf>,
+    pub(crate) equilibrium_bench: bool,
     pub(crate) physics_eval: bool,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
     pub(crate) circuit_mode: CircuitProfileMode,
@@ -103,6 +104,9 @@ pub(crate) fn print_help() {
         "  --long-doc-bench=<path>            Run streaming distillation, anchor paging, and chunked prefill bench"
     );
     println!(
+        "  --equilibrium-bench                Run cross-restart equilibrium & .lmnkp immutability E2E bench"
+    );
+    println!(
         "  --physics-eval                     Run the 4-axis deterministic steering-physics evaluation suite in a single model load"
     );
     println!(
@@ -148,6 +152,7 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--fair-bench",
         "--step2-only",
         "--random-push-control",
+        "--equilibrium-bench",
         "--physics-eval",
     ];
     const PREFIX_FLAGS: &[&str] = &[
@@ -215,6 +220,7 @@ impl EvalCliConfig {
         let max_tokens = parse_max_tokens(cli_args.iter().map(String::as_str));
         let prefill_chunk_size = parse_prefill_chunk_size(cli_args.iter().map(String::as_str));
         let long_doc_bench = parse_long_doc_bench_path(cli_args.iter().map(String::as_str));
+        let equilibrium_bench = cli_args.iter().any(|a| a == "--equilibrium-bench");
         let physics_eval = cli_args.iter().any(|a| a == "--physics-eval");
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
         let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
@@ -262,6 +268,7 @@ impl EvalCliConfig {
             max_tokens,
             prefill_chunk_size,
             long_doc_bench,
+            equilibrium_bench,
             physics_eval,
             kv_min_res,
             circuit_mode,

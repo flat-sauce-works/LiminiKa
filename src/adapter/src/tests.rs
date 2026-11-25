@@ -5064,3 +5064,261 @@ fn short_query_finite_sample_shrinkage_attenuates_loo_contrast_and_two_axis_isol
         "pure SelfRef query must keep exterior_sandbox_facts empty"
     );
 }
+
+#[test]
+fn adapter_equilibrium_sync_restores_snapshot_preserves_host_spine_pin_floor_and_drains_fifo() {
+    let geom = RopeGeometry::phi4_mini();
+    let mut session1 = ModelSteeringAdapter::new(geom.clone()).expect("session1");
+    session1.configure_ego_from_preset(LiminalEgoPreset::Medium);
+
+    // Trigger Slow-Loop crystallization into the bounded FIFO buffer.
+    let mut node = liminika_core::drivers::DistortionDelta::new_empty(7, 707);
+    node.hop_depth = 3;
+    node.reinforce_count = 6;
+    node.gain_q7 = 96;
+    node.pheromone_q7 = 96;
+    node.delta_phase_q7 = [32_i8; 64];
+    node.flags = liminika_core::drivers::DISTORTION_DELTA_FLAG_ACTIVE
+        | liminika_core::drivers::DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
+    {
+        let net = session1.runtime_context_mut().ego_differential_net_mut();
+        net.consolidation_hop_limit = 2;
+        net.set_node(0, node);
+    }
+    let horizon = EpistemicHorizonReading::default();
+    let delta = LiminalBoundaryDelta::default();
+    let overlap = OverlapDiscoveryReport::default();
+    let ego = *session1.ego_state();
+    for _ in 0..4 {
+        session1
+            .runtime_context_mut()
+            .telemetry_bank_mut()
+            .record_step(
+                StigmergicActionDecision::FullOrchestration,
+                &horizon,
+                &delta,
+                &overlap,
+                &ego,
+                0,
+                0,
+                0,
+                false,
+                false,
+            );
+    }
+    let adj = session1.apply_slow_loop_telemetry_epoch(4);
+    assert!(adj.applied);
+    assert_eq!(session1.crystallized_anchors().len(), 1);
+    assert_eq!(session1.crystallized_anchors()[0].anchor_id, 707);
+
+    // Sync into EquilibriumState and persist to .lmnkc.
+    let cfg = EquilibriumConfig::default();
+    let mut eq = EquilibriumState::new(cfg);
+    let report = session1
+        .sync_equilibrium_state(&mut eq)
+        .expect("sync_equilibrium_state");
+    assert_eq!(report.inserted_anchors, 1);
+    assert!(session1.crystallized_anchors().is_empty());
+    assert!(eq.pager().is_resident(707));
+    assert!(eq.runtime_snapshot_payload().is_some());
+
+    let lmnkc_bytes = eq.to_lmnkc_bytes(1_774_901_000).expect("to_lmnkc_bytes");
+    let expected_host_pin_floor = session1.system_spine().baseline_pinned_compute_mask;
+    drop(session1);
+
+    // Restore into a completely fresh session2 instance and verify host Spine pin floor immunity.
+    let restored_eq = EquilibriumState::from_lmnkc_bytes(&lmnkc_bytes, cfg).expect("from_lmnkc");
+    assert!(restored_eq.pager().is_resident(707));
+    let mut session2 = ModelSteeringAdapter::new(geom).expect("session2");
+    // Extra host-side pin bit on session2 must never be cleared by deserialized snapshot.
+    session2
+        .runtime_context_mut()
+        .apply_host_spine_pin_floor(1_u64 << 10);
+    let restored_snap = session2
+        .restore_from_equilibrium(&restored_eq)
+        .expect("restore_from_equilibrium");
+    assert!(restored_snap);
+    assert_eq!(
+        session2.system_spine().baseline_pinned_compute_mask & expected_host_pin_floor,
+        expected_host_pin_floor
+    );
+    assert_ne!(
+        session2.system_spine().baseline_pinned_compute_mask & (1_u64 << 10),
+        0,
+        "deserialized snapshot must never weaken host Spine pin floor"
+    );
+    assert!(session2.ego_state().is_active());
+}
+
+#[test]
+fn lmnkp_immutable_source_discipline_survives_multi_gen_equilibrium_and_topology_rebake() {
+    struct DeterministicSubEncoder {
+        layers: usize,
+        rot_len: usize,
+    }
+    impl SubtitleActivationEncoder for DeterministicSubEncoder {
+        fn encode_subtitle_activations(
+            &mut self,
+            record: &SourceTextRecord,
+        ) -> Result<Vec<Vec<f32>>, String> {
+            let seed = record.text.bytes().fold(0x4242_u64, |acc, b| {
+                acc.wrapping_mul(131).wrapping_add(u64::from(b))
+            });
+            Ok((0..self.layers)
+                .map(|l| {
+                    (0..self.rot_len)
+                        .map(|d| {
+                            (((seed ^ ((l as u64) << 7) ^ (d as u64)) % 100) as f32) * 0.01 - 0.5
+                        })
+                        .collect()
+                })
+                .collect())
+        }
+    }
+
+    let geom_a = RopeGeometry {
+        layout: RopeLayout::HalfSplit,
+        head_dim: 64,
+        rotary_dim: 32,
+        num_q_heads: 8,
+        num_kv_heads: 4,
+        num_layers: 4,
+        layer_rope_mask: 0x0F,
+    };
+    let adapter_a = ModelSteeringAdapter::new(geom_a.clone()).expect("adapter_a");
+    let policy = RecallPolicy::default();
+    let detector = AdaptiveGopCutDetector::default();
+    let mut enc_a = DeterministicSubEncoder {
+        layers: geom_a.num_layers,
+        rot_len: geom_a.q_rot_len(),
+    };
+    let source_dsl =
+        "persona LiminaCore {\n  fact \"zero-alloc core\"\n  fact \"immutable source\"\n}\n";
+    let records = vec![
+        SourceTextRecord {
+            frame_index: 0,
+            timestamp_epoch_sec: 1_774_900_000,
+            role: AttractorRole::Fact,
+            text: "LiminiKa keeps core zero-alloc and non-invasive.".to_string(),
+            energy: 2.0,
+        },
+        SourceTextRecord {
+            frame_index: 1,
+            timestamp_epoch_sec: 1_774_900_010,
+            role: AttractorRole::Fact,
+            text: "Immutable source truth lives strictly in .lmnkp archives.".to_string(),
+            energy: 1.8,
+        },
+    ];
+    let ctx_a = RebakeContext {
+        adapter: &adapter_a,
+        policy: &policy,
+        detector: &detector,
+        centroid_layers: &[],
+        up_to_frame: None,
+    };
+    let (tl_a, _) =
+        LmnkTimeline::bake_from_subtitle_records(&records, &ctx_a, &mut enc_a).expect("bake a");
+
+    // Persist .lmnkp archive + snapshot baseline bytes and CRC32s.
+    let tmp_dir = std::env::temp_dir().join(format!("liminika_p2c_immut_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&tmp_dir);
+    let lmnkp_path = tmp_dir.join("canonical_source.lmnkp");
+    let lmnkc_path = tmp_dir.join("runtime_equilibrium.lmnkc");
+    let _ = tl_a
+        .save_lmnkp_to_path(&lmnkp_path, Some(source_dsl))
+        .expect("save .lmnkp");
+
+    let orig_pkg_bytes = std::fs::read(&lmnkp_path).expect("read orig .lmnkp");
+    let orig_pkg_crc = liminika_core::foundation::compute_crc32_ieee(&orig_pkg_bytes);
+    let orig_view = LmnkPackageView::parse(&orig_pkg_bytes).expect("parse orig .lmnkp");
+    let orig_entry_crcs: Vec<(String, u32, usize)> = orig_view
+        .entries()
+        .iter()
+        .map(|e| (e.name.to_string(), e.crc32, e.payload.len()))
+        .collect();
+    assert_eq!(orig_view.source_lmnk(), Some(source_dsl.as_bytes()));
+
+    // Verify timeline v2 with embedded RuntimeSnapshot remains backward compatible.
+    let snap_a = adapter_a.export_runtime_snapshot().expect("snap_a");
+    let tl_with_snap = tl_a
+        .to_container_bytes_with_snapshot(LMNK_CONTAINER_FLAG_COMPILED_CACHE, Some(&snap_a))
+        .expect("tl with snap");
+    let decoded_tl = LmnkTimeline::from_bytes(&tl_with_snap).expect("v2 decode with snap");
+    assert_eq!(decoded_tl, tl_a);
+    let extracted_snap =
+        LmnkTimeline::extract_runtime_snapshot_from_bytes(&tl_with_snap).expect("extract snap");
+    assert!(extracted_snap.is_some());
+
+    // Run 10 generations of EquilibriumState flat join + .lmnkc persistence from the .lmnkp seed.
+    let owned_pkg = LmnkPackageOwned::load_from_path(&lmnkp_path).expect("load owned .lmnkp");
+    let imported_tl =
+        LmnkTimeline::import_lmnkp_bytes(&owned_pkg.clone().into_bytes()).expect("import .lmnkp");
+    let eq_cfg = EquilibriumConfig::default();
+    let mut eq = imported_tl
+        .build_equilibrium_state(eq_cfg)
+        .expect("build_equilibrium_state");
+    eq.update_runtime_snapshot_from_container(&snap_a)
+        .expect("attach snap");
+    for gen in 1..=10_u64 {
+        let pulse = imported_tl.build_equilibrium_state(eq_cfg).expect("pulse");
+        let rep = eq.join(&pulse).expect("eq join");
+        assert_eq!(rep.generation, gen);
+        let _ = eq
+            .save_lmnkc_to_path(&lmnkc_path, 1_774_900_000 + gen)
+            .expect("save .lmnkc");
+        eq = EquilibriumState::load_lmnkc_from_path(&lmnkc_path, eq_cfg).expect("load .lmnkc");
+    }
+
+    // Encounter a different topology_crc32: join rejects, host rebakes from immutable .lmnkp.
+    let foreign_eq =
+        EquilibriumState::with_topology_crc32(eq_cfg, CORE_TOPOLOGY.topology_crc32 ^ 0x55AA_1234);
+    assert!(matches!(
+        eq.join(&foreign_eq),
+        Err(EquilibriumError::TopologyMismatch { .. })
+    ));
+
+    let mut geom_b = geom_a;
+    geom_b.rotary_dim = 64;
+    let adapter_b = ModelSteeringAdapter::new(geom_b.clone()).expect("adapter_b");
+    let mut enc_b = DeterministicSubEncoder {
+        layers: geom_b.num_layers,
+        rot_len: geom_b.q_rot_len(),
+    };
+    let ctx_b = RebakeContext {
+        adapter: &adapter_b,
+        policy: &policy,
+        detector: &detector,
+        centroid_layers: &[],
+        up_to_frame: None,
+    };
+    let rebaked_tl = match imported_tl
+        .resume_or_rebake(&ctx_b, &mut enc_b, 1)
+        .expect("rebake from .lmnkp")
+    {
+        TimelineResumeOutcome::Rebaked { timeline, .. } => timeline,
+        TimelineResumeOutcome::FastResumed { .. } => panic!("expected rebake on altered geometry"),
+    };
+    let rebaked_eq = rebaked_tl
+        .build_equilibrium_state(eq_cfg)
+        .expect("rebaked eq");
+    let _ = rebaked_eq
+        .save_lmnkc_to_path(&lmnkc_path, 1_774_900_999)
+        .expect("save rebaked .lmnkc");
+
+    // Verify .lmnkp file and every embedded source/manifest/compiled entry are bit-for-bit identical.
+    let after_pkg_bytes = std::fs::read(&lmnkp_path).expect("read after .lmnkp");
+    let after_pkg_crc = liminika_core::foundation::compute_crc32_ieee(&after_pkg_bytes);
+    assert_eq!(after_pkg_bytes, orig_pkg_bytes, ".lmnkp bytes mutated!");
+    assert_eq!(after_pkg_crc, orig_pkg_crc, ".lmnkp CRC32 mutated!");
+    let after_view = LmnkPackageView::parse(&after_pkg_bytes).expect("parse after .lmnkp");
+    let after_entry_crcs: Vec<(String, u32, usize)> = after_view
+        .entries()
+        .iter()
+        .map(|e| (e.name.to_string(), e.crc32, e.payload.len()))
+        .collect();
+    assert_eq!(after_entry_crcs, orig_entry_crcs);
+    assert_eq!(after_view.source_lmnk(), Some(source_dsl.as_bytes()));
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+}

@@ -65,7 +65,8 @@ ADAPTER_MUT_GATE_CALL_RE = re.compile(
     r"measure_entropy_state|step_entropy_logits|set_layer_rope_mask|"
     r"set_ego_max_hops|set_guard_hold_tokens|set_max_observe_stride|"
     r"set_pre_bypass_enabled|configure_ego_from_preset|configure_ego_from_natural_language|"
-    r"bake_logical_pframe_topology|drain_crystallized_anchors)\s*\("
+    r"bake_logical_pframe_topology|drain_crystallized_anchors|"
+    r"restore_runtime_snapshot|sync_equilibrium_state|restore_from_equilibrium)\s*\("
 )
 CORE_CRATE_LAYER_RE = re.compile(
     r"\bliminika_core::(liminal|foundation|stigmergy|drivers|runtime|abi)\b"

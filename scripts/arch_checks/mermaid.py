@@ -202,7 +202,7 @@ def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
 
     lines.append(f'    W_adapter -->|"Mutable RuntimeContext Gate ({ad_runtime_gates} refs)"| L4_runtime')
     if host_files > 0:
-        lines.append('    W_adapter -.->|"Host Working-Set Bridge"| W_host')
+        lines.append('    W_adapter -.->|"Host Pager & Equilibrium Bridge"| W_host')
         lines.append('    W_host -.->|"Core Pod & Container View"| L4_runtime')
     if ad_liminal_vals > 0:
         lines.append(f'    W_adapter -.->|"Value/Pod ({ad_liminal_vals} refs)"| L0_liminal')

@@ -595,6 +595,96 @@ impl ModelSteeringAdapter {
         std::mem::take(&mut self.crystallized_anchors)
     }
 
+    /// Exports the embedded [`RuntimeContext`] into a validated 512-byte standalone `.lmnk`
+    /// snapshot container (`LMNK_SECTION_RUNTIME_SNAPSHOT`) without exposing mutable internals.
+    ///
+    /// # Errors
+    /// Returns an error if core snapshot serialization fails.
+    pub fn export_runtime_snapshot(
+        &self,
+    ) -> Result<[u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES], String> {
+        let mut buf = [0_u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES];
+        let mut req = 0_usize;
+        self.ctx
+            .serialize_to_bytes(&mut buf, &mut req)
+            .map_err(|e| format!("RuntimeContext::serialize_to_bytes failed: {e}"))?;
+        if req != LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES {
+            return Err(format!(
+                "unexpected runtime snapshot byte length: {req} != {LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES}"
+            ));
+        }
+        Ok(buf)
+    }
+
+    /// Restores [`RuntimeContext`] state from a 512-byte snapshot container (or multi-section
+    /// `.lmnkc` containing `LMNK_SECTION_RUNTIME_SNAPSHOT`) while strictly enforcing this host's
+    /// monotonic `Spine` pin floor (`apply_host_spine_pin_floor`) so deserialized bytes can never
+    /// weaken irreversible boundary pins.
+    ///
+    /// # Errors
+    /// Returns an error if container validation, topology matching, or snapshot decoding fails.
+    pub fn restore_runtime_snapshot(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let (active_slots, geom_pinned_slots, _) =
+            Self::compute_slot_masks(self.geometry.num_layers);
+        let host_pin_floor =
+            geom_pinned_slots | self.ctx.system_spine().baseline_pinned_compute_mask;
+        self.ctx
+            .deserialize_from_bytes(bytes)
+            .map_err(|e| format!("RuntimeContext::deserialize_from_bytes failed: {e}"))?;
+        self.ctx.apply_host_spine_pin_floor(host_pin_floor);
+        let final_pinned = self.ctx.system_spine().baseline_pinned_compute_mask & active_slots;
+        let reversible = active_slots & !final_pinned;
+        self.ctx
+            .compute_pool_mut()
+            .set_slot_masks(active_slots, final_pinned, 0, reversible);
+        self.configured_ego = self.ctx.core_layers().ego;
+        if self.configured_ego.is_active() {
+            self.sync_ego_differential_net_from_configured();
+        }
+        Ok(())
+    }
+
+    /// Bridges live adapter state into a domain-agnostic [`EquilibriumState`]: drains all buffered
+    /// Cold-Path crystallized anchors, captures the 512-byte runtime snapshot, and reconciles both
+    /// via flat renormalization (`EquilibriumState::ingest_crystallized_anchors`).
+    ///
+    /// # Errors
+    /// Returns an error if snapshot export, topology validation, or equilibrium reconciliation fails.
+    #[must_use = "EquilibriumJoinReport summarizes convergence and bounded working-set updates"]
+    pub fn sync_equilibrium_state(
+        &mut self,
+        equilibrium: &mut EquilibriumState,
+    ) -> Result<EquilibriumJoinReport, String> {
+        let snap = self.export_runtime_snapshot()?;
+        equilibrium
+            .update_runtime_snapshot_from_container(&snap)
+            .map_err(|e| e.to_string())?;
+        let drained = self.drain_crystallized_anchors();
+        let report = equilibrium
+            .ingest_crystallized_anchors(&drained)
+            .map_err(|e| e.to_string())?;
+        Ok(report)
+    }
+
+    /// Restores this adapter's [`RuntimeContext`] from an [`EquilibriumState`]'s persisted
+    /// `LMNK_SECTION_RUNTIME_SNAPSHOT` (when present) while enforcing host `Spine` pin floors.
+    ///
+    /// Returns `Ok(true)` when a runtime snapshot was restored and `Ok(false)` for legacy `.lmnkc`
+    /// equilibrium files carrying anchor records only.
+    ///
+    /// # Errors
+    /// Returns an error if the stored snapshot fails validation or topology checks.
+    pub fn restore_from_equilibrium(
+        &mut self,
+        equilibrium: &EquilibriumState,
+    ) -> Result<bool, String> {
+        let Some(snap_512) = equilibrium.runtime_snapshot_container_bytes() else {
+            return Ok(false);
+        };
+        self.restore_runtime_snapshot(&snap_512)?;
+        Ok(true)
+    }
+
     /// Evaluates bounded Slow-Loop epoch adjustments and applies them to [`AdaptiveThresholdPolicy`],
     /// [`StigmergicSubstrate`] thresholds, [`DistortionTension`], and [`EgoDifferentialNet`] GOP
     /// maintenance when `applied == true`.
