@@ -10,9 +10,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::manual_unwrap_or)]
 
 pub mod aligned;
 pub mod cohomology;

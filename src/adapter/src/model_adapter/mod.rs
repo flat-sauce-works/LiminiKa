@@ -66,16 +66,13 @@ impl RopeGeometry {
     /// Returns an error string if `head_dim`, `rotary_dim`, head counts, or `num_layers`
     /// violate RoPE or GQA divisibility constraints.
     pub fn validate(&self) -> Result<(), String> {
-        if self.head_dim == 0 || !self.head_dim.is_multiple_of(2) {
+        if self.head_dim == 0 || (self.head_dim & 1) != 0 {
             return Err(format!(
                 "head_dim ({}) must be a positive even integer",
                 self.head_dim
             ));
         }
-        if self.rotary_dim == 0
-            || !self.rotary_dim.is_multiple_of(2)
-            || self.rotary_dim > self.head_dim
-        {
+        if self.rotary_dim == 0 || (self.rotary_dim & 1) != 0 || self.rotary_dim > self.head_dim {
             return Err(format!(
                 "rotary_dim ({}) must be even, > 0, and <= head_dim ({})",
                 self.rotary_dim, self.head_dim
@@ -84,7 +81,7 @@ impl RopeGeometry {
         if self.num_q_heads == 0 || self.num_kv_heads == 0 {
             return Err("num_q_heads and num_kv_heads must be > 0".to_string());
         }
-        if !self.num_q_heads.is_multiple_of(self.num_kv_heads) {
+        if self.num_q_heads % self.num_kv_heads != 0 {
             return Err(format!(
                 "num_q_heads ({}) must be divisible by num_kv_heads ({})",
                 self.num_q_heads, self.num_kv_heads

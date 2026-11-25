@@ -177,6 +177,8 @@ pub const fn eval_barrier_pitchfork(
 /// time (`0` branches)** across all 3 modes.
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) const fn eval_temperature_for_mode(
     mode: u32,
     base_temperature: f32,

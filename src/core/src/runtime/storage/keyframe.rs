@@ -91,6 +91,8 @@ impl KvKeyframePacket {
     /// CRC32 integrity protection and causal provenance metadata.
     #[inline(always)]
     #[must_use]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub const fn new(
         token_index: u32,
         gop_length: u32,
@@ -306,6 +308,8 @@ pub trait KvKeyframeCache: Send + Sync {
     /// (`0` = I-Frame Keyframe Anchor, `1` = P-Frame Phase Motion Delta) and effective GOP length (Section 4.3).
     #[inline(always)]
     #[must_use]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_variable_gop_trigger(
         &self,
         moving_z_entropy: f32,
@@ -555,6 +559,8 @@ pub trait KvKeyframeCache: Send + Sync {
     /// [`LMNK_ERR_INVALID_ARGUMENT`] if `seek_pframe_steps > pframes.len()`,
     /// `phase_step_min_q7 > 127`, or `contradiction_threshold` is non-finite.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn seek_and_reconstruct_persona_from_gop(
         &self,
         keyframe: &KvKeyframePacket,

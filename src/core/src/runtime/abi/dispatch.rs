@@ -298,37 +298,114 @@ impl ContradictionGuardSignal for AbiBorrowedBloomGuard<'_> {
     }
 }
 
+/// Bundled Origin-1 system pressure and layer-skip hints passed across internal FFI helpers.
+#[derive(Clone, Copy)]
+pub(super) struct AbiSystemSpec {
+    pub(super) vram_pressure: f32,
+    pub(super) gpu_frame_overrun: f32,
+    pub(super) active_swarm_cell_mask: u8,
+    pub(super) recommend_layer_skip: u8,
+}
+
+/// Bundled optional Bloom contradiction-guard parameters passed across internal FFI helpers.
+#[derive(Clone, Copy)]
+pub(super) struct AbiBloomSpec {
+    pub(super) bloom_filter_opt: *const lmnk_bloom_filter_t,
+    pub(super) contradiction_threshold: f32,
+    pub(super) bloom_repulsion_threshold: u8,
+}
+
+/// Bundled raw Q7 phase-pointer origin inputs for `synthesize_multi_origin_from_raw_ptrs_with_words`.
+#[derive(Clone, Copy)]
+pub(super) struct AbiRawPhaseOrigin {
+    pub(super) phases: *const lmnk_q7_t,
+    pub(super) strength: f32,
+    pub(super) mapped_offset48: u64,
+    pub(super) anchor_id: u32,
+}
+
+/// Bundled raw byte-slice origin inputs for `synthesize_multi_origin_from_raw_bytes_with_words`.
+#[derive(Clone, Copy)]
+pub(super) struct AbiRawBytesOrigin {
+    pub(super) bytes: *const u8,
+    pub(super) byte_len: usize,
+    pub(super) strength: f32,
+    pub(super) mapped_offset48: u64,
+    pub(super) anchor_id: u32,
+}
+
+/// Bundled raw `f32` embedding origin inputs for `synthesize_multi_origin_from_raw_f32_with_words`.
+#[derive(Clone, Copy)]
+pub(super) struct AbiRawF32Origin {
+    pub(super) values: *const f32,
+    pub(super) len: usize,
+    pub(super) projection_gain: f32,
+    pub(super) strength: f32,
+    pub(super) mapped_offset48: u64,
+    pub(super) anchor_id: u32,
+}
+
+/// Bundled tensor-shape metadata `(head_dim, num_heads)` for internal FFI steering helpers.
+#[derive(Clone, Copy)]
+pub(super) struct AbiTensorShape {
+    pub(super) head_dim: usize,
+    pub(super) num_heads: usize,
+}
+
+/// Bundled raw Q/K/logits tensor buffer pointers and dimensions for internal FFI gateway steering.
+#[derive(Clone, Copy)]
+pub(super) struct AbiSteerBuffers {
+    pub(super) query_tensor: *mut f32,
+    pub(super) key_tensor: *mut f32,
+    pub(super) head_dim: usize,
+    pub(super) num_heads: usize,
+    pub(super) logits_inout: *mut f32,
+    pub(super) vocab_size: usize,
+}
+
+/// Bundled optional toroidal $k$-means centroid buffer and FFI output pointers.
+#[derive(Clone, Copy)]
+pub(super) struct AbiKmeansTail {
+    pub(super) centroids_inout: *mut lmnk_phase_anchor_record_t,
+    pub(super) num_centroids: usize,
+    pub(super) split_coherence_threshold: f32,
+    pub(super) frame_out: *mut lmnk_gateway_frame_t,
+    pub(super) report_out: *mut lmnk_causal_report_t,
+    pub(super) assigned_centroid_idx_out: *mut usize,
+    pub(super) assigned_coherence_out: *mut f32,
+    pub(super) updated_gravity_mass_out: *mut f32,
+}
+
 /// Generic zero-copy helper synthesizing a [`GatewayFrame`] from Origin 1 (`SystemConstraint`)
 /// and Origin 2 (`ObjectiveFact<F>`, `SubjectivePersona<P>`, optional `AbiBorrowedBloomGuard`).
 ///
 /// # Safety
-/// `bloom_filter_opt` must be `NULL` or a valid aligned pointer to [`lmnk_bloom_filter_t`].
+/// `bloom.bloom_filter_opt` must be `NULL` or a valid aligned pointer to [`lmnk_bloom_filter_t`].
 #[inline]
 pub(super) unsafe fn synthesize_multi_origin_generic_with_words<
     F: RawPhaseProjectable,
     P: RawPhaseProjectable,
 >(
-    vram_pressure: f32,
-    gpu_frame_overrun: f32,
-    active_swarm_cell_mask: u8,
-    recommend_layer_skip: u8,
+    sys: AbiSystemSpec,
     fact_sig_opt: Option<ObjectiveFact<F>>,
     pers_sig_opt: Option<SubjectivePersona<P>>,
-    bloom_filter_opt: *const lmnk_bloom_filter_t,
-    contradiction_threshold: f32,
-    bloom_repulsion_threshold: u8,
+    bloom: AbiBloomSpec,
 ) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
     // SAFETY: `FfiHandleRef::from_raw_opt` validates non-nullness and alignment of `bloom_filter_opt`.
-    let bloom_ref_opt = unsafe { FfiHandleRef::from_raw_opt(bloom_filter_opt)? };
-    let sys_sig =
-        SystemConstraint::new((), vram_pressure, gpu_frame_overrun, active_swarm_cell_mask)
-            .with_layer_skip(recommend_layer_skip != 0);
+    let bloom_ref_opt = unsafe { FfiHandleRef::from_raw_opt(bloom.bloom_filter_opt)? };
+    let sys_sig = SystemConstraint::new(
+        (),
+        sys.vram_pressure,
+        sys.gpu_frame_overrun,
+        sys.active_swarm_cell_mask,
+    )
+    .with_layer_skip(sys.recommend_layer_skip != 0);
     Ok(match bloom_ref_opt {
         Some(b_ref) => {
             let guard = AbiBorrowedBloomGuard::new(
                 &b_ref,
-                contradiction_threshold,
-                bloom_repulsion_threshold,
+                bloom.contradiction_threshold,
+                bloom.bloom_repulsion_threshold,
             );
             synthesize_multi_origin_gateway_frame_with_words(
                 Some(&sys_sig),
@@ -355,220 +432,145 @@ pub(super) unsafe fn synthesize_multi_origin_generic_with_words<
 /// Non-null phase pointers must point to at least 64 valid `lmnk_q7_t` elements.
 #[inline]
 pub(super) unsafe fn synthesize_multi_origin_from_raw_ptrs_with_words(
-    vram_pressure: f32,
-    gpu_frame_overrun: f32,
-    active_swarm_cell_mask: u8,
-    recommend_layer_skip: u8,
-    fact_phases: *const lmnk_q7_t,
-    fact_confidence: f32,
-    fact_mapped_offset48: u64,
-    fact_anchor_id: u32,
-    persona_phases: *const lmnk_q7_t,
-    persona_strength: f32,
-    persona_mapped_offset48: u64,
-    persona_anchor_id: u32,
-    bloom_filter_opt: *const lmnk_bloom_filter_t,
-    contradiction_threshold: f32,
-    bloom_repulsion_threshold: u8,
+    sys: AbiSystemSpec,
+    fact: AbiRawPhaseOrigin,
+    persona: AbiRawPhaseOrigin,
+    bloom: AbiBloomSpec,
 ) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
-    let fact_sig_opt = if fact_phases.is_null() {
+    let fact_sig_opt = if fact.phases.is_null() {
         None
     } else {
-        // SAFETY: `fact_phases` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
-        let f_ref = unsafe { &*fact_phases.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() };
+        // SAFETY: `fact.phases` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
+        let f_ref = unsafe { &*fact.phases.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() };
         Some(ObjectiveFact::new(
             AbiPhaseRef64(f_ref),
-            fact_confidence,
-            fact_mapped_offset48,
-            fact_anchor_id,
+            fact.strength,
+            fact.mapped_offset48,
+            fact.anchor_id,
         ))
     };
-    let pers_sig_opt = if persona_phases.is_null() {
+    let pers_sig_opt = if persona.phases.is_null() {
         None
     } else {
-        // SAFETY: `persona_phases` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
-        let p_ref = unsafe { &*persona_phases.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() };
+        // SAFETY: `persona.phases` is non-null and `align_of::<[lmnk_q7_t; 64]>() == 1`.
+        let p_ref = unsafe { &*persona.phases.cast::<[lmnk_q7_t; MAX_ATTENTION_HEADS]>() };
         Some(SubjectivePersona::new(
             AbiPhaseRef64(p_ref),
-            persona_strength,
-            persona_mapped_offset48,
-            persona_anchor_id,
+            persona.strength,
+            persona.mapped_offset48,
+            persona.anchor_id,
         ))
     };
-    // SAFETY: `fact_phases` and `persona_phases` were validated non-null and bound to 64-element
-    // arrays above; `bloom_filter_opt` is validated non-null and aligned via
+    // SAFETY: `fact.phases` and `persona.phases` were validated non-null and bound to 64-element
+    // arrays above; `bloom.bloom_filter_opt` is validated non-null and aligned via
     // `FfiHandleRef::from_raw_opt` inside `synthesize_multi_origin_generic_with_words`.
-    unsafe {
-        synthesize_multi_origin_generic_with_words(
-            vram_pressure,
-            gpu_frame_overrun,
-            active_swarm_cell_mask,
-            recommend_layer_skip,
-            fact_sig_opt,
-            pers_sig_opt,
-            bloom_filter_opt,
-            contradiction_threshold,
-            bloom_repulsion_threshold,
-        )
-    }
+    unsafe { synthesize_multi_origin_generic_with_words(sys, fact_sig_opt, pers_sig_opt, bloom) }
 }
 
 /// Zero-copy internal helper synthesizing a [`GatewayFrame`] directly from raw byte slices.
 ///
 /// # Safety
-/// Non-null byte pointers must reference at least `fact_byte_len` / `persona_byte_len` bytes.
+/// Non-null byte pointers must reference at least `fact.byte_len` / `persona.byte_len` bytes.
 #[inline]
 pub(super) unsafe fn synthesize_multi_origin_from_raw_bytes_with_words(
-    vram_pressure: f32,
-    gpu_frame_overrun: f32,
-    active_swarm_cell_mask: u8,
-    recommend_layer_skip: u8,
-    fact_bytes: *const u8,
-    fact_byte_len: usize,
-    fact_confidence: f32,
-    fact_mapped_offset48: u64,
-    fact_anchor_id: u32,
-    persona_bytes: *const u8,
-    persona_byte_len: usize,
-    persona_strength: f32,
-    persona_mapped_offset48: u64,
-    persona_anchor_id: u32,
-    bloom_filter_opt: *const lmnk_bloom_filter_t,
-    contradiction_threshold: f32,
-    bloom_repulsion_threshold: u8,
+    sys: AbiSystemSpec,
+    fact: AbiRawBytesOrigin,
+    persona: AbiRawBytesOrigin,
+    bloom: AbiBloomSpec,
 ) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
-    if (fact_byte_len > 0 && fact_bytes.is_null())
-        || (persona_byte_len > 0 && persona_bytes.is_null())
+    if (fact.byte_len > 0 && fact.bytes.is_null())
+        || (persona.byte_len > 0 && persona.bytes.is_null())
     {
         return Err(LMNK_ERR_NULL_POINTER);
     }
-    let fact_sig_opt = if fact_bytes.is_null() {
+    let fact_sig_opt = if fact.bytes.is_null() {
         None
     } else {
         // SAFETY: `checked_slice_from_raw_parts` validates non-null, alignment, and `<= isize::MAX` bounds.
-        let f_slice = unsafe { checked_slice_from_raw_parts(fact_bytes, fact_byte_len)? };
+        let f_slice = unsafe { checked_slice_from_raw_parts(fact.bytes, fact.byte_len)? };
         Some(ObjectiveFact::new(
             f_slice,
-            fact_confidence,
-            fact_mapped_offset48,
-            fact_anchor_id,
+            fact.strength,
+            fact.mapped_offset48,
+            fact.anchor_id,
         ))
     };
-    let pers_sig_opt = if persona_bytes.is_null() {
+    let pers_sig_opt = if persona.bytes.is_null() {
         None
     } else {
         // SAFETY: `checked_slice_from_raw_parts` validates non-null, alignment, and `<= isize::MAX` bounds.
-        let p_slice = unsafe { checked_slice_from_raw_parts(persona_bytes, persona_byte_len)? };
+        let p_slice = unsafe { checked_slice_from_raw_parts(persona.bytes, persona.byte_len)? };
         Some(SubjectivePersona::new(
             p_slice,
-            persona_strength,
-            persona_mapped_offset48,
-            persona_anchor_id,
+            persona.strength,
+            persona.mapped_offset48,
+            persona.anchor_id,
         ))
     };
-    // SAFETY: `fact_bytes` and `persona_bytes` were verified non-null for non-zero byte lengths
-    // and sliced within bounds above; `bloom_filter_opt` is validated non-null and aligned via
+    // SAFETY: `fact.bytes` and `persona.bytes` were verified non-null for non-zero byte lengths
+    // and sliced within bounds above; `bloom.bloom_filter_opt` is validated non-null and aligned via
     // `FfiHandleRef::from_raw_opt` inside `synthesize_multi_origin_generic_with_words`.
-    unsafe {
-        synthesize_multi_origin_generic_with_words(
-            vram_pressure,
-            gpu_frame_overrun,
-            active_swarm_cell_mask,
-            recommend_layer_skip,
-            fact_sig_opt,
-            pers_sig_opt,
-            bloom_filter_opt,
-            contradiction_threshold,
-            bloom_repulsion_threshold,
-        )
-    }
+    unsafe { synthesize_multi_origin_generic_with_words(sys, fact_sig_opt, pers_sig_opt, bloom) }
 }
 
 /// Zero-copy internal helper synthesizing a [`GatewayFrame`] directly from raw `f32` embedding slices.
 ///
 /// # Safety
-/// Non-null `f32` pointers must be 4-byte aligned and reference at least `fact_len` / `persona_len` elements.
+/// Non-null `f32` pointers must be 4-byte aligned and reference at least `fact.len` / `persona.len` elements.
 #[inline]
 pub(super) unsafe fn synthesize_multi_origin_from_raw_f32_with_words(
-    vram_pressure: f32,
-    gpu_frame_overrun: f32,
-    active_swarm_cell_mask: u8,
-    recommend_layer_skip: u8,
-    fact_values: *const f32,
-    fact_len: usize,
-    fact_projection_gain: f32,
-    fact_confidence: f32,
-    fact_mapped_offset48: u64,
-    fact_anchor_id: u32,
-    persona_values: *const f32,
-    persona_len: usize,
-    persona_projection_gain: f32,
-    persona_strength: f32,
-    persona_mapped_offset48: u64,
-    persona_anchor_id: u32,
-    bloom_filter_opt: *const lmnk_bloom_filter_t,
-    contradiction_threshold: f32,
-    bloom_repulsion_threshold: u8,
+    sys: AbiSystemSpec,
+    fact: AbiRawF32Origin,
+    persona: AbiRawF32Origin,
+    bloom: AbiBloomSpec,
 ) -> LmnkResult<(GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES])> {
-    if !branchless_is_finite_f32(fact_projection_gain)
-        || fact_projection_gain < 0.0
-        || !branchless_is_finite_f32(persona_projection_gain)
-        || persona_projection_gain < 0.0
+    if !branchless_is_finite_f32(fact.projection_gain)
+        || fact.projection_gain < 0.0
+        || !branchless_is_finite_f32(persona.projection_gain)
+        || persona.projection_gain < 0.0
     {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-    if fact_len > 0 {
-        validate_ptr(fact_values)?;
+    if fact.len > 0 {
+        validate_ptr(fact.values)?;
     }
-    if persona_len > 0 {
-        validate_ptr(persona_values)?;
+    if persona.len > 0 {
+        validate_ptr(persona.values)?;
     }
-    let fact_sig_opt = if fact_values.is_null() {
+    let fact_sig_opt = if fact.values.is_null() {
         None
     } else {
         // SAFETY: `checked_slice_from_raw_parts` validates non-null, `f32` alignment, and `<= isize::MAX` bounds.
-        let f_slice = unsafe { checked_slice_from_raw_parts(fact_values, fact_len)? };
+        let f_slice = unsafe { checked_slice_from_raw_parts(fact.values, fact.len)? };
         Some(ObjectiveFact::new(
             AbiF32EmbeddingRef {
                 slice: f_slice,
-                gain: fact_projection_gain,
+                gain: fact.projection_gain,
             },
-            fact_confidence,
-            fact_mapped_offset48,
-            fact_anchor_id,
+            fact.strength,
+            fact.mapped_offset48,
+            fact.anchor_id,
         ))
     };
-    let pers_sig_opt = if persona_values.is_null() {
+    let pers_sig_opt = if persona.values.is_null() {
         None
     } else {
         // SAFETY: `checked_slice_from_raw_parts` validates non-null, `f32` alignment, and `<= isize::MAX` bounds.
-        let p_slice = unsafe { checked_slice_from_raw_parts(persona_values, persona_len)? };
+        let p_slice = unsafe { checked_slice_from_raw_parts(persona.values, persona.len)? };
         Some(SubjectivePersona::new(
             AbiF32EmbeddingRef {
                 slice: p_slice,
-                gain: persona_projection_gain,
+                gain: persona.projection_gain,
             },
-            persona_strength,
-            persona_mapped_offset48,
-            persona_anchor_id,
+            persona.strength,
+            persona.mapped_offset48,
+            persona.anchor_id,
         ))
     };
-    // SAFETY: `fact_values` and `persona_values` were verified non-null, `f32`-aligned, and
-    // sliced within bounds above; `bloom_filter_opt` is validated non-null and aligned via
+    // SAFETY: `fact.values` and `persona.values` were verified non-null, `f32`-aligned, and
+    // sliced within bounds above; `bloom.bloom_filter_opt` is validated non-null and aligned via
     // `FfiHandleRef::from_raw_opt` inside `synthesize_multi_origin_generic_with_words`.
-    unsafe {
-        synthesize_multi_origin_generic_with_words(
-            vram_pressure,
-            gpu_frame_overrun,
-            active_swarm_cell_mask,
-            recommend_layer_skip,
-            fact_sig_opt,
-            pers_sig_opt,
-            bloom_filter_opt,
-            contradiction_threshold,
-            bloom_repulsion_threshold,
-        )
-    }
+    unsafe { synthesize_multi_origin_generic_with_words(sys, fact_sig_opt, pers_sig_opt, bloom) }
 }
 
 /// Unified register-resident core helper for [`GatewayFrame`] steering across FFI entry points:
@@ -580,9 +582,7 @@ pub(super) fn steer_gateway_frame_with_words_core_safe(
     frame_ref: &GatewayFrame,
     frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     trail: &mut lmnk_pointer_trail_t,
-    unresolved_damping_u7: u8,
-    head_dim: usize,
-    num_heads: usize,
+    shape: crate::runtime::gateway::orchestrator::GatewaySteerShape,
     q_aligned: &mut AlignedSliceMut32<'_, f32>,
     k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
@@ -614,9 +614,7 @@ pub(super) fn steer_gateway_frame_with_words_core_safe(
         frame_ref,
         frm_w,
         trail,
-        unresolved_damping_u7,
-        head_dim,
-        num_heads,
+        shape,
         Some(q_aligned),
         k_opt,
         logits_opt,
@@ -636,81 +634,69 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
     frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     trail_inout: *mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
-    query_tensor: *mut f32,
-    key_tensor: *mut f32,
-    head_dim: usize,
-    num_heads: usize,
-    logits_inout: *mut f32,
-    vocab_size: usize,
-    centroids_inout: *mut lmnk_phase_anchor_record_t,
-    num_centroids: usize,
-    split_coherence_threshold: f32,
-    frame_out: *mut lmnk_gateway_frame_t,
-    report_out: *mut lmnk_causal_report_t,
-    assigned_centroid_idx_out: *mut usize,
-    assigned_coherence_out: *mut f32,
-    updated_gravity_mass_out: *mut f32,
+    buffers: AbiSteerBuffers,
+    tail: AbiKmeansTail,
 ) -> LmnkResult<()> {
     validate_ptr(trail_inout)?;
-    let (_, total_len) = init_phase_engine(head_dim, num_heads)?;
-    let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
-    let logits_bytes = if !logits_inout.is_null() && vocab_size > 0 {
-        validate_raw_slice_bounds(logits_inout, vocab_size)?
+    let (_, total_len) = init_phase_engine(buffers.head_dim, buffers.num_heads)?;
+    let qk_bytes = validate_raw_slice_bounds(buffers.query_tensor, total_len)?;
+    let logits_bytes = if !buffers.logits_inout.is_null() && buffers.vocab_size > 0 {
+        validate_raw_slice_bounds(buffers.logits_inout, buffers.vocab_size)?
     } else {
         0
     };
     if raw_byte_ranges_overlap(
         trail_inout as usize,
         size_of::<lmnk_pointer_trail_t>(),
-        query_tensor as usize,
+        buffers.query_tensor as usize,
         qk_bytes,
-    ) || (!key_tensor.is_null()
+    ) || (!buffers.key_tensor.is_null()
         && raw_byte_ranges_overlap(
             trail_inout as usize,
             size_of::<lmnk_pointer_trail_t>(),
-            key_tensor as usize,
+            buffers.key_tensor as usize,
             qk_bytes,
         ))
         || (logits_bytes > 0
             && raw_byte_ranges_overlap(
                 trail_inout as usize,
                 size_of::<lmnk_pointer_trail_t>(),
-                logits_inout as usize,
+                buffers.logits_inout as usize,
                 logits_bytes,
             ))
     {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
-    let has_centroids = !centroids_inout.is_null() && num_centroids > 0;
+    let has_centroids = !tail.centroids_inout.is_null() && tail.num_centroids > 0;
     if has_centroids {
-        validate_ptr(centroids_inout)?;
-        if !branchless_is_finite_f32(split_coherence_threshold) {
+        validate_ptr(tail.centroids_inout)?;
+        if !branchless_is_finite_f32(tail.split_coherence_threshold) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let cent_bytes = validate_raw_slice_bounds(centroids_inout, num_centroids)?;
+        let cent_bytes = validate_raw_slice_bounds(tail.centroids_inout, tail.num_centroids)?;
         if raw_byte_ranges_overlap(
-            centroids_inout as usize,
+            tail.centroids_inout as usize,
             cent_bytes,
             trail_inout as usize,
             size_of::<lmnk_pointer_trail_t>(),
         ) || raw_byte_ranges_overlap(
-            centroids_inout as usize,
+            tail.centroids_inout as usize,
             cent_bytes,
-            query_tensor as usize,
+            buffers.query_tensor as usize,
             qk_bytes,
-        ) || (!key_tensor.is_null()
+        ) || (!buffers.key_tensor.is_null()
             && raw_byte_ranges_overlap(
-                centroids_inout as usize,
+                tail.centroids_inout as usize,
                 cent_bytes,
-                key_tensor as usize,
+                buffers.key_tensor as usize,
                 qk_bytes,
             ))
             || (logits_bytes > 0
                 && raw_byte_ranges_overlap(
-                    centroids_inout as usize,
+                    tail.centroids_inout as usize,
                     cent_bytes,
-                    logits_inout as usize,
+                    buffers.logits_inout as usize,
                     logits_bytes,
                 ))
         {
@@ -724,12 +710,12 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
         (
             FfiHandleMut::from_raw(trail_inout)?,
             bind_qk_and_logits_32(
-                query_tensor,
-                key_tensor,
-                head_dim,
-                num_heads,
-                logits_inout,
-                vocab_size,
+                buffers.query_tensor,
+                buffers.key_tensor,
+                buffers.head_dim,
+                buffers.num_heads,
+                buffers.logits_inout,
+                buffers.vocab_size,
             )?,
         )
     };
@@ -738,9 +724,11 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
         frame,
         frm_w,
         &mut trail,
-        unresolved_damping_u7,
-        head_dim,
-        num_heads,
+        crate::runtime::gateway::orchestrator::GatewaySteerShape {
+            unresolved_damping_u7,
+            head_dim: buffers.head_dim,
+            num_heads: buffers.num_heads,
+        },
         &mut q_aligned,
         k_opt.as_mut(),
         logits_opt.as_mut(),
@@ -749,27 +737,27 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
     if has_centroids {
         // SAFETY: `centroids_inout` is validated non-null, aligned, bounded, and disjoint from `trail_inout`.
         let centroids_slice =
-            unsafe { checked_slice_from_raw_parts_mut(centroids_inout, num_centroids)? };
+            unsafe { checked_slice_from_raw_parts_mut(tail.centroids_inout, tail.num_centroids)? };
         let (assigned_idx, _assigned_anchor_id, assigned_coh, updated_mass, _spawned_new) =
             PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
                 centroids_slice,
                 frame,
                 frm_w,
-                split_coherence_threshold,
+                tail.split_coherence_threshold,
                 Some(&mut *trail),
             );
         // SAFETY: `write_opt_out` validates optional output pointers before writing.
         unsafe {
-            write_opt_out(assigned_centroid_idx_out, assigned_idx)?;
-            write_opt_out(assigned_coherence_out, assigned_coh)?;
-            write_opt_out(updated_gravity_mass_out, updated_mass)?;
+            write_opt_out(tail.assigned_centroid_idx_out, assigned_idx)?;
+            write_opt_out(tail.assigned_coherence_out, assigned_coh)?;
+            write_opt_out(tail.updated_gravity_mass_out, updated_mass)?;
         }
     }
 
     // SAFETY: `write_opt_out` validates optional output pointers before writing.
     unsafe {
-        write_opt_out(frame_out, *frame)?;
-        write_opt_out(report_out, report)?;
+        write_opt_out(tail.frame_out, *frame)?;
+        write_opt_out(tail.report_out, report)?;
     }
     Ok(())
 }
@@ -783,20 +771,8 @@ pub(super) unsafe fn execute_gateway_frame_steer_and_optional_kmeans_ffi(
     frame: &GatewayFrame,
     trail_inout: *mut lmnk_pointer_trail_t,
     unresolved_damping_u7: u8,
-    query_tensor: *mut f32,
-    key_tensor: *mut f32,
-    head_dim: usize,
-    num_heads: usize,
-    logits_inout: *mut f32,
-    vocab_size: usize,
-    centroids_inout: *mut lmnk_phase_anchor_record_t,
-    num_centroids: usize,
-    split_coherence_threshold: f32,
-    frame_out: *mut lmnk_gateway_frame_t,
-    report_out: *mut lmnk_causal_report_t,
-    assigned_centroid_idx_out: *mut usize,
-    assigned_coherence_out: *mut f32,
-    updated_gravity_mass_out: *mut f32,
+    buffers: AbiSteerBuffers,
+    tail: AbiKmeansTail,
 ) -> LmnkResult<()> {
     let frm_w = frame.phase_words_ref();
     // SAFETY: Validated by `execute_gateway_frame_with_words_steer_and_optional_kmeans_ffi`.
@@ -806,20 +782,8 @@ pub(super) unsafe fn execute_gateway_frame_steer_and_optional_kmeans_ffi(
             frm_w,
             trail_inout,
             unresolved_damping_u7,
-            query_tensor,
-            key_tensor,
-            head_dim,
-            num_heads,
-            logits_inout,
-            vocab_size,
-            centroids_inout,
-            num_centroids,
-            split_coherence_threshold,
-            frame_out,
-            report_out,
-            assigned_centroid_idx_out,
-            assigned_coherence_out,
-            updated_gravity_mass_out,
+            buffers,
+            tail,
         )
     }
 }
@@ -832,8 +796,7 @@ pub(super) fn steer_routed_trail_words_qk_safe(
     trail_flags: u32,
     win_clamp_rad: f32,
     min_step_rad: f32,
-    head_dim: usize,
-    num_heads: usize,
+    shape: AbiTensorShape,
     q_aligned: &mut AlignedSliceMut32<'_, f32>,
     k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
 ) {
@@ -850,8 +813,8 @@ pub(super) fn steer_routed_trail_words_qk_safe(
                     steer_words,
                     0xFF,
                     128,
-                    head_dim,
-                    num_heads,
+                    shape.head_dim,
+                    shape.num_heads,
                     false,
                     eff_clamp_rad,
                     q_aligned,
@@ -865,8 +828,8 @@ pub(super) fn steer_routed_trail_words_qk_safe(
                     &swar_words,
                     0xFF,
                     128,
-                    head_dim,
-                    num_heads,
+                    shape.head_dim,
+                    shape.num_heads,
                     false,
                     eff_clamp_rad,
                     q_aligned,
@@ -885,8 +848,7 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
     bloom_opt: Option<&ContrastivePhaseBloomFilter>,
     trail_inout: &mut lmnk_pointer_trail_t,
     min_step_rad: f32,
-    head_dim: usize,
-    num_heads: usize,
+    shape: AbiTensorShape,
     q_aligned: &mut AlignedSliceMut32<'_, f32>,
     k_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
 ) -> LmnkResult<(f32, u32, f32)> {
@@ -938,8 +900,7 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
         trail_inout.flags,
         eff_clamp_rad,
         min_step_rad,
-        head_dim,
-        num_heads,
+        shape,
         q_aligned,
         k_opt,
     );
@@ -1047,6 +1008,13 @@ pub(super) unsafe fn bind_qk_32<'a>(
     Ok((engine, q_aligned, k_opt))
 }
 
+pub(super) type BoundQkAndLogits<'a> = (
+    PhaseSteeringEngine,
+    AlignedSliceMut32<'a, f32>,
+    Option<AlignedSliceMut32<'a, f32>>,
+    Option<AlignedSliceMut32<'a, f32>>,
+);
+
 /// Validates and binds `query_tensor` (mandatory, 32B aligned), `key_tensor` (optional, 32B aligned),
 /// and `logits_inout` (optional, 32B aligned, disjoint from Q/K) for `(head_dim, num_heads)`.
 ///
@@ -1060,12 +1028,7 @@ pub(super) unsafe fn bind_qk_and_logits_32<'a>(
     num_heads: usize,
     logits_inout: *mut f32,
     vocab_size: usize,
-) -> LmnkResult<(
-    PhaseSteeringEngine,
-    AlignedSliceMut32<'a, f32>,
-    Option<AlignedSliceMut32<'a, f32>>,
-    Option<AlignedSliceMut32<'a, f32>>,
-)> {
+) -> LmnkResult<BoundQkAndLogits<'a>> {
     let (_engine, total_len) = init_phase_engine(head_dim, num_heads)?;
     let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
     let has_logits = !logits_inout.is_null() && vocab_size > 0;

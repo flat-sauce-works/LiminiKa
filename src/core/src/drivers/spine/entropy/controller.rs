@@ -488,6 +488,8 @@ impl EntropyController {
     /// Internal register-pipelined implementation of `eval_stateful_with_lacuna_and_pointer`
     /// assuming `token_z_score` and `lacuna_score` have already been verified finite.
     #[inline]
+    // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+    #[allow(clippy::too_many_arguments)]
     fn eval_stateful_with_lacuna_and_pointer_finite(
         &mut self,
         token_z_score: f32,
@@ -582,6 +584,8 @@ impl EntropyController {
     /// # Errors
     /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if `token_z_score` or `lacuna_score` is non-finite.
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn eval_stateful_with_lacuna_and_pointer(
         &mut self,
         token_z_score: f32,
@@ -618,6 +622,8 @@ impl EntropyController {
     /// Never fails on valid finite/non-finite inputs because [`compute_sparse_surrogate_entropy`]
     /// and [`compute_moving_z_score_entropy`] sanitize non-finite inputs to `0.0`.
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn eval_surrogate_and_step(
         &mut self,
         p_max: f32,
@@ -756,6 +762,8 @@ impl EntropyController {
     /// Branchlessly evaluates the next `EntropyController` branch mode (`0`, `1`, `2`).
     #[inline(always)]
     #[must_use]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn evaluate_branch_mode_transition(
         &self,
         current_mode: u32,
@@ -783,6 +791,8 @@ impl EntropyController {
     /// Evaluates the energy-guided dynamic sampling temperature modifier (`sample_temperature`).
     #[inline(always)]
     #[must_use]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn eval_energy_guided_temperature(
         &self,
         base_temperature: f32,

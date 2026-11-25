@@ -79,6 +79,7 @@ jobs:
               - 'include/**'
               - 'src/**'
               - 'examples/**'
+              - 'fuzz/**'
               - 'tests/**'
               - 'benches/**'
               - 'Cargo.toml'
@@ -112,6 +113,7 @@ jobs:
               - 'scripts/**'
               - 'tests/**'
               - 'examples/**'
+              - 'fuzz/**'
               - 'benches/**'
               - 'cmake/**'
               - 'CMakeLists.txt'
@@ -192,6 +194,9 @@ jobs:
           cargo fmt --all
           if [ -f "examples/candle_eval/Cargo.toml" ]; then
             cargo fmt --manifest-path examples/candle_eval/Cargo.toml
+          fi
+          if [ -d "fuzz/fuzz_targets" ]; then
+            rustfmt --edition 2021 fuzz/fuzz_targets/*.rs
           fi
           if [ -f "Cargo.toml" ]; then
             cargo update --workspace --offline 2>/dev/null || true
@@ -728,6 +733,9 @@ jobs:
           if [ -f "examples/candle_eval/Cargo.toml" ]; then
             cargo fmt --manifest-path examples/candle_eval/Cargo.toml -- --check
           fi
+          if [ -d "fuzz/fuzz_targets" ]; then
+            rustfmt --edition 2021 --check fuzz/fuzz_targets/*.rs
+          fi
 
       - name: Run cargo check/clippy (no_std core, default, and all-features) (Unix)
         if: runner.os != 'Windows'
@@ -801,6 +809,46 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo nextest run --locked --workspace --all-targets --all-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # =========================================================================
+  # 5B. MIRI UNDEFINED BEHAVIOR VERIFICATION (PINNED NIGHTLY)
+  # =========================================================================
+  miri:
+    name: Miri UB Verification (liminika-core & dsl)
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
+
+      - name: Install pinned nightly Rust toolchain with Miri
+        uses: dtolnay/rust-toolchain@nightly-2026-11-20
+        with:
+          components: miri, rust-src
+
+      - name: Enable Rust caching (Miri)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: miri-linux-nightly-2026-11-20
+
+      - name: Run Miri on liminika-core and liminika-dsl
+        env:
+          MIRIFLAGS: "-Zmiri-symbolic-alignment-check"
+        run: |
+          cargo miri setup
+          cargo miri test --locked -p liminika-core --lib
+          cargo miri test --locked -p liminika-core --test test_abi_layout
+          cargo miri test --locked -p liminika-core --test test_zero_alloc
+          cargo miri test --locked -p liminika-core --test test_security_adversarial
+          cargo miri test --locked -p liminika-dsl --lib
+          cargo miri test --locked -p liminika-adapter --lib -- host::path_guard
 
   # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION

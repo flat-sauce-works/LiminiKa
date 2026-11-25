@@ -375,7 +375,8 @@ fn suite1_lmnkc_container_adversarial_and_2500_mutations() {
     let table_start = LMNK_CONTAINER_HEADER_BYTES;
     let table_end = table_start + 5 * LMNK_SECTION_ENTRY_BYTES;
     let mut kind_only_unobserved_ok = 0usize;
-    for trial in 0..2500usize {
+    let mutation_trials: usize = if cfg!(miri) { 64 } else { 2500 };
+    for trial in 0..mutation_trials {
         let mut mutated = valid_buf.clone();
         let mut flipped_only_custom_kind = false;
         match trial % 5 {
@@ -1369,14 +1370,16 @@ fn suite5_uaf_free_zeroize_volatile_all_5120_bytes_proof() {
     ctx.core_layers_mut().ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
     ctx.apply_host_spine_pin_floor(0xFFFF);
     ctx.zeroize_in_place();
-    let raw_ptr = (&*ctx as *const RuntimeContext).cast::<u8>();
-    // SAFETY: `ctx` is valid, live, and uniquely borrowed; inspecting initialized memory representation.
-    let raw_bytes =
-        unsafe { std::slice::from_raw_parts(raw_ptr, std::mem::size_of::<RuntimeContext>()) };
-    assert!(
-        raw_bytes.iter().all(|&b| b == 0x00),
-        "RuntimeContext::zeroize_in_place must zero all 5,120 bytes cleanly"
-    );
+    // Verify all sensitive `Pod` sub-structures and scalar fields are scrubbed to zero without
+    // forming `&[u8]` over non-`Pod` `Option<u8>` payload/padding bytes inside `RuntimeContext`.
+    assert!(ctx.core_layers().as_bytes().iter().all(|&b| b == 0x00));
+    assert!(ctx.system_spine().as_bytes().iter().all(|&b| b == 0x00));
+    assert!(ctx.substrate().as_bytes().iter().all(|&b| b == 0x00));
+    assert_eq!(ctx.compute_pool().active_mask, 0);
+    assert_eq!(ctx.ego_differential_net().active_node_mask, 0);
+    assert_eq!(ctx.substrate().step_counter, 0);
+    assert_eq!(ctx.substrate().slot_weights, [0.0; 8]);
+    assert_eq!(ctx.telemetry_snapshot().spine.total_steps, 0);
 }
 
 #[test]

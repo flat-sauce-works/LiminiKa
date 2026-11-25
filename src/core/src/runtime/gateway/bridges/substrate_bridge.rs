@@ -202,6 +202,8 @@ impl StigmergicSubstrate {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
     /// is non-finite, or tensor slices are invalid.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_gateway_kmeans_and_select_action<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
         signal: &S,
@@ -260,6 +262,8 @@ impl StigmergicSubstrate {
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `centroids` is empty or tensor slices are invalid.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_gateway_attractor_swarm_step<S, R>(
         &mut self,
         signal: &S,

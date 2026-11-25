@@ -355,6 +355,8 @@ pub trait RamPhaseKvCacheOps {
     /// Stores or updates a compressed 64-head KV-phase keyframe and its cognitive circuit in RAM,
     /// evicting the least-recently-used (`last_used_epoch`) slot when full.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn store_context_keyframe(
         &mut self,
         context_hash: u64,
@@ -762,6 +764,8 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     /// Stores or updates a context I-Frame keyframe, resets that slot's P-Frame ring, and returns
     /// the slot index when `context_hash != 0` and `N > 0`.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn store_keyframe_and_reset_gop(
         &mut self,
         context_hash: u64,
@@ -940,6 +944,8 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     /// # Errors
     /// Propagates [`LMNK_ERR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn step_with_gateway_autonomous<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
         &mut self,
         context_hash: u64,

@@ -421,7 +421,6 @@ pub(super) fn apply_phase_steering_nonuniform_slice_core(
                 num_heads,
             );
         }
-        return;
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -1214,6 +1213,8 @@ pub(super) fn apply_phase_clamp_pair_slice_core(
 }
 
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn steer_phase_clamp_single_cell_from_word_core(
     t_slice: &mut [f32],
     raw_word: u64,
@@ -1318,6 +1319,8 @@ pub(crate) fn steer_phase_clamp_single_cell_from_word_core(
     }
 }
 
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn steer_single_slice_from_eff_words_core(
     t_slice: &mut [f32],
     eff_words: &[u64; NUM_SWARM_CELLS],
@@ -1550,6 +1553,8 @@ pub(crate) fn steer_single_slice_from_eff_words_core(
 }
 
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn steer_pair_slice_from_eff_words_core(
     q_slice: &mut [f32],
     k_slice: &mut [f32],
@@ -1595,6 +1600,8 @@ pub(super) fn steer_pair_slice_from_eff_words_core(
     );
 }
 
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn steer_from_swar_words_core_safe(
     swar_words: &[u64; NUM_SWARM_CELLS],
     quorum_mask: u8,

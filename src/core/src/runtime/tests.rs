@@ -721,7 +721,7 @@ fn test_scalable_ram_cognitive_circuit_bank_and_folding() {
             } else {
                 CognitiveOpKind::SynthesizeFuse
             },
-            ((idx % 6) + 1) as u8,
+            (idx % 6) + 1,
         );
         low.push_step_hierarchical(step);
         high.push_step_hierarchical(step);
@@ -1575,19 +1575,13 @@ fn stigmergic_overlap_discovery_and_core_stack_feedback() {
     ];
 
     let mut q_phases = [16i8; MAX_ATTENTION_HEADS];
-    for h in 32..40 {
-        q_phases[h] = 24;
-    }
-    for h in 40..64 {
-        q_phases[h] = 0;
-    }
+    q_phases[32..40].fill(24);
+    q_phases[40..64].fill(0);
     let query_w = load_q7_words_64(&q_phases);
 
     // Approximation noise pushes granule 6 (heads 48..56) to `40` outside both attractors (`-100`, `+100`)
     let mut drifted_phases = q_phases;
-    for h in 48..56 {
-        drifted_phases[h] = 40;
-    }
+    drifted_phases[48..56].fill(40);
     let drifted_w = load_q7_words_64(&drifted_phases);
 
     let overlap =
@@ -1711,9 +1705,8 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     for step in 0..8 {
         let mut next_osc = prev_osc;
         let sign = if step % 2 == 0 { -6i8 } else { 6i8 };
-        for ch in 0..4 {
-            next_osc.threshold_floor_q7[ch] =
-                next_osc.threshold_floor_q7[ch].saturating_add_signed(sign);
+        for floor in &mut next_osc.threshold_floor_q7[..4] {
+            *floor = floor.saturating_add_signed(sign);
         }
         d_osc = LiminalBoundaryDelta::compute_branchless(
             &prev_osc,
@@ -2816,10 +2809,10 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
 
     net_1.epoch = 1;
     net_1.record_matched_activations(mask1);
-    for idx in 0..3 {
+    for (idx, cold) in net_1.node_cold.iter().take(3).enumerate() {
         if ((mask1 >> idx) & 1) != 0 {
-            assert_eq!(net_1.node_cold[idx].reinforce_count, 1);
-            assert_eq!(net_1.node_cold[idx].last_active_epoch, 1);
+            assert_eq!(cold.reinforce_count, 1);
+            assert_eq!(cold.last_active_epoch, 1);
         }
     }
 

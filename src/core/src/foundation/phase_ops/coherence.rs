@@ -53,6 +53,8 @@ pub const fn swar_slerp_word_with_bias_x8(a: u64, b: u64, s: u64, bias_restore: 
 /// on recently stored 64-bit word arrays.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn avx2_u64x8_to_vec64(
     w0: u64,
     w1: u64,
@@ -616,10 +618,10 @@ pub fn coherence_from_diff_words_64(
     {
         // SAFETY: Guarded by `target_feature = "avx2"`. Value-level `[u64; 8] -> [__m256i; 2]`
         // transmute avoids `_mm256_setr_epi64x` 4-to-1 Store-to-Load Forwarding stalls.
-        return unsafe {
+        unsafe {
             let (vd0, vd1) = avx2_u64x8_to_vec64(d0, d1, d2, d3, d4, d5, d6, d7);
             avx2_coherence_from_diff_vec64(vd0, vd1)
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -651,12 +653,12 @@ pub fn coherence_from_word_arrays_with_both_uniform_flags_64(
     {
         // SAFETY: Guarded by `target_feature = "avx2"`. Value-level `[u64; 8] -> [__m256i; 2]`
         // bitcast avoids 4-to-1 GPR-to-YMM Store-to-Load Forwarding stalls on stack-resident word arrays.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::_mm256_sub_epi8;
             let (va0, va1) = avx2_words64_to_vec64_with_uniform(a, a_is_uniform);
             let (vb0, vb1) = avx2_words64_to_vec64_with_uniform(b, b_is_uniform);
             avx2_coherence_from_diff_vec64(_mm256_sub_epi8(va0, vb0), _mm256_sub_epi8(va1, vb1))
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -692,7 +694,7 @@ pub fn coherence_above_floor_from_word_arrays_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: Guarded by `target_feature = "avx2"`.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::_mm256_sub_epi8;
             let (va0, va1) = avx2_words64_to_vec64_with_uniform(a, a_is_uniform);
             let (vb0, vb1) = avx2_words64_to_vec64_with_uniform(b, b_is_uniform);
@@ -701,7 +703,7 @@ pub fn coherence_above_floor_from_word_arrays_64(
                 _mm256_sub_epi8(va1, vb1),
                 floor_coh,
             )
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -759,7 +761,7 @@ pub fn branchless_q7_coherence_64(
     {
         // SAFETY: `phases_a` and `phases_b` are 64-byte arrays and AVX2 is enabled.
         // Direct `_mm256_loadu_si256` avoids 64-bit GPR stack copies and 4-to-1 STLF stalls.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
             let pa = phases_a.as_ptr().cast::<__m256i>();
             let pb = phases_b.as_ptr().cast::<__m256i>();
@@ -768,7 +770,7 @@ pub fn branchless_q7_coherence_64(
             let vb0 = _mm256_loadu_si256(pb);
             let vb1 = _mm256_loadu_si256(pb.add(1));
             avx2_coherence_from_diff_vec64(_mm256_sub_epi8(va0, vb0), _mm256_sub_epi8(va1, vb1))
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -1049,7 +1051,7 @@ pub(super) fn mean_sincos_from_words_with_uniform_flag_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: Guarded by `target_feature = "avx2"`.
-        return unsafe { avx2_mean_sincos_from_words_64(w) };
+        unsafe { avx2_mean_sincos_from_words_64(w) }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -1126,7 +1128,7 @@ pub fn branchless_q7_coherence_and_resultant_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: `phases_a` and `phases_b` are 64 bytes each and `target_feature = "avx2"` is enabled.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
                 __m256i, _mm256_broadcastb_epi8, _mm256_castsi256_si128, _mm256_loadu_si256,
                 _mm256_or_si256, _mm256_sub_epi8, _mm256_testz_si256, _mm256_xor_si256,
@@ -1171,7 +1173,7 @@ pub fn branchless_q7_coherence_and_resultant_64(
             let r_bar = fast_sqrt_unit_f32(mean_sin * mean_sin + mean_cos * mean_cos);
             let mean_q7 = branchless_atan2_to_q7_fast(mean_sin, mean_cos);
             (coherence, r_bar, mean_q7, branchless_von_mises_kappa(r_bar))
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {

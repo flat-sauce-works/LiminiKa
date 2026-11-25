@@ -26,6 +26,25 @@ use crate::stigmergy::{
     MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
 };
 
+#[derive(Clone, Copy)]
+struct CentroidSlotCandidate {
+    nearest_idx: usize,
+    best_coh: f32,
+    empty_opt: Option<usize>,
+    weakest_idx: usize,
+    best_w: [u64; NUM_STIGMERGIC_GRANULES],
+}
+
+#[derive(Clone, Copy)]
+struct CentroidAbsorptionPlan<'a> {
+    target_idx: usize,
+    spawned_new: bool,
+    best_coh: f32,
+    best_is_uniform: bool,
+    sample_is_uniform: bool,
+    cur_target_w: &'a [u64; NUM_STIGMERGIC_GRANULES],
+}
+
 impl PhaseAnchorRecord {
     #[inline(always)]
     fn absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
@@ -85,41 +104,14 @@ impl PhaseAnchorRecord {
             ScopedCut::SelfRef(aligned) => aligned.into_grounded(),
             _ => return self.phase_gravity_mass,
         };
-        let prev_crc = self.checksum_crc32;
-        let prev_aid = self.anchor_id;
-        let prev_count = self.sample_count;
-        let prev_zoff = self.mapped_section_offset48;
-        let prev_be_bits = self.base_energy.to_bits();
-        let prev_rb_bits = self.resultant_r_bar.to_bits();
-        let prev_kp_bits = self.von_mises_kappa.to_bits();
-        let prev_gm_bits = self.phase_gravity_mass.to_bits();
-        let prev_clamp_bits = self.phase_clamp_rad.to_bits();
-        let prev_temp_bits = self.effective_inv_temp.to_bits();
-        let prev_prov = self.lineage_flags;
-        let prev_w7_lo = self.pack_w7_lo();
+        let prev = self.capture_header_snapshot();
         let cur_w = *self.phase_words_ref();
         let (next_w, mass, touched, words_changed) = self
             .absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
                 &cur_w, frame, grounded_w, None, None,
             );
         if touched {
-            self.stamp_or_update_absorption_crc32(
-                prev_crc,
-                prev_aid,
-                prev_count,
-                prev_zoff,
-                prev_be_bits,
-                prev_rb_bits,
-                prev_kp_bits,
-                prev_gm_bits,
-                prev_clamp_bits,
-                prev_temp_bits,
-                prev_prov,
-                prev_w7_lo,
-                &cur_w,
-                &next_w,
-                words_changed,
-            );
+            self.stamp_or_update_absorption_crc32(prev, &cur_w, &next_w, words_changed);
         }
         mass
     }
@@ -128,13 +120,16 @@ impl PhaseAnchorRecord {
     fn select_or_spawn_centroid_slot_64(
         centroids: &mut [Self],
         frame: &GatewayFrame,
-        nearest_idx: usize,
-        best_coh: f32,
-        empty_opt: Option<usize>,
-        weakest_idx: usize,
-        best_w: [u64; NUM_STIGMERGIC_GRANULES],
+        nearest: CentroidSlotCandidate,
         safe_split: f32,
     ) -> (usize, bool, [u64; NUM_STIGMERGIC_GRANULES]) {
+        let CentroidSlotCandidate {
+            nearest_idx,
+            best_coh,
+            empty_opt,
+            weakest_idx,
+            best_w,
+        } = nearest;
         let needs_split = (centroids[nearest_idx].sample_count == 0) | (best_coh < safe_split);
         if needs_split {
             if let Some(empty_i) = empty_opt {
@@ -172,33 +167,30 @@ impl PhaseAnchorRecord {
     #[inline(always)]
     fn commit_frame_absorption_at_index(
         centroids: &mut [Self],
-        target_idx: usize,
-        spawned_new: bool,
-        best_coh: f32,
-        best_is_uniform: bool,
-        sample_is_uniform: bool,
-        cur_target_w: &[u64; NUM_STIGMERGIC_GRANULES],
+        plan: CentroidAbsorptionPlan<'_>,
         frame: &GatewayFrame,
         sample_w: Indivisible<Grounded, PhaseWordsRef64<'_>>,
         trail_opt: Option<&mut PointerTrail>,
     ) -> (u32, f32, f32) {
+        let CentroidAbsorptionPlan {
+            target_idx,
+            spawned_new,
+            best_coh,
+            best_is_uniform,
+            sample_is_uniform,
+            cur_target_w,
+        } = plan;
         let pre_coh = Some(branchless_select_f32(spawned_new, 1.0, best_coh));
         let eff_best_uni = spawned_new | best_is_uniform;
         let uni_flags = Some((eff_best_uni, sample_is_uniform));
         let fallback_aid = (target_idx as u32) + 1;
         let target = &mut centroids[target_idx];
-        let prev_crc = target.checksum_crc32;
-        let prev_count = target.sample_count;
-        let prev_aid = branchless_select_u32(spawned_new, 0, target.anchor_id);
-        let prev_zoff = branchless_select_u64(spawned_new, 0, target.mapped_section_offset48);
-        let prev_be_bits = target.base_energy.to_bits();
-        let prev_gm_bits = target.phase_gravity_mass.to_bits();
-        let prev_prov = target.lineage_flags;
-        let prev_rb_bits = target.resultant_r_bar.to_bits();
-        let prev_kp_bits = target.von_mises_kappa.to_bits();
-        let prev_clamp_bits = target.phase_clamp_rad.to_bits();
-        let prev_temp_bits = target.effective_inv_temp.to_bits();
-        let prev_w7_lo = target.pack_w7_lo();
+        let mut prev = target.capture_header_snapshot();
+        if spawned_new {
+            prev.anchor_id = 0;
+            prev.sample_count = 0;
+            prev.mapped_offset48 = 0;
+        }
         let (next_w, updated_mass, _modified, words_changed) = target
             .absorb_gateway_frame_with_cur_coh_and_uni_unstamped(
                 cur_target_w,
@@ -210,24 +202,7 @@ impl PhaseAnchorRecord {
         let winning_anchor_id =
             branchless_select_u32(target.anchor_id != 0, target.anchor_id, fallback_aid);
         target.anchor_id = winning_anchor_id;
-        let eff_prev_count = branchless_select_u32(spawned_new, 0, prev_count);
-        target.stamp_or_update_absorption_crc32(
-            prev_crc,
-            prev_aid,
-            eff_prev_count,
-            prev_zoff,
-            prev_be_bits,
-            prev_rb_bits,
-            prev_kp_bits,
-            prev_gm_bits,
-            prev_clamp_bits,
-            prev_temp_bits,
-            prev_prov,
-            prev_w7_lo,
-            cur_target_w,
-            &next_w,
-            words_changed,
-        );
+        target.stamp_or_update_absorption_crc32(prev, cur_target_w, &next_w, words_changed);
         let final_coh = branchless_select_f32(spawned_new, 1.0, best_coh);
 
         if let Some(trail) = trail_opt {
@@ -285,21 +260,25 @@ impl PhaseAnchorRecord {
         let (target_idx, spawned_new, cur_target_w) = Self::select_or_spawn_centroid_slot_64(
             centroids,
             frame,
-            nearest_idx,
-            best_coh,
-            empty_opt,
-            weakest_idx,
-            best_w,
+            CentroidSlotCandidate {
+                nearest_idx,
+                best_coh,
+                empty_opt,
+                weakest_idx,
+                best_w,
+            },
             safe_split,
         );
         let (winning_anchor_id, final_coh, updated_mass) = Self::commit_frame_absorption_at_index(
             centroids,
-            target_idx,
-            spawned_new,
-            best_coh,
-            best_is_uniform,
-            sample_is_uniform,
-            &cur_target_w,
+            CentroidAbsorptionPlan {
+                target_idx,
+                spawned_new,
+                best_coh,
+                best_is_uniform,
+                sample_is_uniform,
+                cur_target_w: &cur_target_w,
+            },
             frame,
             grounded_w,
             trail_opt,
@@ -529,12 +508,14 @@ impl PhaseAnchorRecord {
         let target_uni = (settled_on_scatter & best_2_uni) | ((!settled_on_scatter) & best_1_uni);
         let (landed_aid, _final_coh, updated_mass) = Self::commit_frame_absorption_at_index(
             centroids,
-            target_idx,
-            effective_spawn,
-            target_coh,
-            target_uni,
-            absorbed_uni,
-            &cur_target_w,
+            CentroidAbsorptionPlan {
+                target_idx,
+                spawned_new: effective_spawn,
+                best_coh: target_coh,
+                best_is_uniform: target_uni,
+                sample_is_uniform: absorbed_uni,
+                cur_target_w: &cur_target_w,
+            },
             frame,
             grounded_absorbed_w,
             trail_opt,
@@ -658,12 +639,14 @@ impl PhaseAnchorRecord {
         let empty_cur = [0u64; NUM_STIGMERGIC_GRANULES];
         let (final_aid, _coh, _mass) = Self::commit_frame_absorption_at_index(
             centroids,
-            target_idx,
-            true,
-            1.0,
-            true,
-            is_word_array_uniform_64(drifted_words),
-            &empty_cur,
+            CentroidAbsorptionPlan {
+                target_idx,
+                spawned_new: true,
+                best_coh: 1.0,
+                best_is_uniform: true,
+                sample_is_uniform: is_word_array_uniform_64(drifted_words),
+                cur_target_w: &empty_cur,
+            },
             &seed_frame,
             grounded_w,
             trail_opt,

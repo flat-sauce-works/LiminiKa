@@ -27,6 +27,19 @@ use crate::stigmergy::{
 
 use super::PhaseAnchorRecord;
 
+pub(crate) type Top2LiminalCentroidRoute = (
+    usize,
+    usize,
+    u32,
+    u32,
+    f32,
+    f32,
+    bool,
+    [u64; NUM_STIGMERGIC_GRANULES],
+    [u64; NUM_STIGMERGIC_GRANULES],
+    [u64; NUM_STIGMERGIC_GRANULES],
+);
+
 impl PhaseAnchorRecord {
     /// Evaluates macro distribution diagnostics across `centroids` in $\mathcal{O}(K^2)$ SWAR:
     /// returns `(active_clusters, total_samples, mean_resultant_r_bar, mean_von_mises_kappa, max_pairwise_coherence)`.
@@ -249,18 +262,7 @@ impl PhaseAnchorRecord {
         trail_w: [u64; NUM_STIGMERGIC_GRANULES],
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
-    ) -> (
-        usize,
-        usize,
-        u32,
-        u32,
-        f32,
-        f32,
-        bool,
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-    ) {
+    ) -> Top2LiminalCentroidRoute {
         let k_len = centroids.len();
         if k_len == 0 {
             return (
@@ -466,18 +468,7 @@ impl PhaseAnchorRecord {
         trail: &mut PointerTrail,
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
-    ) -> (
-        usize,
-        usize,
-        u32,
-        u32,
-        f32,
-        f32,
-        bool,
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-    ) {
+    ) -> Top2LiminalCentroidRoute {
         let trail_w = *trail_phase_words_ref(trail);
         Self::route_top2_liminal_centroids_from_preloaded_words_64(
             centroids,
@@ -521,6 +512,8 @@ impl PhaseAnchorRecord {
     ///    links the winning candidate into `src_trail.linked_trail_id`, and returns
     ///    `(winning_centroid_idx, winning_trail_id, best_score, best_coherence, found_valid)`.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn route_coarse_to_fine_candidates_64(
         centroids: &[Self],
         src_trail: &mut PointerTrail,

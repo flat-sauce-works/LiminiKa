@@ -562,7 +562,7 @@ impl RuntimeContext {
         latent_slots: &mut H,
         escalation_provider: &mut E,
         trail_out: &mut PointerTrail,
-        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> Result<(GatewayFrame, CausalProvenanceReport, u32, u32, bool)> {
         let (head_dim, num_heads, _expected_len) =
             self.substrate.validate_substrate_cascade_params(
@@ -713,7 +713,7 @@ impl RuntimeContext {
 
         let mut steered = false;
         if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) == 0 {
-            if let Some(q) = query_tensor.as_deref_mut() {
+            if let Some(q) = query_tensor {
                 let final_w = *trail_phase_words_ref(trail_out);
                 if swar_words_nonzero_64(&final_w) {
                     let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);

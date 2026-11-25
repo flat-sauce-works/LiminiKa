@@ -67,6 +67,18 @@ impl Default for StigmergicThresholds {
     }
 }
 
+/// Bundled parameters for [`StigmergicThresholds::execute_decision_steering_and_logit_scaling`].
+#[derive(Clone, Copy)]
+pub(super) struct DecisionSteerParams<'a> {
+    pub decision: StigmergicActionDecision,
+    pub steer_words: &'a [u64; NUM_STIGMERGIC_GRANULES],
+    pub phase_step_min_rad: f32,
+    pub phase_clamp_max: f32,
+    pub head_dim: usize,
+    pub num_heads: usize,
+    pub best_coh: f32,
+}
+
 impl StigmergicThresholds {
     /// Creates the canonical LiminiKa stigmergic threshold ladder.
     #[inline(always)]
@@ -273,6 +285,8 @@ impl StigmergicThresholds {
     /// (`0` bytes of [`super::StigmergicSubstrate`] stack allocation).
     #[inline(always)]
     #[must_use]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub const fn evaluate_report_on_trail(
         &self,
         trail: &PointerTrail,
@@ -327,19 +341,21 @@ impl StigmergicThresholds {
     }
 
     #[inline]
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn execute_decision_steering_and_logit_scaling(
-        decision: StigmergicActionDecision,
-        steer_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        phase_step_min_rad: f32,
-        phase_clamp_max: f32,
-        head_dim: usize,
-        num_heads: usize,
-        best_coh: f32,
+        params: DecisionSteerParams<'_>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> LmnkResult<(bool, bool, bool)> {
+        let DecisionSteerParams {
+            decision,
+            steer_words,
+            phase_step_min_rad,
+            phase_clamp_max,
+            head_dim,
+            num_heads,
+            best_coh,
+        } = params;
         let mut steered = false;
         let mut subhead_routed = false;
         let mut skip_compensated = false;
@@ -491,6 +507,8 @@ impl StigmergicThresholds {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor`, `key_tensor`, or `logits_opt`
     /// alias or have invalid dimensions.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_stateless_action_step(
         &self,
         phase_steering: &PhaseSteeringEngine,
@@ -596,13 +614,15 @@ impl StigmergicThresholds {
         trail_inout.sync_flags_with_current_ptr();
 
         let _ = Self::execute_decision_steering_and_logit_scaling(
-            decision,
-            &steer_words,
-            phase_step_min_rad,
-            phase_clamp_max,
-            head_dim,
-            num_heads,
-            best_coh,
+            DecisionSteerParams {
+                decision,
+                steer_words: &steer_words,
+                phase_step_min_rad,
+                phase_clamp_max,
+                head_dim,
+                num_heads,
+                best_coh,
+            },
             query_tensor,
             key_tensor,
             logits_opt,

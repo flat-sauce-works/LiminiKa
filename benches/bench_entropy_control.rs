@@ -9,11 +9,6 @@
 //!   Hodge obstruction pairing, and non-finite / odd-remainder boundary cases.
 
 #![allow(missing_docs)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
 
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,

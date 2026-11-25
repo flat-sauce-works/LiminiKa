@@ -1,0 +1,48 @@
+# name: fuzz/Cargo.toml
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "liminika-fuzz"
+version = "0.3.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+liminika-adapter = { path = "../src/adapter" }
+liminika-core = { path = "../src/core" }
+liminika-dsl = { path = "../src/dsl" }
+
+[[bin]]
+name = "lmnkc_container"
+path = "fuzz_targets/lmnkc_container.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lmnkp_package"
+path = "fuzz_targets/lmnkp_package.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lmnk_dsl"
+path = "fuzz_targets/lmnk_dsl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lmnk_timeline"
+path = "fuzz_targets/lmnk_timeline.rs"
+test = false
+doc = false
+bench = false

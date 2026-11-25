@@ -274,7 +274,7 @@ pub(crate) fn atan2_to_q7_word_x8_simd(sin_arr: &[f32; 8], cos_arr: &[f32; 8]) -
         unsafe {
             let vy = _mm256_loadu_ps(sin_arr.as_ptr());
             let vx = _mm256_loadu_ps(cos_arr.as_ptr());
-            return avx2_atan2_to_q7_word_x8_vec(vy, vx);
+            avx2_atan2_to_q7_word_x8_vec(vy, vx)
         }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
@@ -492,6 +492,9 @@ pub(crate) fn sincos_f32_x8_simd(angles: &[f32], sin_out: &mut [f32; 8], cos_out
             if _mm256_movemask_ps(in_fast_range) == 0xFF {
                 let k =
                     _mm256_round_ps::<0x08>(_mm256_mul_ps(v_in, _mm256_set1_ps(0.159_154_94_f32)));
+                // Cody-Waite double-split `2*pi = 6.283185 + 3.0717959e-7` requires the truncated
+                // high part verbatim (`f32::consts::TAU` would degrade range-reduction accuracy).
+                #[allow(clippy::approx_constant, clippy::excessive_precision)]
                 let x = _mm256_sub_ps(
                     _mm256_sub_ps(v_in, _mm256_mul_ps(k, _mm256_set1_ps(6.283_185_f32))),
                     _mm256_mul_ps(k, _mm256_set1_ps(3.071_795_9e-7_f32)),
@@ -519,6 +522,8 @@ pub(crate) fn sincos_f32_x8_simd(angles: &[f32], sin_out: &mut [f32; 8], cos_out
                 sp = _mm256_add_ps(_mm256_mul_ps(x2, sp), _mm256_set1_ps(-0.166_666_67_f32));
                 let sin_v = _mm256_mul_ps(x_folded, _mm256_add_ps(_mm256_mul_ps(x2, sp), one_v));
 
+                // Exact minimax cosine polynomial coefficient `-1/10!` in f32 rounding.
+                #[allow(clippy::excessive_precision)]
                 let mut cp = _mm256_add_ps(
                     _mm256_mul_ps(x2, _mm256_set1_ps(-0.000_000_275_573_19_f32)),
                     _mm256_set1_ps(0.000_024_801_587_f32),

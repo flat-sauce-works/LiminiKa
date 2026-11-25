@@ -74,7 +74,6 @@ pub(crate) fn rank1_write_outer_product_simd(
                     i += 1;
                 }
             }
-            return;
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         {
@@ -111,7 +110,6 @@ pub(crate) fn rank1_write_outer_product_simd(
                     i += 1;
                 }
             }
-            return;
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         {
@@ -193,7 +191,6 @@ pub(crate) fn rank1_accum_outer_product_simd(
                     i += 1;
                 }
             }
-            return;
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         {
@@ -239,7 +236,6 @@ pub(crate) fn rank1_accum_outer_product_simd(
                     i += 1;
                 }
             }
-            return;
         }
         #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
         {
@@ -254,6 +250,12 @@ pub(crate) fn rank1_accum_outer_product_simd(
 // 2. Synchronous Rank-1 Residual Adapter Pure Functions
 // ===================================================================
 
+type UnpackedRank1Slices<'a> = (
+    AlignedSlice32<'a, f32>,
+    AlignedSlice32<'a, f32>,
+    Option<AlignedSlice32<'a, f32>>,
+);
+
 /// # Safety
 /// Caller must ensure `desc.u_vector_ptr` (`d_out` floats), `desc.v_vector_ptr` (`d_in` floats),
 /// and optional `desc.gain_scalar_ptr` (`d_out` floats) point to valid, initialized, 32-byte aligned
@@ -264,11 +266,7 @@ unsafe fn validate_and_unpack_rank1_descriptor<'a>(
     d_in: usize,
     d_out: usize,
     y_out_ptr: *const f32,
-) -> LmnkResult<(
-    AlignedSlice32<'a, f32>,
-    AlignedSlice32<'a, f32>,
-    Option<AlignedSlice32<'a, f32>>,
-)> {
+) -> LmnkResult<UnpackedRank1Slices<'a>> {
     if desc.u_vector_ptr == 0 || desc.v_vector_ptr == 0 {
         return Err(LMNK_ERR_NULL_POINTER);
     }

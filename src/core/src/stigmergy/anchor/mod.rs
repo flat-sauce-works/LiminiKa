@@ -9,19 +9,19 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use core::mem::{align_of, offset_of, size_of};
 
 use self::crc32_delta::{
     crc32_anchor_be24_final_u32, crc32_anchor_gm36_final_u32, crc32_anchor_zoff16_final_u32,
     crc32_update_anchor_absorption_delta, crc32_update_anchor_stationary_fields_delta,
-    ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB, ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
-    ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB, ANCHOR_CRC32_RBAR_ONE_FINAL_CONTRIB,
-    ANCHOR_CRC32_W0_FINAL_CONTRIB, CRC32_ANCHOR_ACTION_BYTE57_REF, CRC32_ANCHOR_AID_BYTE0_REF,
-    CRC32_ANCHOR_AID_BYTE1_REF, CRC32_ANCHOR_PROV_BYTE0_REF, CRC32_ANCHOR_PROV_BYTE1_REF,
-    CRC32_ANCHOR_SC_BYTE0_REF, CRC32_ANCHOR_SLOT_BYTE56_LUT_8, CRC32_ANCHOR_ZOFF_BYTE1_REF,
-    CRC32_ANCHOR_ZOFF_BYTE2_REF, CRC32_ANCHOR_ZOFF_BYTE3_REF,
+    AnchorHeaderDelta, ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB,
+    ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB,
+    ANCHOR_CRC32_RBAR_ONE_FINAL_CONTRIB, ANCHOR_CRC32_W0_FINAL_CONTRIB,
+    CRC32_ANCHOR_ACTION_BYTE57_REF, CRC32_ANCHOR_AID_BYTE0_REF, CRC32_ANCHOR_AID_BYTE1_REF,
+    CRC32_ANCHOR_PROV_BYTE0_REF, CRC32_ANCHOR_PROV_BYTE1_REF, CRC32_ANCHOR_SC_BYTE0_REF,
+    CRC32_ANCHOR_SLOT_BYTE56_LUT_8, CRC32_ANCHOR_ZOFF_BYTE1_REF, CRC32_ANCHOR_ZOFF_BYTE2_REF,
+    CRC32_ANCHOR_ZOFF_BYTE3_REF,
 };
 use crate::foundation::{
     atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast, branchless_clamp_f32,
@@ -752,73 +752,107 @@ impl PhaseAnchorRecord {
         }
         (next_w, grav_mass, words_changed)
     }
+}
+
+/// Return tuple from [`PhaseAnchorRecord::find_nearest_toroidal_centroid_with_cache_64`].
+pub(crate) type NearestCentroidMatch = (
+    usize,
+    f32,
+    f32,
+    Option<usize>,
+    usize,
+    [u64; NUM_STIGMERGIC_GRANULES],
+    bool,
+    bool,
+    Option<u8>,
+);
+
+/// Snapshot of [`PhaseAnchorRecord`] header fields captured before an absorption step for
+/// incremental GF(2) CRC32 updates.
+#[derive(Clone, Copy)]
+pub(crate) struct AnchorHeaderSnapshot {
+    pub crc: u32,
+    pub anchor_id: u32,
+    pub sample_count: u32,
+    pub mapped_offset48: u64,
+    pub base_energy_bits: u32,
+    pub r_bar_bits: u32,
+    pub kappa_bits: u32,
+    pub gravity_mass_bits: u32,
+    pub clamp_bits: u32,
+    pub inv_temp_bits: u32,
+    pub provenance_bits: u32,
+    pub w7_lo: u32,
+}
+
+impl PhaseAnchorRecord {
+    #[inline(always)]
+    pub(crate) fn capture_header_snapshot(&self) -> AnchorHeaderSnapshot {
+        AnchorHeaderSnapshot {
+            crc: self.checksum_crc32,
+            anchor_id: self.anchor_id,
+            sample_count: self.sample_count,
+            mapped_offset48: self.mapped_section_offset48,
+            base_energy_bits: self.base_energy.to_bits(),
+            r_bar_bits: self.resultant_r_bar.to_bits(),
+            kappa_bits: self.von_mises_kappa.to_bits(),
+            gravity_mass_bits: self.phase_gravity_mass.to_bits(),
+            clamp_bits: self.phase_clamp_rad.to_bits(),
+            inv_temp_bits: self.effective_inv_temp.to_bits(),
+            provenance_bits: self.lineage_flags,
+            w7_lo: self.pack_w7_lo(),
+        }
+    }
 
     #[inline(always)]
     pub(crate) fn stamp_or_update_absorption_crc32(
         &mut self,
-        prev_crc: u32,
-        prev_aid: u32,
-        prev_count: u32,
-        prev_zoff: u64,
-        prev_be_bits: u32,
-        prev_rb_bits: u32,
-        prev_kp_bits: u32,
-        prev_gm_bits: u32,
-        prev_clamp_bits: u32,
-        prev_temp_bits: u32,
-        prev_prov: u32,
-        prev_w7_lo: u32,
+        prev: AnchorHeaderSnapshot,
         cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
         next_w: &[u64; NUM_STIGMERGIC_GRANULES],
         words_changed: bool,
     ) {
-        if prev_crc != 0 {
-            let delta_aid = prev_aid ^ self.anchor_id;
-            let delta_zoff = prev_zoff ^ self.mapped_section_offset48;
-            let delta_rb = prev_rb_bits ^ self.resultant_r_bar.to_bits();
-            let delta_kp = prev_kp_bits ^ self.von_mises_kappa.to_bits();
-            let delta_cl = prev_clamp_bits ^ self.phase_clamp_rad.to_bits();
-            let delta_tm = prev_temp_bits ^ self.effective_inv_temp.to_bits();
-            let delta_w7 = prev_w7_lo ^ self.pack_w7_lo();
+        if prev.crc != 0 {
+            let delta = AnchorHeaderDelta {
+                anchor_id: prev.anchor_id ^ self.anchor_id,
+                sample_count: prev.sample_count ^ self.sample_count,
+                mapped_offset48: prev.mapped_offset48 ^ self.mapped_section_offset48,
+                base_energy_bits: prev.base_energy_bits ^ self.base_energy.to_bits(),
+                r_bar_bits: prev.r_bar_bits ^ self.resultant_r_bar.to_bits(),
+                kappa_bits: prev.kappa_bits ^ self.von_mises_kappa.to_bits(),
+                gravity_mass_bits: prev.gravity_mass_bits ^ self.phase_gravity_mass.to_bits(),
+                clamp_bits: prev.clamp_bits ^ self.phase_clamp_rad.to_bits(),
+                inv_temp_bits: prev.inv_temp_bits ^ self.effective_inv_temp.to_bits(),
+                provenance_bits: prev.provenance_bits ^ self.lineage_flags,
+                w7_lo: prev.w7_lo ^ self.pack_w7_lo(),
+            };
             if (!words_changed)
-                & (delta_aid == 0)
-                & (delta_zoff == 0)
-                & ((delta_rb | delta_kp) == 0)
-                & ((delta_w7 >> 16) == 0)
+                & (delta.anchor_id == 0)
+                & (delta.mapped_offset48 == 0)
+                & ((delta.r_bar_bits | delta.kappa_bits) == 0)
+                & ((delta.w7_lo >> 16) == 0)
             {
                 self.checksum_crc32 = crc32_update_anchor_stationary_fields_delta(
-                    prev_crc,
-                    prev_count ^ self.sample_count,
-                    prev_be_bits ^ self.base_energy.to_bits(),
-                    prev_gm_bits ^ self.phase_gravity_mass.to_bits(),
-                    delta_cl,
-                    delta_tm,
-                    prev_prov ^ self.lineage_flags,
-                    delta_w7,
+                    prev.crc,
+                    delta.sample_count,
+                    delta.base_energy_bits,
+                    delta.gravity_mass_bits,
+                    delta.clamp_bits,
+                    delta.inv_temp_bits,
+                    delta.provenance_bits,
+                    delta.w7_lo,
                 );
             } else {
-                self.checksum_crc32 = crc32_update_anchor_absorption_delta(
-                    prev_crc,
-                    delta_aid,
-                    prev_count ^ self.sample_count,
-                    delta_zoff,
-                    prev_be_bits ^ self.base_energy.to_bits(),
-                    delta_rb,
-                    delta_kp,
-                    prev_gm_bits ^ self.phase_gravity_mass.to_bits(),
-                    delta_cl,
-                    delta_tm,
-                    prev_prov ^ self.lineage_flags,
-                    delta_w7,
-                    cur_w,
-                    next_w,
-                );
+                self.checksum_crc32 =
+                    crc32_update_anchor_absorption_delta(prev.crc, delta, cur_w, next_w);
             }
         } else {
             self.stamp_crc32_with_words(next_w);
         }
     }
+}
 
+impl PhaseAnchorRecord {
     /// Absorbs a [`Grounded`] 64-head sample point (`sample_phases`, `sample_energy`) into this
     /// centroid on $SO(2)^{64}$, updates $(\bar{R}_c, \kappa_c, M_{\mathrm{grav}})$, and stamps
     /// `checksum_crc32`.
@@ -833,16 +867,7 @@ impl PhaseAnchorRecord {
         sample_phases: Indivisible<Grounded, PhaseProfileRef64<'_>>,
         sample_energy: f32,
     ) -> f32 {
-        let prev_crc = self.checksum_crc32;
-        let prev_count = self.sample_count;
-        let prev_be_bits = self.base_energy.to_bits();
-        let prev_rb_bits = self.resultant_r_bar.to_bits();
-        let prev_kp_bits = self.von_mises_kappa.to_bits();
-        let prev_gm_bits = self.phase_gravity_mass.to_bits();
-        let prev_clamp_bits = self.phase_clamp_rad.to_bits();
-        let prev_temp_bits = self.effective_inv_temp.to_bits();
-        let prev_prov = self.lineage_flags;
-        let prev_w7_lo = self.pack_w7_lo();
+        let prev = self.capture_header_snapshot();
         let cur_w = *self.phase_words_ref();
         let sample_w = load_q7_words_64(sample_phases.as_ref().0);
         let grounded_w = Scoped::interior(PhaseWordsRef64(&sample_w)).into_grounded();
@@ -855,23 +880,7 @@ impl PhaseAnchorRecord {
                 sample_energy,
                 1,
             );
-        self.stamp_or_update_absorption_crc32(
-            prev_crc,
-            self.anchor_id,
-            prev_count,
-            self.mapped_section_offset48,
-            prev_be_bits,
-            prev_rb_bits,
-            prev_kp_bits,
-            prev_gm_bits,
-            prev_clamp_bits,
-            prev_temp_bits,
-            prev_prov,
-            prev_w7_lo,
-            &cur_w,
-            &next_w,
-            words_changed,
-        );
+        self.stamp_or_update_absorption_crc32(prev, &cur_w, &next_w, words_changed);
         mass
     }
 
@@ -904,17 +913,7 @@ impl PhaseAnchorRecord {
             u16,
             u16,
         )>,
-    ) -> (
-        usize,
-        f32,
-        f32,
-        Option<usize>,
-        usize,
-        [u64; NUM_STIGMERGIC_GRANULES],
-        bool,
-        bool,
-        Option<u8>,
-    ) {
+    ) -> NearestCentroidMatch {
         let k_len = centroids.len();
         if k_len == 0 {
             return (

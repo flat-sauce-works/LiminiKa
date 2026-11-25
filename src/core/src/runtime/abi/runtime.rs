@@ -1038,8 +1038,10 @@ pub unsafe extern "C" fn lmnk_container_map_and_steer_zero_copy_safe(
             bloom,
             &mut trail,
             min_step_rad,
-            head_dim,
-            num_heads,
+            AbiTensorShape {
+                head_dim,
+                num_heads,
+            },
             &mut q_aligned,
             k_opt.as_mut(),
         )?;

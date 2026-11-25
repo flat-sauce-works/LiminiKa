@@ -5,7 +5,6 @@
 //! orchestration entry points, and opaque handle management for `LiminiKa` `v0.3.0` (`0x0000_0300`).
 
 #![allow(non_camel_case_types)]
-#![allow(clippy::too_many_lines)]
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -887,9 +886,7 @@ mod tests {
             ..GatewayFrame::default()
         };
         let mut p1 = [16i8; MAX_ATTENTION_HEADS];
-        for h in 48..56 {
-            p1[h] = -100;
-        }
+        p1[48..56].fill(-100);
         let f1 = GatewayFrame {
             target_anchor_id: 12,
             effective_energy: 1.4,
@@ -902,9 +899,7 @@ mod tests {
 
         let query_phases = [16i8; MAX_ATTENTION_HEADS];
         let mut drifted_phases = [16i8; MAX_ATTENTION_HEADS];
-        for h in 48..56 {
-            drifted_phases[h] = 100;
-        }
+        drifted_phases[48..56].fill(100);
 
         let mut horizon = lmnk_epistemic_horizon_t::default();
         let mut overlap_report = lmnk_overlap_discovery_report_t::default();

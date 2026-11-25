@@ -306,6 +306,8 @@ impl EgoIntentAxes {
     /// without heap allocations or natural-language dictionaries.
     #[inline]
     #[must_use]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_cue_counts_overlay(
         mut self,
         autonomy_cues: u8,

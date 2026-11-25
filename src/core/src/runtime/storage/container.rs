@@ -897,7 +897,7 @@ impl<'a> LmnkContainerView<'a> {
 
         if !anchors.is_empty() {
             let off = cursor;
-            let len = anchors.len() * size_of::<PhaseAnchorRecord>();
+            let len = core::mem::size_of_val(anchors);
             let end = off + len;
             let payload_slice = buf.get_mut(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
             let _ = PhaseAnchorRecord::write_records_to_container_bytes(anchors, payload_slice)?;

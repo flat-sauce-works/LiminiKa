@@ -9,7 +9,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::Q7_FULL_COS_REF;
@@ -157,6 +156,8 @@ pub(super) const fn precompute_bayesian_trail_scales(
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn eval_candidate_trail_words_with_macro_fast(
     self_w: &[u64; 8],
     self_is_uniform: bool,
@@ -268,6 +269,8 @@ pub(super) fn eval_candidate_trail_words_with_macro_fast(
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn eval_candidate_trail_avx2_with_macro_fast(
     self_w: &[u64; 8],
     self_is_uniform: bool,

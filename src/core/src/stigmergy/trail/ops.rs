@@ -133,6 +133,8 @@ impl TaggedPtr {
 /// bridger, and Attention score modulator accepting `self_w` directly in 8 `u64` SWAR registers
 /// and returning the post-bridged 8 `u64` SWAR words (`0` redundant stack/memory reloads).
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     trail: &mut PointerTrail,
     mut self_w: [u64; NUM_STIGMERGIC_GRANULES],

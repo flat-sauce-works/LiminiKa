@@ -571,8 +571,8 @@ mod tests {
                 &mut out_8h.as_aligned_slice_mut(),
             )
             .unwrap();
-        for h in 0..8 {
-            assert_eq!(out_8h.data[h], 64);
+        for &val in &out_8h.data[..8] {
+            assert_eq!(val, 64);
         }
 
         let (s_pi, c_pi) = branchless_sincos_q7(-128);

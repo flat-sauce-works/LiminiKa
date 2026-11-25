@@ -178,6 +178,8 @@ impl StigmergicSubstrate {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias or have
     /// fewer than `head_dim * num_heads` elements.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_next_action_step(
         &mut self,
         input_ptr: TaggedPtr,
@@ -206,6 +208,8 @@ impl StigmergicSubstrate {
     }
 
     #[inline]
+    // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn orchestrate_next_action_step_core(
         &mut self,
         input_ptr: TaggedPtr,
@@ -384,13 +388,15 @@ impl StigmergicSubstrate {
 
         let (steered, subhead_routed, skip_compensated) =
             StigmergicThresholds::execute_decision_steering_and_logit_scaling(
-                decision,
-                &steer_words,
-                phase_step_min_rad,
-                phase_clamp_max,
-                head_dim,
-                num_heads,
-                best_coh,
+                super::thresholds::DecisionSteerParams {
+                    decision,
+                    steer_words: &steer_words,
+                    phase_step_min_rad,
+                    phase_clamp_max,
+                    head_dim,
+                    num_heads,
+                    best_coh,
+                },
                 query_tensor,
                 key_tensor,
                 logits_opt,
@@ -469,6 +475,8 @@ impl StigmergicSubstrate {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `start_trail_idx >= self.inline_active_len()` or
     /// `max_hops == 0`.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn traverse_pointer_chain_and_orchestrate(
         &mut self,
         start_trail_idx: usize,

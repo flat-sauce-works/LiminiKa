@@ -41,18 +41,29 @@ use crate::stigmergy::{
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHEROMONE_RISING, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
+/// Shape and damping parameters for [`accumulate_trail_and_steer_gateway_words_core`].
+#[derive(Clone, Copy)]
+pub(crate) struct GatewaySteerShape {
+    pub unresolved_damping_u7: u8,
+    pub head_dim: usize,
+    pub num_heads: usize,
+}
+
 #[inline]
 pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
     frame: &GatewayFrame,
     frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     trail_inout: &mut PointerTrail,
-    unresolved_damping_u7: u8,
-    head_dim: usize,
-    num_heads: usize,
+    shape: GatewaySteerShape,
     query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
 ) -> LmnkResult<(bool, bool, bool)> {
+    let GatewaySteerShape {
+        unresolved_damping_u7,
+        head_dim,
+        num_heads,
+    } = shape;
     let frm_nonzero = swar_words_nonzero_64(frm_w);
     let next_w = if frm_nonzero {
         *trail_phase_words_mut(trail_inout) = *frm_w;
@@ -418,9 +429,11 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
             &frame,
             &frm_w,
             trail_inout,
-            unresolved_damping_u7,
-            head_dim,
-            num_heads,
+            GatewaySteerShape {
+                unresolved_damping_u7,
+                head_dim,
+                num_heads,
+            },
             Some(query_tensor),
             key_tensor,
             logits_opt,
@@ -437,6 +450,8 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
     /// violate layout or `LMNK_RESTRICT` disjointness invariants.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn steer_gateway_signal_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
@@ -469,6 +484,8 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
     /// violate layout or `LMNK_RESTRICT` disjointness invariants.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn steer_gateway_signal_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
@@ -631,6 +648,8 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     /// # Errors
     /// Propagates any validation or execution error from [`StigmergicSubstrateOps`] or [`PhaseSteeringActiveExt`].
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn ingest_gateway_and_steer_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
@@ -642,7 +661,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
         unresolved_damping_u7: u8,
-        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
         let geom = geometry.rope_geometry();
@@ -703,7 +722,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         if layer_skipped {
             trail_out.flags |= TRAIL_FLAG_INERTIAL_SKIP_ACTIVE;
             metrics |= LEDGER_METRIC_LAYER_SKIP_COMPENSATED;
-        } else if let Some(q) = query_tensor.as_deref_mut() {
+        } else if let Some(q) = query_tensor {
             let clean_damping =
                 branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
             let swar_words =
@@ -748,6 +767,8 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     /// # Errors
     /// Propagates any validation or execution error from [`StigmergicSubstrateOps`].
     #[inline]
+    // Public trait signature frozen for v0.3.0; bundled hidden-slice tuple preserves independent lifetimes.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn orchestrate_gateway_layer_with_scale_and_core_layers_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
@@ -762,7 +783,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
         unresolved_damping_u7: u8,
-        mut query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
+        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         rank1_hidden: Option<(
             &mut AlignedSliceMut32<'_, f32>,
             &AlignedSlice32<'_, f32>,
@@ -993,7 +1014,7 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                 metrics |= LEDGER_METRIC_LAYER_SKIP_COMPENSATED;
             }
         } else {
-            if let Some(q) = query_tensor.as_deref_mut() {
+            if let Some(q) = query_tensor {
                 let clean_damping =
                     branchless_select_u8(unresolved_damping_u7 > 128, 128, unresolved_damping_u7);
                 let hub_damping_u7 =
@@ -1059,6 +1080,8 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     /// # Errors
     /// Propagates any error from [`Self::orchestrate_gateway_layer_with_scale_and_core_layers_safe`].
     #[inline]
+    // Public trait signature frozen for v0.3.0; bundled hidden-slice tuple preserves independent lifetimes.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn orchestrate_gateway_layer_with_core_layers_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
@@ -1130,6 +1153,8 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Propagates any error from [`crate::stigmergy::PointerSubstrate::step_pointer`] or
     /// [`crate::stigmergy::FastPathLedger::telemetry_push`].
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn orchestrate_scale_layer(
         &mut self,
         layer: &(impl StigmergicScaleLayer + ?Sized),
@@ -1175,6 +1200,8 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
     /// propagates pointer/telemetry errors.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn orchestrate_adaptive_depth_n<L: StigmergicScaleLayer>(
         &mut self,
         layers: &[L],
@@ -1210,6 +1237,8 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
     /// propagates pointer/telemetry errors.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn orchestrate_adaptive_depth_n_with_policy<
         L: StigmergicScaleLayer,
         P: CognitiveCircuitThresholdPolicy + ?Sized,

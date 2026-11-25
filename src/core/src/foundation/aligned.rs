@@ -10,7 +10,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of};

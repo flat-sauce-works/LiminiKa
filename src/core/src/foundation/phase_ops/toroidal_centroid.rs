@@ -208,7 +208,7 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
         // SAFETY: Guarded by `target_feature = "avx2"`. Keeps `va0..vb1`, `vd0..vd1`, `sc0..sc1`,
         // and `out0..out1` 100% resident in YMM registers across coherence, SLERP, stationarity,
         // rigid SO(2) invariance, and circular resultant evaluation (`0` GPR-to-YMM or YMM-to-GPR STLF stalls).
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
                 _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastb_epi8, _mm256_castsi256_si128,
                 _mm256_mulhrs_epi16, _mm256_or_si256, _mm256_permute4x64_epi64, _mm256_set1_epi16,
@@ -297,7 +297,7 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
             };
             let rb = fast_sqrt_unit_f32(mean_sin * mean_sin + mean_cos * mean_cos);
             (next_w, next_e, rb, branchless_von_mises_kappa(rb), true)
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -538,7 +538,7 @@ pub fn branchless_q7_synergy_fuse_words_64(
             let (va0, va1) = avx2_words64_to_vec64(a);
             let fused_w =
                 avx2_vec64_to_words64(_mm256_add_epi8(va0, vst0), _mm256_add_epi8(va1, vst1));
-            return (fused_w, effective_pull, coherence);
+            (fused_w, effective_pull, coherence)
         }
     }
 
@@ -683,7 +683,7 @@ pub fn branchless_q7_inhibit_words_64(
             let (vs0, vs1) = avx2_scale_vec64(vt0, vt1, s);
             *target_words = avx2_vec64_to_words64(vs0, vs1);
         }
-        return clean_w * retain_factor;
+        clean_w * retain_factor
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {

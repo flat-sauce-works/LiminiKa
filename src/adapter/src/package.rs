@@ -405,7 +405,7 @@ impl LmnkPackageBuilder {
             }
 
             let data_offset = out.len();
-            if entry.align_64 && !data_offset.is_multiple_of(64) {
+            if entry.align_64 && (data_offset & 63) != 0 {
                 return Err(LmnkPackageError::AlignmentViolation(format!(
                     "internal 64B alignment error for '{}' at offset {}",
                     entry.name, data_offset
@@ -625,7 +625,7 @@ impl LmnkPackageEntry<'_> {
     #[inline]
     #[must_use]
     pub const fn is_aligned64(&self) -> bool {
-        self.data_offset.is_multiple_of(64)
+        (self.data_offset & 63) == 0
     }
 }
 

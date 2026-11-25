@@ -19,30 +19,35 @@ use super::{
     LMNK_PHASE_ANCHOR_VERSION,
 };
 
+#[derive(Clone, Copy)]
+struct CentroidMergeSource<'a> {
+    words: &'a [u64; NUM_STIGMERGIC_GRANULES],
+    is_uniform: bool,
+    anchor_id: u32,
+    sample_count: u32,
+    mapped_offset48: u64,
+    base_energy: f32,
+    resultant_r_bar: f32,
+    von_mises_kappa: f32,
+    gravity_mass: f32,
+    phase_clamp_rad: f32,
+    effective_inv_temp: f32,
+    lineage_flags: u32,
+    dominant_slot: u8,
+    action_mode_flags: u8,
+    active_swarm_mask: u8,
+    attribution_tag: u8,
+}
+
 impl PhaseAnchorRecord {
     fn merge_other_centroid_words_in_place(
         &mut self,
         w_a: &[u64; NUM_STIGMERGIC_GRANULES],
         a_is_uniform: bool,
-        w_b: &[u64; NUM_STIGMERGIC_GRANULES],
-        b_is_uniform: bool,
+        other: CentroidMergeSource<'_>,
         coh: f32,
-        b_anchor_id: u32,
-        b_sample_count: u32,
-        b_mapped_offset48: u64,
-        b_base_energy: f32,
-        b_resultant_r_bar: f32,
-        b_von_mises_kappa: f32,
-        b_gravity_mass: f32,
-        b_phase_clamp_rad: f32,
-        b_effective_inv_temp: f32,
-        b_lineage_flags: u32,
-        b_dominant_slot: u8,
-        b_action_mode_flags: u8,
-        b_active_swarm_mask: u8,
-        b_attribution_tag: u8,
     ) -> [u64; NUM_STIGMERGIC_GRANULES] {
-        let b_dom = b_gravity_mass > self.phase_gravity_mass;
+        let b_dom = other.gravity_mass > self.phase_gravity_mass;
         let (
             cur_dom_w,
             dom_uni,
@@ -57,23 +62,23 @@ impl PhaseAnchorRecord {
             src_r,
             src_k,
         ) = if b_dom {
-            self.anchor_id = b_anchor_id;
-            self.dominant_slot = b_dominant_slot;
-            self.phase_clamp_rad = b_phase_clamp_rad;
-            self.effective_inv_temp = b_effective_inv_temp;
-            self.attribution_tag = b_attribution_tag;
-            if b_mapped_offset48 != 0 {
-                self.mapped_section_offset48 = b_mapped_offset48;
+            self.anchor_id = other.anchor_id;
+            self.dominant_slot = other.dominant_slot;
+            self.phase_clamp_rad = other.phase_clamp_rad;
+            self.effective_inv_temp = other.effective_inv_temp;
+            self.attribution_tag = other.attribution_tag;
+            if other.mapped_offset48 != 0 {
+                self.mapped_section_offset48 = other.mapped_offset48;
             }
             (
-                w_b,
-                b_is_uniform,
+                other.words,
+                other.is_uniform,
                 w_a,
                 a_is_uniform,
-                b_sample_count,
-                b_base_energy,
-                b_resultant_r_bar,
-                b_von_mises_kappa,
+                other.sample_count,
+                other.base_energy,
+                other.resultant_r_bar,
+                other.von_mises_kappa,
                 self.base_energy,
                 self.sample_count,
                 self.resultant_r_bar,
@@ -81,21 +86,21 @@ impl PhaseAnchorRecord {
             )
         } else {
             if self.mapped_section_offset48 == 0 {
-                self.mapped_section_offset48 = b_mapped_offset48;
+                self.mapped_section_offset48 = other.mapped_offset48;
             }
             (
                 w_a,
                 a_is_uniform,
-                w_b,
-                b_is_uniform,
+                other.words,
+                other.is_uniform,
                 self.sample_count,
                 self.base_energy,
                 self.resultant_r_bar,
                 self.von_mises_kappa,
-                b_base_energy,
-                b_sample_count,
-                b_resultant_r_bar,
-                b_von_mises_kappa,
+                other.base_energy,
+                other.sample_count,
+                other.resultant_r_bar,
+                other.von_mises_kappa,
             )
         };
 
@@ -123,12 +128,12 @@ impl PhaseAnchorRecord {
         self.phase_gravity_mass = branchless_flush_subnormal_f32(
             next_e * branchless_clamp_f32(r_bar, 0.10, 1.0) * maturity_scale,
         );
-        self.lineage_flags |= b_lineage_flags | ANCHOR_LINEAGE_MATURE_BIT;
-        self.action_mode_flags |= b_action_mode_flags;
+        self.lineage_flags |= other.lineage_flags | ANCHOR_LINEAGE_MATURE_BIT;
+        self.action_mode_flags |= other.action_mode_flags;
         if self.action_mode_flags == ACTION_PRESET_PASSIVE_SIDECAR {
             self.action_mode_flags = ACTION_PRESET_EXPRESS_PHASE;
         }
-        self.active_swarm_mask &= b_active_swarm_mask;
+        self.active_swarm_mask &= other.active_swarm_mask;
         next_w
     }
 
@@ -219,42 +224,27 @@ impl PhaseAnchorRecord {
                             &w_a, a_uni, &w_b, b_uni, safe_merge,
                         );
                         if coh >= safe_merge {
-                            let (
-                                b_aid,
-                                b_sc,
-                                b_zoff,
-                                b_be,
-                                b_rbar,
-                                b_kap,
-                                b_mass,
-                                b_clamp,
-                                b_temp,
-                                b_prov,
-                                b_slot,
-                                b_act,
-                                b_swm,
-                                b_cause,
-                            ) = (
-                                centroids[b].anchor_id,
-                                centroids[b].sample_count,
-                                centroids[b].mapped_section_offset48,
-                                centroids[b].base_energy,
-                                centroids[b].resultant_r_bar,
-                                centroids[b].von_mises_kappa,
-                                centroids[b].phase_gravity_mass,
-                                centroids[b].phase_clamp_rad,
-                                centroids[b].effective_inv_temp,
-                                centroids[b].lineage_flags,
-                                centroids[b].dominant_slot,
-                                centroids[b].action_mode_flags,
-                                centroids[b].active_swarm_mask,
-                                centroids[b].attribution_tag,
-                            );
-                            w_a = centroids[a].merge_other_centroid_words_in_place(
-                                &w_a, a_uni, &w_b, b_uni, coh, b_aid, b_sc, b_zoff, b_be, b_rbar,
-                                b_kap, b_mass, b_clamp, b_temp, b_prov, b_slot, b_act, b_swm,
-                                b_cause,
-                            );
+                            let b_slot = centroids[b].dominant_slot;
+                            let merge_src = CentroidMergeSource {
+                                words: &w_b,
+                                is_uniform: b_uni,
+                                anchor_id: centroids[b].anchor_id,
+                                sample_count: centroids[b].sample_count,
+                                mapped_offset48: centroids[b].mapped_section_offset48,
+                                base_energy: centroids[b].base_energy,
+                                resultant_r_bar: centroids[b].resultant_r_bar,
+                                von_mises_kappa: centroids[b].von_mises_kappa,
+                                gravity_mass: centroids[b].phase_gravity_mass,
+                                phase_clamp_rad: centroids[b].phase_clamp_rad,
+                                effective_inv_temp: centroids[b].effective_inv_temp,
+                                lineage_flags: centroids[b].lineage_flags,
+                                dominant_slot: b_slot,
+                                action_mode_flags: centroids[b].action_mode_flags,
+                                active_swarm_mask: centroids[b].active_swarm_mask,
+                                attribution_tag: centroids[b].attribution_tag,
+                            };
+                            w_a = centroids[a]
+                                .merge_other_centroid_words_in_place(&w_a, a_uni, merge_src, coh);
                             a_uni = if a_uni & b_uni {
                                 true
                             } else {

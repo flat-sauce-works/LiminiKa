@@ -114,7 +114,7 @@ pub(crate) fn branchless_q7_unified_manifold_fold_words_with_flags_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `t` is a 64-byte (`8 * u64`) stack array.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
                 __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
                 _mm256_testz_si256,
@@ -343,7 +343,7 @@ pub(crate) fn branchless_q7_unified_manifold_fold_words_with_flags_64(
                 any_resonant,
                 any_liminal,
             )
-        };
+        }
     }
 
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
@@ -541,7 +541,7 @@ pub fn branchless_q7_gravity_fold_64(
         // SAFETY: Guarded by `target_feature = "avx2"`. Fast-paths word-uniform anchors directly in
         // a single 64-bit GPR (`r_w0`) with zero YMM loads/extractions, and transitions to two
         // 256-bit YMM registers (`vr0, vr1`) via direct `_mm256_loadu_si256` when non-uniform.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
                 __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
                 _mm256_testz_si256,
@@ -725,7 +725,7 @@ pub fn branchless_q7_gravity_fold_64(
                 dominant_idx,
                 active_count,
             )
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {

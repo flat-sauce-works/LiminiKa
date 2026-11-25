@@ -103,7 +103,7 @@ impl RecallStratum for LocalFeatureWorkerStratum {
             ctx.raw_sig
         };
 
-        if expected > 0 && query_vec.len() >= expected && query_vec.len().is_multiple_of(expected) {
+        if expected > 0 && query_vec.len() >= expected && query_vec.len() % expected == 0 {
             let num_steered = query_vec.len() / expected;
             if num_steered >= 2 {
                 let mut layer_cos: Vec<Vec<f32>> = vec![vec![0.0_f32; num_steered]; n_entries];
@@ -211,7 +211,7 @@ impl RecallStratum for HeadAngleWorkerStratum {
             || r_dim == 0
             || expected != n_heads * r_dim
             || query_vec.len() < expected
-            || !query_vec.len().is_multiple_of(expected)
+            || query_vec.len() % expected != 0
         {
             return Ok(());
         }

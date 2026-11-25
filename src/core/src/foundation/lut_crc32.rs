@@ -3,9 +3,6 @@
 
 //! Static 64B-aligned lookup tables (Q7, TANH, Slice-by-16 CRC32) and branchless IEEE 802.3 CRC32 updaters.
 
-use core::mem::align_of;
-
-use crate::foundation::aligned::is_aligned_to;
 use crate::foundation::scalar_math::{
     branchless_flush_subnormal_f32, branchless_max_f32, branchless_q7_abs_u8,
     branchless_q7_fold_s1_geodesic, branchless_relu_f32, branchless_rsqrt_f32,
@@ -1022,32 +1019,70 @@ pub const fn compute_crc32_ieee(bytes: &[u8]) -> u32 {
 
 #[inline(always)]
 #[must_use]
+fn read_block64_le_words(block: &[u8]) -> [u64; 8] {
+    [
+        u64::from_le_bytes([
+            block[0], block[1], block[2], block[3], block[4], block[5], block[6], block[7],
+        ]),
+        u64::from_le_bytes([
+            block[8], block[9], block[10], block[11], block[12], block[13], block[14], block[15],
+        ]),
+        u64::from_le_bytes([
+            block[16], block[17], block[18], block[19], block[20], block[21], block[22], block[23],
+        ]),
+        u64::from_le_bytes([
+            block[24], block[25], block[26], block[27], block[28], block[29], block[30], block[31],
+        ]),
+        u64::from_le_bytes([
+            block[32], block[33], block[34], block[35], block[36], block[37], block[38], block[39],
+        ]),
+        u64::from_le_bytes([
+            block[40], block[41], block[42], block[43], block[44], block[45], block[46], block[47],
+        ]),
+        u64::from_le_bytes([
+            block[48], block[49], block[50], block[51], block[52], block[53], block[54], block[55],
+        ]),
+        u64::from_le_bytes([
+            block[56], block[57], block[58], block[59], block[60], block[61], block[62], block[63],
+        ]),
+    ]
+}
+
+#[inline(always)]
+#[must_use]
 pub(crate) fn update_aligned64_blocks_crc32_raw(mut crc: u32, bytes: &[u8]) -> u32 {
     let len = bytes.len();
     let num_blocks = len >> 6;
-    // SAFETY: Caller guarantees `bytes` is 8-byte aligned and `len` is a multiple of 64.
-    let blocks =
-        unsafe { core::slice::from_raw_parts(bytes.as_ptr().cast::<[u64; 8]>(), num_blocks) };
     let mut b = 0usize;
     while b + 4 <= num_blocks {
-        let z0 = crc32_block64_zero_seed_words(&blocks[b]);
-        let z1 = crc32_block64_zero_seed_words(&blocks[b + 1]);
+        let base = b << 6;
+        let w0 = read_block64_le_words(&bytes[base..base + 64]);
+        let w1 = read_block64_le_words(&bytes[base + 64..base + 128]);
+        let w2 = read_block64_le_words(&bytes[base + 128..base + 192]);
+        let w3 = read_block64_le_words(&bytes[base + 192..base + 256]);
+        let z0 = crc32_block64_zero_seed_words(&w0);
+        let z1 = crc32_block64_zero_seed_words(&w1);
         let z01 = (if z0 == 0 { 0 } else { crc32_step_l4(z0) }) ^ z1;
-        let z2 = crc32_block64_zero_seed_words(&blocks[b + 2]);
-        let z3 = crc32_block64_zero_seed_words(&blocks[b + 3]);
+        let z2 = crc32_block64_zero_seed_words(&w2);
+        let z3 = crc32_block64_zero_seed_words(&w3);
         let c23 = (if z2 == 0 { 0 } else { crc32_step_l4(z2) }) ^ z3;
         crc = crc32_step_l16(crc) ^ (if z01 == 0 { 0 } else { crc32_step_l8(z01) }) ^ c23;
         b += 4;
     }
     while b + 2 <= num_blocks {
-        let z0 = crc32_block64_zero_seed_words(&blocks[b]);
-        let z1 = crc32_block64_zero_seed_words(&blocks[b + 1]);
+        let base = b << 6;
+        let w0 = read_block64_le_words(&bytes[base..base + 64]);
+        let w1 = read_block64_le_words(&bytes[base + 64..base + 128]);
+        let z0 = crc32_block64_zero_seed_words(&w0);
+        let z1 = crc32_block64_zero_seed_words(&w1);
         let z01 = (if z0 == 0 { 0 } else { crc32_step_l4(z0) }) ^ z1;
         crc = crc32_step_l8(crc) ^ z01;
         b += 2;
     }
     if b < num_blocks {
-        crc = crc32_step_block64_words(crc, &blocks[b]);
+        let base = b << 6;
+        let w0 = read_block64_le_words(&bytes[base..base + 64]);
+        crc = crc32_step_block64_words(crc, &w0);
     }
     crc
 }
@@ -1055,11 +1090,8 @@ pub(crate) fn update_aligned64_blocks_crc32_raw(mut crc: u32, bytes: &[u8]) -> u
 #[inline(always)]
 #[must_use]
 pub(crate) fn compute_aligned64_payload_crc32_ieee(bytes: &[u8]) -> u32 {
-    #[cfg(target_endian = "little")]
-    {
-        if (bytes.len() & 63) == 0 && is_aligned_to(bytes, align_of::<u64>()) {
-            return !update_aligned64_blocks_crc32_raw(0xFFFF_FFFFu32, bytes);
-        }
+    if (bytes.len() & 63) == 0 {
+        return !update_aligned64_blocks_crc32_raw(0xFFFF_FFFFu32, bytes);
     }
     branchless_crc32_ieee(bytes)
 }

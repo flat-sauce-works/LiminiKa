@@ -8,7 +8,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use crate::foundation::{
     branchless_clamp_f32, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, words_to_q7_array_64, Pod,

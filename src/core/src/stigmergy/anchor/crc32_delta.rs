@@ -269,6 +269,8 @@ pub(crate) const fn crc32_anchor_tm44_final_u32(tm_bits: u32) -> u32 {
 /// (`offset 40..44`), `effective_inv_temp` (`offset 44..48`), `lineage_flags` (`offset 48..52`),
 /// or `w7_lo` (`dominant_slot` / `action_mode_flags` at `offset 56..58`) changed.
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) const fn crc32_update_anchor_stationary_fields_delta(
     old_crc32: u32,
     delta_sample_count: u32,
@@ -388,24 +390,42 @@ pub(crate) const ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB: u32 =
 pub(crate) const ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB: u32 =
     crc32_step_l5(crc32_slice16_dep_lo0(0x4248_0000u32));
 
+/// Bit-XOR deltas across the 64-byte [`super::PhaseAnchorRecord`] header fields for GF(2)
+/// differential IEEE 802.3 CRC32 updates.
+#[derive(Clone, Copy)]
+pub(crate) struct AnchorHeaderDelta {
+    pub anchor_id: u32,
+    pub sample_count: u32,
+    pub mapped_offset48: u64,
+    pub base_energy_bits: u32,
+    pub r_bar_bits: u32,
+    pub kappa_bits: u32,
+    pub gravity_mass_bits: u32,
+    pub clamp_bits: u32,
+    pub inv_temp_bits: u32,
+    pub provenance_bits: u32,
+    pub w7_lo: u32,
+}
+
 /// Evaluates the 64-byte header (`offset 0..64`) GF(2) differential IEEE 802.3 CRC32 state
 /// `(final_128b_xor, c3_at_offset_64)` using strictly the L1D-resident `CRC32_IEEE_SLICE16_REF`
 /// table and scalar constants (`0` separate 4KB `FINAL_LUT` table accesses), allowing `c3` to fold
 /// directly into `phase_profile` word 0 (`dw[0]`) with zero `crc32_step_l4` overhead.
 #[inline]
-pub(crate) const fn crc32_anchor_header_delta_c3(
-    delta_anchor_id: u32,
-    delta_sample_count: u32,
-    delta_mapped_offset48: u64,
-    delta_base_energy_bits: u32,
-    delta_r_bar_bits: u32,
-    delta_kappa_bits: u32,
-    delta_gravity_mass_bits: u32,
-    delta_clamp_bits: u32,
-    delta_inv_temp_bits: u32,
-    delta_provenance_bits: u32,
-    delta_w7_lo: u32,
-) -> (u32, u32) {
+pub(crate) const fn crc32_anchor_header_delta_c3(delta: AnchorHeaderDelta) -> (u32, u32) {
+    let AnchorHeaderDelta {
+        anchor_id: delta_anchor_id,
+        sample_count: delta_sample_count,
+        mapped_offset48: delta_mapped_offset48,
+        base_energy_bits: delta_base_energy_bits,
+        r_bar_bits: delta_r_bar_bits,
+        kappa_bits: delta_kappa_bits,
+        gravity_mass_bits: delta_gravity_mass_bits,
+        clamp_bits: delta_clamp_bits,
+        inv_temp_bits: delta_inv_temp_bits,
+        provenance_bits: delta_provenance_bits,
+        w7_lo: delta_w7_lo,
+    } = delta;
     let mut final_xor = 0u32;
 
     if delta_base_energy_bits != 0 {
@@ -513,33 +533,11 @@ pub(crate) const fn crc32_anchor_header_delta_c3(
 #[inline(always)]
 pub(crate) const fn crc32_update_anchor_absorption_delta(
     old_crc32: u32,
-    delta_anchor_id: u32,
-    delta_sample_count: u32,
-    delta_mapped_offset48: u64,
-    delta_base_energy_bits: u32,
-    delta_r_bar_bits: u32,
-    delta_kappa_bits: u32,
-    delta_gravity_mass_bits: u32,
-    delta_clamp_bits: u32,
-    delta_inv_temp_bits: u32,
-    delta_provenance_bits: u32,
-    delta_w7_lo: u32,
+    delta: AnchorHeaderDelta,
     cur_w: &[u64; 8],
     next_w: &[u64; 8],
 ) -> u32 {
-    let (final_xor, c3) = crc32_anchor_header_delta_c3(
-        delta_anchor_id,
-        delta_sample_count,
-        delta_mapped_offset48,
-        delta_base_energy_bits,
-        delta_r_bar_bits,
-        delta_kappa_bits,
-        delta_gravity_mass_bits,
-        delta_clamp_bits,
-        delta_inv_temp_bits,
-        delta_provenance_bits,
-        delta_w7_lo,
-    );
+    let (final_xor, c3) = crc32_anchor_header_delta_c3(delta);
 
     if cur_w[0] == next_w[0]
         && ((((cur_w[1] ^ next_w[1]) | (cur_w[2] ^ next_w[2]))

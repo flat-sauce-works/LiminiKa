@@ -560,6 +560,8 @@ impl RuntimeContext {
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim`, `num_heads`, `substrate_capacity`, or
     /// `thresholds` fail architectural invariant validation.
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn rebind_phase_and_substrate(
         &mut self,
         head_dim: u32,
@@ -702,6 +704,8 @@ impl RuntimeContext {
     /// and updates `last_sandbox_event`.
     #[inline]
     #[must_use]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn step_sandbox_hypothesis_lifecycle(
         &mut self,
         decision: StigmergicActionDecision,

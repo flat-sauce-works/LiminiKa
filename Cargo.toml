@@ -8,12 +8,16 @@ members = [
   "src/adapter",
   "src/cli",
 ]
+exclude = [
+  "fuzz",
+  "examples/candle_eval",
+]
 resolver = "2"
 
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.80"
+rust-version = "1.83"
 license = "MIT OR Apache-2.0"
 
 authors = ["flat-sauce-works"]

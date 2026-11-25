@@ -475,7 +475,7 @@ pub fn steer_visual_grid_2d_bitmask_gated(
         // SAFETY: `target_feature = "avx2"` is enabled; hoists `(v_cos, v_sin)` construction
         // once outside the 256-patch bitmask scan.
         let (v_cos, v_sin) = unsafe { avx2_build_so2_2d_xy_vecs(sin_x, cos_x, sin_y, cos_y) };
-        return steer_visual_grid_bitmask_core(
+        steer_visual_grid_bitmask_core(
             grid_tensor,
             active_patch_mask,
             patch_stride_elems,
@@ -487,7 +487,7 @@ pub fn steer_visual_grid_2d_bitmask_gated(
                     avx2_rotate_so2_2d_xy_slice_with_vecs(patch_slice, v_cos, v_sin);
                 }
             },
-        );
+        )
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     steer_visual_grid_bitmask_core(

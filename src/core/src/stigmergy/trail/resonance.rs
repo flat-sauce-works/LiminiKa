@@ -468,6 +468,8 @@ impl PointerTrail {
     /// candidate memory trail `candidate_trail` ($M_j$, identified by `candidate_trail_id`) in
     /// strictly constant time (`0` branches, `0 fdiv`).
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn evaluate_bayesian_transition_score_with(
         &self,
         candidate_trail_id: u32,
@@ -521,6 +523,8 @@ impl PointerTrail {
 
     /// Evaluates non-linear cross-slot synergy and liminal beat interference between two working lanes.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_cross_slot_synergy(
         &mut self,
         slot_a: u32,
@@ -731,6 +735,8 @@ impl PointerTrail {
 /// in-place by the full **Bayes-Attention Stigmergic Transition Score** (`0` branches, `0 fdiv`),
 /// accumulating coherence along the top-ranked trail's pointer chain while evaluating 64-head Q7
 /// similarity via `1`-cycle register shifts when either vector is uniform across all 64 heads.
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+#[allow(clippy::too_many_arguments)]
 pub fn modulate_attention_scores_by_bayesian_trails_64(
     attention_scores: &mut [f32],
     query_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -1093,6 +1099,8 @@ pub fn bridge_and_filter_liminal_trail_chain(
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `qdpt_addr_offsets` is empty or its length does
 /// not match `qdpt_phase_deltas.len()`.
 #[inline(always)]
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_dyadic_qdpt_and_cascade_ptr(
     parent_ptr: TaggedPtr,
     current_mask: &PagedBitmask,

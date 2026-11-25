@@ -119,6 +119,8 @@ pub fn project_lora(
 /// `dim_out` is odd, matrix slices are too small, `phase_profile_out` is empty, or
 /// `block_scales_out.len() < dim_out / 2`.
 #[inline]
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+#[allow(clippy::too_many_arguments)]
 pub fn project_lora_with_block_scales(
     lora_a: &AlignedSlice32<'_, f32>,
     lora_b: &AlignedSlice32<'_, f32>,

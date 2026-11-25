@@ -8,7 +8,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use crate::foundation::{
     branchless_clamp_f32, branchless_popcount_rsqrt_u32, branchless_relu_f32,

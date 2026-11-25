@@ -219,6 +219,8 @@ pub trait StigmergicSubstrateOps: PointerSubstrate + FastPathLedger {
     /// Filters `raw_words` via 8-lane SWAR `PhaseStepFilter` and steers `query_tensor` / `key_tensor` using
     /// caller-validated `(head_dim, num_heads)`.
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn steer_phase_step_words_prevalidated_core(
         &self,
         raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -280,6 +282,8 @@ pub trait StigmergicSubstrateOps: PointerSubstrate + FastPathLedger {
     /// [`StigmergicSubstrateOps::step_substrate_with_bloom_repulsion_to_words`], or
     /// [`FastPathLedger::telemetry_push`].
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     fn execute_stigmergic_token_cascade(
         &mut self,
         input_ptr: u64,

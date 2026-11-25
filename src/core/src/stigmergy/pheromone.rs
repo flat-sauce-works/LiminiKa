@@ -9,7 +9,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use crate::foundation::{
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
@@ -98,6 +97,8 @@ impl PheromoneDensityOps for PointerTrail {
 /// when `step_gain_u7 <= 128`.
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) const fn swar_subswarm_resolve_with_bias_x8(
     current_word: u64,
     target_word: u64,
@@ -167,6 +168,8 @@ pub(crate) const fn precompute_swarm_step_params(
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 unsafe fn avx2_subswarm_resolve_words_64(
     cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
     cur_is_uniform: bool,
@@ -290,6 +293,8 @@ unsafe fn avx2_subswarm_resolve_words_64(
 
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn swar_subswarm_resolve_words_64(
     cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
     cur_is_uniform: bool,
@@ -305,7 +310,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: Guarded by `cfg(target_feature = "avx2")`.
-        return unsafe {
+        unsafe {
             avx2_subswarm_resolve_words_64(
                 cur_w,
                 cur_is_uniform,
@@ -318,7 +323,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
                 min_step_q7,
                 tolerance_q7,
             )
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     let _ = (cur_is_uniform, tgt_is_uniform);
@@ -445,6 +450,8 @@ impl PointerTrail {
     /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_resolve_action_in_swarm_to_words(
         &mut self,
         action_ptr: TaggedPtr,
@@ -483,6 +490,8 @@ impl PointerTrail {
     /// Subdivides the Stigmergic Substrate's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches).
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_resolve_action_in_swarm_masked(
         &mut self,
         action_ptr: TaggedPtr,
@@ -517,6 +526,8 @@ impl PointerTrail {
 
     /// Subdivides the Stigmergic Substrate's target 64-head phase command across all 8 Micro-Swarm cells (`0xFF`).
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_resolve_action_in_swarm(
         &mut self,
         action_ptr: TaggedPtr,
@@ -551,6 +562,8 @@ impl PointerTrail {
     /// `active_granule_mask`, and reconstitutes the resulting state transition into
     /// `(StigmergicReconstitutionReport, reconstituted_words)` in branchless constant time.
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn reconstitute_from_stigmergy_words(
         &mut self,
         action_ptr: TaggedPtr,
@@ -586,6 +599,8 @@ impl PointerTrail {
     }
 
     #[inline]
+    // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_resolve_action_in_swarm_with_cur_words(
         &mut self,
         action_ptr: TaggedPtr,
@@ -615,17 +630,15 @@ impl PointerTrail {
         let mut next_words = cur_w;
         let quorum_mask: u8;
         let residual_sum: u32;
-        if use_explicit_tgt
+        if (use_explicit_tgt
             && (cur_w[0] == tgt_base_w[0])
             && ((((cur_w[1] ^ tgt_base_w[1]) | (cur_w[2] ^ tgt_base_w[2]))
                 | ((cur_w[3] ^ tgt_base_w[3]) | (cur_w[4] ^ tgt_base_w[4]))
                 | ((cur_w[5] ^ tgt_base_w[5]) | (cur_w[6] ^ tgt_base_w[6]))
                 | (cur_w[7] ^ tgt_base_w[7]))
-                == 0)
+                == 0))
+            || active_cell_mask == 0
         {
-            quorum_mask = 0xFF;
-            residual_sum = 0;
-        } else if active_cell_mask == 0 {
             quorum_mask = 0xFF;
             residual_sum = 0;
         } else {
@@ -823,6 +836,8 @@ impl PointerTrail {
     /// pre-loaded target SWAR words (`target_words`), avoiding any 64-byte stack reload when
     /// chained after `ManifoldGatewaySignal::synthesize_gateway_frame_with_words`.
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn try_resolve_action_in_swarm_from_words(
         &mut self,
         action_ptr: TaggedPtr,
@@ -911,6 +926,8 @@ impl PointerTrail {
     /// Resolves `target_words` inside the 8-cell SWAR Micro-Swarm using parameters derived
     /// structurally from `(granularity, layer_index, total_layers)` and optional Bloom guards.
     #[inline(always)]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve_swarm_with_scale_layer(
         &mut self,
         action_ptr: TaggedPtr,

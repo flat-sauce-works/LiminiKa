@@ -3,6 +3,7 @@
 
 //! Integration test enforcing zero dynamic heap allocation on the LiminiKa Hot Path.
 
+#[cfg(not(all(miri, windows)))]
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -18,12 +19,18 @@ use liminika_core::foundation::{
 };
 use liminika_core::stigmergy::StigmergicReconstitutionReport;
 
-struct ZeroAllocGuardAllocator;
-
 thread_local! {
     static ENFORCE_ZERO_ALLOC: Cell<bool> = const { Cell::new(false) };
 }
 
+// On Windows Miri, `std::alloc::System` stores an over-aligned allocation header before the
+// returned pointer, triggering an upstream Stacked Borrows mismatch inside `std::sys::alloc::windows`
+// when dropping `Box<MaybeUninit<RuntimeContext>>` (64B-aligned). On Linux Miri and all native
+// targets, `ZeroAllocGuardAllocator` runs unconditionally.
+#[cfg(not(all(miri, windows)))]
+struct ZeroAllocGuardAllocator;
+
+#[cfg(not(all(miri, windows)))]
 // SAFETY: Delegates directly to `std::alloc::System` while enforcing zero-allocation during Hot Path windows on the active test thread.
 unsafe impl GlobalAlloc for ZeroAllocGuardAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
@@ -44,6 +51,7 @@ unsafe impl GlobalAlloc for ZeroAllocGuardAllocator {
     }
 }
 
+#[cfg(not(all(miri, windows)))]
 #[global_allocator]
 static A: ZeroAllocGuardAllocator = ZeroAllocGuardAllocator;
 
@@ -82,7 +90,8 @@ fn test_context_step_token_zero_allocation_guarantee() {
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(true));
 
     // 3. Execute Hot Path step loop (verified zero-allocation).
-    for token_id in 0..100 {
+    let hot_iters: u32 = if cfg!(miri) { 4 } else { 100 };
+    for token_id in 0..hot_iters {
         // SAFETY: `ctx_handle` is valid, `query_buf`/`key_buf` are disjoint 32-byte-aligned
         // 128-element buffers, and `trail_out` is 64-byte aligned.
         let step_status = unsafe {

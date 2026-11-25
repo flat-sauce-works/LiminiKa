@@ -87,6 +87,8 @@ pub(super) const fn compute_subhead_eff_word_x8(
 }
 
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
@@ -161,6 +163,8 @@ pub(super) fn dispatch_subhead_profiles_core(
 /// on the cells actually spanned by each subgroup (`8` word transforms total for aligned splits).
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) const fn build_subhead_eff_words_64(
     fact_w: &[u64; NUM_SWARM_CELLS],
     fact_h: usize,
@@ -280,6 +284,8 @@ pub(super) const fn build_subhead_eff_words_64(
 /// `compute_subhead_eff_word_x8` in registers.
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_subhead_eff_words_from_profiles_64(
     fact_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     fact_h: usize,
@@ -422,6 +428,8 @@ pub(super) const fn byte_uniform_word_u8(w: &[u64; NUM_SWARM_CELLS]) -> Option<u
 /// fast-pathing default `PhaseClamp` limits (`0.24 rad`) via `.rodata` LUTs.
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
     b_u8: u8,
     s_u8: u8,
@@ -463,6 +471,8 @@ pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
 /// constant effective Q7 bytes `(f_u8, l_u8, e_u8)`, coalescing adjacent subgroups when their
 /// effective bytes match (`1..=3` calls to `rotate_phase_clamp_upper_heads_uniform_sincos`).
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
     t_slice: &mut [f32],
     b_u8: u8,
@@ -802,6 +812,8 @@ pub(crate) fn rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
 /// `base_clamp_words` and pre-transformed `subhead_eff_words` in a single flat loop
 /// (`0` subgroup or cell loop exits).
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
     t_slice: &mut [f32],
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
@@ -1005,6 +1017,8 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
 }
 
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
@@ -1162,6 +1176,8 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     Ok(())
 }
 
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
@@ -1243,6 +1259,8 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
 /// over `tensor` by loading `base_clamp_phases` into 8 `u64` SWAR registers and delegating to
 /// `dispatch_fused_phase_clamp_words_and_subhead_profiles_core`.
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_fused_phase_clamp_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -1273,6 +1291,8 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_profiles_core(
 }
 
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_subhead_slot_ensemble_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
@@ -1423,6 +1443,8 @@ pub fn dispatch_single_pass(
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
 /// `head_dim` is invalid, `base_clamp_max_rad <= 0.0`, `subhead_max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+#[allow(clippy::too_many_arguments)]
 pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -1470,6 +1492,8 @@ pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
 /// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+#[allow(clippy::too_many_arguments)]
 pub fn dispatch_subhead_slot_ensemble(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
@@ -1501,6 +1525,8 @@ pub fn dispatch_subhead_slot_ensemble(
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
 /// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
+#[allow(clippy::too_many_arguments)]
 pub fn dispatch_subhead_slot_ensemble_geodesic(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,

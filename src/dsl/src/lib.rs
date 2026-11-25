@@ -69,28 +69,33 @@ mod tests {
 
     #[test]
     fn rejects_adversarial_dsl_inputs_and_resource_limits() {
-        // 1. Oversized input (> 1 MiB)
-        let huge = " ".repeat(LMNK_DSL_MAX_INPUT_BYTES + 1);
-        assert!(parse_and_validate_lmnk(&huge).is_err());
+        // 1-4. Large resource-cap stress inputs (1 MiB / 65k tokens / 1k rules) are slow under
+        // the Miri interpreter and contain zero `unsafe`, so skip them under `cfg(miri)`.
+        #[cfg(not(miri))]
+        {
+            // 1. Oversized input (> 1 MiB)
+            let huge = " ".repeat(LMNK_DSL_MAX_INPUT_BYTES + 1);
+            assert!(parse_and_validate_lmnk(&huge).is_err());
 
-        // 2. Token limit (> 65,536)
-        let too_many_toks = "{ ".repeat(LMNK_DSL_MAX_TOKENS + 1);
-        assert!(parse_and_validate_lmnk(&too_many_toks).is_err());
+            // 2. Token limit (> 65,536)
+            let too_many_toks = "{ ".repeat(LMNK_DSL_MAX_TOKENS + 1);
+            assert!(parse_and_validate_lmnk(&too_many_toks).is_err());
 
-        // 3. Declaration limit (> 256)
-        let mut many_decls = String::new();
-        for i in 0..=LMNK_DSL_MAX_DECLARATIONS {
-            many_decls.push_str(&format!("persona P{i} {{ }}\n"));
+            // 3. Declaration limit (> 256)
+            let mut many_decls = String::new();
+            for i in 0..=LMNK_DSL_MAX_DECLARATIONS {
+                many_decls.push_str(&format!("persona P{i} {{ }}\n"));
+            }
+            assert!(parse_and_validate_lmnk(&many_decls).is_err());
+
+            // 4. Rule limit per persona (> 1,024)
+            let mut many_rules = String::from("persona Flood {\n  attractors {\n");
+            for i in 0..=LMNK_DSL_MAX_RULES_PER_PERSONA {
+                many_rules.push_str(&format!("    attract \"presets/r{i}.lmnk\" @ 0.5\n"));
+            }
+            many_rules.push_str("  }\n}\n");
+            assert!(parse_and_validate_lmnk(&many_rules).is_err());
         }
-        assert!(parse_and_validate_lmnk(&many_decls).is_err());
-
-        // 4. Rule limit per persona (> 1,024)
-        let mut many_rules = String::from("persona Flood {\n  attractors {\n");
-        for i in 0..=LMNK_DSL_MAX_RULES_PER_PERSONA {
-            many_rules.push_str(&format!("    attract \"presets/r{i}.lmnk\" @ 0.5\n"));
-        }
-        many_rules.push_str("  }\n}\n");
-        assert!(parse_and_validate_lmnk(&many_rules).is_err());
 
         // 5. NUL and ASCII control chars inside string literals
         assert!(parse_and_validate_lmnk("persona P extends \"presets/a\0b\" { }").is_err());
@@ -164,8 +169,10 @@ mod tests {
         };
 
         let base_bytes = base.as_bytes();
+        let trials: usize = if cfg!(miri) { 64 } else { 1200 };
+        let min_rejected: usize = if cfg!(miri) { 20 } else { 500 };
         let mut rejected_count = 0usize;
-        for trial in 0..1200usize {
+        for trial in 0..trials {
             let mut mutated = base_bytes.to_vec();
             match trial % 4 {
                 0 => {
@@ -195,6 +202,6 @@ mod tests {
                 rejected_count += 1;
             }
         }
-        assert!(rejected_count >= 500);
+        assert!(rejected_count >= min_rejected);
     }
 }

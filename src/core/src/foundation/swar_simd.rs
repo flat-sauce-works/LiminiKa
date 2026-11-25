@@ -878,6 +878,8 @@ pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
 /// [`crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
 /// `sincos_phase_clamp_poly` **once** instead of twice when custom `PhaseClamp` limits are active.
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
     base_q7: PhaseQ7,
     geodesic_base: bool,

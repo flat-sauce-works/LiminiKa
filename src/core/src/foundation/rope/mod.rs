@@ -41,7 +41,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 use crate::foundation::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16, AlignedSliceMut32,
     DisjointMutPair,
