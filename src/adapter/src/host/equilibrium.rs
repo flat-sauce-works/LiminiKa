@@ -30,10 +30,14 @@ use liminika_core::runtime::{
 };
 use liminika_core::stigmergy::PhaseAnchorRecord;
 
+use crate::host::integrity::{
+    sign_lmnkc_container, verify_lmnkc_integrity, IntegrityPolicy, SigningKeyPair,
+};
 use crate::host::pager::{
     bitcut64_polarity_similarity, phase_profile_bitcut64, phase_profile_cosine_q7,
     AnchorPagerConfig, AnchorSlotEntry, AnchorWorkingSetPager, PagerStepOutcome, PagerStepQuery,
 };
+use crate::host::path_guard::validate_local_output_path;
 
 /// Custom `.lmnkc` section kind storing versioned host equilibrium metadata (`0x0101`).
 ///
@@ -808,11 +812,28 @@ impl EquilibriumState {
         Ok(out)
     }
 
-    /// Parses and restores an [`EquilibriumState`] from `.lmnkc` bytes with full CRC32, ABI, and
-    /// `CORE_TOPOLOGY` verification.
+    /// Serializes this equilibrium state into a signed 64B-aligned `.lmnkc` container carrying
+    /// `ContentHash (0xFF01)` (SHA-256) and `Signature (0xFF02)` (Ed25519).
     ///
-    /// Fully backward compatible with legacy `.lmnkc` containers lacking
-    /// `LMNK_SECTION_RUNTIME_SNAPSHOT` or `HOST_EQUILIBRIUM_META_SECTION_KIND`.
+    /// # Errors
+    /// Returns [`EquilibriumError::ContainerInvalid`] if serialization or signing fails.
+    pub fn to_signed_lmnkc_bytes(
+        &self,
+        timestamp_epoch_sec: u64,
+        keypair: &SigningKeyPair,
+    ) -> Result<Vec<u8>, EquilibriumError> {
+        let raw = self.to_lmnkc_bytes(timestamp_epoch_sec)?;
+        sign_lmnkc_container(&raw, keypair).map_err(|e| {
+            EquilibriumError::ContainerInvalid(format!("failed to sign .lmnkc container: {e}"))
+        })
+    }
+
+    /// Parses and restores an [`EquilibriumState`] from `.lmnkc` bytes with full CRC32, ABI,
+    /// `CORE_TOPOLOGY`, and fail-closed cryptographic integrity verification under
+    /// [`IntegrityPolicy::AllowUnsigned`].
+    ///
+    /// Fully backward compatible with legacy unsigned `.lmnkc` containers lacking
+    /// `LMNK_SECTION_RUNTIME_SNAPSHOT`, `HOST_EQUILIBRIUM_META_SECTION_KIND`, or `0xFF01`/`0xFF02`.
     ///
     /// # Errors
     /// Returns [`EquilibriumError::TopologyMismatch`], [`EquilibriumError::ContainerInvalid`],
@@ -821,8 +842,24 @@ impl EquilibriumState {
         bytes: &[u8],
         config: EquilibriumConfig,
     ) -> Result<Self, EquilibriumError> {
+        Self::from_lmnkc_bytes_with_policy(bytes, config, &IntegrityPolicy::AllowUnsigned)
+    }
+
+    /// Parses and restores an [`EquilibriumState`] from `.lmnkc` bytes while enforcing an explicit
+    /// cryptographic [`IntegrityPolicy`].
+    ///
+    /// # Errors
+    /// Returns [`EquilibriumError::TopologyMismatch`], [`EquilibriumError::ContainerInvalid`],
+    /// [`EquilibriumError::SnapshotInvalid`], or [`EquilibriumError::PinnedCapacityExceeded`].
+    pub fn from_lmnkc_bytes_with_policy(
+        bytes: &[u8],
+        config: EquilibriumConfig,
+        policy: &IntegrityPolicy,
+    ) -> Result<Self, EquilibriumError> {
         let cfg = config.sanitized();
         let view = parse_container_checked(bytes, CORE_TOPOLOGY.topology_crc32)?;
+        verify_lmnkc_integrity(bytes, policy)
+            .map_err(|e| EquilibriumError::ContainerInvalid(e.to_string()))?;
         let topology_crc32 = view.header().topology_crc32;
 
         let runtime_snapshot = match view.section_bytes(LMNK_SECTION_RUNTIME_SNAPSHOT) {
@@ -874,13 +911,16 @@ impl EquilibriumState {
     /// Writes the serialized `.lmnkc` equilibrium container to `path`, returning bytes written.
     ///
     /// # Errors
-    /// Returns [`EquilibriumError`] on serialization or filesystem write failure.
+    /// Returns [`EquilibriumError`] on unsafe output path, serialization, or filesystem failure.
     pub fn save_lmnkc_to_path(
         &self,
         path: impl AsRef<Path>,
         timestamp_epoch_sec: u64,
     ) -> Result<usize, EquilibriumError> {
         let p = path.as_ref();
+        validate_local_output_path(p).map_err(|e| {
+            EquilibriumError::Io(format!("unsafe output path {}: {e}", p.display()))
+        })?;
         if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|e| {
                 EquilibriumError::Io(format!(
@@ -903,6 +943,19 @@ impl EquilibriumState {
     pub fn load_lmnkc_from_path(
         path: impl AsRef<Path>,
         config: EquilibriumConfig,
+    ) -> Result<Self, EquilibriumError> {
+        Self::load_lmnkc_from_path_with_policy(path, config, &IntegrityPolicy::AllowUnsigned)
+    }
+
+    /// Reads and validates an `.lmnkc` equilibrium container from `path` under an explicit
+    /// cryptographic [`IntegrityPolicy`].
+    ///
+    /// # Errors
+    /// Returns [`EquilibriumError`] on I/O, size cap, topology mismatch, or integrity/policy failure.
+    pub fn load_lmnkc_from_path_with_policy(
+        path: impl AsRef<Path>,
+        config: EquilibriumConfig,
+        policy: &IntegrityPolicy,
     ) -> Result<Self, EquilibriumError> {
         let p = path.as_ref();
         let file = File::open(p).map_err(|e| {
@@ -932,7 +985,7 @@ impl EquilibriumState {
                 p.display()
             )));
         }
-        Self::from_lmnkc_bytes(&bytes, config)
+        Self::from_lmnkc_bytes_with_policy(&bytes, config, policy)
     }
 }
 
@@ -1690,5 +1743,47 @@ mod tests {
         let neg = [-64_i8; MAX_ATTENTION_HEADS];
         let (anti, _) = circular_merge_phase_profiles_q7(&pos, 0.6, &neg, 0.4);
         assert_eq!(anti[0], 64);
+    }
+
+    #[test]
+    fn signed_equilibrium_lmnkc_enforces_policy_and_rejects_downgrade_or_tampering() {
+        let cfg = EquilibriumConfig::default();
+        let mut eq = EquilibriumState::new(cfg);
+        eq.insert_anchor(make_record(7, 77, 1.5), Lacuna::SelfRef, true)
+            .expect("insert");
+        let kp = SigningKeyPair::from_seed_bytes([0x5A_u8; 32]);
+        let wrong_kp = SigningKeyPair::from_seed_bytes([0xA5_u8; 32]);
+        let pk = kp.verifying_key();
+
+        let unsigned = eq.to_lmnkc_bytes(1_774_901_000).expect("unsigned");
+        assert!(EquilibriumState::from_lmnkc_bytes(&unsigned, cfg).is_ok());
+        assert!(EquilibriumState::from_lmnkc_bytes_with_policy(
+            &unsigned,
+            cfg,
+            &IntegrityPolicy::RequireSignature(pk),
+        )
+        .is_err());
+
+        let signed = eq
+            .to_signed_lmnkc_bytes(1_774_901_000, &kp)
+            .expect("signed");
+        let restored = EquilibriumState::from_lmnkc_bytes_with_policy(
+            &signed,
+            cfg,
+            &IntegrityPolicy::RequireSignature(pk),
+        )
+        .expect("verified restore");
+        assert!(restored.pager().get_entry(7).unwrap().pinned);
+
+        assert!(EquilibriumState::from_lmnkc_bytes_with_policy(
+            &signed,
+            cfg,
+            &IntegrityPolicy::RequireSignature(wrong_kp.verifying_key()),
+        )
+        .is_err());
+
+        assert!(eq
+            .save_lmnkc_to_path(Path::new("out/CON.lmnkc"), 1_774_901_000)
+            .is_err());
     }
 }

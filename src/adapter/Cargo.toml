@@ -10,7 +10,11 @@ publish = false
 description = "Model connection, RoPE geometry mapping, and optimization adapter over liminika-core"
 
 [dependencies]
+ed25519-dalek.workspace = true
+getrandom.workspace = true
 liminika-core = { path = "../core" }
+sha2.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true

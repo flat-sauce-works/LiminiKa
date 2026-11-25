@@ -23,6 +23,14 @@ use std::path::Path;
 
 use liminika_core::foundation::compute_crc32_ieee;
 
+use crate::host::integrity::{
+    compute_archive_entries_content_hash, sign_archive_content_hash,
+    verify_archive_entries_integrity, IntegrityPolicy, IntegrityReport, SigningKeyPair,
+};
+use crate::host::path_guard::{
+    validate_archive_relative_path, validate_local_output_path, PathGuardError,
+};
+
 /// Hard upper byte limit (`64 MiB`) enforced for any `.lmnkp` package.
 pub const LMNKP_MAX_PACKAGE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -43,6 +51,12 @@ pub const LMNKP_ENTRY_SOURCE: &str = "source.lmnk";
 
 /// Canonical `.lmnkp` 64B-aligned compiled container entry name.
 pub const LMNKP_ENTRY_COMPILED: &str = "compiled.lmnkc";
+
+/// Canonical `.lmnkp` SHA-256 content-hash entry name (`32` raw bytes).
+pub const LMNKP_ENTRY_CONTENT_HASH: &str = "integrity.sha256";
+
+/// Canonical `.lmnkp` Ed25519 detached signature entry name (`64` raw bytes).
+pub const LMNKP_ENTRY_SIGNATURE: &str = "signature.ed25519";
 
 const PKZIP_LOCAL_HEADER_SIG: u32 = 0x0403_4B50;
 const PKZIP_CENTRAL_HEADER_SIG: u32 = 0x0201_4B50;
@@ -82,6 +96,8 @@ pub enum LmnkPackageError {
     },
     /// Required entry payload is missing or violates 64-byte alignment inside the archive.
     AlignmentViolation(String),
+    /// Cryptographic SHA-256 content hash or Ed25519 signature verification failed.
+    IntegrityFailure(String),
     /// Filesystem I/O failure.
     Io(String),
 }
@@ -104,6 +120,7 @@ impl fmt::Display for LmnkPackageError {
                 "CRC32 mismatch for '{name}': expected=0x{expected:08x} actual=0x{actual:08x}"
             ),
             Self::AlignmentViolation(msg) => write!(f, "alignment violation: {msg}"),
+            Self::IntegrityFailure(msg) => write!(f, "package integrity failure: {msg}"),
             Self::Io(msg) => write!(f, "package I/O error: {msg}"),
         }
     }
@@ -111,48 +128,18 @@ impl fmt::Display for LmnkPackageError {
 
 impl std::error::Error for LmnkPackageError {}
 
-/// Validates an archive entry name against traversal, parser differentials, and OS-unsafe characters.
+/// Validates an archive entry name against traversal, Windows reserved device names,
+/// parser differentials, and OS-unsafe characters via [`validate_archive_relative_path`].
 ///
 /// # Errors
 /// Returns [`LmnkPackageError::InvalidEntryName`] or [`LmnkPackageError::LimitExceeded`] on rejection.
 pub fn validate_package_entry_name(name: &str) -> Result<(), LmnkPackageError> {
-    if name.is_empty() {
-        return Err(LmnkPackageError::InvalidEntryName(
-            "entry name must not be empty".to_string(),
-        ));
-    }
-    if name.len() > LMNKP_MAX_NAME_BYTES {
-        return Err(LmnkPackageError::LimitExceeded(format!(
-            "entry name length {} exceeds {}",
-            name.len(),
-            LMNKP_MAX_NAME_BYTES
-        )));
-    }
-    if name.starts_with('/') || name.starts_with('\\') || name.ends_with('/') {
-        return Err(LmnkPackageError::InvalidEntryName(format!(
-            "entry '{name}' uses leading/trailing path separator"
-        )));
-    }
-    if name.contains('\\') {
-        return Err(LmnkPackageError::InvalidEntryName(format!(
-            "entry '{name}' contains backslash"
-        )));
-    }
-    for b in name.bytes() {
-        if b < 0x20 || b == 0x7F {
-            return Err(LmnkPackageError::InvalidEntryName(format!(
-                "entry '{name}' contains NUL or ASCII control byte 0x{b:02x}"
-            )));
+    validate_archive_relative_path(name).map_err(|err| match err {
+        PathGuardError::LengthExceeded { len, max } => {
+            LmnkPackageError::LimitExceeded(format!("entry name length {len} exceeds {max}"))
         }
-    }
-    for seg in name.split('/') {
-        if seg.is_empty() || seg == "." || seg == ".." || seg.contains(':') {
-            return Err(LmnkPackageError::InvalidEntryName(format!(
-                "entry '{name}' contains disallowed path segment '{seg}'"
-            )));
-        }
-    }
-    Ok(())
+        other => LmnkPackageError::InvalidEntryName(format!("entry '{name}': {other}")),
+    })
 }
 
 /// Formats a canonical JSON `manifest.json` payload without external serialization crates.
@@ -490,13 +477,64 @@ impl LmnkPackageBuilder {
         Ok(out)
     }
 
-    /// Builds and writes the `.lmnkp` archive to `path`, creating parent directories on demand.
+    /// Builds a `.lmnkp` archive with a canonical `integrity.sha256` entry covering all content
+    /// entries in sorted name order.
     ///
     /// # Errors
-    /// Returns [`LmnkPackageError`] on serialization or filesystem write failure.
+    /// Returns [`LmnkPackageError`] on entry limit overflow or serialization failure.
+    pub fn build_with_content_hash(&self) -> Result<Vec<u8>, LmnkPackageError> {
+        let mut cloned = self.clone_without_integrity_entries()?;
+        let content_refs: Vec<(&str, &[u8])> = cloned
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.payload.as_slice()))
+            .collect();
+        let digest = compute_archive_entries_content_hash(&content_refs);
+        cloned.add_entry(LMNKP_ENTRY_CONTENT_HASH, digest.to_vec(), false)?;
+        cloned.build()
+    }
+
+    /// Builds a `.lmnkp` archive carrying both `integrity.sha256` (SHA-256) and
+    /// `signature.ed25519` (Ed25519 signature over the canonical sorted entry hash).
+    ///
+    /// # Errors
+    /// Returns [`LmnkPackageError`] on entry limit overflow or serialization failure.
+    pub fn build_signed(&self, keypair: &SigningKeyPair) -> Result<Vec<u8>, LmnkPackageError> {
+        let mut cloned = self.clone_without_integrity_entries()?;
+        let content_refs: Vec<(&str, &[u8])> = cloned
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.payload.as_slice()))
+            .collect();
+        let digest = compute_archive_entries_content_hash(&content_refs);
+        let sig = sign_archive_content_hash(&digest, keypair);
+        cloned.add_entry(LMNKP_ENTRY_CONTENT_HASH, digest.to_vec(), false)?;
+        cloned.add_entry(LMNKP_ENTRY_SIGNATURE, sig.to_vec(), false)?;
+        cloned.build()
+    }
+
+    fn clone_without_integrity_entries(&self) -> Result<Self, LmnkPackageError> {
+        let mut builder = Self::new();
+        for entry in &self.entries {
+            if is_package_integrity_entry(&entry.name) {
+                continue;
+            }
+            builder.add_entry(entry.name.clone(), entry.payload.clone(), entry.align_64)?;
+        }
+        Ok(builder)
+    }
+
+    /// Builds and writes the `.lmnkp` archive to `path`, creating parent directories on demand
+    /// after validating `path` with [`validate_local_output_path`].
+    ///
+    /// # Errors
+    /// Returns [`LmnkPackageError`] on unsafe path, serialization, or filesystem write failure.
     pub fn write_to_path(&self, path: impl AsRef<Path>) -> Result<usize, LmnkPackageError> {
-        let bytes = self.build()?;
         let p = path.as_ref();
+        validate_local_output_path(p).map_err(|e| {
+            LmnkPackageError::Io(format!("unsafe output path {}: {e}", p.display()))
+        })?;
+        let bytes = self.build()?;
         if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|e| {
                 LmnkPackageError::Io(format!(
@@ -510,6 +548,63 @@ impl LmnkPackageBuilder {
         })?;
         Ok(bytes.len())
     }
+}
+
+#[inline]
+fn is_package_integrity_entry(name: &str) -> bool {
+    name.eq_ignore_ascii_case(LMNKP_ENTRY_CONTENT_HASH)
+        || name.eq_ignore_ascii_case(LMNKP_ENTRY_SIGNATURE)
+}
+
+/// Re-emits an existing `.lmnkp` archive with a fresh `integrity.sha256` entry while preserving
+/// all source entries byte-for-byte and keeping 64B alignment on aligned entries.
+///
+/// # Errors
+/// Returns [`LmnkPackageError`] if input parsing or serialization fails.
+pub fn attach_lmnkp_content_hash(package_bytes: &[u8]) -> Result<Vec<u8>, LmnkPackageError> {
+    let view = LmnkPackageView::parse(package_bytes)?;
+    let mut builder = LmnkPackageBuilder::new();
+    for entry in view.entries() {
+        if is_package_integrity_entry(entry.name) {
+            continue;
+        }
+        let align_64 = entry.name == LMNKP_ENTRY_COMPILED || entry.is_aligned64();
+        builder.add_entry(entry.name, entry.payload.to_vec(), align_64)?;
+    }
+    builder.build_with_content_hash()
+}
+
+/// Re-emits an existing `.lmnkp` archive with `integrity.sha256` and `signature.ed25519` entries
+/// while preserving all source entries byte-for-byte and keeping 64B alignment on aligned entries.
+///
+/// # Errors
+/// Returns [`LmnkPackageError`] if input parsing or serialization fails.
+pub fn sign_lmnkp_package(
+    package_bytes: &[u8],
+    keypair: &SigningKeyPair,
+) -> Result<Vec<u8>, LmnkPackageError> {
+    let view = LmnkPackageView::parse(package_bytes)?;
+    let mut builder = LmnkPackageBuilder::new();
+    for entry in view.entries() {
+        if is_package_integrity_entry(entry.name) {
+            continue;
+        }
+        let align_64 = entry.name == LMNKP_ENTRY_COMPILED || entry.is_aligned64();
+        builder.add_entry(entry.name, entry.payload.to_vec(), align_64)?;
+    }
+    builder.build_signed(keypair)
+}
+
+/// Parses and cryptographically verifies an `.lmnkp` archive against `policy`.
+///
+/// # Errors
+/// Returns [`LmnkPackageError`] on archive corruption or integrity/policy failure.
+pub fn verify_lmnkp_integrity(
+    package_bytes: &[u8],
+    policy: &IntegrityPolicy,
+) -> Result<IntegrityReport, LmnkPackageError> {
+    let view = LmnkPackageView::parse(package_bytes)?;
+    view.verify_integrity(policy)
 }
 
 /// Validated zero-copy entry descriptor returned by [`LmnkPackageView`].
@@ -954,6 +1049,33 @@ impl<'a> LmnkPackageView<'a> {
         self.require_aligned64_entry(LMNKP_ENTRY_COMPILED)
             .map(|e| e.payload)
     }
+
+    /// Verifies cryptographic SHA-256 (`integrity.sha256`) and Ed25519 (`signature.ed25519`)
+    /// integrity across all non-integrity entries under `policy` (fail-closed on any tampering).
+    ///
+    /// # Errors
+    /// Returns [`LmnkPackageError::IntegrityFailure`] if verification or `policy` fails.
+    pub fn verify_integrity(
+        &self,
+        policy: &IntegrityPolicy,
+    ) -> Result<IntegrityReport, LmnkPackageError> {
+        let mut content_entries: Vec<(&str, &[u8])> = Vec::with_capacity(self.entries.len());
+        let mut stored_hash: Option<&[u8]> = None;
+        let mut stored_sig: Option<&[u8]> = None;
+
+        for entry in &self.entries {
+            if entry.name.eq_ignore_ascii_case(LMNKP_ENTRY_CONTENT_HASH) {
+                stored_hash = Some(entry.payload);
+            } else if entry.name.eq_ignore_ascii_case(LMNKP_ENTRY_SIGNATURE) {
+                stored_sig = Some(entry.payload);
+            } else {
+                content_entries.push((entry.name, entry.payload));
+            }
+        }
+
+        verify_archive_entries_integrity(&content_entries, stored_hash, stored_sig, policy)
+            .map_err(|e| LmnkPackageError::IntegrityFailure(e.to_string()))
+    }
 }
 
 /// Owned `.lmnkp` buffer enforcing TOCTOU-safe bounded buffered reads from external paths.
@@ -1307,8 +1429,8 @@ mod tests {
                 0 => {
                     let idx = (next_u64() as usize) % mutated.len();
                     mutated[idx] ^= 1u8 << ((next_u64() as u8) & 7);
-                    // Wait: avoid flipping benign zero alignment-padding bytes inside LMNKP extra padding that are unchecked;
-                    // instead if parse somehow succeeds (only possible inside 0-byte LFN padding bytes), flip EOCD sig.
+                    // Avoid flipping benign zero alignment-padding bytes inside LMNKP extra padding;
+                    // if parse still succeeds, flip EOCD sig to guarantee rejection.
                     if LmnkPackageView::parse(&mutated).is_ok() {
                         let eocd = mutated.len() - PKZIP_EOCD_FIXED_BYTES;
                         mutated[eocd] ^= 0xFF;
@@ -1341,6 +1463,225 @@ mod tests {
             assert!(
                 LmnkPackageView::parse(&mutated).is_err(),
                 "mutated .lmnkp trial {trial} unexpectedly parsed as Ok"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_windows_reserved_device_names_in_builder_and_parser() {
+        for bad in [
+            "CON",
+            "con.lmnkc",
+            "AUX.tar.gz",
+            "dir/nul.json",
+            "PRN.txt",
+            "com0.lmnk",
+            "dir/COM9.bin",
+            "lpt1.lmnkc",
+            "LPT\u{00B2}.json",
+            "trailing.",
+            "trailing ",
+            "file.lmnkc:ads",
+        ] {
+            let mut b = LmnkPackageBuilder::new();
+            assert!(
+                matches!(
+                    b.add_entry(bad, vec![1, 2, 3], false),
+                    Err(LmnkPackageError::InvalidEntryName(_))
+                ),
+                "builder must reject '{bad}'"
+            );
+        }
+
+        // Also verify parser rejects raw-patched reserved name "con.txt" inside a valid ZIP frame.
+        let mut b = LmnkPackageBuilder::new();
+        b.add_entry("abc.txt", b"hello".to_vec(), false).unwrap();
+        let mut raw = b.build().unwrap();
+        let cd = find_cd_offset(&raw);
+        raw[PKZIP_LFH_FIXED_BYTES..PKZIP_LFH_FIXED_BYTES + 3].copy_from_slice(b"CON");
+        raw[cd + PKZIP_CD_FIXED_BYTES..cd + PKZIP_CD_FIXED_BYTES + 3].copy_from_slice(b"CON");
+        assert!(matches!(
+            LmnkPackageView::parse(&raw),
+            Err(LmnkPackageError::InvalidEntryName(_))
+        ));
+
+        // Output path sanitizer blocks reserved device names on disk write.
+        assert!(b.write_to_path("out/NUL.lmnkp").is_err());
+    }
+
+    #[test]
+    fn lmnkp_sha256_ed25519_signing_tamper_resistance_and_source_immutability() {
+        use crate::host::integrity::{IntegrityTrustLevel, SigningKeyPair};
+
+        let manifest = format_package_manifest_json(
+            "0.3.0",
+            0xCAFE_BABE_1234_5678,
+            2,
+            0x0102_0304,
+            LMNKP_ENTRY_COMPILED,
+            Some(LMNKP_ENTRY_SOURCE),
+        );
+        let source = b"persona Integrity { fact \"immutable\" }\n".to_vec();
+        let compiled = vec![0x7E_u8; 128];
+
+        let mut builder = LmnkPackageBuilder::new();
+        builder
+            .add_manifest_json(manifest.clone())
+            .unwrap()
+            .add_source_lmnk(source.clone())
+            .unwrap()
+            .add_compiled_lmnkc(compiled.clone())
+            .unwrap();
+
+        let unsigned_pkg = builder.build().unwrap();
+        let kp = SigningKeyPair::from_seed_bytes([0x33_u8; 32]);
+        let wrong_kp = SigningKeyPair::from_seed_bytes([0x44_u8; 32]);
+        let pk = kp.verifying_key();
+
+        // 1. Legacy unsigned compatibility & downgrade rejection.
+        let r_un = verify_lmnkp_integrity(&unsigned_pkg, &IntegrityPolicy::AllowUnsigned).unwrap();
+        assert_eq!(r_un.trust_level, IntegrityTrustLevel::Unsigned);
+        assert!(
+            verify_lmnkp_integrity(&unsigned_pkg, &IntegrityPolicy::RequireContentHash).is_err()
+        );
+        assert!(
+            verify_lmnkp_integrity(&unsigned_pkg, &IntegrityPolicy::RequireSignature(pk)).is_err()
+        );
+
+        // 2. Hash-only and signed packages preserve all source entries byte-for-byte + 64B align.
+        let hashed_pkg = attach_lmnkp_content_hash(&unsigned_pkg).unwrap();
+        let r_h =
+            verify_lmnkp_integrity(&hashed_pkg, &IntegrityPolicy::RequireContentHash).unwrap();
+        assert_eq!(r_h.trust_level, IntegrityTrustLevel::ContentHashVerified);
+
+        let signed_pkg = sign_lmnkp_package(&unsigned_pkg, &kp).unwrap();
+        let r_s =
+            verify_lmnkp_integrity(&signed_pkg, &IntegrityPolicy::RequireSignature(pk)).unwrap();
+        assert_eq!(r_s.trust_level, IntegrityTrustLevel::SignatureVerified);
+        assert_eq!(r_s.computed_sha256, r_h.computed_sha256);
+
+        let signed_view = LmnkPackageView::parse(&signed_pkg).unwrap();
+        assert_eq!(
+            signed_view.manifest_json().unwrap(),
+            Some(manifest.as_str())
+        );
+        assert_eq!(signed_view.source_lmnk(), Some(source.as_slice()));
+        let compiled_e = signed_view
+            .require_aligned64_entry(LMNKP_ENTRY_COMPILED)
+            .unwrap();
+        assert!(compiled_e.is_aligned64());
+        assert_eq!(compiled_e.payload, compiled.as_slice());
+
+        // 3. Wrong public key rejected.
+        assert!(verify_lmnkp_integrity(
+            &signed_pkg,
+            &IntegrityPolicy::RequireSignature(wrong_kp.verifying_key()),
+        )
+        .is_err());
+
+        // 4. 1-bit flip in manifest/source/compiled (with fresh ZIP CRC32) rejected fail-closed!
+        {
+            let mut tampered_source = source.clone();
+            tampered_source[0] ^= 0x01;
+            let mut tb = LmnkPackageBuilder::new();
+            tb.add_manifest_json(manifest.clone()).unwrap();
+            tb.add_source_lmnk(tampered_source).unwrap();
+            tb.add_compiled_lmnkc(compiled.clone()).unwrap();
+            tb.add_entry(
+                LMNKP_ENTRY_CONTENT_HASH,
+                signed_view
+                    .entry(LMNKP_ENTRY_CONTENT_HASH)
+                    .unwrap()
+                    .payload
+                    .to_vec(),
+                false,
+            )
+            .unwrap();
+            tb.add_entry(
+                LMNKP_ENTRY_SIGNATURE,
+                signed_view
+                    .entry(LMNKP_ENTRY_SIGNATURE)
+                    .unwrap()
+                    .payload
+                    .to_vec(),
+                false,
+            )
+            .unwrap();
+            let tampered_bytes = tb.build().unwrap();
+            assert!(
+                verify_lmnkp_integrity(&tampered_bytes, &IntegrityPolicy::AllowUnsigned).is_err()
+            );
+        }
+
+        // 5. Extra injected entry, deleted entry, renamed entry, and standalone signature rejected!
+        let hash_bytes = signed_view
+            .entry(LMNKP_ENTRY_CONTENT_HASH)
+            .unwrap()
+            .payload
+            .to_vec();
+        let sig_bytes = signed_view
+            .entry(LMNKP_ENTRY_SIGNATURE)
+            .unwrap()
+            .payload
+            .to_vec();
+
+        // Injected entry
+        {
+            let mut tb = LmnkPackageBuilder::new();
+            tb.add_manifest_json(manifest.clone()).unwrap();
+            tb.add_source_lmnk(source.clone()).unwrap();
+            tb.add_compiled_lmnkc(compiled.clone()).unwrap();
+            tb.add_entry("extra.txt", b"injected".to_vec(), false)
+                .unwrap();
+            tb.add_entry(LMNKP_ENTRY_CONTENT_HASH, hash_bytes.clone(), false)
+                .unwrap();
+            tb.add_entry(LMNKP_ENTRY_SIGNATURE, sig_bytes.clone(), false)
+                .unwrap();
+            assert!(
+                verify_lmnkp_integrity(&tb.build().unwrap(), &IntegrityPolicy::AllowUnsigned)
+                    .is_err()
+            );
+        }
+        // Deleted entry
+        {
+            let mut tb = LmnkPackageBuilder::new();
+            tb.add_manifest_json(manifest.clone()).unwrap();
+            tb.add_compiled_lmnkc(compiled.clone()).unwrap();
+            tb.add_entry(LMNKP_ENTRY_CONTENT_HASH, hash_bytes.clone(), false)
+                .unwrap();
+            tb.add_entry(LMNKP_ENTRY_SIGNATURE, sig_bytes.clone(), false)
+                .unwrap();
+            assert!(
+                verify_lmnkp_integrity(&tb.build().unwrap(), &IntegrityPolicy::AllowUnsigned)
+                    .is_err()
+            );
+        }
+        // Renamed entry
+        {
+            let mut tb = LmnkPackageBuilder::new();
+            tb.add_manifest_json(manifest.clone()).unwrap();
+            tb.add_entry("renamed.lmnk", source.clone(), false).unwrap();
+            tb.add_compiled_lmnkc(compiled.clone()).unwrap();
+            tb.add_entry(LMNKP_ENTRY_CONTENT_HASH, hash_bytes, false)
+                .unwrap();
+            tb.add_entry(LMNKP_ENTRY_SIGNATURE, sig_bytes.clone(), false)
+                .unwrap();
+            assert!(
+                verify_lmnkp_integrity(&tb.build().unwrap(), &IntegrityPolicy::AllowUnsigned)
+                    .is_err()
+            );
+        }
+        // Standalone signature without integrity.sha256
+        {
+            let mut tb = LmnkPackageBuilder::new();
+            tb.add_manifest_json(manifest).unwrap();
+            tb.add_source_lmnk(source).unwrap();
+            tb.add_compiled_lmnkc(compiled).unwrap();
+            tb.add_entry(LMNKP_ENTRY_SIGNATURE, sig_bytes, false)
+                .unwrap();
+            assert!(
+                verify_lmnkp_integrity(&tb.build().unwrap(), &IntegrityPolicy::AllowUnsigned)
+                    .is_err()
             );
         }
     }

@@ -1178,13 +1178,32 @@ impl LmnkTimeline {
     }
 
     /// Validates and imports an [`LmnkTimeline`] from an `.lmnkp` Store ZIP package byte slice,
-    /// verifying both the 64B alignment of `compiled.lmnkc` and [`LmnkContainerView::parse`].
+    /// verifying 64B alignment of `compiled.lmnkc`, fail-closed package/container cryptographic
+    /// integrity under [`IntegrityPolicy::AllowUnsigned`], and [`LmnkContainerView::parse`].
     ///
     /// # Errors
     /// Returns [`LmnkTimelineError::TopologyMismatch`], [`LmnkTimelineError::Package`], or
     /// [`LmnkTimelineError::Corrupted`].
     pub fn import_lmnkp_bytes(bytes: &[u8]) -> Result<Self, LmnkTimelineError> {
+        Self::import_lmnkp_bytes_with_policy(bytes, &IntegrityPolicy::AllowUnsigned)
+    }
+
+    /// Validates and imports an [`LmnkTimeline`] from an `.lmnkp` Store ZIP package byte slice
+    /// while enforcing an explicit cryptographic [`IntegrityPolicy`].
+    ///
+    /// The outer `.lmnkp` archive is verified against `policy`, while the embedded `compiled.lmnkc`
+    /// is always verified fail-closed under [`IntegrityPolicy::AllowUnsigned`] (and is also
+    /// cryptographically bound into the outer `.lmnkp` hash/signature).
+    ///
+    /// # Errors
+    /// Returns [`LmnkTimelineError::TopologyMismatch`], [`LmnkTimelineError::Package`], or
+    /// [`LmnkTimelineError::Corrupted`].
+    pub fn import_lmnkp_bytes_with_policy(
+        bytes: &[u8],
+        policy: &IntegrityPolicy,
+    ) -> Result<Self, LmnkTimelineError> {
         let pkg = LmnkPackageView::parse(bytes)?;
+        let _ = pkg.verify_integrity(policy)?;
         let compiled = pkg.compiled_lmnkc()?;
         Self::from_bytes(compiled)
     }
@@ -1192,9 +1211,12 @@ impl LmnkTimeline {
     /// Writes the serialized unified `.lmnkc` container to `path`, returning bytes written.
     ///
     /// # Errors
-    /// Returns [`LmnkTimelineError`] if serialization or filesystem creation/write fails.
+    /// Returns [`LmnkTimelineError`] if path validation, serialization, or filesystem write fails.
     pub fn save_to_path(&self, path: impl AsRef<Path>) -> Result<usize, LmnkTimelineError> {
         let p = path.as_ref();
+        validate_local_output_path(p).map_err(|e| {
+            LmnkTimelineError::Io(format!("unsafe output path {}: {e}", p.display()))
+        })?;
         if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|e| {
                 LmnkTimelineError::Io(format!(
@@ -1216,13 +1238,16 @@ impl LmnkTimeline {
     /// Writes a 64B-aligned `.lmnkp` package archive to `path`, returning bytes written.
     ///
     /// # Errors
-    /// Returns [`LmnkTimelineError`] if package creation or filesystem write fails.
+    /// Returns [`LmnkTimelineError`] if path validation, package creation, or write fails.
     pub fn save_lmnkp_to_path(
         &self,
         path: impl AsRef<Path>,
         source_lmnk: Option<&str>,
     ) -> Result<usize, LmnkTimelineError> {
         let p = path.as_ref();
+        validate_local_output_path(p).map_err(|e| {
+            LmnkTimelineError::Io(format!("unsafe output path {}: {e}", p.display()))
+        })?;
         if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(parent).map_err(|e| {
                 LmnkTimelineError::Io(format!(
@@ -1249,6 +1274,19 @@ impl LmnkTimeline {
     /// # Errors
     /// Returns [`LmnkTimelineError`] on I/O, ZIP, topology mismatch, or container validation errors.
     pub fn load_from_path(path: impl AsRef<Path>) -> Result<Self, LmnkTimelineError> {
+        Self::load_from_path_with_policy(path, &IntegrityPolicy::AllowUnsigned)
+    }
+
+    /// Loads and validates an `.lmnkc` container or `.lmnkp` package from `path` under an explicit
+    /// cryptographic [`IntegrityPolicy`].
+    ///
+    /// # Errors
+    /// Returns [`LmnkTimelineError`] on I/O, ZIP, integrity/policy, topology mismatch, or
+    /// container validation errors.
+    pub fn load_from_path_with_policy(
+        path: impl AsRef<Path>,
+        policy: &IntegrityPolicy,
+    ) -> Result<Self, LmnkTimelineError> {
         let p = path.as_ref();
         let file = std::fs::File::open(p).map_err(|e| {
             LmnkTimelineError::Io(format!("failed to open container {}: {e}", p.display()))
@@ -1283,9 +1321,9 @@ impl LmnkTimeline {
                 .and_then(|e| e.to_str())
                 .is_some_and(|e| e.eq_ignore_ascii_case("lmnkp"))
         {
-            Self::import_lmnkp_bytes(&bytes)
+            Self::import_lmnkp_bytes_with_policy(&bytes, policy)
         } else {
-            Self::from_bytes(&bytes)
+            Self::from_bytes_with_policy(&bytes, policy)
         }
     }
 
@@ -1446,14 +1484,30 @@ impl LmnkTimeline {
     }
 
     /// Parses and validates a unified `.lmnkc` container byte stream produced by
-    /// [`Self::to_container_bytes`] or [`AttractorContainerCodec::to_bytes`].
+    /// [`Self::to_container_bytes`] or [`AttractorContainerCodec::to_bytes`], enforcing fail-closed
+    /// cryptographic verification when `0xFF01`/`0xFF02` sections are present.
     ///
     /// # Errors
     /// Returns [`LmnkTimelineError::TopologyMismatch`] when `topology_crc32` mismatches
     /// [`CORE_TOPOLOGY`] (signaling rebake), or [`LmnkTimelineError::Corrupted`] /
-    /// [`LmnkTimelineError::Alignment`] on structural/CRC failure.
+    /// [`LmnkTimelineError::Alignment`] on structural/CRC/integrity failure.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LmnkTimelineError> {
+        Self::from_bytes_with_policy(bytes, &IntegrityPolicy::AllowUnsigned)
+    }
+
+    /// Parses and validates a unified `.lmnkc` container byte stream under an explicit
+    /// cryptographic [`IntegrityPolicy`].
+    ///
+    /// # Errors
+    /// Returns [`LmnkTimelineError::TopologyMismatch`], [`LmnkTimelineError::Alignment`], or
+    /// [`LmnkTimelineError::Corrupted`] on structural, integrity, or policy violation.
+    pub fn from_bytes_with_policy(
+        bytes: &[u8],
+        policy: &IntegrityPolicy,
+    ) -> Result<Self, LmnkTimelineError> {
         let view = LmnkContainerView::parse(bytes).map_err(|e| map_container_err(bytes, e))?;
+        verify_lmnkc_integrity(bytes, policy)
+            .map_err(|e| LmnkTimelineError::Corrupted(e.to_string()))?;
         let meta_bytes = view
             .section_bytes(LMNK_SECTION_RECALL_METADATA)
             .ok_or_else(|| {
@@ -1833,5 +1887,30 @@ mod tests {
             LmnkTimeline::from_bytes(&bytes),
             Err(LmnkTimelineError::TopologyMismatch { .. })
         ));
+
+        // 6. Signed .lmnkc and .lmnkp policy enforcement + downgrade rejection.
+        let kp = SigningKeyPair::from_seed_bytes([0x77_u8; 32]);
+        let pk = kp.verifying_key();
+        let raw_c = tl
+            .to_container_bytes(LMNK_CONTAINER_FLAG_COMPILED_CACHE)
+            .expect("raw_c");
+        assert!(LmnkTimeline::from_bytes_with_policy(
+            &raw_c,
+            &IntegrityPolicy::RequireSignature(pk)
+        )
+        .is_err());
+        let signed_c = sign_lmnkc_container(&raw_c, &kp).expect("sign lmnkc");
+        let verified_tl =
+            LmnkTimeline::from_bytes_with_policy(&signed_c, &IntegrityPolicy::RequireSignature(pk))
+                .expect("verified lmnkc timeline");
+        assert_eq!(verified_tl, tl);
+
+        let signed_pkg = sign_lmnkp_package(&pkg_bytes, &kp).expect("sign lmnkp");
+        let verified_pkg_tl = LmnkTimeline::import_lmnkp_bytes_with_policy(
+            &signed_pkg,
+            &IntegrityPolicy::RequireSignature(pk),
+        )
+        .expect("verified lmnkp timeline");
+        assert_eq!(verified_pkg_tl, tl);
     }
 }

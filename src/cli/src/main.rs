@@ -13,7 +13,14 @@ fn print_usage() {
     println!("  eval-check [fixture_path]");
     println!("  eval-dry-run [fixture_path]");
     println!("  list [containers_dir]");
-    println!("  inspect <file.lmnkc|file.lmnkp> [seek_frame]");
+    println!(
+        "  inspect <file.lmnkc|file.lmnkp> [seek_frame] [--pubkey <file|hex>] [--require-hash]"
+    );
+    println!("  verify <file.lmnkc|file.lmnkp> [--pubkey <file|hex>] [--require-hash]");
+    println!(
+        "  sign <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> (--key <secret_file> | --hash-only)"
+    );
+    println!("  keygen <secret_key_out> [public_key_out]");
     println!("  bake [fixture_path] [dst.lmnkc|dst.lmnkp] [phi4-mini|alt-128] [--package]");
     println!("  rebake <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> [phi4-mini|alt-128]");
 }
@@ -149,28 +156,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else if cmd == "inspect" {
         use liminika_adapter::{
-            AttractorContainerCodec, LmnkPackageOwned, LmnkTimeline, LmnkTimelineError,
+            verify_lmnkc_integrity, AttractorContainerCodec, IntegrityPolicy, LmnkPackageOwned,
+            LmnkTimeline, LmnkTimelineError,
         };
         use liminika_core::liminal::LMNK_ERR_TOPOLOGY_MISMATCH;
         use liminika_core::runtime::{LmnkContainerHeader, LmnkContainerView, CORE_TOPOLOGY};
 
-        let path = args
-            .next()
-            .ok_or("usage: liminika inspect <file.lmnkc|file.lmnkp> [seek_frame]")?;
-        let seek_frame: Option<u64> = args.next().map(|s| s.parse::<u64>()).transpose()?;
-        let is_pkg = std::path::Path::new(&path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("lmnkp"));
+        let mut pubkey_arg: Option<String> = None;
+        let mut require_hash = false;
+        let mut positional = Vec::new();
+        while let Some(arg) = args.next() {
+            if arg == "--pubkey" {
+                let val = args
+                    .next()
+                    .ok_or("missing value after --pubkey (expected key file path or 64-hex)")?;
+                pubkey_arg = Some(val);
+            } else if arg == "--require-hash" {
+                require_hash = true;
+            } else {
+                positional.push(arg);
+            }
+        }
+        let mut pos_iter = positional.into_iter();
+        let path = pos_iter.next().ok_or(
+            "usage: liminika inspect <file.lmnkc|file.lmnkp> [seek_frame] [--pubkey <file|hex>] [--require-hash]",
+        )?;
+        let seek_frame: Option<u64> = pos_iter.next().map(|s| s.parse::<u64>()).transpose()?;
+        let policy = build_integrity_policy(pubkey_arg.as_deref(), require_hash)?;
+        let is_pkg = is_lmnkp_path(std::path::Path::new(&path));
 
         let owned_pkg = if is_pkg {
             let pkg = LmnkPackageOwned::load_from_path(&path)?;
             {
                 let view = pkg.view()?;
+                let report = view.verify_integrity(&policy)?;
                 println!(
-                    "Loaded .lmnkp package '{}': {} entries",
+                    "Loaded .lmnkp package '{}': {} entries | integrity={} sha256={} hash={} sig={}",
                     path,
-                    view.entries().len()
+                    view.entries().len(),
+                    report.trust_level,
+                    report.sha256_hex(),
+                    report.has_content_hash,
+                    report.has_signature
                 );
                 for entry in view.entries() {
                     println!(
@@ -192,7 +219,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let owned_raw = if owned_pkg.is_none() {
-            Some(std::fs::read(&path)?)
+            Some(read_bounded_artifact(std::path::Path::new(&path))?)
         } else {
             None
         };
@@ -204,14 +231,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match LmnkContainerView::parse(container_bytes) {
             Ok(view) => {
+                let container_policy = if owned_pkg.is_some() {
+                    IntegrityPolicy::AllowUnsigned
+                } else {
+                    policy
+                };
+                let report = verify_lmnkc_integrity(container_bytes, &container_policy)?;
                 let hdr = view.header();
                 println!(
-                    "Container '{}': abi=0x{:08x} flags=0x{:08x} topology_crc32=0x{:08x} sections={}",
+                    concat!(
+                        "Container '{}': abi=0x{:08x} flags=0x{:08x} topology_crc32=0x{:08x}",
+                        " sections={} | integrity={} sha256={} hash={} sig={}"
+                    ),
                     path,
                     hdr.version,
                     hdr.container_flags,
                     hdr.topology_crc32,
-                    hdr.section_count
+                    hdr.section_count,
+                    report.trust_level,
+                    report.sha256_hex(),
+                    report.has_content_hash,
+                    report.has_signature
                 );
                 for sec in view.sections() {
                     println!(
@@ -265,6 +305,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 state.anchor_ids.len()
             );
         }
+    } else if cmd == "verify" {
+        let mut pubkey_arg: Option<String> = None;
+        let mut require_hash = false;
+        let mut positional = Vec::new();
+        while let Some(arg) = args.next() {
+            if arg == "--pubkey" {
+                let val = args
+                    .next()
+                    .ok_or("missing value after --pubkey (expected key file path or 64-hex)")?;
+                pubkey_arg = Some(val);
+            } else if arg == "--require-hash" {
+                require_hash = true;
+            } else {
+                positional.push(arg);
+            }
+        }
+        let path = positional.into_iter().next().ok_or(
+            "usage: liminika verify <file.lmnkc|file.lmnkp> [--pubkey <file|hex>] [--require-hash]",
+        )?;
+        let policy = build_integrity_policy(pubkey_arg.as_deref(), require_hash)?;
+        let report = run_verify_artifact(std::path::Path::new(&path), &policy)?;
+        println!(
+            "Verified '{}': status={} sha256={} hash={} sig={}",
+            path,
+            report.trust_level,
+            report.sha256_hex(),
+            report.has_content_hash,
+            report.has_signature
+        );
+    } else if cmd == "sign" {
+        let mut key_path: Option<String> = None;
+        let mut hash_only = false;
+        let mut positional = Vec::new();
+        while let Some(arg) = args.next() {
+            if arg == "--key" {
+                let val = args
+                    .next()
+                    .ok_or("missing value after --key (expected secret key file path)")?;
+                key_path = Some(val);
+            } else if arg == "--hash-only" {
+                hash_only = true;
+            } else {
+                positional.push(arg);
+            }
+        }
+        let mut pos_iter = positional.into_iter();
+        let src = pos_iter.next().ok_or(
+            "usage: liminika sign <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> (--key <secret_file> | --hash-only)",
+        )?;
+        let dst = pos_iter.next().ok_or(
+            "usage: liminika sign <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> (--key <secret_file> | --hash-only)",
+        )?;
+        if hash_only && key_path.is_some() {
+            return Err("cannot combine --key and --hash-only".into());
+        }
+        if !hash_only && key_path.is_none() {
+            return Err("specify either --key <secret_file> or --hash-only".into());
+        }
+        let summary = run_sign_artifact(
+            std::path::Path::new(&src),
+            std::path::Path::new(&dst),
+            key_path.as_deref().map(std::path::Path::new),
+        )?;
+        println!(
+            "Wrote '{}' ({} bytes) | status={} sha256={}{}",
+            dst,
+            summary.written_bytes,
+            summary.report.trust_level,
+            summary.report.sha256_hex(),
+            summary
+                .pubkey_hex
+                .as_deref()
+                .map_or(String::new(), |pk| format!(" pubkey={pk}"))
+        );
+    } else if cmd == "keygen" {
+        let secret_out = args
+            .next()
+            .ok_or("usage: liminika keygen <secret_key_out> [public_key_out]")?;
+        let pub_out = args.next().unwrap_or_else(|| format!("{secret_out}.pub"));
+        let pubkey = run_keygen(
+            std::path::Path::new(&secret_out),
+            std::path::Path::new(&pub_out),
+        )?;
+        println!(
+            "Generated Ed25519 keypair: secret='{}' public='{}' pubkey={}",
+            secret_out,
+            pub_out,
+            pubkey.to_hex()
+        );
     } else if cmd == "bake" {
         let mut as_package = false;
         let mut positional = Vec::new();
@@ -319,6 +448,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dst_path = args.next().ok_or(
             "usage: liminika rebake <src.lmnkc|src.lmnkp> <dst.lmnkc|dst.lmnkp> [phi4-mini|alt-128]",
         )?;
+        liminika_adapter::validate_local_output_path(std::path::Path::new(&dst_path))
+            .map_err(|e| format!("unsafe output path '{dst_path}': {e}"))?;
         let profile = args.next().unwrap_or_else(|| "alt-128".to_string());
         let dst_is_pkg = std::path::Path::new(&dst_path)
             .extension()
@@ -462,6 +593,149 @@ fn resolve_cli_rope_geometry(profile: &str) -> Result<liminika_adapter::RopeGeom
     }
 }
 
+fn is_lmnkp_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("lmnkp"))
+}
+
+fn read_bounded_artifact(path: &std::path::Path) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use std::io::Read as _;
+    let cap = liminika_adapter::LMNKP_MAX_PACKAGE_BYTES;
+    let file = std::fs::File::open(path)?;
+    let meta_len = file.metadata()?.len();
+    if meta_len > cap as u64 {
+        return Err(format!(
+            "artifact '{}' ({meta_len} B) exceeds hard cap {cap} B",
+            path.display()
+        )
+        .into());
+    }
+    let mut bytes = Vec::with_capacity((meta_len as usize).min(cap));
+    file.take((cap as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > cap {
+        return Err(format!(
+            "artifact '{}' exceeds hard read cap {cap} B",
+            path.display()
+        )
+        .into());
+    }
+    Ok(bytes)
+}
+
+fn build_integrity_policy(
+    pubkey_arg: Option<&str>,
+    require_hash: bool,
+) -> Result<liminika_adapter::IntegrityPolicy, Box<dyn std::error::Error>> {
+    use liminika_adapter::{IntegrityPolicy, VerifyingPublicKey};
+    if let Some(arg) = pubkey_arg {
+        let p = std::path::Path::new(arg);
+        let pk = if p.is_file() {
+            VerifyingPublicKey::read_hex_file(p)?
+        } else {
+            VerifyingPublicKey::from_hex(arg)?
+        };
+        Ok(IntegrityPolicy::RequireSignature(pk))
+    } else if require_hash {
+        Ok(IntegrityPolicy::RequireContentHash)
+    } else {
+        Ok(IntegrityPolicy::AllowUnsigned)
+    }
+}
+
+struct CliSignSummary {
+    written_bytes: usize,
+    report: liminika_adapter::IntegrityReport,
+    pubkey_hex: Option<String>,
+}
+
+fn run_keygen(
+    secret_out: &std::path::Path,
+    pub_out: &std::path::Path,
+) -> Result<liminika_adapter::VerifyingPublicKey, Box<dyn std::error::Error>> {
+    liminika_adapter::validate_local_output_path(secret_out)?;
+    liminika_adapter::validate_local_output_path(pub_out)?;
+    let kp = liminika_adapter::SigningKeyPair::generate()?;
+    let pk = kp.verifying_key();
+    kp.write_seed_hex_file(secret_out)?;
+    pk.write_hex_file(pub_out)?;
+    Ok(pk)
+}
+
+fn run_sign_artifact(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    key_file: Option<&std::path::Path>,
+) -> Result<CliSignSummary, Box<dyn std::error::Error>> {
+    use liminika_adapter::{
+        attach_lmnkc_content_hash, attach_lmnkp_content_hash, sign_lmnkc_container,
+        sign_lmnkp_package, validate_local_output_path, verify_lmnkc_integrity,
+        verify_lmnkp_integrity, IntegrityPolicy, SigningKeyPair,
+    };
+
+    validate_local_output_path(dst)?;
+    let raw = read_bounded_artifact(src)?;
+    let is_pkg = raw.starts_with(b"PK\x03\x04") || is_lmnkp_path(src);
+
+    let (signed_bytes, pubkey_opt) = if let Some(kf) = key_file {
+        let kp = SigningKeyPair::read_seed_hex_file(kf)?;
+        let pk = kp.verifying_key();
+        let out = if is_pkg {
+            sign_lmnkp_package(&raw, &kp)?
+        } else {
+            sign_lmnkc_container(&raw, &kp)?
+        };
+        (out, Some(pk))
+    } else {
+        let out = if is_pkg {
+            attach_lmnkp_content_hash(&raw)?
+        } else {
+            attach_lmnkc_content_hash(&raw)?
+        };
+        (out, None)
+    };
+
+    let check_policy = match pubkey_opt {
+        Some(pk) => IntegrityPolicy::RequireSignature(pk),
+        None => IntegrityPolicy::RequireContentHash,
+    };
+    let report = if is_pkg {
+        verify_lmnkp_integrity(&signed_bytes, &check_policy)?
+    } else {
+        verify_lmnkc_integrity(&signed_bytes, &check_policy)?
+    };
+
+    if let Some(parent) = dst.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(dst, &signed_bytes)?;
+    Ok(CliSignSummary {
+        written_bytes: signed_bytes.len(),
+        report,
+        pubkey_hex: pubkey_opt.map(|pk| pk.to_hex()),
+    })
+}
+
+fn run_verify_artifact(
+    path: &std::path::Path,
+    policy: &liminika_adapter::IntegrityPolicy,
+) -> Result<liminika_adapter::IntegrityReport, Box<dyn std::error::Error>> {
+    use liminika_adapter::{verify_lmnkc_integrity, IntegrityPolicy, LmnkPackageView};
+
+    let raw = read_bounded_artifact(path)?;
+    if raw.starts_with(b"PK\x03\x04") || is_lmnkp_path(path) {
+        let view = LmnkPackageView::parse(&raw)?;
+        let report = view.verify_integrity(policy)?;
+        if let Ok(compiled) = view.compiled_lmnkc() {
+            let _ = verify_lmnkc_integrity(compiled, &IntegrityPolicy::AllowUnsigned)?;
+        }
+        Ok(report)
+    } else {
+        Ok(verify_lmnkc_integrity(&raw, policy)?)
+    }
+}
+
 /// Parses a sectioned evaluation fixture and compiles its attractors into a portable `.lmnkc`
 /// dual-track container or 64B-aligned `.lmnkp` Store ZIP package at `dst_path`.
 fn bake_fixture_to_lmnk_file(
@@ -470,6 +744,7 @@ fn bake_fixture_to_lmnk_file(
     profile: &str,
     as_package: bool,
 ) -> Result<(liminika_adapter::LmnkTimeline, usize), Box<dyn std::error::Error>> {
+    liminika_adapter::validate_local_output_path(dst_path)?;
     use liminika_adapter::{
         AdaptiveGopCutDetector, AttractorRole, LmnkTimeline, ModelSteeringAdapter, RebakeContext,
         RecallPolicy, SourceTextRecord,
@@ -619,6 +894,95 @@ mod tests {
 
         let listed = collect_lmnk_paths_creating_dir(&base.join("out")).expect("list artifacts");
         assert_eq!(listed, vec![dst_path, pkg_path]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn cli_keygen_sign_verify_tamper_and_reserved_path_end_to_end() {
+        use super::{build_integrity_policy, run_keygen, run_sign_artifact, run_verify_artifact};
+        use liminika_adapter::IntegrityTrustLevel;
+
+        let base =
+            std::env::temp_dir().join(format!("liminika_cli_integrity_e2e_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("create temp test dir");
+
+        let fixture_path = base.join("fixture.txt");
+        let fixture_raw = include_str!("../../../tests/fixtures/gcso_eval_samples.txt");
+        std::fs::write(&fixture_path, fixture_raw).expect("write fixture");
+
+        let secret_key = base.join("keys").join("signing.key");
+        let public_key = base.join("keys").join("signing.pub");
+        let pk = run_keygen(&secret_key, &public_key).expect("keygen");
+        assert!(secret_key.is_file());
+        assert!(public_key.is_file());
+
+        // Bake unsigned .lmnkc and .lmnkp artifacts.
+        let unsigned_c = base.join("raw.lmnkc");
+        let unsigned_p = base.join("raw.lmnkp");
+        bake_fixture_to_lmnk_file(&fixture_path, &unsigned_c, "phi4-mini", false)
+            .expect("bake lmnkc");
+        bake_fixture_to_lmnk_file(&fixture_path, &unsigned_p, "phi4-mini", true)
+            .expect("bake lmnkp");
+
+        let strict_policy =
+            build_integrity_policy(Some(public_key.to_str().unwrap()), false).expect("policy");
+        assert!(run_verify_artifact(&unsigned_c, &strict_policy).is_err());
+        assert!(run_verify_artifact(&unsigned_p, &strict_policy).is_err());
+
+        // Sign both artifacts.
+        let signed_c = base.join("signed.lmnkc");
+        let signed_p = base.join("signed.lmnkp");
+        let sum_c =
+            run_sign_artifact(&unsigned_c, &signed_c, Some(&secret_key)).expect("sign lmnkc");
+        assert_eq!(
+            sum_c.report.trust_level,
+            IntegrityTrustLevel::SignatureVerified
+        );
+        assert_eq!(sum_c.pubkey_hex.as_deref(), Some(pk.to_hex().as_str()));
+
+        let sum_p =
+            run_sign_artifact(&unsigned_p, &signed_p, Some(&secret_key)).expect("sign lmnkp");
+        assert_eq!(
+            sum_p.report.trust_level,
+            IntegrityTrustLevel::SignatureVerified
+        );
+
+        // Verify both artifacts with public key file & hex string.
+        let rep_c = run_verify_artifact(&signed_c, &strict_policy).expect("verify signed lmnkc");
+        assert_eq!(rep_c.trust_level, IntegrityTrustLevel::SignatureVerified);
+        let hex_policy = build_integrity_policy(Some(&pk.to_hex()), false).expect("hex policy");
+        let rep_p = run_verify_artifact(&signed_p, &hex_policy).expect("verify signed lmnkp");
+        assert_eq!(rep_p.trust_level, IntegrityTrustLevel::SignatureVerified);
+
+        // Tamper 1 byte in both signed files -> verify must fail!
+        let mut bad_c = std::fs::read(&signed_c).expect("read signed lmnkc");
+        let mid_c = bad_c.len() / 2;
+        bad_c[mid_c] ^= 0x01;
+        let bad_c_path = base.join("tampered.lmnkc");
+        std::fs::write(&bad_c_path, &bad_c).expect("write tampered lmnkc");
+        assert!(run_verify_artifact(&bad_c_path, &strict_policy).is_err());
+
+        let mut bad_p = std::fs::read(&signed_p).expect("read signed lmnkp");
+        let mid_p = bad_p.len() / 2;
+        bad_p[mid_p] ^= 0x01;
+        let bad_p_path = base.join("tampered.lmnkp");
+        std::fs::write(&bad_p_path, &bad_p).expect("write tampered lmnkp");
+        assert!(run_verify_artifact(&bad_p_path, &strict_policy).is_err());
+
+        // Windows reserved device name outputs rejected across keygen, sign, and bake!
+        assert!(run_keygen(&base.join("CON.key"), &base.join("ok.pub")).is_err());
+        assert!(
+            run_sign_artifact(&unsigned_c, &base.join("NUL.lmnkc"), Some(&secret_key)).is_err()
+        );
+        assert!(bake_fixture_to_lmnk_file(
+            &fixture_path,
+            &base.join("aux.lmnkp"),
+            "phi4-mini",
+            true
+        )
+        .is_err());
 
         let _ = std::fs::remove_dir_all(&base);
     }
