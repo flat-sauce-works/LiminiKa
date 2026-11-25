@@ -11,6 +11,7 @@
 
 mod calibrator;
 mod encoder;
+mod streaming;
 #[cfg(test)]
 mod tests;
 
@@ -22,6 +23,10 @@ pub use encoder::{
     extract_leading_alias_word, CapturedTokenSequence, ContrastiveAnchorBank,
     ContrastiveAnchorEntry, PooledSubtitleEncoder, PrefixAliasProbe, TokenSequenceEncoder,
     DEFAULT_STARTUP_PRIOR_PROBES,
+};
+pub use streaming::{
+    split_raw_document_chunks, StreamingCorpusDistiller, StreamingDistillConfig,
+    StreamingDistillReport, DEFAULT_STREAMING_SALIENT_TOKENS, STREAMING_PCA_SAMPLE_BUDGET,
 };
 
 use crate::{
@@ -168,19 +173,20 @@ impl SequenceActivationPooler {
             }
         }
 
+        // Two-pass streaming over `token_flat` avoids materializing `[seq_len][dim]` unit copies
+        // while preserving exact per-token normalization rounding order (`(w * inv_sum) * (src * inv)`).
         let mut weights = Vec::with_capacity(seq_len);
-        let mut unit_tokens: Vec<Vec<f32>> = Vec::with_capacity(seq_len);
+        let mut invs = Vec::with_capacity(seq_len);
+        let mut weight_sum = 0.0_f64;
         for t in 0..seq_len {
             let slice = &token_flat[t * dim..(t + 1) * dim];
             let norm_sq: f64 = slice.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
             let norm = norm_sq.sqrt();
-            let mut unit = vec![0.0_f32; dim];
-            if norm > 1e-12 {
-                let inv = (1.0 / norm) as f32;
-                for (dst, &src) in unit.iter_mut().zip(slice.iter()) {
-                    *dst = src * inv;
-                }
-            }
+            let inv = if norm > 1e-12 {
+                (1.0 / norm) as f32
+            } else {
+                0.0_f32
+            };
             let w = match (mode, reference) {
                 (SequencePoolingMode::UniformMean, _) | (_, None) => 1.0_f32,
                 (
@@ -190,28 +196,35 @@ impl SequenceActivationPooler {
                     },
                     Some(ref_vec),
                 ) => {
-                    let cos_pos = TextAttractorCorpus::cosine_f32(&unit, ref_vec).max(0.0);
+                    let cos_pos = if inv > 0.0 {
+                        TextAttractorCorpus::cosine_f32(slice, ref_vec).max(0.0)
+                    } else {
+                        0.0
+                    };
                     let floor = weight_floor.clamp(1e-3, 1.0);
                     let novelty = (1.0 - cos_pos).clamp(floor, 1.0);
                     novelty.powf(novelty_power.max(0.0))
                 }
             };
+            weight_sum += f64::from(w);
             weights.push(w);
-            unit_tokens.push(unit);
+            invs.push(inv);
         }
 
-        let weight_sum: f64 = weights.iter().map(|&w| f64::from(w)).sum();
         let inv_sum = if weight_sum > 1e-12 {
             (1.0 / weight_sum) as f32
         } else {
             1.0 / (seq_len as f32)
         };
-
         let mut out = vec![0.0_f32; dim];
-        for (w, unit) in weights.iter().zip(unit_tokens.iter()) {
-            let scale = *w * inv_sum;
-            for (dst, &src) in out.iter_mut().zip(unit.iter()) {
-                *dst += scale * src;
+        for (t, (&w, &inv)) in weights.iter().zip(invs.iter()).enumerate() {
+            if inv == 0.0 {
+                continue;
+            }
+            let scale = w * inv_sum;
+            let slice = &token_flat[t * dim..(t + 1) * dim];
+            for (dst, &src) in out.iter_mut().zip(slice.iter()) {
+                *dst += scale * (src * inv);
             }
         }
         Ok(out)
@@ -471,30 +484,41 @@ pub struct CompiledTokenCorpus {
 }
 
 impl CompiledTokenCorpus {
-    fn fit_cross_entry_token_common_mode(
+    pub(super) fn fit_cross_entry_token_common_mode(
         per_entry_tok_sigs: &[Vec<Vec<f32>>],
         max_components: usize,
     ) -> Vec<Vec<f32>> {
         if per_entry_tok_sigs.len() < 3 || max_components == 0 {
             return Vec::new();
         }
-        let total_toks: usize = per_entry_tok_sigs.iter().map(Vec::len).sum();
+        let sampled_indices: Vec<usize> = if per_entry_tok_sigs.len() <= STREAMING_PCA_SAMPLE_BUDGET
+        {
+            (0..per_entry_tok_sigs.len()).collect()
+        } else {
+            (0..STREAMING_PCA_SAMPLE_BUDGET)
+                .map(|s| (s * per_entry_tok_sigs.len()) / STREAMING_PCA_SAMPLE_BUDGET)
+                .collect()
+        };
+        let total_toks: usize = sampled_indices
+            .iter()
+            .map(|&i| per_entry_tok_sigs[i].len())
+            .sum();
         let mut flat_refs: Vec<&[f32]> = Vec::with_capacity(total_toks);
-        for toks in per_entry_tok_sigs {
-            for tok in toks {
+        for &i in &sampled_indices {
+            for tok in &per_entry_tok_sigs[i] {
                 flat_refs.push(tok.as_slice());
             }
         }
         let candidates =
             TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&flat_refs, max_components);
-        let min_entry_support = (per_entry_tok_sigs.len() / 2).max(2);
+        let min_entry_support = (sampled_indices.len() / 2).max(2);
         candidates
             .into_iter()
             .filter(|dir| {
-                let supporting_entries = per_entry_tok_sigs
+                let supporting_entries = sampled_indices
                     .iter()
-                    .filter(|toks| {
-                        toks.iter().any(|tok| {
+                    .filter(|&&i| {
+                        per_entry_tok_sigs[i].iter().any(|tok| {
                             let c = TextAttractorCorpus::cosine_f32(tok, dir);
                             c * c > 0.08
                         })
@@ -505,7 +529,7 @@ impl CompiledTokenCorpus {
             .collect()
     }
 
-    fn token_orthogonal_residual_norm(raw_tok_sig: &[f32], basis: &[Vec<f32>]) -> f32 {
+    pub(super) fn token_orthogonal_residual_norm(raw_tok_sig: &[f32], basis: &[Vec<f32>]) -> f32 {
         if basis.is_empty() || raw_tok_sig.is_empty() {
             return 1.0;
         }
@@ -642,7 +666,7 @@ impl CompiledTokenCorpus {
         out
     }
 
-    fn extract_salient_token_sigs_indexed(
+    pub(super) fn extract_salient_token_sigs_indexed(
         adapter: &ModelSteeringAdapter,
         per_layer_token_qs: &[Vec<f32>],
         seq_len: usize,
@@ -671,7 +695,7 @@ impl CompiledTokenCorpus {
         ))
     }
 
-    fn merge_orthonormal_basis(
+    pub(super) fn merge_orthonormal_basis(
         base: &[Vec<f32>],
         extra: &[Vec<f32>],
         max_total: usize,

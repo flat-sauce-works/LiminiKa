@@ -29,6 +29,7 @@ pub(crate) type LayerResonantSlices<'a> = (
 mod bake;
 mod cli;
 mod eval;
+mod long_doc_bench;
 mod metrics;
 mod model;
 mod multi_turn;
@@ -192,6 +193,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_elapsed,
         vram_before.as_deref(),
     );
+    if let Some(ref doc_arg) = cli.long_doc_bench {
+        let doc_path = if doc_arg.is_absolute() || doc_arg.exists() {
+            doc_arg.clone()
+        } else {
+            repo_root.join(doc_arg)
+        };
+        if !recall_only {
+            eval::run_gpu_warmup(&mut model, &tokenizer)?;
+        }
+        long_doc_bench::run_long_doc_benchmark(
+            &doc_path,
+            cli.prefill_chunk_size,
+            &mut model,
+            &tokenizer,
+            &mut adapter,
+        )?;
+        return Ok(());
+    }
     let active_persona_circuit = resolve_persona_circuit(circuit_mode, persona_lmnk_in.as_deref());
     let init_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
     if let Some(ref bank) = init_persona_bank {

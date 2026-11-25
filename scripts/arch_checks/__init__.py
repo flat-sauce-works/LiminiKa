@@ -28,6 +28,7 @@ from .mermaid import (
 from .workspace_gates import (
     check_downstream_vocabulary,
     check_file_hygiene_and_loc,
+    check_host_llm_isolation,
     check_workspace_crate_gates,
     run_workspace_checks,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "check_cross_observer_scoped_boundaries",
     "check_downstream_vocabulary",
     "check_file_hygiene_and_loc",
+    "check_host_llm_isolation",
     "check_topology_matrix_parity",
     "check_vocabulary_ownership",
     "check_workspace_crate_gates",

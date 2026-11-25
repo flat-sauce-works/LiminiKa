@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use crate::eval::{
     parse_bench_trials, parse_circuit_mode, parse_ego_max_hops, parse_ego_mode,
     parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens, parse_horizon_mode,
-    parse_kv_min_res, parse_layer_mask, parse_logits_observe_stride, parse_max_tokens,
-    parse_phase_clamp_rad, parse_pressure_sim_mode, parse_probe_frame, parse_quant_mode,
-    parse_reflect_mode, parse_rng_seed, parse_temperature, CircuitProfileMode, EgoProfileMode,
-    FairBenchCondition, HorizonAblationMode, PressureSimMode, ReflectMode,
+    parse_kv_min_res, parse_layer_mask, parse_logits_observe_stride, parse_long_doc_bench_path,
+    parse_max_tokens, parse_phase_clamp_rad, parse_prefill_chunk_size, parse_pressure_sim_mode,
+    parse_probe_frame, parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature,
+    CircuitProfileMode, EgoProfileMode, FairBenchCondition, HorizonAblationMode, PressureSimMode,
+    ReflectMode,
 };
 use crate::model::ProbeCoordinateFrame;
 use candle_core::quantized::GgmlDType;
@@ -40,6 +41,8 @@ pub(crate) struct EvalCliConfig {
     pub(crate) phase_clamp_rad: Option<f32>,
     pub(crate) random_push_control: bool,
     pub(crate) max_tokens: usize,
+    pub(crate) prefill_chunk_size: usize,
+    pub(crate) long_doc_bench: Option<PathBuf>,
     pub(crate) physics_eval: bool,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
     pub(crate) circuit_mode: CircuitProfileMode,
@@ -92,6 +95,12 @@ pub(crate) fn print_help() {
     );
     println!(
         "  --max-tokens=<N>                   Maximum generated decode tokens per turn in [1, 512] (default: 64)"
+    );
+    println!(
+        "  --prefill-chunk-size=<N>           Eval-only chunked prefill width in [16, 4096] (default: 256)"
+    );
+    println!(
+        "  --long-doc-bench=<path>            Run streaming distillation, anchor paging, and chunked prefill bench"
     );
     println!(
         "  --physics-eval                     Run the 4-axis deterministic steering-physics evaluation suite in a single model load"
@@ -155,6 +164,8 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--layer-mask=",
         "--phase-clamp-rad=",
         "--max-tokens=",
+        "--prefill-chunk-size=",
+        "--long-doc-bench=",
         "--kv-min-res=",
         "--circuit=",
         "--ego=",
@@ -202,6 +213,8 @@ impl EvalCliConfig {
         let phase_clamp_rad = parse_phase_clamp_rad(cli_args.iter().map(String::as_str));
         let random_push_control = cli_args.iter().any(|a| a == "--random-push-control");
         let max_tokens = parse_max_tokens(cli_args.iter().map(String::as_str));
+        let prefill_chunk_size = parse_prefill_chunk_size(cli_args.iter().map(String::as_str));
+        let long_doc_bench = parse_long_doc_bench_path(cli_args.iter().map(String::as_str));
         let physics_eval = cli_args.iter().any(|a| a == "--physics-eval");
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
         let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
@@ -247,6 +260,8 @@ impl EvalCliConfig {
             phase_clamp_rad,
             random_push_control,
             max_tokens,
+            prefill_chunk_size,
+            long_doc_bench,
             physics_eval,
             kv_min_res,
             circuit_mode,
@@ -889,6 +904,8 @@ mod tests {
             "--phase-clamp-rad=0.24".to_string(),
             "--random-push-control".to_string(),
             "--max-tokens=128".to_string(),
+            "--prefill-chunk-size=128".to_string(),
+            "--long-doc-bench=docs/paper/en/GCSO.md".to_string(),
             "--physics-eval".to_string(),
         ];
         assert!(find_unrecognized_args(args.iter().skip(1).map(String::as_str)).is_empty());
@@ -899,6 +916,11 @@ mod tests {
         assert_eq!(parsed.phase_clamp_rad, Some(0.24));
         assert!(parsed.random_push_control);
         assert_eq!(parsed.max_tokens, 128);
+        assert_eq!(parsed.prefill_chunk_size, 128);
+        assert_eq!(
+            parsed.long_doc_bench,
+            Some(PathBuf::from("docs/paper/en/GCSO.md"))
+        );
         assert!(parsed.physics_eval);
         assert_eq!(
             parsed.fixture_path,

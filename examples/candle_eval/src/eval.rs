@@ -219,6 +219,32 @@ pub(crate) const DEFAULT_LOGITS_OBSERVE_STRIDE: usize = 1;
 pub(crate) const DEFAULT_GUARD_HOLD_TOKENS: u8 = ModelSteeringAdapter::DEFAULT_GUARD_HOLD_TOKENS;
 pub(crate) const DEFAULT_LAYER_STEER_MASK: u64 = 0xFFFF_0000;
 pub(crate) const DEFAULT_MAX_GEN_TOKENS: usize = 64;
+pub(crate) const DEFAULT_PREFILL_CHUNK_SIZE: usize = crate::model::DEFAULT_PREFILL_CHUNK_SIZE;
+
+pub(crate) fn parse_prefill_chunk_size<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
+    for arg in args {
+        if let Some(raw) = arg.strip_prefix("--prefill-chunk-size=") {
+            if let Ok(parsed) = raw.trim().parse::<usize>() {
+                return parsed.clamp(16, 4096);
+            }
+        }
+    }
+    DEFAULT_PREFILL_CHUNK_SIZE
+}
+
+pub(crate) fn parse_long_doc_bench_path<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> Option<PathBuf> {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--long-doc-bench=") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+    None
+}
 
 pub(crate) fn parse_layer_mask<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<u64> {
     for arg in args {
@@ -916,6 +942,7 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) phase_clamp_override: Option<f32>,
     pub(crate) random_push_seed: Option<u64>,
     pub(crate) max_tokens: usize,
+    pub(crate) prefill_chunk_size: usize,
     pub(crate) capture_first_logits: bool,
     pub(crate) first_prefill_logits: Option<Vec<f32>>,
     pub(crate) exit_entropy_h_tilde: f32,
@@ -960,6 +987,7 @@ pub(crate) fn run_gpu_warmup(
         let next = match outcome {
             LogitsOutcome::ObservedFull(ref logits) => argmax(logits),
             LogitsOutcome::UnobservedDeviceArgmax(tok) => tok,
+            LogitsOutcome::SkippedIntermediate => break,
         };
         gen_count += 1;
         if next == 199999 || next == 200020 {
@@ -1037,35 +1065,15 @@ pub(crate) fn generate_steered_reply_with_offset(
             .adapter
             .set_pre_bypass_enabled(cfg.use_steer && cfg.enable_pre_bypass);
 
-        let prefill_exec_mask = if cfg.use_steer {
-            let mut prefill_dispatch = steer.adapter.step_compute_dispatch_with_spine(
-                SystemPressureReading {
-                    frame_time_pressure_q15: 8192,
-                    bandwidth_pressure_q15: 8192,
-                    l3_load_pressure_q15: 8192,
-                    irreversible_step: 1,
-                    _pad: 0,
-                },
-                false,
-            );
-            prefill_dispatch.whole_token_steering_bypass = 0;
-            steer.compute_dispatch = Some(prefill_dispatch);
-            Some(prefill_dispatch.execute_mask)
-        } else {
-            None
-        };
-        let (mut pending_outcome, _, _) = model.forward_tokens(
+        let (mut pending_outcome, _prefill_rep) = model.prefill_tokens_chunked(
             &ids,
             start_offset,
+            cfg.prefill_chunk_size.max(1),
             Some(&mut steer),
+            None,
             cfg.use_steer,
-            false,
             LogitsFetchMode::FullLogits,
-            KvCacheMode::Append,
         )?;
-        if let Some(exec_mask) = prefill_exec_mask {
-            steer.adapter.commit_compute_exit_reward(exec_mask, 64);
-        }
         let prefill_secs = t_prefill.elapsed().as_secs_f64();
         if cfg.capture_first_logits {
             if let LogitsOutcome::ObservedFull(ref logits) = pending_outcome {
@@ -1091,6 +1099,7 @@ pub(crate) fn generate_steered_reply_with_offset(
                     sample_next_token(logits, cfg.temperature, &mut rng_state)
                 }
                 LogitsOutcome::UnobservedDeviceArgmax(tok_id) => tok_id,
+                LogitsOutcome::SkippedIntermediate => break,
             };
             if next == 199999 || next == 200020 {
                 break;
@@ -1116,7 +1125,9 @@ pub(crate) fn generate_steered_reply_with_offset(
                     entropy_count += 1;
                     Some(h)
                 }
-                LogitsOutcome::UnobservedDeviceArgmax(_) => None,
+                LogitsOutcome::UnobservedDeviceArgmax(_) | LogitsOutcome::SkippedIntermediate => {
+                    None
+                }
             };
 
             if cfg.use_steer {

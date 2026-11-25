@@ -51,10 +51,12 @@ use liminika_core::stigmergy::{
     LEDGER_FLAG_COGNITIVE_TRAJECTORY, WORKBENCH_LANE_FLAG_REPULSION,
 };
 
+pub mod host;
 pub mod pooling;
 pub mod reflection;
 pub mod stratum;
 
+pub use host::*;
 pub use liminika_core::drivers::{
     AnonymousComputePool, ComputeDispatchMask, ComputePoolConfig, ComputePressureRegime,
     DistortionDelta, DistortionTension, DistortionTensionStateCode, EgoDifferentialNet,
@@ -84,6 +86,7 @@ pub use reflection::*;
 pub use stratum::*;
 
 pub mod corpus_recall;
+mod corpus_recall_cache;
 pub mod ego_intent;
 pub mod model_adapter;
 pub mod package;

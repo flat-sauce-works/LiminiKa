@@ -13,6 +13,7 @@ from .common import (
     extract_non_test_code,
     find_banned_public_decls,
     find_function_line_span,
+    split_ident_tokens,
     strip_cfg_test_tail,
 )
 from .core_dag import BANNED_LEGACY_DECL_TOKENS
@@ -69,6 +70,87 @@ ADAPTER_MUT_GATE_CALL_RE = re.compile(
 CORE_CRATE_LAYER_RE = re.compile(
     r"\bliminika_core::(liminal|foundation|stigmergy|drivers|runtime|abi)\b"
 )
+RUST_IDENT_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*\b")
+HOST_LLM_BANNED_TOKENS: frozenset[str] = frozenset(
+    {
+        "candle",
+        "tokenizer",
+        "tokenizers",
+        "prompt",
+        "prompts",
+        "logit",
+        "logits",
+        "vocab",
+        "rotary",
+        "rope",
+        "phi4",
+        "phi3",
+        "gguf",
+        "safetensors",
+    }
+)
+HOST_LLM_BANNED_IDENT_EXACT: frozenset[str] = frozenset(
+    {
+        "kv_cache",
+        "compiledtokencorpus",
+        "modelsteeringadapter",
+        "turnorchestrator",
+        "textattractorcorpus",
+        "tokensequenceencoder",
+        "turnkvcachestepping",
+        "ropegeometry",
+        "attractorrole",
+    }
+)
+HOST_ADAPTER_LLM_IMPORT_RE = re.compile(
+    r"\bcrate::(?:pooling|stratum|corpus_recall|model_adapter|"
+    r"turn_orchestrator|reflection|ego_intent|timeline)\b"
+)
+
+
+def scan_host_llm_isolation_in_source(code_only: str, rel_path: str, raw_lines: list[str]) -> list[str]:
+    """Scan stripped Rust code under `host/` for disallowed LLM identifier tokens or imports."""
+    violations: list[str] = []
+    for match in RUST_IDENT_RE.finditer(code_only):
+        ident = match.group(0)
+        lower_ident = ident.lower()
+        tokens = split_ident_tokens(ident)
+        banned_toks = sorted(tokens & HOST_LLM_BANNED_TOKENS)
+        hit_exact = lower_ident in HOST_LLM_BANNED_IDENT_EXACT or "kv_cache" in lower_ident
+        if banned_toks or hit_exact:
+            lineno = code_only.count("\n", 0, match.start()) + 1
+            snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
+            reason = ", ".join(banned_toks) if banned_toks else ident
+            violations.append(
+                f"Host LLM isolation (disallowed LLM token `{reason}` in `{ident}`): "
+                f"{rel_path}:{lineno}: {snippet}"
+            )
+    for match in HOST_ADAPTER_LLM_IMPORT_RE.finditer(code_only):
+        lineno = code_only.count("\n", 0, match.start()) + 1
+        snippet = raw_lines[lineno - 1].strip() if 1 <= lineno <= len(raw_lines) else ""
+        violations.append(
+            f"Host LLM isolation (disallowed adapter import `{match.group(0)}`): "
+            f"{rel_path}:{lineno}: {snippet}"
+        )
+    return violations
+
+
+def check_host_llm_isolation(repo_root: pathlib.Path) -> list[str]:
+    """Enforce mechanical isolation of `src/adapter/src/host/` from LLM vocabulary and modules."""
+    violations: list[str] = []
+    host_dir = repo_root / "src" / "adapter" / "src" / "host"
+    if not host_dir.is_dir():
+        return violations
+    for rs_file in sorted(host_dir.rglob("*.rs")):
+        if rs_file.name == "tests.rs" or "tests" in rs_file.parts:
+            continue
+        rel_path = rs_file.relative_to(repo_root).as_posix()
+        raw_text = rs_file.read_text(encoding="utf-8")
+        code_only = extract_non_test_code(raw_text)
+        violations.extend(
+            scan_host_llm_isolation_in_source(code_only, rel_path, raw_text.splitlines())
+        )
+    return violations
 
 
 def check_downstream_vocabulary(repo_root: pathlib.Path) -> list[str]:
@@ -229,9 +311,10 @@ def check_file_hygiene_and_loc(repo_root: pathlib.Path) -> list[str]:
 
 
 def run_workspace_checks(repo_root: pathlib.Path) -> list[str]:
-    """Run all downstream vocabulary, workspace crate gate, and file-hygiene checks."""
+    """Run all downstream vocabulary, host isolation, workspace gate, and file-hygiene checks."""
     violations: list[str] = []
     violations.extend(check_downstream_vocabulary(repo_root))
+    violations.extend(check_host_llm_isolation(repo_root))
     violations.extend(check_workspace_crate_gates(repo_root))
     violations.extend(check_file_hygiene_and_loc(repo_root))
     return violations

@@ -5,7 +5,7 @@
 //! and persistent token-sequence recall ([`TextAttractorCorpus`]).
 
 use super::*;
-use std::sync::OnceLock;
+use crate::corpus_recall_cache::{CorpusRecallCache, LazyRecallCache};
 
 /// Semantic origin role of a natural-language text attractor inside [`TextAttractorCorpus`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -632,6 +632,10 @@ pub trait AttractorBoundaryPerspective {
 /// Default number of same-role nearest neighbors used for local hubness baseline statistics.
 pub const DEFAULT_NEIGHBOR_K: usize = 4;
 
+/// Maximum same-role or global entry count using exact $O(N^2)$ pairwise cosine scans before
+/// switching to deterministic SWAR `BitCut64` + stride-sampled quasi-linear calibration.
+pub const EXACT_CORPUS_STATS_LIMIT: usize = 64;
+
 /// Precomputed role-scoped local neighborhood statistics for a single corpus attractor entry.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EntryNeighborhoodStats {
@@ -760,218 +764,6 @@ impl RecallBoundaryGate for CoherenceGuardGate {
     }
 }
 
-/// Lazily populated contiguous recall cache stored inside [`TextAttractorCorpus`].
-#[derive(Debug)]
-pub(crate) struct CorpusRecallCache {
-    /// Flat row-major common-mode-projected normalized corpus signatures (`entries.len() * sig_dim`).
-    pub(crate) projected_sigs_flat: Vec<f32>,
-    /// Fixed dimension of each projected signature row (`0` when empty or non-uniform).
-    pub(crate) sig_dim: usize,
-    /// Lower-quartile orthogonal residual ratio (`||P_perp(e)|| / ||e||`) across corpus entries,
-    /// anchoring query orthogonal-residual attenuation without hardcoded magic thresholds.
-    pub(crate) corpus_ortho_ref: f32,
-    /// Ordered corpus entry indices partitioned by [`AttractorRole::slot_index`].
-    role_indices: [Vec<usize>; 3],
-    /// Precomputed role-scoped neighborhood mean/std per corpus entry.
-    entry_stats: Vec<EntryNeighborhoodStats>,
-    /// Corpus-wide mean of `neighbor_mean_cosine` per [`AttractorRole::slot_index`].
-    role_global_means: [f32; 3],
-}
-
-impl CorpusRecallCache {
-    fn build(entries: &[TextAttractorEntry], common_mode_basis: &[Vec<f32>]) -> Self {
-        let n_entries = entries.len();
-        let sig_dim = entries
-            .first()
-            .map_or(0, |e| e.residual_sig.len())
-            .filter_nonzero_if_uniform(entries);
-
-        let mut projected_sigs_flat = Vec::with_capacity(n_entries.saturating_mul(sig_dim));
-        let mut entry_ortho_ratios: Vec<f32> = Vec::with_capacity(n_entries);
-        if sig_dim > 0 {
-            for entry in entries {
-                let start = projected_sigs_flat.len();
-                projected_sigs_flat.extend_from_slice(&entry.residual_sig);
-                let ratio = TextAttractorCorpus::project_and_normalize_in_place_with_ratio(
-                    &mut projected_sigs_flat[start..start + sig_dim],
-                    common_mode_basis,
-                );
-                entry_ortho_ratios.push(ratio);
-            }
-        }
-        let corpus_ortho_ref = if common_mode_basis.is_empty() || entry_ortho_ratios.is_empty() {
-            1.0
-        } else {
-            entry_ortho_ratios.sort_by(f32::total_cmp);
-            let q25_idx = entry_ortho_ratios.len() / 4;
-            entry_ortho_ratios[q25_idx].clamp(0.15, 1.0)
-        };
-
-        let mut role_indices: [Vec<usize>; 3] = [Vec::new(), Vec::new(), Vec::new()];
-        for (i, entry) in entries.iter().enumerate() {
-            role_indices[entry.role.slot_index()].push(i);
-        }
-
-        let mut entry_stats = vec![EntryNeighborhoodStats::default(); n_entries];
-        let mut role_global_means = [0.0_f32; 3];
-
-        for role_slot in 0..3 {
-            let idxs = &role_indices[role_slot];
-            let m = idxs.len();
-            if m <= 1 {
-                continue;
-            }
-            // Compute the symmetric upper triangle of same-role cosines once, then assemble each
-            // row's neighbor vector in ascending index order for exact bit-parity with naive scans.
-            let mut pair_cos = vec![0.0_f32; m * m];
-            for a in 0..m {
-                let sig_a = Self::slice_from_flat(&projected_sigs_flat, sig_dim, idxs[a]);
-                for b in (a + 1)..m {
-                    let sig_b = Self::slice_from_flat(&projected_sigs_flat, sig_dim, idxs[b]);
-                    let c = TextAttractorCorpus::cosine_f32(sig_a, sig_b);
-                    pair_cos[a * m + b] = c;
-                    pair_cos[b * m + a] = c;
-                }
-            }
-            let neighbor_k = (m - 1).clamp(1, DEFAULT_NEIGHBOR_K);
-            let mut sum_k_mean = 0.0_f32;
-            let mut sims = Vec::with_capacity(m - 1);
-            for a in 0..m {
-                sims.clear();
-                let row = &pair_cos[a * m..(a + 1) * m];
-                for (b, &val) in row.iter().enumerate() {
-                    if b != a {
-                        sims.push(val);
-                    }
-                }
-                sims.sort_by(|x, y| y.total_cmp(x));
-                let top_slice = &sims[..neighbor_k.min(sims.len())];
-                let k_len = top_slice.len().max(1) as f32;
-                let k_mean = top_slice.iter().sum::<f32>() / k_len;
-                let all_len = sims.len().max(1) as f32;
-                let all_mean = sims.iter().sum::<f32>() / all_len;
-                let all_var = sims
-                    .iter()
-                    .map(|&s| (s - all_mean) * (s - all_mean))
-                    .sum::<f32>()
-                    / all_len;
-                entry_stats[idxs[a]] = EntryNeighborhoodStats {
-                    neighbor_mean_cosine: k_mean,
-                    neighbor_std_cosine: all_var.sqrt(),
-                };
-                sum_k_mean += k_mean;
-            }
-            role_global_means[role_slot] = sum_k_mean / (m as f32);
-        }
-
-        Self {
-            projected_sigs_flat,
-            sig_dim,
-            corpus_ortho_ref,
-            role_indices,
-            entry_stats,
-            role_global_means,
-        }
-    }
-
-    #[inline]
-    fn slice_from_flat(flat: &[f32], sig_dim: usize, idx: usize) -> &[f32] {
-        if sig_dim == 0 {
-            return &[];
-        }
-        let Some(start) = idx.checked_mul(sig_dim) else {
-            return &[];
-        };
-        let Some(end) = start.checked_add(sig_dim) else {
-            return &[];
-        };
-        flat.get(start..end).unwrap_or(&[])
-    }
-
-    #[inline]
-    pub(crate) fn projected_sig(&self, idx: usize) -> &[f32] {
-        Self::slice_from_flat(&self.projected_sigs_flat, self.sig_dim, idx)
-    }
-}
-
-trait UniformSigDimExt {
-    fn filter_nonzero_if_uniform(self, entries: &[TextAttractorEntry]) -> usize;
-}
-
-impl UniformSigDimExt for usize {
-    fn filter_nonzero_if_uniform(self, entries: &[TextAttractorEntry]) -> usize {
-        if self > 0 && entries.iter().all(|e| e.residual_sig.len() == self) {
-            self
-        } else {
-            0
-        }
-    }
-}
-
-impl NeighborhoodStatsProvider for CorpusRecallCache {
-    #[inline]
-    fn entry_stats(&self, entry_idx: usize) -> EntryNeighborhoodStats {
-        self.entry_stats.get(entry_idx).copied().unwrap_or_default()
-    }
-
-    #[inline]
-    fn role_global_mean(&self, role: AttractorRole) -> f32 {
-        self.role_global_means[role.slot_index()]
-    }
-
-    #[inline]
-    fn role_indices(&self, role: AttractorRole) -> &[usize] {
-        &self.role_indices[role.slot_index()]
-    }
-}
-
-/// Private `OnceLock<Box<_>>` wrapper providing `Clone` (empty reset), `Default`, `Debug`, and
-/// `Send + Sync` while keeping `TextAttractorCorpus` compact when the lazy cache is unpopulated.
-struct LazyRecallCache(OnceLock<Box<CorpusRecallCache>>);
-
-impl LazyRecallCache {
-    const fn new() -> Self {
-        Self(OnceLock::new())
-    }
-
-    #[inline]
-    fn invalidate(&mut self) {
-        let _ = self.0.take();
-    }
-
-    #[inline]
-    fn get_or_init(&self, init: impl FnOnce() -> CorpusRecallCache) -> &CorpusRecallCache {
-        self.0.get_or_init(|| Box::new(init())).as_ref()
-    }
-
-    #[cfg(test)]
-    #[inline]
-    fn is_populated(&self) -> bool {
-        self.0.get().is_some()
-    }
-}
-
-impl Default for LazyRecallCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for LazyRecallCache {
-    fn clone(&self) -> Self {
-        // Leave cloned corpora with an empty lazy cache to avoid duplicating cached matrices.
-        Self::new()
-    }
-}
-
-impl std::fmt::Debug for LazyRecallCache {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("LazyRecallCache")
-            .field("populated", &self.0.get().is_some())
-            .finish()
-    }
-}
-
 /// Model-agnostic Cold-Path corpus that compiles natural-language logs, facts, personas, and
 /// contrastive guards into a dynamic attractor manifold with explicit `Liminal` boundary detection.
 #[derive(Debug, Default, Clone)]
@@ -1044,7 +836,10 @@ impl TextAttractorCorpus {
         }
     }
 
-    fn project_and_normalize_in_place_with_ratio(out: &mut [f32], basis: &[Vec<f32>]) -> f32 {
+    pub(crate) fn project_and_normalize_in_place_with_ratio(
+        out: &mut [f32],
+        basis: &[Vec<f32>],
+    ) -> f32 {
         if basis.is_empty() || out.is_empty() {
             return 1.0;
         }
@@ -1192,14 +987,56 @@ impl TextAttractorCorpus {
         basis
     }
 
+    /// Projects every stored entry into a CRC32-stamped [`PhaseAnchorRecord`] for `.lmnkc`
+    /// container persistence or domain-agnostic [`AnchorWorkingSetPager`] paging.
+    #[must_use]
+    pub fn to_phase_anchor_records(&self) -> Vec<PhaseAnchorRecord> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                let slot = match entry.role {
+                    AttractorRole::Fact => ATTRACTOR_SLOT_KNOWLEDGE,
+                    AttractorRole::Persona => ATTRACTOR_SLOT_PERSONA,
+                    AttractorRole::Guard => ATTRACTOR_SLOT_REPULSION,
+                };
+                let mut rec = PhaseAnchorRecord::new_empty(entry.anchor_id, slot, 0);
+                rec.base_energy = entry.energy;
+                rec.phase_gravity_mass = entry.energy;
+                rec.sample_count = 1;
+                if let Some(last_layer) = entry.per_layer_q7.last() {
+                    rec.phase_profile = *last_layer;
+                }
+                rec.stamp_crc32();
+                rec
+            })
+            .collect()
+    }
+
+    /// Constructs a domain-agnostic [`AnchorWorkingSetPager`] backed by all entries in this corpus.
+    #[must_use]
+    pub fn build_working_set_pager(&self, config: AnchorPagerConfig) -> AnchorWorkingSetPager {
+        let records = self.to_phase_anchor_records();
+        AnchorWorkingSetPager::from_records(&records, config)
+    }
+
     /// Estimates up to `max_components` orthonormal common-mode directions from corpus signatures
     /// via deflated power iteration (`3` components by default removes shared prompt bias).
     pub fn fit_common_mode_subspace(&mut self, max_components: usize) {
-        let sig_refs: Vec<&[f32]> = self
-            .entries
-            .iter()
-            .map(|e| e.residual_sig.as_slice())
-            .collect();
+        let sig_refs: Vec<&[f32]> = if self.entries.len() <= EXACT_CORPUS_STATS_LIMIT {
+            self.entries
+                .iter()
+                .map(|e| e.residual_sig.as_slice())
+                .collect()
+        } else {
+            let n = self.entries.len();
+            (0..EXACT_CORPUS_STATS_LIMIT)
+                .map(|s| {
+                    self.entries[(s * n) / EXACT_CORPUS_STATS_LIMIT]
+                        .residual_sig
+                        .as_slice()
+                })
+                .collect()
+        };
         self.common_mode_basis =
             Self::fit_common_mode_subspace_from_sigs(&sig_refs, max_components);
         self.recall_cache.invalidate();
@@ -1265,10 +1102,18 @@ impl TextAttractorCorpus {
         }
         let cache = self.recall_cache();
         let n_entries = self.entries.len();
-        let mut sims = Vec::with_capacity((n_entries * (n_entries - 1)) / 2);
-        for i in 0..n_entries {
-            let sig_i = cache.projected_sig(i);
-            for j in (i + 1)..n_entries {
+        let sample_indices: Vec<usize> = if n_entries <= EXACT_CORPUS_STATS_LIMIT {
+            (0..n_entries).collect()
+        } else {
+            (0..EXACT_CORPUS_STATS_LIMIT)
+                .map(|s| (s * n_entries) / EXACT_CORPUS_STATS_LIMIT)
+                .collect()
+        };
+        let m = sample_indices.len();
+        let mut sims = Vec::with_capacity((m * m.saturating_sub(1)) / 2);
+        for a in 0..m {
+            let sig_i = cache.projected_sig(sample_indices[a]);
+            for &j in &sample_indices[(a + 1)..] {
                 sims.push(f64::from(Self::cosine_f32(sig_i, cache.projected_sig(j))));
             }
         }

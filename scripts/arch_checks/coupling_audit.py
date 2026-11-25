@@ -60,7 +60,8 @@ UPWARD_FEEDBACK_RE = re.compile(
     r"sync_core_layers_from_recall|evaluate_ego_pframe_chain_mut|"
     r"consolidate_and_evaporate_cold_path|step_sandbox_hypothesis_lifecycle|"
     r"reinforce_active_circuit_with_bank|calibrate_manifold_probe|"
-    r"signal_compute_instability|update_environment_telemetry|step_distortion_tension_hot_path)\b"
+    r"signal_compute_instability|update_environment_telemetry|"
+    r"step_distortion_tension_hot_path|step_working_set|step_hot_path_branchless)\b"
 )
 
 

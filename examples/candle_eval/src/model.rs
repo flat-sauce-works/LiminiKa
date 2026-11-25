@@ -9,7 +9,8 @@ use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
 use candle_nn::{linear_no_bias, rms_norm, Embedding, Linear, RmsNorm, VarBuilder};
 use liminika_adapter::{
-    CorpusRecallEscalationProvider, ModelSteeringAdapter, RopeGeometry, RopeLayout,
+    AnchorWorkingSetPager, CorpusRecallEscalationProvider, ModelSteeringAdapter, PagerStepQuery,
+    RopeGeometry, RopeLayout, SystemPressureReading,
 };
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
 use liminika_core::foundation::TaggedPtr;
@@ -41,21 +42,38 @@ pub(crate) enum ProbeCoordinateFrame {
 pub(crate) enum LogitsFetchMode {
     FullLogits,
     DeviceArgmaxOnly,
+    SkipLogits,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum LogitsOutcome {
     ObservedFull(Vec<f32>),
     UnobservedDeviceArgmax(u32),
+    SkippedIntermediate,
+}
+
+/// Default prefill chunk width (`256` tokens) preventing $O(L^2)$ attention VRAM spikes while
+/// keeping short single-turn prompts (`<= 256` tokens) on the exact single-chunk path.
+pub(crate) const DEFAULT_PREFILL_CHUNK_SIZE: usize = 256;
+
+/// Coarse-grained telemetry emitted by [`Phi3Model::prefill_tokens_chunked`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ChunkedPrefillReport {
+    pub(crate) total_tokens: usize,
+    pub(crate) chunk_size: usize,
+    pub(crate) chunks_executed: usize,
+    pub(crate) liminal_steps: usize,
+    pub(crate) pager_page_ins: u64,
+    pub(crate) pager_page_outs: u64,
 }
 
 impl LogitsOutcome {
     pub(crate) fn into_full_logits(self) -> CResult<Vec<f32>> {
         match self {
             Self::ObservedFull(v) => Ok(v),
-            Self::UnobservedDeviceArgmax(_) => Err(candle_core::Error::Msg(
-                "expected FullLogits outcome".to_string(),
-            )),
+            Self::UnobservedDeviceArgmax(_) | Self::SkippedIntermediate => Err(
+                candle_core::Error::Msg("expected FullLogits outcome".to_string()),
+            ),
         }
     }
 }
@@ -340,10 +358,16 @@ pub(crate) struct Phi3Config {
     pub(crate) partial_rotary_factor: f64,
     #[serde(default)]
     pub(crate) tie_word_embeddings: bool,
+    #[serde(default = "default_max_position_embeddings")]
+    pub(crate) max_position_embeddings: usize,
 }
 
 fn default_partial_rotary() -> f64 {
     1.0
+}
+
+fn default_max_position_embeddings() -> usize {
+    4096
 }
 
 impl Phi3Config {
@@ -377,27 +401,77 @@ impl Phi3Config {
 pub(crate) struct RotaryCache {
     cos: Tensor,
     sin: Tensor,
+    inv_freq: Tensor,
     rotary_dim: usize,
+    cached_len: usize,
+    max_position_embeddings: usize,
+    dtype: DType,
+    device: Device,
 }
 
 impl RotaryCache {
-    fn new(cfg: &Phi3Config, max_seq: usize, dtype: DType, dev: &Device) -> CResult<Self> {
+    fn new(cfg: &Phi3Config, initial_seq: usize, dtype: DType, dev: &Device) -> CResult<Self> {
         let rot_dim = cfg.rotary_dim();
         let half = rot_dim / 2;
-        let inv_freq: Vec<f32> = (0..half)
+        let max_pos = cfg.max_position_embeddings.max(1);
+        let init_len = initial_seq.clamp(1, max_pos);
+        let inv_freq_vec: Vec<f32> = (0..half)
             .map(|i| 1.0_f32 / (cfg.rope_theta as f32).powf((2 * i) as f32 / rot_dim as f32))
             .collect();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, half), dev)?;
-        let pos: Vec<f32> = (0..max_seq).map(|p| p as f32).collect();
-        let pos = Tensor::from_vec(pos, (max_seq, 1), dev)?;
+        let inv_freq = Tensor::from_vec(inv_freq_vec, (1, half), dev)?;
+        let pos: Vec<f32> = (0..init_len).map(|p| p as f32).collect();
+        let pos = Tensor::from_vec(pos, (init_len, 1), dev)?;
         let freqs = pos.matmul(&inv_freq)?;
         let cos = freqs.cos()?.to_dtype(dtype)?;
         let sin = freqs.sin()?.to_dtype(dtype)?;
         Ok(Self {
             cos,
             sin,
+            inv_freq,
             rotary_dim: rot_dim,
+            cached_len: init_len,
+            max_position_embeddings: max_pos,
+            dtype,
+            device: dev.clone(),
         })
+    }
+
+    pub(crate) fn cached_len(&self) -> usize {
+        self.cached_len
+    }
+
+    /// Dynamically extends the precomputed RoPE `cos`/`sin` tables up to `required_len` (growing
+    /// in power-of-two increments capped at `max_position_embeddings`), preserving bit-identical
+    /// prefixes and returning an explicit error without panicking if `max_position_embeddings` is
+    /// exceeded.
+    pub(crate) fn ensure_capacity(&mut self, required_len: usize) -> CResult<()> {
+        if required_len <= self.cached_len {
+            return Ok(());
+        }
+        if required_len > self.max_position_embeddings {
+            return Err(candle_core::Error::Msg(format!(
+                "sequence length {required_len} exceeds model max_position_embeddings {}",
+                self.max_position_embeddings
+            )));
+        }
+        let target_len = required_len
+            .checked_next_power_of_two()
+            .unwrap_or(self.max_position_embeddings)
+            .max(self.cached_len.saturating_mul(2))
+            .min(self.max_position_embeddings);
+        let add_len = target_len.saturating_sub(self.cached_len);
+        if add_len == 0 {
+            return Ok(());
+        }
+        let pos: Vec<f32> = (self.cached_len..target_len).map(|p| p as f32).collect();
+        let pos = Tensor::from_vec(pos, (add_len, 1), &self.device)?;
+        let freqs = pos.matmul(&self.inv_freq)?;
+        let tail_cos = freqs.cos()?.to_dtype(self.dtype)?;
+        let tail_sin = freqs.sin()?.to_dtype(self.dtype)?;
+        self.cos = Tensor::cat(&[&self.cos, &tail_cos], 0)?;
+        self.sin = Tensor::cat(&[&self.sin, &tail_sin], 0)?;
+        self.cached_len = target_len;
+        Ok(())
     }
 
     /// Applies HalfSplit RoPE (`cos`/`sin`) to the rotary slice `[b, num_heads, seq_len, rot]`.
@@ -407,6 +481,15 @@ impl RotaryCache {
         offset: usize,
         seq_len: usize,
     ) -> CResult<Tensor> {
+        let end = offset.checked_add(seq_len).ok_or_else(|| {
+            candle_core::Error::Msg("RoPE position offset + seq_len overflow".to_string())
+        })?;
+        if end > self.cached_len {
+            return Err(candle_core::Error::Msg(format!(
+                "RoPE span {offset}..{end} exceeds cached_len {}",
+                self.cached_len
+            )));
+        }
         let half = self.rotary_dim / 2;
         let x1 = x_rot.narrow(D::Minus1, 0, half)?;
         let x2 = x_rot.narrow(D::Minus1, half, half)?;
@@ -1067,6 +1150,10 @@ impl Phi3Model {
         })
     }
 
+    pub(crate) fn rope_cached_len(&self) -> usize {
+        self.rope.cached_len()
+    }
+
     pub(crate) fn clear_cache(&mut self) {
         for layer in &mut self.layers {
             layer.self_attn.clear_cache();
@@ -1104,6 +1191,15 @@ impl Phi3Model {
         if kv_mode == KvCacheMode::Append {
             debug_assert_eq!(self.kv_len(), offset);
         }
+        if tokens.is_empty() {
+            return Err(candle_core::Error::Msg(
+                "forward_tokens requires at least one token".to_string(),
+            ));
+        }
+        let required_len = offset.checked_add(tokens.len()).ok_or_else(|| {
+            candle_core::Error::Msg("forward_tokens offset + len overflow".to_string())
+        })?;
+        self.rope.ensure_capacity(required_len)?;
         let mut h = if self.embed_on_cpu {
             let input_cpu = Tensor::from_slice(tokens, (1, tokens.len()), &Device::Cpu)?;
             self.embed_tokens
@@ -1186,6 +1282,10 @@ impl Phi3Model {
             let post = layer.post_attention_layernorm.forward(&h)?;
             let mlp_out = layer.mlp.forward(&post)?;
             h = (h + mlp_out)?;
+        }
+
+        if matches!(fetch_mode, LogitsFetchMode::SkipLogits) && !collect_bake_data {
+            return Ok((LogitsOutcome::SkippedIntermediate, per_layer_q, Vec::new()));
         }
 
         let h = self.norm.forward(&h)?;
@@ -1316,6 +1416,7 @@ impl Phi3Model {
 
         let logits_1d = self.lm_head.forward(&last)?.squeeze(0)?;
         let outcome = match fetch_mode {
+            LogitsFetchMode::SkipLogits => LogitsOutcome::SkippedIntermediate,
             LogitsFetchMode::DeviceArgmaxOnly if !use_entropy_gate || whole_bypass => {
                 let tok_id = extract_device_argmax_token(&logits_1d)?;
                 LogitsOutcome::UnobservedDeviceArgmax(tok_id)
@@ -1341,6 +1442,126 @@ impl Phi3Model {
         };
         Ok((outcome, per_layer_q, last_hidden))
     }
+
+    /// Prefills an arbitrarily long token sequence into the persistent KV cache in bounded chunks
+    /// (`chunk_size`, default [`DEFAULT_PREFILL_CHUNK_SIZE`]), preventing $O(L^2)$ attention VRAM
+    /// spikes while preserving mathematical equivalence to monolithic causal prefill.
+    ///
+    /// When steering is active, each chunk boundary executes one coarse-grained `liminal` step
+    /// (`SystemSpineState` compute-dispatch safety floor, `DistortionTension` damping update, and
+    /// optional [`AnchorWorkingSetPager`] working-set paging) instead of per-token round-trips.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn prefill_tokens_chunked(
+        &mut self,
+        tokens: &[u32],
+        start_offset: usize,
+        chunk_size: usize,
+        mut steer: Option<&mut ForwardSteer<'_, '_, '_>>,
+        mut pager: Option<&mut AnchorWorkingSetPager>,
+        use_entropy_gate: bool,
+        final_fetch_mode: LogitsFetchMode,
+    ) -> CResult<(LogitsOutcome, ChunkedPrefillReport)> {
+        if tokens.is_empty() {
+            return Err(candle_core::Error::Msg(
+                "prefill_tokens_chunked requires at least one token".to_string(),
+            ));
+        }
+        let required_len = start_offset.checked_add(tokens.len()).ok_or_else(|| {
+            candle_core::Error::Msg("prefill_tokens_chunked offset + len overflow".to_string())
+        })?;
+        self.rope.ensure_capacity(required_len)?;
+
+        let eff_chunk = chunk_size.max(1);
+        let mut pos = 0_usize;
+        let mut chunks_executed = 0_usize;
+        let mut liminal_steps = 0_usize;
+        let pager_in_before = pager.as_ref().map_or(0, |p| p.stats().page_ins);
+        let pager_out_before = pager.as_ref().map_or(0, |p| p.stats().page_outs);
+        let mut last_outcome = LogitsOutcome::SkippedIntermediate;
+
+        while pos < tokens.len() {
+            let end = (pos + eff_chunk).min(tokens.len());
+            let chunk = &tokens[pos..end];
+            let is_last = end == tokens.len();
+            let chunk_offset = start_offset + pos;
+
+            let exec_mask_opt = if let Some(st) = steer.as_deref_mut() {
+                if st.rope_rad != 0.0 {
+                    let mut dispatch = st.adapter.step_compute_dispatch_with_spine(
+                        SystemPressureReading {
+                            frame_time_pressure_q15: 8192,
+                            bandwidth_pressure_q15: 8192,
+                            l3_load_pressure_q15: 8192,
+                            irreversible_step: u8::from(is_last),
+                            _pad: 0,
+                        },
+                        false,
+                    );
+                    // Never bypass prefill KV population; preserve Spine safety floor across chunks.
+                    dispatch.whole_token_steering_bypass = 0;
+                    st.compute_dispatch = Some(dispatch);
+                    liminal_steps += 1;
+                    if let Some(pg) = pager.as_deref_mut() {
+                        let _ = pg.step_working_set(&PagerStepQuery {
+                            phase_profile: st.trail.accumulated_phase_delta,
+                            lacuna_partition: *st.adapter.last_lacuna_partition(),
+                            desired_count: 4,
+                            allow_exterior_staging: false,
+                        });
+                    }
+                    Some(dispatch.execute_mask)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let fetch_mode = if is_last {
+                final_fetch_mode
+            } else {
+                LogitsFetchMode::SkipLogits
+            };
+            let (outcome, _, _) = self.forward_tokens(
+                chunk,
+                chunk_offset,
+                steer.as_deref_mut(),
+                is_last && use_entropy_gate,
+                false,
+                fetch_mode,
+                KvCacheMode::Append,
+            )?;
+            last_outcome = outcome;
+
+            if let (Some(exec_mask), Some(st)) = (exec_mask_opt, steer.as_deref_mut()) {
+                st.adapter.commit_compute_exit_reward(exec_mask, 64);
+                if !is_last {
+                    st.adapter.step_distortion_tension_hot_path(0, 0, false);
+                }
+            }
+
+            chunks_executed += 1;
+            pos = end;
+        }
+
+        let pager_page_ins = pager
+            .as_ref()
+            .map_or(0, |p| p.stats().page_ins.saturating_sub(pager_in_before));
+        let pager_page_outs = pager
+            .as_ref()
+            .map_or(0, |p| p.stats().page_outs.saturating_sub(pager_out_before));
+        Ok((
+            last_outcome,
+            ChunkedPrefillReport {
+                total_tokens: tokens.len(),
+                chunk_size: eff_chunk,
+                chunks_executed,
+                liminal_steps,
+                pager_page_ins,
+                pager_page_outs,
+            },
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -1359,6 +1580,7 @@ mod tests {
             rope_theta: 10_000.0,
             partial_rotary_factor: 1.0,
             tie_word_embeddings: true,
+            max_position_embeddings: 128,
         }
     }
 
@@ -1677,5 +1899,211 @@ mod tests {
         let frame = wrapped.synthesize_gateway_frame();
         assert!((frame.phase_clamp_rad - 0.24).abs() < 1e-6);
         assert_ne!(frame.phase_deltas, ref_q7);
+    }
+
+    fn deterministic_tiny_model(cfg: &Phi3Config, init_rope_len: usize) -> Phi3Model {
+        let h = cfg.hidden_size;
+        let inter = cfg.intermediate_size;
+        let v = cfg.vocab_size;
+        let mk_linear = |rows: usize, cols: usize, seed: usize| -> LinearLayer {
+            let w: Vec<f32> = (0..rows * cols)
+                .map(|i| ((((i * 19 + seed * 7 + 3) % 23) as f32) - 11.0) * 0.03)
+                .collect();
+            let t = Tensor::from_vec(w, (rows, cols), &Device::Cpu).expect("linear w");
+            LinearLayer::Dense(Linear::new(t, None))
+        };
+        let emb_w: Vec<f32> = (0..v * h)
+            .map(|i| (((i * 13 + 5) % 29) as f32 - 14.0) * 0.04)
+            .collect();
+        let emb_t = Tensor::from_vec(emb_w, (v, h), &Device::Cpu).expect("emb");
+        let lm_head = LinearLayer::Dense(Linear::new(emb_t.clone(), None));
+        let embed_tokens = Embedding::new(emb_t, h);
+
+        let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
+        for l in 0..cfg.num_hidden_layers {
+            let ones_a = Tensor::ones(h, DType::F32, &Device::Cpu).expect("ones_a");
+            let ones_b = Tensor::ones(h, DType::F32, &Device::Cpu).expect("ones_b");
+            layers.push(Phi3Layer {
+                input_layernorm: RmsNorm::new(ones_a, cfg.rms_norm_eps),
+                self_attn: deterministic_attention(cfg),
+                post_attention_layernorm: RmsNorm::new(ones_b, cfg.rms_norm_eps),
+                mlp: Phi3Mlp {
+                    gate_up_proj: mk_linear(2 * inter, h, l * 3 + 1),
+                    down_proj: mk_linear(h, inter, l * 3 + 2),
+                    intermediate_size: inter,
+                },
+            });
+        }
+        let final_norm = RmsNorm::new(
+            Tensor::ones(h, DType::F32, &Device::Cpu).expect("ones_norm"),
+            cfg.rms_norm_eps,
+        );
+        let rope = RotaryCache::new(cfg, init_rope_len, DType::F32, &Device::Cpu).expect("rope");
+        Phi3Model {
+            embed_tokens,
+            embed_on_cpu: false,
+            layers,
+            norm: final_norm,
+            lm_head,
+            rope,
+            device: Device::Cpu,
+        }
+    }
+
+    #[test]
+    fn dynamic_rotary_cache_incremental_growth_matches_monolithic_and_rejects_overflow() {
+        let cfg = tiny_config();
+        let mut dyn_rope = RotaryCache::new(&cfg, 16, DType::F32, &Device::Cpu).expect("dyn rope");
+        let full_rope = RotaryCache::new(&cfg, 128, DType::F32, &Device::Cpu).expect("full rope");
+        assert_eq!(dyn_rope.cached_len(), 16);
+
+        dyn_rope.ensure_capacity(40).expect("grow to 64");
+        assert_eq!(dyn_rope.cached_len(), 64);
+        dyn_rope.ensure_capacity(120).expect("grow to 128");
+        assert_eq!(dyn_rope.cached_len(), 128);
+
+        let x_vec: Vec<f32> = (0..cfg.num_attention_heads * 12 * cfg.head_dim())
+            .map(|i| (((i * 17 + 9) % 31) as f32 - 15.0) * 0.05)
+            .collect();
+        let x = Tensor::from_vec(
+            x_vec,
+            (1, cfg.num_attention_heads, 12, cfg.head_dim()),
+            &Device::Cpu,
+        )
+        .expect("x");
+        let out_dyn = dyn_rope
+            .apply_with_adapter(&x, 100, None)
+            .expect("dyn apply");
+        let out_full = full_rope
+            .apply_with_adapter(&x, 100, None)
+            .expect("full apply");
+        let max_diff = tensor_flat_f32(&out_dyn)
+            .iter()
+            .zip(tensor_flat_f32(&out_full).iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_diff < 1e-6,
+            "dynamic RoPE mismatch: max_diff={max_diff}"
+        );
+
+        // Exceeding `max_position_embeddings` must return an explicit error without panicking.
+        assert!(dyn_rope.ensure_capacity(129).is_err());
+    }
+
+    #[test]
+    fn chunked_prefill_matches_monolithic_logits_and_kv_cache() {
+        let cfg = tiny_config();
+        let tokens: Vec<u32> = (0..25)
+            .map(|i| (i * 5 + 3) % cfg.vocab_size as u32)
+            .collect();
+
+        let mut mono_model = deterministic_tiny_model(&cfg, 64);
+        let (mono_out, _, _) = mono_model
+            .forward_tokens(
+                &tokens,
+                0,
+                None,
+                false,
+                false,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::Append,
+            )
+            .expect("mono prefill");
+        let mono_logits = mono_out.into_full_logits().expect("mono logits");
+
+        // Start chunked model with small initial RoPE cache (8) to exercise dynamic growth + chunking.
+        let mut chunk_model = deterministic_tiny_model(&cfg, 8);
+        let (chunk_out, report) = chunk_model
+            .prefill_tokens_chunked(
+                &tokens,
+                0,
+                7,
+                None,
+                None,
+                false,
+                LogitsFetchMode::FullLogits,
+            )
+            .expect("chunked prefill");
+        let chunk_logits = chunk_out.into_full_logits().expect("chunk logits");
+
+        assert_eq!(report.total_tokens, 25);
+        assert_eq!(report.chunks_executed, 4);
+        assert_eq!(chunk_model.kv_len(), 25);
+        assert!(chunk_model.rope_cached_len() >= 25);
+
+        let max_logit_diff = mono_logits
+            .iter()
+            .zip(chunk_logits.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            max_logit_diff < 1e-4,
+            "chunked vs monolithic logits diverged: max_diff={max_logit_diff}"
+        );
+
+        for l in 0..cfg.num_hidden_layers {
+            let (mk, mv) = mono_model.layers[l]
+                .self_attn
+                .kv_cache
+                .as_ref()
+                .expect("mono kv");
+            let (ck, cv) = chunk_model.layers[l]
+                .self_attn
+                .kv_cache
+                .as_ref()
+                .expect("chunk kv");
+            let k_diff = tensor_flat_f32(mk)
+                .iter()
+                .zip(tensor_flat_f32(ck).iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            let v_diff = tensor_flat_f32(mv)
+                .iter()
+                .zip(tensor_flat_f32(cv).iter())
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(k_diff < 1e-5, "layer {l} K cache diff={k_diff}");
+            assert!(v_diff < 1e-5, "layer {l} V cache diff={v_diff}");
+        }
+
+        // Verify coarse-grained liminal step coupling + AnchorWorkingSetPager on steered chunks.
+        let mut steered_model = deterministic_tiny_model(&cfg, 8);
+        let mut adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry()).expect("adapter");
+        let mut trail = lmnk_pointer_trail_t::default();
+        let q7s = vec![vec![0_i8; cfg.num_attention_heads]; cfg.num_hidden_layers];
+        let mut pager = AnchorWorkingSetPager::new(liminika_adapter::AnchorPagerConfig::default());
+        let mut steer = ForwardSteer {
+            adapter: &mut adapter,
+            q7s: Some(&q7s),
+            persona_q7s: None,
+            resonant_ctx: None,
+            rope_rad: 0.12,
+            trail: &mut trail,
+            rank1: None,
+            horizon_mode: HorizonAblationMode::Core3,
+            escalation_provider: None,
+            compute_dispatch: None,
+            layer_steer_mask: None,
+            probe_frame: ProbeCoordinateFrame::PreRope,
+            phase_clamp_override: None,
+            random_push_seed: None,
+            steer_bypass_hits: 0,
+            steer_eligible_layers: 0,
+        };
+        let (_, steered_rep) = steered_model
+            .prefill_tokens_chunked(
+                &tokens,
+                0,
+                7,
+                Some(&mut steer),
+                Some(&mut pager),
+                false,
+                LogitsFetchMode::FullLogits,
+            )
+            .expect("steered chunked prefill");
+        assert_eq!(steered_rep.chunks_executed, 4);
+        assert_eq!(steered_rep.liminal_steps, 4);
+        assert_eq!(pager.stats().total_steps, 4);
     }
 }

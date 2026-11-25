@@ -348,14 +348,25 @@ fn evaluate_role_coalition_pair(
         })
         .collect();
 
+    // For large corpora (> 32 entries of the same role), bound pairwise coalition search to the
+    // top-32 single-entry candidates (`<= 496` pairs, O(1)) while keeping `<= 32` bit-identical.
+    let pair_candidates: Vec<(usize, f32)> = if excl_single_scores.len() <= 32 {
+        excl_single_scores.clone()
+    } else {
+        let mut ranked = excl_single_scores.clone();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ranked.truncate(32);
+        ranked
+    };
+
     let mut best_pair: Option<(usize, usize, f32, f32, f32)> = None;
-    for a in 0..role_idxs.len() {
-        let (i, gain_i) = excl_single_scores[a];
+    for a in 0..pair_candidates.len() {
+        let (i, gain_i) = pair_candidates[a];
         let gain_i_pos = gain_i.max(0.0);
         if gain_i_pos <= 0.004 {
             continue;
         }
-        for &(j, gain_j) in &excl_single_scores[(a + 1)..] {
+        for &(j, gain_j) in &pair_candidates[(a + 1)..] {
             let gain_j_pos = gain_j.max(0.0);
             if gain_j_pos <= 0.004 {
                 continue;
@@ -546,6 +557,32 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             .min(SUBSTRATE_INLINE_TRAILS)
             .min(fact_idxs.len());
         if hop_cap >= 3 {
+            // Precompute per-deposit top-2 remaining Fact excess values in O(T_q * N) so the
+            // 3rd-hop specialist search stays linear in `fact_idxs.len()` instead of O(N^2 * T_q).
+            let rem_top2: Vec<(usize, f32, f32)> = signal
+                .token_deposits
+                .iter()
+                .map(|d| {
+                    let mut best_idx = usize::MAX;
+                    let mut best_v = 0.0_f32;
+                    let mut second_v = 0.0_f32;
+                    for &m in fact_idxs {
+                        if m == first_idx || m == second_idx {
+                            continue;
+                        }
+                        let v = d.entry_excess[m].max(0.0);
+                        if v > best_v {
+                            second_v = best_v;
+                            best_v = v;
+                            best_idx = m;
+                        } else if v > second_v {
+                            second_v = v;
+                        }
+                    }
+                    (best_idx, best_v, second_v)
+                })
+                .collect();
+
             let mut best_third: Option<(usize, f32)> = None;
             for &k in fact_idxs {
                 if k == first_idx || k == second_idx {
@@ -556,7 +593,12 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                 }
                 let mut res_gain = 0.0_f32;
                 let mut has_specialist_peak = false;
-                for (d, &w) in signal.token_deposits.iter().zip(decomp_weights.iter()) {
+                for ((d, &w), &(top_m, top_v, second_v)) in signal
+                    .token_deposits
+                    .iter()
+                    .zip(decomp_weights.iter())
+                    .zip(rem_top2.iter())
+                {
                     let pair_ex = d.entry_excess[first_idx]
                         .max(d.entry_excess[second_idx])
                         .max(0.0);
@@ -564,12 +606,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                     if ex_k <= pair_ex {
                         continue;
                     }
-                    let other_rem_max = fact_idxs
-                        .iter()
-                        .copied()
-                        .filter(|&m| m != first_idx && m != second_idx && m != k)
-                        .map(|m| d.entry_excess[m].max(0.0))
-                        .fold(0.0_f32, f32::max);
+                    let other_rem_max = if top_m == k { second_v } else { top_v };
                     let rem_excl = if ex_k > 1e-6 {
                         ((ex_k - other_rem_max) / ex_k).clamp(0.0, 1.0)
                     } else {

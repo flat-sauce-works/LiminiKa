@@ -555,6 +555,29 @@ impl LmnkTimeline {
         &self.frames
     }
 
+    /// Loads the latest keyframe's persisted [`PhaseAnchorRecord`] section (`> 64` supported)
+    /// into a domain-agnostic [`AnchorWorkingSetPager`].
+    ///
+    /// # Errors
+    /// Returns an error if the timeline contains no valid keyframe snapshot or container parsing fails.
+    pub fn load_anchor_pager(
+        &self,
+        config: AnchorPagerConfig,
+    ) -> Result<AnchorWorkingSetPager, String> {
+        for frame in self.frames.iter().rev() {
+            if let GopFrameKind::KeyframeI {
+                container_bytes, ..
+            } = &frame.kind
+            {
+                return AnchorWorkingSetPager::from_container_bytes(container_bytes, config);
+            }
+        }
+        Err(
+            "timeline contains no KeyframeI snapshot to load into AnchorWorkingSetPager"
+                .to_string(),
+        )
+    }
+
     /// Returns frame indices of all I-Frame keyframes in the seek table.
     #[must_use]
     pub fn keyframe_positions(&self) -> &[usize] {

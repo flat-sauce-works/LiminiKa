@@ -127,6 +127,9 @@ def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
         repo_root / "examples" / "candle_eval" / "src"
     )
     ad_files, ad_loc, ad_code = scan_crate_prod_stats(repo_root / "src" / "adapter" / "src")
+    host_files, host_loc, _ = scan_crate_prod_stats(
+        repo_root / "src" / "adapter" / "src" / "host"
+    )
 
     cli_dsl_refs = len(re.findall(r"\bliminika_dsl\b", cli_code))
     cli_adapter_gates = len(ADAPTER_MUT_GATE_CALL_RE.findall(cli_code))
@@ -163,7 +166,11 @@ def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
         '    subgraph WS_ADAPTER["Canonical Adapter Gate (liminika-adapter)"]',
         (
             '        W_adapter["ModelSteeringAdapter + TurnOrchestrator + CompiledTokenCorpus '
-            f'- {plural_files(ad_files)}, {ad_loc} prod LOC"]'
+            f'- {plural_files(ad_files - host_files)}, {ad_loc - host_loc} prod LOC"]'
+        ),
+        (
+            '        W_host["App-Agnostic Host (host/ - LLM-isolated) '
+            f'- {plural_files(host_files)}, {host_loc} prod LOC"]'
         ),
         "    end",
         '    subgraph WS_CORE["liminika-core (#![no_std] 5-Layer Unidirectional DAG)"]',
@@ -194,6 +201,9 @@ def render_mermaid_workspace(repo_root: pathlib.Path) -> str:
         lines.append(f'    W_eval -.->|"Value/Pod & Anchors ({eval_core_vals} refs)"| L4_runtime')
 
     lines.append(f'    W_adapter -->|"Mutable RuntimeContext Gate ({ad_runtime_gates} refs)"| L4_runtime')
+    if host_files > 0:
+        lines.append('    W_adapter -.->|"Host Working-Set Bridge"| W_host')
+        lines.append('    W_host -.->|"Core Pod & Container View"| L4_runtime')
     if ad_liminal_vals > 0:
         lines.append(f'    W_adapter -.->|"Value/Pod ({ad_liminal_vals} refs)"| L0_liminal')
     if ad_foundation_vals > 0:
