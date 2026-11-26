@@ -65,7 +65,7 @@ pub struct DistortionDelta {
     pub pheromone_q7: u8,
     /// Directed delta scaling gain in Q0.7 (`0..=127`, `offset 14`).
     pub gain_q7: u8,
-    /// 2-bit [`AttributionTag`] (`Stigmergy`/`Ego`, `offset 15`).
+    /// 3-bit [`AttributionTag`] (`Stigmergy`/`Ego`, `offset 15`).
     pub attribution_tag: u8,
     /// Model-agnostic logical `EgoIntentAxes` transition (`16 B`, `offset 16..32`).
     pub intent_delta: EgoIntentAxes,
@@ -155,19 +155,19 @@ pub struct PFrameRoutingMeta {
     pub pheromone_q7: u8,
     /// Directed delta scaling gain in Q0.7 (`0..=127`, `offset 6`).
     pub gain_q7: u8,
-    /// Packed 2-bit [`AttributionTag`] (`bits 0..=1`) and lifecycle flags (`bits 2..=4`, `offset 7`).
+    /// Packed 3-bit [`AttributionTag`] (`bits 0..=2`) and lifecycle flags (`bits 3..=5`, `offset 7`).
     pub flags_and_tag: u8,
 }
 
 impl PFrameRoutingMeta {
-    /// Bit `2`: node is active and eligible for lacuna trigger matching.
-    pub const FLAG_ACTIVE_BIT: u8 = 1 << 2;
-    /// Bit `3`: node was consolidated into an I-Frame phase anchor.
-    pub const FLAG_CONSOLIDATED_BIT: u8 = 1 << 3;
-    /// Bit `4`: node carries valid model-baked 64-head Q7 phase deltas.
-    pub const FLAG_BAKED_VALID_BIT: u8 = 1 << 4;
-    /// Low 2-bit mask extracting [`AttributionTag::raw()`].
-    pub const TAG_MASK: u8 = 0x03;
+    /// Bit `3`: node is active and eligible for lacuna trigger matching.
+    pub const FLAG_ACTIVE_BIT: u8 = 1 << 3;
+    /// Bit `4`: node was consolidated into an I-Frame phase anchor.
+    pub const FLAG_CONSOLIDATED_BIT: u8 = 1 << 4;
+    /// Bit `5`: node carries valid model-baked 64-head Q7 phase deltas.
+    pub const FLAG_BAKED_VALID_BIT: u8 = 1 << 5;
+    /// Low 3-bit mask extracting [`AttributionTag::raw()`].
+    pub const TAG_MASK: u8 = 0x07;
 
     /// Constructs an inactive default 8-byte [`PFrameRoutingMeta`].
     #[inline(always)]
@@ -184,7 +184,7 @@ impl PFrameRoutingMeta {
         }
     }
 
-    /// Packs `DISTORTION_DELTA_FLAG_*` bits and a 2-bit [`AttributionTag`] into `flags_and_tag`.
+    /// Packs `DISTORTION_DELTA_FLAG_*` bits and a 3-bit [`AttributionTag`] into `flags_and_tag`.
     #[inline(always)]
     #[must_use]
     pub const fn pack_flags_and_tag(distortion_flags: u32, tag: u8) -> u8 {
@@ -228,7 +228,7 @@ impl PFrameRoutingMeta {
         a | c | b
     }
 
-    /// Extracts the 2-bit [`AttributionTag`] code (`0..=3`).
+    /// Extracts the 3-bit [`AttributionTag`] code (`0..=5`).
     #[inline(always)]
     #[must_use]
     pub const fn attribution_tag(self) -> u8 {
@@ -716,7 +716,7 @@ impl EgoDifferentialNet {
                         cold.anchor_ref_id,
                         ATTRACTOR_SLOT_SYSTEM_BASELINE,
                         cold.reinforce_count,
-                        f32::from(routing.gain_q7) * (1.0 / 127.0),
+                        f32::from(routing.gain_q7) * (1.0 / 128.0),
                         grounded,
                     );
                     routing.set_consolidated(true);

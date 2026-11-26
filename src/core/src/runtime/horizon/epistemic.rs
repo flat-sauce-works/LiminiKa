@@ -250,7 +250,7 @@ pub fn evaluate_epistemic_horizon_words_64<Node: RelativeAttractorNode>(
         let is_att = (w_i32 > 0) | coupling_row_q7.is_none();
         let rel_mag = branchless_select_f32(
             coupling_row_q7.is_some(),
-            (w_i32.unsigned_abs() as f32) * (1.0 / 127.0),
+            (w_i32.unsigned_abs() as f32) * (1.0 / 128.0),
             1.0,
         );
 
@@ -359,7 +359,7 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
         let w_i32 = coupling_row_q7[idx] as i32;
         let is_rep = w_i32 < 0;
         let is_att = w_i32 > 0;
-        let mag = (w_i32.unsigned_abs() as f32) * (1.0 / 127.0);
+        let mag = (w_i32.unsigned_abs() as f32) * (1.0 / 128.0);
 
         let node = &nodes[idx];
         let e = branchless_relu_f32(node.relative_energy());

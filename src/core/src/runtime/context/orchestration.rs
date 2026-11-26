@@ -276,7 +276,7 @@ impl RuntimeContext {
                 }
                 let ent_above_floor_q15 = ent_q15.saturating_sub(SPINE_ENTROPY_TENSION_FLOOR_Q15);
                 let exit_entropy_q7 =
-                    (((u32::from(ent_above_floor_q15) * 127) + 16_384) >> 15).min(127) as u8;
+                    (((u32::from(ent_above_floor_q15) * 128) + 16_384) >> 15).min(127) as u8;
                 let guard_prox_q7 = if eff_repulsion { 88 } else { sens_q7 >> 2 };
                 let active_overdrive = eff_repulsion && self.core_layers.ego.is_active();
                 self.distortion_tension.step_hot_path_branchless(
@@ -759,10 +759,16 @@ impl RuntimeContext {
             quiescent_dwell,
             qos_throttled,
         );
-        let exit_ent_q7 =
-            (branchless_clamp_f32(entropy_st.moving_z_entropy, 0.0, 1.0) * 127.0) as u8;
-        let guard_prox_q7 =
-            (branchless_clamp_f32(frame.repulsion_severity, 0.0, 1.0) * 127.0) as u8;
+        let exit_ent_q7 = branchless_clamp_f32(
+            branchless_clamp_f32(entropy_st.moving_z_entropy, 0.0, 1.0) * 128.0,
+            0.0,
+            127.0,
+        ) as u8;
+        let guard_prox_q7 = branchless_clamp_f32(
+            branchless_clamp_f32(frame.repulsion_severity, 0.0, 1.0) * 128.0,
+            0.0,
+            127.0,
+        ) as u8;
         let active_overdrive = matches!(step_decision, StigmergicActionDecision::RepulsionEscape)
             && self.core_layers.ego.is_active();
         self.distortion_tension.step_hot_path_branchless(

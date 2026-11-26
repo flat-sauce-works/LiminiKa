@@ -96,6 +96,11 @@ typedef int32_t lmnk_status_t;
 #define LMNK_DAG_FLAG_SPINE_EGO_ISOLATED (1U << 1)
 #define LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL (1U << 2)
 #define LMNK_DAG_FLAG_NO_STD_CORE (1U << 3)
+#define LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED (1U << 4)
+#define LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL                                        \
+    (LMNK_DAG_FLAG_Y_SHAPED_PARALLEL_ROOTS | LMNK_DAG_FLAG_SPINE_EGO_ISOLATED | \
+     LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL | LMNK_DAG_FLAG_NO_STD_CORE |     \
+     LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED)
 #define LMNK_TOPOLOGY_PINNED_CHANNEL_MASK ((uint8_t)((1U << 0) | (1U << 3)))
 #define LMNK_TOPOLOGY_SANDBOX_CHANNEL_MASK ((uint8_t)(1U << 7))
 
@@ -170,8 +175,9 @@ typedef int32_t lmnk_status_t;
 #define LMNK_PRIMITIVE_STIGMERGY 1U
 #define LMNK_DRIVER_SYSTEM 0U
 #define LMNK_DRIVER_EGO 1U
+#define LMNK_DRIVER_ENVELOPE 2U
 #define LMNK_ATTRIBUTION_TAG(primitive, driver) \
-    ((uint8_t)((((driver) & 0x01U) << 1) | ((primitive) & 0x01U)))
+    ((uint8_t)((((driver) & 0x03U) << 1) | ((primitive) & 0x01U)))
 
 #define LMNK_LACUNA_UNOBSERVED 0U
 #define LMNK_LACUNA_SELF_REF 1U
@@ -311,38 +317,45 @@ typedef int32_t lmnk_status_t;
 /* -------------------------------------------------------------------------- */
 /* Header-only tagged pointer bit-packers (zero FFI call overhead)            */
 /* -------------------------------------------------------------------------- */
-static inline uint64_t lmnk_tagged_ptr_pack(uint64_t raw_addr, uint8_t tag, lmnk_q7_t phase) {
+#if defined(__GNUC__) || defined(__clang__)
+    #define LMNK_STATIC_INLINE static inline __attribute__((unused))
+#else
+    #define LMNK_STATIC_INLINE static inline
+#endif
+
+LMNK_STATIC_INLINE uint64_t lmnk_tagged_ptr_pack(uint64_t raw_addr, uint8_t tag, lmnk_q7_t phase) {
     const uint64_t addr_bits = raw_addr & LMNK_TAGGED_PTR_ADDR_MASK;
     const uint64_t tag_bits = ((uint64_t)tag) << LMNK_TAGGED_PTR_TAG_SHIFT;
     const uint64_t phase_bits = ((uint64_t)((uint8_t)phase)) << LMNK_TAGGED_PTR_PHASE_SHIFT;
     return addr_bits | tag_bits | phase_bits;
 }
 
-static inline uint64_t lmnk_tagged_ptr_unpack_addr(uint64_t ptr) {
+LMNK_STATIC_INLINE uint64_t lmnk_tagged_ptr_unpack_addr(uint64_t ptr) {
     return ptr & LMNK_TAGGED_PTR_ADDR_MASK;
 }
 
-static inline uint8_t lmnk_tagged_ptr_unpack_tag(uint64_t ptr) {
+LMNK_STATIC_INLINE uint8_t lmnk_tagged_ptr_unpack_tag(uint64_t ptr) {
     return (uint8_t)((ptr >> LMNK_TAGGED_PTR_TAG_SHIFT) & 0xFFULL);
 }
 
-static inline lmnk_q7_t lmnk_tagged_ptr_unpack_phase(uint64_t ptr) {
+LMNK_STATIC_INLINE lmnk_q7_t lmnk_tagged_ptr_unpack_phase(uint64_t ptr) {
     return (lmnk_q7_t)((uint8_t)((ptr >> LMNK_TAGGED_PTR_PHASE_SHIFT) & 0xFFULL));
 }
 
-static inline uint64_t lmnk_tagged_ptr_pack_action(uint64_t raw_addr, uint8_t attractor_slot,
-                                                   uint8_t action_mode_flags, lmnk_q7_t phase) {
+LMNK_STATIC_INLINE uint64_t lmnk_tagged_ptr_pack_action(uint64_t raw_addr, uint8_t attractor_slot,
+                                                        uint8_t action_mode_flags,
+                                                        lmnk_q7_t phase) {
     const uint8_t tag =
         (uint8_t)((((uint32_t)(attractor_slot & LMNK_ATTRACTOR_SLOT_ID_MASK)) << 5U) |
                   ((uint32_t)(action_mode_flags & 0x1FU)));
     return lmnk_tagged_ptr_pack(raw_addr, tag, phase);
 }
 
-static inline uint8_t lmnk_tagged_ptr_unpack_action_mode(uint64_t ptr) {
+LMNK_STATIC_INLINE uint8_t lmnk_tagged_ptr_unpack_action_mode(uint64_t ptr) {
     return (uint8_t)(lmnk_tagged_ptr_unpack_tag(ptr) & 0x1FU);
 }
 
-static inline uint8_t lmnk_tagged_ptr_unpack_attractor_slot(uint64_t ptr) {
+LMNK_STATIC_INLINE uint8_t lmnk_tagged_ptr_unpack_attractor_slot(uint64_t ptr) {
     return (uint8_t)((lmnk_tagged_ptr_unpack_tag(ptr) >> 5U) & LMNK_ATTRACTOR_SLOT_ID_MASK);
 }
 

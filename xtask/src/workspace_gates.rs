@@ -33,6 +33,7 @@ const CORE_MUTABLE_TYPES: &[&str] = &[
     "AnonymousComputePool",
     "EntropyController",
     "EgoDifferentialNet",
+    "EnvelopeState",
     "DistortionTension",
     "PhaseSteeringEngine",
     "ResidualAdapterEngine",
@@ -250,6 +251,7 @@ fn find_core_mutable_engine_refs(code: &str) -> Vec<usize> {
                             | "AnonymousComputePool"
                             | "EntropyController"
                             | "EgoDifferentialNet"
+                            | "EnvelopeState"
                             | "DistortionTension"
                     ),
                     "stigmergy" => matches!(ty, "PhaseSteeringEngine" | "ResidualAdapterEngine"),

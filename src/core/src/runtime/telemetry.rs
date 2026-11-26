@@ -258,7 +258,11 @@ impl LiminalTopologyTelemetrySnapshot {
         active_anchors: u8,
         spawned_anchors: u8,
     ) -> Self {
-        let sev = (branchless_clamp_f32(horizon.conflict_severity, 0.0, 1.0) * 127.0 + 0.5) as u8;
+        let sev = branchless_clamp_f32(
+            branchless_clamp_f32(horizon.conflict_severity, 0.0, 1.0) * 128.0 + 0.5,
+            0.0,
+            127.0,
+        ) as u8;
         Self {
             threshold_floor_q7: field.threshold_floor_q7,
             aperture_gain_q7: field.aperture_gain_q7,
@@ -653,8 +657,9 @@ pub struct CoreTelemetrySnapshot {
     pub assimilation_drift: f32,
     /// Consecutive steps where $D_{\mathrm{assim}}$ exceeded the drift threshold (with hysteresis).
     pub assimilation_drift_dwell: u16,
-    /// `2 Primitives x 2 Drivers` structural attribution counts indexed by `AttributionTag::raw()` (`0..=3`).
-    pub attribution_counts: [u64; 4],
+    /// `2 Primitives x 3 Drivers` structural attribution counts indexed by `AttributionTag::raw()`
+    /// (`0..=5`; slots `6..=7` reserved).
+    pub attribution_counts: [u32; 8],
     /// Cumulative `SystemSpine` token-level whole-steering bypass hits (`0` D2H syncs).
     pub whole_token_bypass_events: u64,
     /// Cumulative [`DistortionTension`] immediate Hot-Path Ego damping events.
@@ -698,7 +703,7 @@ pub struct CoreTelemetryBank {
     reserved_cl0: u8,
     /// Vertical `+ System` spine counters (hot `Coarse` counters packed within `0..64`).
     pub spine: SystemSpineTelemetry,
-    attribution_counts: [u64; 4],
+    attribution_counts: [u32; 8],
     whole_token_bypass_events: u64,
     immediate_tension_damps: u64,
     slow_tension_excites: u64,
@@ -806,7 +811,7 @@ impl CoreTelemetryBank {
                 slow_loop_dwell_delta: 0,
                 reserved: [0; 6],
             },
-            attribution_counts: [0; 4],
+            attribution_counts: [0; 8],
             whole_token_bypass_events: 0,
             immediate_tension_damps: 0,
             slow_tension_excites: 0,
@@ -943,7 +948,7 @@ impl CoreTelemetryBank {
         self.assimilation_drift_dwell = 0;
         self.sandbox_coherence_improve_dwell = 0;
         self.derivative_alpha_q7 = crate::stigmergy::substrate::DEFAULT_DERIVATIVE_ALPHA_Q7;
-        self.attribution_counts = [0; 4];
+        self.attribution_counts = [0; 8];
         self.whole_token_bypass_events = 0;
         self.immediate_tension_damps = 0;
         self.slow_tension_excites = 0;
@@ -1039,7 +1044,7 @@ impl CoreTelemetryBank {
         self.instability_recovery_count
     }
 
-    /// Records lightweight `2 Primitives x 2 Drivers` structural attribution, P-Frame chain hops,
+    /// Records lightweight `2 Primitives x 3 Drivers` structural attribution, P-Frame chain hops,
     /// `DistortionTension` events, exterior $O \setminus S$ sandbox staging, and pre-inference bypass hits.
     #[inline]
     pub fn record_two_by_two_step(
@@ -1050,7 +1055,7 @@ impl CoreTelemetryBank {
         tension: &DistortionTension,
         pframe_hops: u8,
     ) {
-        let idx = usize::from(tag_raw & 0x03);
+        let idx = usize::from(tag_raw & 0x07);
         self.attribution_counts[idx] = self.attribution_counts[idx].saturating_add(1);
         if whole_token_bypass {
             self.whole_token_bypass_events = self.whole_token_bypass_events.saturating_add(1);

@@ -143,8 +143,7 @@ pub const SPINE_BYPASS_VETO_REPULSION_ACTIVE: u8 = 1 << 1;
 /// Bypass vetoed because an irreversible step lock or pinned compute mask is active (`1 << 2`).
 pub const SPINE_BYPASS_VETO_PINNED_LOCK: u8 = 1 << 2;
 
-/// Minimum host-immutable compute slot bitmask (`bit 0`) preserved across untrusted snapshot restores.
-pub const HOST_IMMUTABLE_PINNED_COMPUTE_MASK: u64 = 1u64 << 0;
+pub use crate::liminal::HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
 
 /// Spine control flag (`bit 0`): active turn holds a contradiction-guard compute pin.
 pub const SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE: u8 = 1 << 0;
@@ -589,7 +588,7 @@ pub struct SystemSpineState {
     pub bypass_dwell_steps: u8,
     /// Remaining recovery cooldown steps before bypass may re-engage (`offset 26`).
     pub bypass_cooldown_steps: u8,
-    /// 2-bit [`AttributionTag`] (`Liminal`/`System`, `offset 27`).
+    /// 3-bit [`AttributionTag`] (`Liminal`/`System`, `offset 27`).
     pub attribution_tag: u8,
     /// Explicit C alignment padding for the `0..32` ABI-preserved prefix (`offset 28..32`).
     pub reserved_half0: [u8; 4],
@@ -810,8 +809,8 @@ impl SystemSpineState {
     pub const fn compute_effective_observe_stride(&self, sensitivity_q7: u8) -> u8 {
         let max_s = self.effective_max_observe_stride();
         let is_dynamic = max_s > 1;
-        // Map last_observed_entropy_q15 / (2 * 0.78) * 127 into [0..=64] with integer multiply-shift.
-        let p_ent_raw = ((self.last_observed_entropy_q15 as u32) * 163) >> 16;
+        // Map last_observed_entropy_q15 / (2 * 0.78) * 128 into [0..=64] with integer multiply-shift.
+        let p_ent_raw = ((self.last_observed_entropy_q15 as u32) * 164) >> 16;
         let p_ent_q7 = if p_ent_raw > 64 { 64 } else { p_ent_raw as u8 };
         let ent_sens_q7 = sensitivity_4p1mp_q7(p_ent_q7);
         let eff_sens_q7 = if sensitivity_q7 > ent_sens_q7 {

@@ -8,8 +8,9 @@ use std::fs;
 use std::path::Path;
 
 use liminika_core::runtime::{
-    CORE_TOPOLOGY, LMNK_TOPOLOGY_CHANNEL_COUNT, LMNK_TOPOLOGY_DAG_EDGE_MATRIX,
-    LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL, LMNK_TOPOLOGY_LAYER_COUNT, LMNK_TOPOLOGY_MAGIC,
+    CORE_TOPOLOGY, LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED, LMNK_TOPOLOGY_CHANNEL_COUNT,
+    LMNK_TOPOLOGY_DAG_EDGE_MATRIX, LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL, LMNK_TOPOLOGY_LAYER_COUNT,
+    LMNK_TOPOLOGY_MAGIC,
 };
 
 use crate::scanner::{
@@ -69,9 +70,21 @@ const ALLOWED_SUBSTRATE_DECLS: &[(&str, &str)] = &[
     ("SubstrateGatewayExt", "runtime/gateway/orchestrator.rs"),
 ];
 
-/// Sibling driver isolation pairs (`(source_driver, forbidden_sibling)`).
-/// Designed for Phase 2 expansion to 3 siblings (`spine`, `ego`, `envelope`).
-const DRIVER_ISOLATION_PAIRS: &[(&str, &str)] = &[("spine", "ego"), ("ego", "spine")];
+/// Sibling driver isolation pairs (`(source_driver, forbidden_sibling)`) covering all 6 directed
+/// pairs across the 3 Lv.3 driver siblings (`spine`, `ego`, `envelope`).
+const DRIVER_ISOLATION_PAIRS: &[(&str, &str)] = &[
+    ("spine", "ego"),
+    ("spine", "envelope"),
+    ("ego", "spine"),
+    ("ego", "envelope"),
+    ("envelope", "spine"),
+    ("envelope", "ego"),
+];
+
+/// Scans source text inside a Lv.3 driver module for forbidden references to sibling `dst_driver`.
+pub fn scan_driver_isolation_in_source(source: &str, dst_driver: &str) -> Vec<usize> {
+    find_prefixed_module_refs(source, "crate::drivers::", true, &[dst_driver])
+}
 
 const FOUNDATION_FORBIDDEN_WORDS: &[&str] = &[
     "BitCut",
@@ -306,7 +319,7 @@ fn check_dag_and_axiom_rules(core_src: &Path) -> Vec<String> {
         let label = format!("drivers/{src_driver} -> drivers/{dst_driver}");
         let sub = format!("drivers/{src_driver}");
         run_rule(&label, &sub, &|t| {
-            find_prefixed_module_refs(t, "crate::drivers::", true, &[dst_driver])
+            scan_driver_isolation_in_source(t, dst_driver)
         });
     }
     run_rule(
@@ -645,6 +658,12 @@ pub fn check_topology_matrix_parity(core_src: &Path) -> Vec<String> {
             "Topology parity: dag_flags expected {LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL:#06x}, got {:#06x}",
             CORE_TOPOLOGY.dag_flags
         ));
+    }
+    if (CORE_TOPOLOGY.dag_flags & LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED) == 0 {
+        violations.push(
+            "Topology parity: CORE_TOPOLOGY.dag_flags missing LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED"
+                .to_string(),
+        );
     }
     violations
 }

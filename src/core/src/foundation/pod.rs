@@ -20,9 +20,9 @@ use core::slice;
 
 use crate::foundation::scalar_math::{branchless_q7_add_sat, branchless_q7_neg_sat};
 use crate::liminal::{
-    AttributionTag, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_INVALID_ARGUMENT,
-    LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, PhaseQ7, RuntimeConfig,
+    AttributionTag, BoundarySignal, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
+    LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7, RuntimeConfig,
 };
 
 /// Number of 64-bit words in a 256-bit [`PagedBitmask`] (`4`).
@@ -744,6 +744,7 @@ impl_pod_for_primitives!(
     LmnkStatus,
     RuntimeConfig,
     AttributionTag,
+    BoundarySignal,
     LacunaPartition8,
     LiminalThresholdState,
     TaggedPtr,
@@ -783,6 +784,19 @@ const _: () = {
     assert!(core::mem::offset_of!(Rank1Descriptor, gain_offset) == 24);
     assert!(core::mem::offset_of!(Rank1Descriptor, scale_factor) == 28);
     assert!(size_of::<KvMotionDeltaPacket>() == 64 && align_of::<KvMotionDeltaPacket>() == 64);
+    assert!(size_of::<BoundarySignal>() == 32 && align_of::<BoundarySignal>() == 32);
+    assert!(core::mem::offset_of!(BoundarySignal, partition) == 0);
+    assert!(core::mem::offset_of!(BoundarySignal, pressure_q15) == 16);
+    assert!(core::mem::offset_of!(BoundarySignal, delta_q15) == 18);
+    assert!(core::mem::offset_of!(BoundarySignal, attribution_tag) == 20);
+    assert!(core::mem::offset_of!(BoundarySignal, lacuna_code) == 21);
+    assert!(core::mem::offset_of!(BoundarySignal, contraction_q7) == 22);
+    assert!(core::mem::offset_of!(BoundarySignal, chatter_q7) == 23);
+    assert!(core::mem::offset_of!(BoundarySignal, signal_flags) == 24);
+    assert!(core::mem::offset_of!(BoundarySignal, dominant_lane) == 25);
+    assert!(core::mem::offset_of!(BoundarySignal, root_cause_code) == 26);
+    assert!(core::mem::offset_of!(BoundarySignal, breach_mask) == 27);
+    assert!(core::mem::offset_of!(BoundarySignal, epoch_id) == 28);
     assert!((ATTRACTOR_SLOT_ID_MASK as usize) == (MAX_ATTRACTOR_DOMAINS - 1));
     assert!(pack_action_slot_tag(7, 0x1F) == 0xFF);
     assert!(unpack_attractor_slot_from_tag(pack_action_slot_tag(5, 0x13)) == 5);

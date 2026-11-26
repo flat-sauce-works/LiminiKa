@@ -26,6 +26,7 @@ pub fn bucket_for_path(core_src: &Path, rs_file: &Path) -> Option<&'static str> 
         return match comps.next() {
             Some("spine") => Some("drivers::spine"),
             Some("ego") => Some("drivers::ego"),
+            Some("envelope") => Some("drivers::envelope"),
             _ => Some("drivers"),
         };
     }
@@ -63,6 +64,7 @@ fn find_crate_layer_targets(code: &str) -> Vec<&'static str> {
                     match sub {
                         "spine" => targets.push("drivers::spine"),
                         "ego" => targets.push("drivers::ego"),
+                        "envelope" => targets.push("drivers::envelope"),
                         _ => targets.push("drivers"),
                     }
                 } else {
@@ -94,7 +96,10 @@ pub fn collect_dag_metrics(
         for (_lineno, line) in strip_cfg_test_tail(&lines) {
             let code = line.split("//").next().unwrap_or("");
             for target in find_crate_layer_targets(code) {
-                let dst_bucket = if matches!(target, "drivers::spine" | "drivers::ego") {
+                let dst_bucket = if matches!(
+                    target,
+                    "drivers::spine" | "drivers::ego" | "drivers::envelope"
+                ) {
                     target
                 } else {
                     target.split("::").next().unwrap_or(target)
@@ -121,13 +126,18 @@ const ORDERED_CORE_PAIRS: &[(&str, &str)] = &[
     ("liminal", "drivers::ego"),
     ("foundation", "drivers::ego"),
     ("stigmergy", "drivers::ego"),
+    ("liminal", "drivers::envelope"),
+    ("foundation", "drivers::envelope"),
+    ("stigmergy", "drivers::envelope"),
     ("drivers", "drivers::spine"),
     ("drivers", "drivers::ego"),
+    ("drivers", "drivers::envelope"),
     ("liminal", "runtime"),
     ("foundation", "runtime"),
     ("stigmergy", "runtime"),
     ("drivers::spine", "runtime"),
     ("drivers::ego", "runtime"),
+    ("drivers::envelope", "runtime"),
     ("drivers", "runtime"),
 ];
 
@@ -138,6 +148,7 @@ fn node_id(key: &str) -> &'static str {
         "stigmergy" => "L2_stigmergy",
         "drivers::spine" => "L3_spine",
         "drivers::ego" => "L3_ego",
+        "drivers::envelope" => "L3_envelope",
         "drivers" => "L3_drivers_hub",
         "runtime" => "L4_runtime",
         _ => "L_unknown",
@@ -181,6 +192,13 @@ pub fn render_mermaid(core_src: &Path) -> String {
         format!(
             "        L3_ego[\"{}\"]",
             node_label("drivers::ego", "drivers/ego (Intent & EgoDifferentialNet)")
+        ),
+        format!(
+            "        L3_envelope[\"{}\"]",
+            node_label(
+                "drivers::envelope",
+                "drivers/envelope (Bounds & EnvelopeState)"
+            )
         ),
         format!(
             "        L3_drivers_hub[\"{}\"]",
@@ -311,6 +329,13 @@ pub fn render_mermaid_workspace(repo_root: &Path) -> String {
             core_label("drivers::ego", "Lv.3 drivers/ego (Ego P-Frame)")
         ),
         format!(
+            "            L3_envelope[\"{}\"]",
+            core_label(
+                "drivers::envelope",
+                "Lv.3 drivers/envelope (Safety Envelope)"
+            )
+        ),
+        format!(
             "            L3_drivers_hub[\"{}\"]",
             core_label("drivers", "Lv.3 drivers/mod (Tension)")
         ),
@@ -394,6 +419,7 @@ pub fn render_mermaid_workspace(repo_root: &Path) -> String {
     lines.push("    L2_stigmergy ~~~ L3_drivers_hub".to_string());
     lines.push("    L3_spine ~~~ L4_runtime".to_string());
     lines.push("    L3_ego ~~~ L4_runtime".to_string());
+    lines.push("    L3_envelope ~~~ L4_runtime".to_string());
     lines.push(String::new());
     lines.join("\n")
 }

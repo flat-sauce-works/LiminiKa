@@ -13,8 +13,9 @@ use liminika_core::liminal::{
     BitCut8, LMNK_ABI_COMPAT_MASK, LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_HEX,
 };
 use liminika_core::runtime::{
-    CORE_TOPOLOGY, LMNK_TOPOLOGY_CHANNEL_COUNT, LMNK_TOPOLOGY_DAG_EDGE_MATRIX,
-    LMNK_TOPOLOGY_LAYER_COUNT, LMNK_TOPOLOGY_MAGIC,
+    CORE_TOPOLOGY, LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED, LMNK_TOPOLOGY_CHANNEL_COUNT,
+    LMNK_TOPOLOGY_DAG_EDGE_MATRIX, LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL, LMNK_TOPOLOGY_LAYER_COUNT,
+    LMNK_TOPOLOGY_MAGIC,
 };
 
 fn collect_non_test_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -60,6 +61,11 @@ fn test_core_topology_matrix_and_filesystem_dag_parity() {
     assert_eq!(CORE_TOPOLOGY.layer_count, LMNK_TOPOLOGY_LAYER_COUNT);
     assert_eq!(CORE_TOPOLOGY.channel_count, LMNK_TOPOLOGY_CHANNEL_COUNT);
     assert_eq!(CORE_TOPOLOGY.dag_edge_matrix, LMNK_TOPOLOGY_DAG_EDGE_MATRIX);
+    assert_eq!(CORE_TOPOLOGY.dag_flags, LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL);
+    assert_ne!(
+        CORE_TOPOLOGY.dag_flags & LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED,
+        0
+    );
     assert!(CORE_TOPOLOGY.verify_crc32());
 
     let prefix = CORE_TOPOLOGY.to_prefix_le_bytes();
@@ -90,6 +96,7 @@ fn test_core_topology_matrix_and_filesystem_dag_parity() {
     );
     assert_eq!(layer_dirs.len(), usize::from(CORE_TOPOLOGY.layer_count));
     assert!(core_src.join("stigmergy/anchor/mod.rs").is_file());
+    assert!(core_src.join("drivers/envelope/mod.rs").is_file());
     assert!(core_src.join("runtime/topology.rs").is_file());
     assert!(!core_src.join("stigmergy/crystal").exists());
     assert!(!core_src.join("stigmergy/attractor").exists());
@@ -122,28 +129,33 @@ fn test_core_topology_matrix_and_filesystem_dag_parity() {
         );
     }
 
-    let mut spine_files = Vec::new();
-    collect_non_test_rs_files(&core_src.join("drivers/spine"), &mut spine_files);
-    for path in spine_files {
-        let src = fs::read_to_string(&path).expect("read spine file");
-        let prod = non_test_body(&src);
-        assert!(
-            !prod.contains("crate::drivers::ego"),
-            "drivers/spine file {} must stay isolated from drivers/ego",
-            path.display()
+    let driver_siblings = ["spine", "ego", "envelope"];
+    for &src_driver in &driver_siblings {
+        let mut driver_files = Vec::new();
+        collect_non_test_rs_files(
+            &core_src.join(format!("drivers/{src_driver}")),
+            &mut driver_files,
         );
-    }
-
-    let mut ego_files = Vec::new();
-    collect_non_test_rs_files(&core_src.join("drivers/ego"), &mut ego_files);
-    for path in ego_files {
-        let src = fs::read_to_string(&path).expect("read ego file");
-        let prod = non_test_body(&src);
         assert!(
-            !prod.contains("crate::drivers::spine"),
-            "drivers/ego file {} must stay isolated from drivers/spine",
-            path.display()
+            !driver_files.is_empty(),
+            "drivers/{src_driver} must contain production .rs files"
         );
+        for path in driver_files {
+            let src = fs::read_to_string(&path).expect("read driver file");
+            let prod = non_test_body(&src);
+            for &dst_driver in &driver_siblings {
+                if src_driver == dst_driver {
+                    continue;
+                }
+                let forbidden_crate = format!("crate::drivers::{dst_driver}");
+                let forbidden_super = format!("super::{dst_driver}");
+                assert!(
+                    !prod.contains(&forbidden_crate) && !prod.contains(&forbidden_super),
+                    "drivers/{src_driver} file {} must stay isolated from drivers/{dst_driver}",
+                    path.display()
+                );
+            }
+        }
     }
 
     // 4. BitCut8 admission invariants

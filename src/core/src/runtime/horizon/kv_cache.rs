@@ -427,7 +427,7 @@ pub trait RamPhaseKvCacheOps {
             norm_approx += u16::from(swar_mean_u8_le128_x8(swar_q7_abs_u8_x8(words[c])));
             c += 1;
         }
-        let r_bar_approx = ((norm_approx as f32) / (8.0 * 127.0)).clamp(0.0, 1.0);
+        let r_bar_approx = ((norm_approx as f32) * (1.0 / (8.0 * 128.0))).clamp(0.0, 1.0);
         let crc32 = KvKeyframePacket::compute_anchor_crc32(phases);
         let lineage_flags = CAUSAL_AXIS_OBJECTIVE_FACT | circuit.causal_provenance_bits();
         let cluster_id = anchor_id.min(u32::from(u16::MAX)) as u16;
@@ -595,7 +595,7 @@ pub trait RamPhaseKvCacheOps {
                     }
                     let prox =
                         branchless_clamp_f32(1.0 - (sum_diff as f32) * (1.0 / 8192.0), 0.0, 1.0);
-                    let scaled = branchless_select_f32(cos > 0.0, cos * prox, cos) * 127.0;
+                    let scaled = branchless_select_f32(cos > 0.0, cos * prox, cos) * 128.0;
                     let rounded = if scaled >= 0.0 {
                         scaled + 0.5
                     } else {

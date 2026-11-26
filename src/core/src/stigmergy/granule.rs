@@ -300,7 +300,7 @@ pub fn evaluate_stigmergic_overlap_and_discovery_words_64<Node: RelativeAttracto
         let disc_hit = is_lacuna & (drift_q7 >= safe_discovery_floor);
         discovery_excursion_mask |= branchless_select_u8(disc_hit, bit, 0);
         lacuna_excursion_energy +=
-            branchless_select_f32(is_lacuna, f32::from(drift_q7) * (1.0 / 127.0), 0.0);
+            branchless_select_f32(is_lacuna, f32::from(drift_q7) * (1.0 / 128.0), 0.0);
 
         let take_serendip = disc_hit & (drift_q7 > best_serendip_q7);
         best_serendip_q7 = branchless_select_u8(take_serendip, drift_q7, best_serendip_q7);
@@ -479,8 +479,8 @@ impl StigmergicGranuleState {
 
     /// Evaluates the branchless self-differentiable boundary sensitivity gate $4p(1-p)$ in Q0.7 (`0 fdiv`).
     ///
-    /// Vanishes at both ignorance (`p_q7 == 0`) and saturation (`p_q7 >= 127`) while peaking at the
-    /// transition boundary (`p_q7 == 64`, returning `126`).
+    /// Vanishes at both ignorance (`p_q7 == 0`) and full saturation (`p_q7 >= 128`), returns `3` at
+    /// `p_q7 == 127`, and peaks at the transition boundary (`p_q7 == 64`, returning `127`).
     #[inline(always)]
     #[must_use]
     pub const fn boundary_sensitivity_gate_q7(p_q7: u8) -> u8 {

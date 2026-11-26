@@ -35,11 +35,15 @@ pub const LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL: u16 = 1 << 2;
 /// DAG invariant bit `3`: `liminika-core` enforces `#![no_std]` zero-allocation boundaries.
 pub const LMNK_DAG_FLAG_NO_STD_CORE: u16 = 1 << 3;
 
+/// DAG invariant bit `4`: all 3 Lv.3 driver siblings (`spine`, `ego`, `envelope`) are mutually isolated (6 pairs).
+pub const LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED: u16 = 1 << 4;
+
 /// Canonical composite DAG invariant flags for `LiminiKa` `v0.4.0`.
 pub const LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL: u16 = LMNK_DAG_FLAG_Y_SHAPED_PARALLEL_ROOTS
     | LMNK_DAG_FLAG_SPINE_EGO_ISOLATED
     | LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL
-    | LMNK_DAG_FLAG_NO_STD_CORE;
+    | LMNK_DAG_FLAG_NO_STD_CORE
+    | LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED;
 
 /// Canonical 5-layer unidirectional DAG upstream bitmasks (`dag_edge_matrix[layer]`).
 ///
@@ -289,6 +293,11 @@ mod tests {
         assert_eq!(CORE_TOPOLOGY.magic, LMNK_TOPOLOGY_MAGIC);
         assert_eq!(CORE_TOPOLOGY.layer_count, 5);
         assert_eq!(CORE_TOPOLOGY.channel_count, 8);
+        assert_ne!(
+            CORE_TOPOLOGY.dag_flags & LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED,
+            0
+        );
+        assert_eq!(CORE_TOPOLOGY.dag_flags, LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL);
         assert_eq!(
             CORE_TOPOLOGY.topology_crc32,
             compute_crc32_ieee(&CORE_TOPOLOGY.to_prefix_le_bytes())

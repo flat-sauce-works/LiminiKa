@@ -39,11 +39,13 @@ use crate::foundation::{
     load_q7_words_64, step_toroidal_centroid_words_cached_64, store_q7_words_64,
 };
 use crate::liminal::{
-    AbstractDomain, DEFAULT_ENTROPY_EPS, Grounded, Indivisible, LMNK_ABI_VERSION_HEX,
-    LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
-    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
-    Scoped, branchless_select_f32, branchless_select_q7, branchless_select_usize,
-    is_compatible_abi_version,
+    AbstractDomain, AttributionTag, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT,
+    BOUNDARY_SIGNAL_FLAG_FAULT, BOUNDARY_SIGNAL_FLAG_OBSERVED,
+    BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BoundarySignal, DEFAULT_ENTROPY_EPS, Grounded,
+    Indivisible, LMNK_ABI_VERSION_HEX, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
+    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, Lacuna, LacunaPartition8, LmnkResult,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, Scoped, branchless_select_f32,
+    branchless_select_q7, branchless_select_u8, branchless_select_usize, is_compatible_abi_version,
 };
 
 /// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
@@ -612,6 +614,68 @@ impl PhaseAnchorRecord {
     #[inline(always)]
     pub fn stamp_crc32(&mut self) {
         self.checksum_crc32 = self.compute_payload_crc32();
+    }
+
+    /// Projects this 128-byte [`PhaseAnchorRecord`] (`64 B` header + `64 B` RoPE phase payload)
+    /// into a 32-byte domain-agnostic [`BoundarySignal`] in $\mathcal{O}(1)$ without mutating or
+    /// copying the 64-head phase profile (`0 alloc`, `0 fdiv`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_boundary_signal(
+        &self,
+        partition: LacunaPartition8,
+        pressure_q15: u16,
+        epoch_id: u32,
+    ) -> BoundarySignal {
+        let r_bar_finite = branchless_is_finite_f32(self.resultant_r_bar);
+        let energy_finite = branchless_is_finite_f32(self.base_energy);
+        let is_fault = (!r_bar_finite) | (!energy_finite) | partition.has_undefined_bottom();
+        let r_bar_clamped = branchless_select_f32(
+            r_bar_finite,
+            branchless_clamp_f32(self.resultant_r_bar, 0.0, 1.0),
+            0.0,
+        );
+        let disp_q15_raw = ((1.0 - r_bar_clamped) * 32_768.0 + 0.5) as u32;
+        let disp_q15 = if self.sample_count == 0 {
+            0
+        } else if disp_q15_raw > 32_768 {
+            32_768
+        } else {
+            disp_q15_raw as u16
+        };
+
+        let has_ext = (!is_fault) & partition.has_exterior_gap();
+        let is_obs = (!is_fault) & ((self.sample_count > 0) | (partition.observed_mask != 0));
+        let is_stat = (!is_fault) & (!has_ext) & (self.sample_count >= 2) & (r_bar_clamped >= 0.45);
+        let base_lacuna = branchless_select_u8(
+            partition.dominant_lacuna != 0,
+            partition.dominant_lacuna & 0x03,
+            branchless_select_u8(
+                self.sample_count > 0,
+                Lacuna::SelfRef.code(),
+                Lacuna::Unobserved.code(),
+            ),
+        );
+        let lacuna_code = branchless_select_u8(is_fault, Lacuna::Undefined.code(), base_lacuna);
+        let signal_flags = branchless_select_u8(is_obs, BOUNDARY_SIGNAL_FLAG_OBSERVED, 0)
+            | branchless_select_u8(is_fault, BOUNDARY_SIGNAL_FLAG_FAULT, 0)
+            | branchless_select_u8(has_ext, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, 0)
+            | branchless_select_u8(is_stat, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, 0);
+
+        BoundarySignal {
+            partition,
+            pressure_q15,
+            delta_q15: disp_q15,
+            attribution_tag: AttributionTag::STIGMERGY_SYSTEM.raw(),
+            lacuna_code,
+            contraction_q7: 128,
+            chatter_q7: 0,
+            signal_flags,
+            dominant_lane: self.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            root_cause_code: self.root_cause_code,
+            breach_mask: 0,
+            epoch_id,
+        }
     }
 
     /// Restores `self` from `src` using width-matched scalar writes and 64-bit GPR stores

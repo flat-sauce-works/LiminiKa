@@ -156,7 +156,7 @@ impl StigmergicThresholds {
         let confirmed_rise = exceeds_deadband & (prev_rising | strong_rise);
 
         let p_norm = branchless_clamp_f32(i_rho * 0.25_f32 + e_gate * 0.5_f32, 0.0, 1.0);
-        let p_q7 = (p_norm * 127.0_f32) as u8;
+        let p_q7 = (p_norm * 128.0_f32) as u8;
         let gate_q7 = StigmergicGranuleState::boundary_sensitivity_gate_q7(p_q7);
         let gate_f = (gate_q7 as f32) * (1.0_f32 / 128.0_f32);
 

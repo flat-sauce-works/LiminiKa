@@ -686,7 +686,7 @@ pub trait CognitiveCircuitThresholdPolicy {
         let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(h.to_bits() >> 1));
         let y1 = y0 * (1.5_f32 - half * y0 * y0);
         let inv_sqrt_h = y1 * (1.5_f32 - half * y1 * y1);
-        let base_floor = 2.0_f32 * inv_sqrt_h * 127.0_f32;
+        let base_floor = 2.0_f32 * inv_sqrt_h * 128.0_f32;
         let cap = capacity.max(1) as f32;
         let occ_ratio = branchless_clamp_f32(
             (occupied_slots as f32) * fast_inv_pos_normal_f32(cap),
@@ -761,7 +761,7 @@ impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
             0.0,
             1.0,
         );
-        let base_floor = 2.0_f32 * inv_sqrt_h * 127.0_f32 * (1.0_f32 - 0.15_f32 * occ_ratio);
+        let base_floor = 2.0_f32 * inv_sqrt_h * 128.0_f32 * (1.0_f32 - 0.15_f32 * occ_ratio);
         ((base_floor + 0.5_f32) as i32 + gain_shift).clamp(24, 96) as PhaseQ7
     }
 

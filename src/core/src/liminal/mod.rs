@@ -12,6 +12,7 @@
 
 pub mod axiom;
 pub mod bitcut;
+pub mod boundary;
 pub mod constants;
 pub mod partition;
 pub mod select;
@@ -19,6 +20,7 @@ pub mod threshold;
 
 pub use self::axiom::*;
 pub use self::bitcut::{BitCut, BitCut8, BitCut32, BitCut64};
+pub use self::boundary::*;
 pub use self::constants::*;
 pub use self::partition::*;
 pub use self::select::*;

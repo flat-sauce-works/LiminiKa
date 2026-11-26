@@ -284,10 +284,16 @@ fn test_workbench_free_by_default_allocator_pin_evict_decay_and_sandbox() {
 fn test_stigmergic_calculus_convex_combination_and_boundary_gate() {
     use crate::stigmergy::granule::StigmergicGranuleState;
 
-    // 1. 4p(1-p) boundary sensitivity gate vanishes at ignorance (0) and saturation (127), peaks at 64.
+    // 1. 4p(1-p) boundary sensitivity gate vanishes at ignorance (0) and saturation (>= 128),
+    //    returns 3 at 127, and peaks at 64 (127).
     assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(0), 0);
-    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(127), 0);
-    assert!(StigmergicGranuleState::boundary_sensitivity_gate_q7(64) >= 120);
+    assert_eq!(
+        StigmergicGranuleState::boundary_sensitivity_gate_q7(64),
+        127
+    );
+    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(127), 3);
+    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(128), 0);
+    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(255), 0);
 
     // 2. alpha = 0 reduces identically to pure integral density.
     let (eff_zero, _) =

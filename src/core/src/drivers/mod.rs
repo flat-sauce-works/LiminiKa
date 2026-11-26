@@ -1,9 +1,10 @@
 // name: src/core/src/drivers/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Level 3 (`Drivers`): Dual execution axes (`spine` vs. `ego`) mediating homeostatic
-//! convergence vs. intentional deviation through [`DistortionTension`] (`32 B`).
-//! `spine` and `ego` never import one another.
+//! Level 3 (`Drivers`): Three mutually isolated execution driver siblings (`spine`, `ego`,
+//! `envelope`) mediating homeostatic convergence, intentional deviation, and bounded safety
+//! constraints through [`DistortionTension`] (`32 B`) and Lv.0 [`crate::liminal::BoundarySignal`].
+//! `spine`, `ego`, and `envelope` never import one another.
 //!
 //! Depends strictly on `core`, [`crate::liminal`], [`crate::foundation`], and [`crate::stigmergy`].
 
@@ -13,9 +14,11 @@
 #![warn(clippy::missing_errors_doc)]
 
 pub mod ego;
+pub mod envelope;
 pub mod spine;
 
 pub use self::ego::*;
+pub use self::envelope::*;
 pub use self::spine::*;
 
 use crate::foundation::Pod;
@@ -65,7 +68,7 @@ pub struct DistortionTension {
     pub slow_excitation_events: u32,
     /// L-infinity / mean magnitude of the latest differential $\delta_{\mathrm{ego}}$ (`offset 16`).
     pub last_ego_delta_norm_q7: u8,
-    /// 2-bit [`AttributionTag`] (`Liminal`, `Ego`, `offset 17`).
+    /// 3-bit [`AttributionTag`] (`Liminal`, `Ego`, `offset 17`).
     pub attribution_tag: u8,
     /// Observed non-pinned guard proximity in Q0.7 (`offset 18`).
     pub guard_proximity_q7: u8,

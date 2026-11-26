@@ -8,12 +8,18 @@ use super::*;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::branchless_rotate_so2_pair;
 use crate::foundation::{
-    ACTION_MODE_PHASE_REPULSE, ACTION_PRESET_EXPRESS_PHASE, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD, Pod, RawPhaseProjectable, SubheadConfig, TaggedPtr,
-    branchless_clamp_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
-    branchless_sincos_q7_phase_clamp, pack_action_slot_tag, resolve_autonomous_swarm_rot_dim,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_PRESET_EXPRESS_PHASE,
+    ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, Pod,
+    RawPhaseProjectable, SubheadConfig, TaggedPtr, branchless_clamp_f32, branchless_is_finite_f32,
+    branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_sincos_q7_phase_clamp,
+    pack_action_slot_tag, resolve_autonomous_swarm_rot_dim,
 };
-use crate::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_u8};
+use crate::liminal::{
+    AttributionTag, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, BOUNDARY_SIGNAL_FLAG_FAULT,
+    BOUNDARY_SIGNAL_FLAG_OBSERVED, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BoundarySignal, Lacuna,
+    LacunaPartition8, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_u8,
+};
 use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
 mod adapters;
@@ -196,6 +202,81 @@ impl GatewayFrame {
         }
     }
 
+    /// Projects this 128-byte [`GatewayFrame`] (`64 B` header + `64 B` RoPE phase deltas)
+    /// into a 32-byte domain-agnostic [`BoundarySignal`] in $\mathcal{O}(1)$ without mutating or
+    /// copying the 64-head phase payload (`0 alloc`, `0 fdiv`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_boundary_signal(
+        &self,
+        partition: LacunaPartition8,
+        pressure_q15: u16,
+        chatter_q7: u8,
+        epoch_id: u32,
+    ) -> BoundarySignal {
+        let energy_ok = branchless_is_finite_f32(self.effective_energy);
+        let rep_ok = branchless_is_finite_f32(self.repulsion_severity);
+        let coh_ok = branchless_is_finite_f32(self.fact_persona_coherence);
+        let is_fault = (!energy_ok) | (!rep_ok) | (!coh_ok) | partition.has_undefined_bottom();
+
+        let rep_clamped = branchless_select_f32(
+            rep_ok,
+            branchless_clamp_f32(self.repulsion_severity, 0.0, 1.0),
+            1.0,
+        );
+        let delta_raw = (rep_clamped * 32_768.0 + 0.5) as u32;
+        let delta_q15 = if delta_raw > 32_768 {
+            32_768
+        } else {
+            delta_raw as u16
+        };
+
+        let has_ext = (!is_fault) & (partition.has_exterior_gap() | self.is_repulsed());
+        let has_energy = energy_ok & (self.effective_energy > 0.0);
+        let is_obs = (!is_fault) & ((partition.observed_mask != 0) | has_energy);
+        let is_stat = (!is_fault)
+            & (!has_ext)
+            & (partition.is_self_aligned()
+                | ((self.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0));
+
+        let non_fault_lacuna = branchless_select_u8(
+            has_ext,
+            Lacuna::Exterior.code(),
+            branchless_select_u8(
+                (partition.self_ref_mask != 0) | has_energy,
+                Lacuna::SelfRef.code(),
+                Lacuna::Unobserved.code(),
+            ),
+        );
+        let lacuna_code =
+            branchless_select_u8(is_fault, Lacuna::Undefined.code(), non_fault_lacuna);
+        let signal_flags = branchless_select_u8(is_obs, BOUNDARY_SIGNAL_FLAG_OBSERVED, 0)
+            | branchless_select_u8(is_fault, BOUNDARY_SIGNAL_FLAG_FAULT, 0)
+            | branchless_select_u8(has_ext, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, 0)
+            | branchless_select_u8(is_stat, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, 0);
+        let attribution_tag = branchless_select_u8(
+            partition.is_sandbox_eligible(),
+            AttributionTag::STIGMERGY_SYSTEM.raw(),
+            AttributionTag::LIMINAL_SYSTEM.raw(),
+        );
+        let clamped_chatter = if chatter_q7 > 127 { 127 } else { chatter_q7 };
+
+        BoundarySignal {
+            partition,
+            pressure_q15,
+            delta_q15,
+            attribution_tag,
+            lacuna_code,
+            contraction_q7: 128,
+            chatter_q7: clamped_chatter,
+            signal_flags,
+            dominant_lane: self.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            root_cause_code: self.root_cause_code,
+            breach_mask: 0,
+            epoch_id,
+        }
+    }
+
     /// Converts the Gateway's recommended Fact/Logic/Explore head split into a [`SubheadConfig`]
     /// scaled proportionally to `total_heads`.
     #[inline(always)]
@@ -355,5 +436,60 @@ impl RawPhaseProjectable for GatewayFrame {
     #[inline(always)]
     fn project_to_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
         *self.phase_words_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::liminal::evaluate_lacuna_partition_branchless;
+    use crate::stigmergy::PhaseAnchorRecord;
+
+    #[test]
+    fn test_gateway_frame_and_phase_anchor_boundary_signal_projections() {
+        assert_eq!(core::mem::size_of::<GatewayFrame>(), 128);
+        assert_eq!(core::mem::size_of::<PhaseAnchorRecord>(), 128);
+
+        let tol = [10u8; NUM_STIGMERGIC_GRANULES];
+        let aligned = [80, 72, 0, 0, 0, 0, 0, 0];
+        let lp = evaluate_lacuna_partition_branchless(0x03, &aligned, &tol, 40);
+
+        let mut frame = GatewayFrame {
+            effective_energy: 1.5,
+            repulsion_severity: 0.25,
+            dominant_slot: 2,
+            root_cause_code: ROOT_CAUSE_NOMINAL,
+            ..GatewayFrame::default()
+        };
+        let sig = frame.to_boundary_signal(lp, 9_000, 12, 7);
+        assert!(sig.is_observed());
+        assert!(!sig.is_fault());
+        assert!(!sig.has_exterior_alert());
+        assert!(sig.is_stationary_ready());
+        assert_eq!(sig.dominant_lane, 2);
+        assert_eq!(sig.delta_q15, 8_192);
+        assert_eq!(sig.epoch_id, 7);
+
+        // NaN energy fails closed to Undefined fault.
+        frame.effective_energy = f32::NAN;
+        let fault_sig = frame.to_boundary_signal(lp, 9_000, 12, 8);
+        assert!(fault_sig.is_fault());
+        assert_eq!(fault_sig.lacuna_code, Lacuna::Undefined.code());
+
+        // PhaseAnchorRecord projection preserves 128B layout and projects dispersion.
+        let mut anchor = PhaseAnchorRecord::new_empty(11, 1, 0);
+        anchor.sample_count = 4;
+        anchor.base_energy = 1.0;
+        anchor.resultant_r_bar = 0.75;
+        let a_sig = anchor.to_boundary_signal(lp, 8_000, 9);
+        assert!(a_sig.is_observed());
+        assert!(!a_sig.is_fault());
+        assert!(a_sig.is_stationary_ready());
+        assert_eq!(a_sig.delta_q15, 8_192);
+        assert_eq!(a_sig.dominant_lane, 1);
+        assert_eq!(
+            a_sig.attribution_tag,
+            AttributionTag::STIGMERGY_SYSTEM.raw()
+        );
     }
 }

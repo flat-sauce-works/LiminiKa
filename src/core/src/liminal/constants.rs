@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Layer 0 fundamental constants, C-ABI configuration/status primitives, cognitive threshold
-//! masks, and 2-bit structural attribution tags.
+//! masks, and 3-bit structural attribution tags (`2 Primitives x 3 Drivers`).
 
 #![forbid(unsafe_code)]
 
@@ -551,8 +551,12 @@ pub const THRESHOLD_STIGMERGY_WIDE: u32 = 0x0000_FFFF;
 /// Number of dynamic channel slots tracked by `LiminalThresholdState`.
 pub const NUM_LIMINAL_THRESHOLD_CHANNELS: usize = 8;
 
+/// Minimum host-immutable compute slot bitmask (`bit 0`) preserved across untrusted snapshot restores
+/// and shared across isolated Lv.3 drivers (`spine`, `envelope`).
+pub const HOST_IMMUTABLE_PINNED_COMPUTE_MASK: u64 = 1u64 << 0;
+
 // ===================================================================
-// 4. 2 Primitives x 2 Drivers Lightweight Attribution Tags
+// 4. 2 Primitives x 3 Drivers Lightweight Attribution Tags
 // ===================================================================
 
 /// Geometric primitive classifier (`PrimitiveKind`).
@@ -588,49 +592,57 @@ pub enum DriverKind {
     System = 0,
     /// Anisotropic intentional differential noise / P-Frame network (`1`).
     Ego = 1,
+    /// Bounded safety-envelope constraint and pin-floor driver (`2`).
+    Envelope = 2,
 }
 
 impl DriverKind {
-    /// Decodes a [`DriverKind`] branchlessly from bit 0 of a shifted driver field.
+    /// Decodes a [`DriverKind`] branchlessly from a 2-bit driver field (`0 => System`, `1 => Ego`,
+    /// `2 => Envelope`, reserved `3 => System`).
     #[inline(always)]
     #[must_use]
-    pub const fn from_bit(bit: u8) -> Self {
-        if (bit & 1) == 0 {
-            Self::System
-        } else {
-            Self::Ego
+    pub const fn from_bits(bits: u8) -> Self {
+        match bits & 0x03 {
+            1 => Self::Ego,
+            2 => Self::Envelope,
+            _ => Self::System,
         }
     }
 }
 
-/// Packed 2-bit structural attribution tag (`[Driver(1b) | Primitive(1b)]`) inside a 1-byte
-/// wrapper for zero-cost telemetry and bypass provenance without marker-trait bloat.
+/// Packed 3-bit structural attribution tag (`[Driver(2b) | Primitive(1b)]`) inside a 1-byte
+/// wrapper for zero-cost telemetry and bypass provenance across `2 Primitives x 3 Drivers`
+/// (`0..=5`) without marker-trait bloat.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AttributionTag(pub u8);
 
 impl AttributionTag {
-    /// Packs `(primitive, driver)` into a 2-bit attribution tag byte.
+    /// Packs `(primitive, driver)` into a 3-bit attribution tag byte (`0..=5`).
     #[inline(always)]
     #[must_use]
     pub const fn new(primitive: PrimitiveKind, driver: DriverKind) -> Self {
-        Self((primitive as u8) | ((driver as u8) << 1))
+        Self(((primitive as u8) & 0x01) | (((driver as u8) & 0x03) << 1))
     }
 
-    /// Attribution tag for (`Liminal`, `System`).
+    /// Attribution tag for (`Liminal`, `System`) = `0`.
     pub const LIMINAL_SYSTEM: Self = Self::new(PrimitiveKind::Liminal, DriverKind::System);
-    /// Attribution tag for (`Liminal`, `Ego`).
-    pub const LIMINAL_EGO: Self = Self::new(PrimitiveKind::Liminal, DriverKind::Ego);
-    /// Attribution tag for (`Stigmergy`, `System`).
+    /// Attribution tag for (`Stigmergy`, `System`) = `1`.
     pub const STIGMERGY_SYSTEM: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::System);
-    /// Attribution tag for (`Stigmergy`, `Ego`).
+    /// Attribution tag for (`Liminal`, `Ego`) = `2`.
+    pub const LIMINAL_EGO: Self = Self::new(PrimitiveKind::Liminal, DriverKind::Ego);
+    /// Attribution tag for (`Stigmergy`, `Ego`) = `3`.
     pub const STIGMERGY_EGO: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::Ego);
+    /// Attribution tag for (`Liminal`, `Envelope`) = `4`.
+    pub const LIMINAL_ENVELOPE: Self = Self::new(PrimitiveKind::Liminal, DriverKind::Envelope);
+    /// Attribution tag for (`Stigmergy`, `Envelope`) = `5`.
+    pub const STIGMERGY_ENVELOPE: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::Envelope);
 
-    /// Returns the raw byte representation (`bits 0..=1`).
+    /// Returns the raw 3-bit tag representation (`bits 0..=2`).
     #[inline(always)]
     #[must_use]
     pub const fn raw(self) -> u8 {
-        self.0 & 0x03
+        self.0 & 0x07
     }
 
     /// Extracts the [`PrimitiveKind`] primitive axis (`bit 0`).
@@ -640,25 +652,32 @@ impl AttributionTag {
         PrimitiveKind::from_bit(self.0)
     }
 
-    /// Extracts the [`DriverKind`] orthogonal driver axis (`bit 1`).
+    /// Extracts the [`DriverKind`] orthogonal driver axis (`bits 1..=2`).
     #[inline(always)]
     #[must_use]
     pub const fn driver(self) -> DriverKind {
-        DriverKind::from_bit(self.0 >> 1)
+        DriverKind::from_bits(self.0 >> 1)
     }
 
     /// Returns `true` when attributed to the deterministic [`DriverKind::System`] spine.
     #[inline(always)]
     #[must_use]
     pub const fn is_system(self) -> bool {
-        (self.0 & (1 << 1)) == 0
+        ((self.0 >> 1) & 0x03) == DriverKind::System as u8
     }
 
     /// Returns `true` when attributed to the differential [`DriverKind::Ego`] operator.
     #[inline(always)]
     #[must_use]
     pub const fn is_ego(self) -> bool {
-        (self.0 & (1 << 1)) != 0
+        ((self.0 >> 1) & 0x03) == DriverKind::Ego as u8
+    }
+
+    /// Returns `true` when attributed to the bounded [`DriverKind::Envelope`] constraint driver.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_envelope(self) -> bool {
+        ((self.0 >> 1) & 0x03) == DriverKind::Envelope as u8
     }
 }
 
@@ -667,4 +686,78 @@ impl AttributionTag {
 #[must_use]
 pub const fn pack_attribution_tag(primitive: PrimitiveKind, driver: DriverKind) -> u8 {
     AttributionTag::new(primitive, driver).raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_attribution_tag_two_by_three_mutual_exclusivity() {
+        let cases = [
+            (
+                AttributionTag::LIMINAL_SYSTEM,
+                0u8,
+                PrimitiveKind::Liminal,
+                DriverKind::System,
+                (true, false, false),
+            ),
+            (
+                AttributionTag::STIGMERGY_SYSTEM,
+                1u8,
+                PrimitiveKind::Stigmergy,
+                DriverKind::System,
+                (true, false, false),
+            ),
+            (
+                AttributionTag::LIMINAL_EGO,
+                2u8,
+                PrimitiveKind::Liminal,
+                DriverKind::Ego,
+                (false, true, false),
+            ),
+            (
+                AttributionTag::STIGMERGY_EGO,
+                3u8,
+                PrimitiveKind::Stigmergy,
+                DriverKind::Ego,
+                (false, true, false),
+            ),
+            (
+                AttributionTag::LIMINAL_ENVELOPE,
+                4u8,
+                PrimitiveKind::Liminal,
+                DriverKind::Envelope,
+                (false, false, true),
+            ),
+            (
+                AttributionTag::STIGMERGY_ENVELOPE,
+                5u8,
+                PrimitiveKind::Stigmergy,
+                DriverKind::Envelope,
+                (false, false, true),
+            ),
+        ];
+
+        for (tag, expected_raw, expected_prim, expected_drv, (sys, ego, env)) in cases {
+            assert_eq!(tag.raw(), expected_raw);
+            assert_eq!(
+                pack_attribution_tag(expected_prim, expected_drv),
+                expected_raw
+            );
+            assert_eq!(tag.primitive(), expected_prim);
+            assert_eq!(tag.driver(), expected_drv);
+            assert_eq!(tag.is_system(), sys);
+            assert_eq!(tag.is_ego(), ego);
+            assert_eq!(tag.is_envelope(), env);
+            let active_count = usize::from(tag.is_system())
+                + usize::from(tag.is_ego())
+                + usize::from(tag.is_envelope());
+            assert_eq!(active_count, 1);
+        }
+
+        // Reserved driver code 3 falls back fail-safely to System.
+        assert_eq!(DriverKind::from_bits(3), DriverKind::System);
+        assert_eq!(DriverKind::from_bits(0b1111_1110), DriverKind::Envelope);
+    }
 }

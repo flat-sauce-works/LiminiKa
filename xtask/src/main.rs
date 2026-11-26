@@ -157,7 +157,7 @@ fn main() -> ExitCode {
             exit_code = ExitCode::FAILURE;
         } else {
             println!(
-                "All 5-layer DAG, spine/ego isolation, axiom orthogonality, \
+                "All 5-layer DAG, 3-driver isolation, axiom orthogonality, \
                  AbstractDomain, Scoped boundary, workspace gate, legacy declared-identifier bans, \
                  Substrate ownership, and file hygiene invariants passed (0 violations)."
             );
@@ -297,6 +297,28 @@ pub fn demo<'a, 'static_like>(x: &'a str) -> (&'static std::ffi::CStr, char) {
         let hits = workspace_gates::scan_host_llm_isolation_in_source(&code, "host/bad.rs", &lines);
         assert!(hits.iter().any(|h| h.contains("crate::pooling")));
         assert!(hits.iter().any(|h| h.contains("logits")));
+    }
+
+    #[test]
+    fn detects_three_driver_sibling_isolation_violations() {
+        let bad_spine = "use crate::drivers::envelope::EnvelopeState;\n";
+        assert_eq!(
+            core_dag::scan_driver_isolation_in_source(bad_spine, "envelope").len(),
+            1
+        );
+        let bad_env_ego = "use super::ego::EgoDifferentialNet;\n";
+        assert_eq!(
+            core_dag::scan_driver_isolation_in_source(bad_env_ego, "ego").len(),
+            1
+        );
+        let bad_env_spine = "use crate::drivers::spine::SystemSpineState;\n";
+        assert_eq!(
+            core_dag::scan_driver_isolation_in_source(bad_env_spine, "spine").len(),
+            1
+        );
+        let clean_env = "use crate::liminal::BoundarySignal;\nuse crate::foundation::Pod;\n";
+        assert!(core_dag::scan_driver_isolation_in_source(clean_env, "spine").is_empty());
+        assert!(core_dag::scan_driver_isolation_in_source(clean_env, "ego").is_empty());
     }
 
     #[test]

@@ -30,6 +30,8 @@ const CORE_PRIMITIVE_WORDS: &[&str] = &[
     "Scoped",
     "Indivisible",
     "SystemSpineState",
+    "EnvelopeState",
+    "BoundarySignal",
     "DistortionTension",
     "EgoDifferentialNet",
     "CoreTelemetryBank",

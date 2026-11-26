@@ -73,6 +73,14 @@ void test_static_invariants() {
     static_assert(offsetof(lmnk_topology_snapshot_t, spawned_anchors) == 31U);
     static_assert(sizeof(lmnk_lacuna_partition_t) == 16U);
     static_assert(LMNK_ERR_TOPOLOGY_MISMATCH == -52);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_LIMINAL, LMNK_DRIVER_SYSTEM) == 0U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_STIGMERGY, LMNK_DRIVER_SYSTEM) == 1U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_LIMINAL, LMNK_DRIVER_EGO) == 2U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_STIGMERGY, LMNK_DRIVER_EGO) == 3U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_LIMINAL, LMNK_DRIVER_ENVELOPE) == 4U);
+    static_assert(LMNK_ATTRIBUTION_TAG(LMNK_PRIMITIVE_STIGMERGY, LMNK_DRIVER_ENVELOPE) == 5U);
+    static_assert(LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED == (1U << 4));
+    static_assert((LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL & LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED) != 0U);
 }
 
 void test_handshake_config_and_inline_tagged_ptr() {

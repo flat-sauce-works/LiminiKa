@@ -9,13 +9,13 @@ use crate::liminal::constants::{NUM_LIMINAL_THRESHOLD_CHANNELS, THRESHOLD_STIGME
 
 /// Evaluates the branchless self-differentiable boundary sensitivity gate $4p(1-p)$ in Q0.7 (`0 fdiv`).
 ///
-/// Vanishes at both ignorance (`p_q7 == 0`) and saturation (`p_q7 >= 127`) while peaking at the
-/// transition boundary (`p_q7 == 64`, returning `126`).
+/// Vanishes at both ignorance (`p_q7 == 0`) and full saturation (`p_q7 >= 128`), returns `3` at
+/// `p_q7 == 127`, and peaks at the transition boundary (`p_q7 == 64`, returning `127`).
 #[inline(always)]
 #[must_use]
 pub const fn sensitivity_4p1mp_q7(p_q7: u8) -> u8 {
-    let p = if p_q7 > 127 { 127 } else { p_q7 };
-    let prod = (p as u32) * ((127 - p) as u32);
+    let p = if p_q7 > 128 { 128 } else { p_q7 };
+    let prod = (p as u32) * ((128 - p) as u32);
     let scaled = prod >> 5;
     if scaled > 127 { 127 } else { scaled as u8 }
 }
@@ -82,13 +82,33 @@ impl LiminalThresholdState {
     #[inline(always)]
     #[must_use]
     pub const fn channel_threshold_floor_f32(&self, ch: usize) -> f32 {
-        (self.threshold_floor_q7[ch & (NUM_LIMINAL_THRESHOLD_CHANNELS - 1)] as f32) * (1.0 / 127.0)
+        (self.threshold_floor_q7[ch & (NUM_LIMINAL_THRESHOLD_CHANNELS - 1)] as f32) * (1.0 / 128.0)
     }
 
     /// Returns channel `ch`'s normalized cognitive opening gain in `[0.0, 1.0]`.
     #[inline(always)]
     #[must_use]
     pub const fn channel_gain_f32(&self, ch: usize) -> f32 {
-        (self.aperture_gain_q7[ch & (NUM_LIMINAL_THRESHOLD_CHANNELS - 1)] as f32) * (1.0 / 127.0)
+        (self.aperture_gain_q7[ch & (NUM_LIMINAL_THRESHOLD_CHANNELS - 1)] as f32) * (1.0 / 128.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sensitivity_4p1mp_q7_scale_128_and_channel_accessors() {
+        assert_eq!(sensitivity_4p1mp_q7(0), 0);
+        assert_eq!(sensitivity_4p1mp_q7(64), 127);
+        assert_eq!(sensitivity_4p1mp_q7(127), 3);
+        assert_eq!(sensitivity_4p1mp_q7(128), 0);
+        assert_eq!(sensitivity_4p1mp_q7(255), 0);
+
+        let mut st = LiminalThresholdState::new();
+        st.threshold_floor_q7[1] = 64;
+        st.aperture_gain_q7[1] = 96;
+        assert!((st.channel_threshold_floor_f32(1) - 0.5).abs() < 1e-6);
+        assert!((st.channel_gain_f32(1) - 0.75).abs() < 1e-6);
     }
 }
