@@ -1335,7 +1335,7 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
         64
     );
 
-    // Case B: Saturated basin cannot absorb an orthogonal sample into any existing node -> autonomous daughter birth!
+    // Case B: Saturated basin cannot absorb an orthogonal sample into any existing node -> autonomous daughter birth.
     let fact_orphan = ObjectiveFact::new([-96i8; MAX_ATTENTION_HEADS], 1.8, 0x0040_0000, 91);
     let (_, report_birth) = PhaseAnchorRecord::step_dissipative_overflow_signal_64(
         &mut pool,
@@ -1640,7 +1640,7 @@ fn stigmergic_overlap_discovery_and_core_stack_feedback() {
     let post_overlap = evaluate_stigmergic_overlap_and_discovery_words_64(
         &anchors, &query_w, &drifted_w, 0.70, 16,
     );
-    // Granule 6 is no longer in the unobserved exterior because Anchor 2 now covers it!
+    // Granule 6 is no longer in the unobserved exterior because Anchor 2 now covers it.
     assert_eq!(post_overlap.lacuna_exterior_mask & (1 << 6), 0);
 
     // Verify zero-alloc Core Layer 0 + Layer 1 + Layer 2 Mermaid output
@@ -1770,7 +1770,7 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     assert_ne!(ego_symbolic.ego_signature_hash, 0);
     assert!(ego_symbolic.counter_basin_thrust_q7 >= 24);
 
-    // 3. Counter-basin orbital thrust & transgressive Liminal leap on GatewayFrame + Core Layers
+    // 3. Counter-basin thrust & transgressive Liminal leap on GatewayFrame + Core Layers
     let mut stack = CoreStateStack::new();
     let overlap = OverlapDiscoveryReport {
         overlap_core_mask: 0x0F,

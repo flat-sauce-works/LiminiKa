@@ -248,7 +248,6 @@ impl<O: Cuttable, T> Scoped<O, T> {
     /// Borrows the wrapped value immutably.
     #[inline(always)]
     #[must_use]
-    #[allow(clippy::should_implement_trait)]
     pub const fn as_ref(&self) -> &T {
         &self.value
     }
@@ -367,7 +366,6 @@ impl<C: IndivisiblePhase, T> Indivisible<C, T> {
     /// Borrows the converged payload immutably.
     #[inline(always)]
     #[must_use]
-    #[allow(clippy::should_implement_trait)]
     pub const fn as_ref(&self) -> &T {
         &self.value
     }

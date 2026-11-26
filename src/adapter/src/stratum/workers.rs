@@ -23,6 +23,7 @@ fn short_query_contrast_shrinkage(query_seq_len: usize) -> f32 {
 
 /// Applies leave-one-out top-k viewing-angle contrast across a subset of corpus `indices`
 /// to eliminate `1/N` self-dilution bias across differently sized role populations.
+// Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
 #[allow(clippy::too_many_arguments)]
 fn apply_loo_top_k_contrast_on_indices(
     cos_matrix: &[Vec<f32>],

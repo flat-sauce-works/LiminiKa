@@ -66,7 +66,7 @@ fn test_container_view_hardened_parsing_alignment_and_reserved_sections() {
     assert_eq!(valid_view.causal_provenance_zero_copy().unwrap().len(), 1);
 
     // Intentionally 1-byte-misaligned slice: parse succeeds, zero-copy typed slice returns LMNK_ERR_ALIGNMENT,
-    // while section_bytes() and read_phase_anchor() succeed cleanly!
+    // while section_bytes() and read_phase_anchor() succeed cleanly.
     let mut unaligned_backing = alloc::vec![0u8; written + 2];
     unaligned_backing[1..1 + written].copy_from_slice(&aligned.data[..written]);
     let misaligned = &unaligned_backing[1..1 + written];

@@ -4,8 +4,8 @@
 //! Shared benchmark utilities (FTZ/DAZ MXCSR guard, cache-line-aligned heap
 //! buffers, and Criterion configuration helpers) for LiminiKa benchmarks.
 
+// Each bench binary includes this module and uses a different subset of its helpers.
 #![allow(dead_code)]
-#![allow(missing_docs)]
 
 use liminika_core::foundation::{AlignedSlice, AlignedSliceMut};
 use std::alloc::{alloc, dealloc, Layout};

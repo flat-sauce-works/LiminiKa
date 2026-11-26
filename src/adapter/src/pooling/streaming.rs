@@ -844,7 +844,7 @@ mod tests {
                 .push_text(&mut encoder, &adapter, role, text, 1.5)
                 .expect("push_text");
         }
-        // Strictly 1 forward pass per chunk!
+        // Strictly 1 forward pass per chunk.
         assert_eq!(encoder.forward_calls, 280);
 
         let (compiled, report) = distiller.finalize(&adapter, None).expect("finalize");

@@ -428,6 +428,7 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// Borrows the validated handle as a mutable reference `&mut T`.
     #[inline(always)]
     #[must_use]
+    // Inherent accessor on the handle wrapper; an `AsMut` impl would widen the public trait surface.
     #[allow(clippy::should_implement_trait)]
     pub fn as_mut(&mut self) -> &mut T {
         // SAFETY: Validity, alignment, and unique borrow guaranteed at construction.
@@ -499,6 +500,7 @@ macro_rules! define_opaque_handles {
             pub type $handle = *mut $opaque;
 
             #[doc = $doc]
+            // C-ABI typedef aliases keep their `lmnk_*_t` spelling to mirror `include/liminika/lmnk_types.h`.
             #[allow(non_camel_case_types)]
             pub type $c_alias = $handle;
         )*

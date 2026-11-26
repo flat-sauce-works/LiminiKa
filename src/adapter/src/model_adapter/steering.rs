@@ -266,6 +266,7 @@ impl ModelSteeringAdapter {
     /// # Errors
     ///
     /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_layer_rope_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
@@ -309,6 +310,7 @@ impl ModelSteeringAdapter {
     ///
     /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
     /// `liminika-core` rejects the inputs.
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_layer_rope_with_horizon_slots<
         S: ManifoldGatewaySignal + ?Sized,
@@ -463,7 +465,7 @@ impl ModelSteeringAdapter {
             let probe_baseline = *this.ctx.probe_baseline();
             {
                 let bank = this.ctx.telemetry_bank_mut();
-                let _ = bank.evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
+                bank.evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
                 bank.record_step(
                     decision,
                     &last_horizon,
@@ -517,6 +519,7 @@ impl ModelSteeringAdapter {
     ///
     /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
     /// `liminika-core` rejects the inputs.
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_layer_rope_with_spillover<
         S: ManifoldGatewaySignal + ?Sized,
@@ -621,7 +624,7 @@ impl ModelSteeringAdapter {
         frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     ) {
         if let Some(c) = circuit {
-            let _ = c.modulate_gateway_frame_at_scale(
+            c.modulate_gateway_frame_at_scale(
                 frame,
                 frm_w,
                 frm_w,
@@ -773,7 +776,7 @@ impl ModelSteeringAdapter {
                 &last_horizon,
                 &last_overlap,
             );
-            let _ = self.ctx.evaluate_ego_pframe_chain_mut(&mut frame);
+            self.ctx.evaluate_ego_pframe_chain_mut(&mut frame);
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(circuit, &mut frame, &cand_w);
             spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);

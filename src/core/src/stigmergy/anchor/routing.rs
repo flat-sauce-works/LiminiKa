@@ -104,6 +104,7 @@ impl PhaseAnchorRecord {
     }
 
     #[inline(always)]
+    // Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     fn apply_macro_centroid_pull_to_trail_64(
         trail: &mut PointerTrail,

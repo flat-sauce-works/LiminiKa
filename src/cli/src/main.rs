@@ -956,7 +956,7 @@ mod tests {
         let rep_p = run_verify_artifact(&signed_p, &hex_policy).expect("verify signed lmnkp");
         assert_eq!(rep_p.trust_level, IntegrityTrustLevel::SignatureVerified);
 
-        // Tamper 1 byte in both signed files -> verify must fail!
+        // Tamper 1 byte in both signed files -> verify must fail.
         let mut bad_c = std::fs::read(&signed_c).expect("read signed lmnkc");
         let mid_c = bad_c.len() / 2;
         bad_c[mid_c] ^= 0x01;
@@ -971,7 +971,7 @@ mod tests {
         std::fs::write(&bad_p_path, &bad_p).expect("write tampered lmnkp");
         assert!(run_verify_artifact(&bad_p_path, &strict_policy).is_err());
 
-        // Windows reserved device name outputs rejected across keygen, sign, and bake!
+        // Windows reserved device name outputs rejected across keygen, sign, and bake.
         assert!(run_keygen(&base.join("CON.key"), &base.join("ok.pub")).is_err());
         assert!(
             run_sign_artifact(&unsigned_c, &base.join("NUL.lmnkc"), Some(&secret_key)).is_err()

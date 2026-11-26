@@ -275,6 +275,9 @@ impl ModelSteeringAdapter {
             }
         }
         let prev_was_sandbox = self.ctx.sandbox_workbench_lane().is_some();
+        // Non-fatal by design: `apply_preset_lanes` validates every spec before touching a lane, so an
+        // `Err` leaves the previous lanes untouched and the turn proceeds with them. The `LmnkResult`
+        // is dropped to keep the v0.3.0 signature; v0.4.0 propagates it as a `Result`.
         let _ = self.ctx.substrate_mut().apply_preset_lanes(&specs);
         *self.ctx.sandbox_workbench_lane_mut() = None;
         let assim_drift = self.ctx.telemetry_bank().assimilation_drift();
@@ -323,7 +326,7 @@ impl ModelSteeringAdapter {
         }
         if self.ctx.core_layers().ego.is_active() {
             let mut p_frame = gateway_frame;
-            let _ = self.ctx.evaluate_ego_pframe_chain_mut(&mut p_frame);
+            self.ctx.evaluate_ego_pframe_chain_mut(&mut p_frame);
         }
         self.active_workbench_preset = preset;
         (horizon, overlap_report, ensemble_report)

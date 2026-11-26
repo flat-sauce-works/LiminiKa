@@ -1189,6 +1189,7 @@ impl CoreTelemetryBank {
     /// In [`TelemetryVerbosityMode::Coarse`], returns immediately after incrementing `total_steps`
     /// (and `qos_throttle_events` when throttled) so Hot-Path L1D stays clean.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn record_step(
         &mut self,

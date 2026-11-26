@@ -936,7 +936,7 @@ mod tests {
             Err(IntegrityError::SignatureVerificationFailed(_))
         ));
 
-        // 4. 1-bit payload flip (even with recomputed section CRC32) fails closed under AllowUnsigned!
+        // 4. 1-bit payload flip (even with recomputed section CRC32) fails closed under AllowUnsigned.
         {
             let view = LmnkContainerView::parse(&signed).expect("view");
             let trail_entry = view.find_section(LMNK_SECTION_POINTER_TRAILS).unwrap();
@@ -984,7 +984,7 @@ mod tests {
             ));
         }
 
-        // 5. Header timestamp tamper (with recomputed header CRC32) fails closed!
+        // 5. Header timestamp tamper (with recomputed header CRC32) fails closed.
         {
             let mut bad_hdr = signed.clone();
             let new_ts = 1_999_999_999_u64;
@@ -996,7 +996,7 @@ mod tests {
             ));
         }
 
-        // 6. Section reordering attack (swap PhaseAnchors and PointerTrails with fresh CRCs) fails closed!
+        // 6. Section reordering attack (swap PhaseAnchors and PointerTrails with fresh CRCs) fails closed.
         {
             let view = LmnkContainerView::parse(&signed).expect("view");
             let sections = [
@@ -1035,7 +1035,7 @@ mod tests {
             ));
         }
 
-        // 7. Standalone Signature (0xFF02) without ContentHash (0xFF01) rejected fail-closed!
+        // 7. Standalone Signature (0xFF02) without ContentHash (0xFF01) rejected fail-closed.
         {
             let view = LmnkContainerView::parse(&signed).expect("view");
             let sections = [
@@ -1064,7 +1064,7 @@ mod tests {
             ));
         }
 
-        // 8. Truncated ContentHash payload rejected fail-closed!
+        // 8. Truncated ContentHash payload rejected fail-closed.
         {
             let view = LmnkContainerView::parse(&unsigned).expect("view");
             let sections = [

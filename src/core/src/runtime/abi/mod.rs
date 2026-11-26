@@ -4,6 +4,7 @@
 //! C-ABI interface definitions, FFI safety barriers, binary layout contracts, pointer-driven
 //! orchestration entry points, and opaque handle management for `LiminiKa` `v0.3.0` (`0x0000_0300`).
 
+// C-ABI typedef aliases keep their `lmnk_*_t` spelling to mirror `include/liminika/lmnk_types.h`.
 #![allow(non_camel_case_types)]
 
 #[cfg(feature = "std")]

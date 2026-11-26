@@ -52,6 +52,7 @@ use crate::liminal::{
 ///
 /// Returns `(updated_centroid_words, next_base_energy, resultant_r_bar, von_mises_kappa, words_changed)`.
 #[inline]
+// Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn step_toroidal_centroid_words_cached_64(
     centroid_words: &[u64; 8],
@@ -364,6 +365,7 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
 /// and word-uniform flags, returning `(next_words, next_energy, next_r_bar, next_kappa)`.
 #[inline(always)]
 #[must_use]
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
 #[allow(clippy::too_many_arguments)]
 pub fn branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
     centroid_words: &[u64; 8],

@@ -33,6 +33,8 @@ static void lmnk_free_aligned(void* ptr) {
 /**
  * @brief Minimal C11 host harness demonstrating a GGUF / llama.cpp post-RoPE hook
  * using Phi-4-mini HalfSplit partial-RoPE geometry via the LiminiKa C-ABI.
+ *
+ * @note The LiminiKa C-ABI is model-agnostic; this example uses the Phi-4-mini geometry as a concrete case.
  */
 int main(void) {
     lmnk_config_t cfg;

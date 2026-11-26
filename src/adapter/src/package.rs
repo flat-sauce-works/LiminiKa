@@ -1579,7 +1579,7 @@ mod tests {
         )
         .is_err());
 
-        // 4. 1-bit flip in manifest/source/compiled (with fresh ZIP CRC32) rejected fail-closed!
+        // 4. 1-bit flip in manifest/source/compiled (with fresh ZIP CRC32) rejected fail-closed.
         {
             let mut tampered_source = source.clone();
             tampered_source[0] ^= 0x01;
@@ -1613,7 +1613,7 @@ mod tests {
             );
         }
 
-        // 5. Extra injected entry, deleted entry, renamed entry, and standalone signature rejected!
+        // 5. Extra injected entry, deleted entry, renamed entry, and standalone signature rejected.
         let hash_bytes = signed_view
             .entry(LMNKP_ENTRY_CONTENT_HASH)
             .unwrap()

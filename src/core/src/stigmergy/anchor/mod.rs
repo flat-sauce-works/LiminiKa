@@ -679,7 +679,6 @@ impl PhaseAnchorRecord {
     /// Internal register-resident M-step helper accepting the already-loaded `cur_w` in registers
     /// and an optional `precomputed_coh_opt` from the E-step to eliminate duplicate 64-head coherence evaluation.
     #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn absorb_sample_words_with_cur_coh_and_uni_unstamped(
         &mut self,
         cur_w: &[u64; NUM_STIGMERGIC_GRANULES],

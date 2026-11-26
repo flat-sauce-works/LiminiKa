@@ -534,7 +534,7 @@ impl EquilibriumState {
         );
         let mut evaporated_anchors = 0_usize;
 
-        // Phase 1: Apply dissipative gravity decay to existing backing entries (Spine pins exempt).
+        // Step 1: Apply dissipative gravity decay to existing backing entries (Spine pins exempt).
         for &entry in self.pager.backing_entries() {
             if matches!(entry.lacuna_state, Lacuna::Undefined) {
                 evaporated_anchors += 1;
@@ -569,7 +569,7 @@ impl EquilibriumState {
             }
         }
 
-        // Phase 2: Coalesce incoming anchors (exact ID or near-duplicate compatible phase).
+        // Step 2: Coalesce incoming anchors (exact ID or near-duplicate compatible phase).
         let mut merged_anchors = 0_usize;
         let mut inserted_anchors = 0_usize;
 
@@ -659,7 +659,7 @@ impl EquilibriumState {
             }
         }
 
-        // Phase 3: Enforce hard bounded backing-bank ceiling without ever pruning pinned anchors.
+        // Step 3: Enforce hard bounded backing-bank ceiling without ever pruning pinned anchors.
         let pinned_count = working.iter().filter(|e| e.pinned).count();
         if pinned_count > cfg.pager.working_set_capacity {
             return Err(EquilibriumError::PinnedCapacityExceeded {

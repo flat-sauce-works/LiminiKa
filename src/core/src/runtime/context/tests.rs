@@ -351,7 +351,7 @@ fn test_latent_horizon_slot_tuple_isolation_dwell_and_slide_out_cleanup() {
     let mut frame = GatewayFrame::default();
     let mut stack = CoreStateStack::new();
 
-    // Step 1: Destabilized (step 1 of dwell, high repulsion) -> only FastSlot slides in!
+    // Step 1: Destabilized (step 1 of dwell, high repulsion) -> only FastSlot slides in.
     let mut t1 = HorizonTriggerInput {
         repulsion_severity: 0.6,
         ..HorizonTriggerInput::default()
@@ -381,7 +381,7 @@ fn test_latent_horizon_slot_tuple_isolation_dwell_and_slide_out_cleanup() {
     assert_eq!(active_mask, (1 << 1) | (1 << 4));
     assert_eq!(pair.1.modulate_calls, 1);
 
-    // Step 3: Quiescent (step 1 of dwell) -> FastSlot slides out with cleanup, HysteresisSlot holds!
+    // Step 3: Quiescent (step 1 of dwell) -> FastSlot slides out with cleanup, HysteresisSlot holds.
     let mut t3 = HorizonTriggerInput {
         stationary_shortcut_ready: true,
         ..HorizonTriggerInput::default()

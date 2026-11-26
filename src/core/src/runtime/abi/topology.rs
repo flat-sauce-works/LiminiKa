@@ -706,7 +706,7 @@ pub unsafe extern "C" fn lmnk_ego_state_derive_from_text(
 }
 
 /// Branchlessly evaluates active Ego triggers across Layer 0/1 boundaries and `delta`,
-/// updating `ego_inout` and `stack_inout` and modulating `frame_inout` (counter-basin orbital
+/// updating `ego_inout` and `stack_inout` and modulating `frame_inout` (counter-basin
 /// thrust and transgressive phase steering).
 ///
 /// # Safety

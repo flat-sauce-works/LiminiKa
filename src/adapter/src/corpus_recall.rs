@@ -1166,6 +1166,7 @@ impl TextAttractorCorpus {
     /// # Errors
     ///
     /// Returns an error if layer counts or per-layer `q_rot` lengths mismatch `adapter.geometry()`.
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn ingest_text_activations_with_phase_ref(
         &mut self,
@@ -1337,6 +1338,7 @@ impl TextAttractorCorpus {
     /// # Errors
     /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`,
     /// observation vectors mismatch `self.entries().len()`, or a stratum fails.
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn recall_for_query_with_strata_observation_and_circuit(
         &self,

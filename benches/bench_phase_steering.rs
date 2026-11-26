@@ -13,8 +13,6 @@
 //! - Isolates provisional pre-v1.0 `.lmnk` zero-copy container steering into the dedicated
 //!   `PhaseSteering_Provisional_LMNK_Container` Criterion group.
 
-#![allow(missing_docs)]
-
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };

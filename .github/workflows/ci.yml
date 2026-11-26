@@ -852,6 +852,45 @@ jobs:
           cargo miri test --locked -p liminika-adapter --lib -- host::path_guard
 
   # =========================================================================
+  # 5C. MSRV VERIFICATION (RUST 1.83.0)
+  # =========================================================================
+  msrv-check:
+    name: MSRV 1.83.0 Verification (liminika-core & dsl)
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
+
+      - name: Install MSRV Rust toolchain (1.83.0)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.83.0"
+
+      - name: Enable Rust caching (MSRV 1.83.0)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.83.0-linux
+
+      - name: Verify MSRV 1.83.0 on zero-dependency crates (core & dsl)
+        # `liminika-adapter` and `liminika-cli` (and dev-dep `criterion`) pull locked
+        # transitive crates requiring Rust >= 1.85 / edition2024 (`base64ct`, `zeroize`,
+        # `wasip2`, `wit-bindgen`, `criterion`/`clap`), so this job pins the passing
+        # zero-dependency library targets (`liminika-core` and `liminika-dsl`).
+        run: |
+          cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
+          cargo check --locked -p liminika-core --lib
+          cargo check --locked -p liminika-core --lib --all-features
+          cargo check --locked -p liminika-dsl --lib
+
+  # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION
   # =========================================================================
   dsl-validation:

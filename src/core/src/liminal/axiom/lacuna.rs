@@ -94,7 +94,8 @@ pub fn classify_lacuna(observed: bool, delta: f32, eps_self: f32) -> Lacuna {
     } else {
         0.0
     };
-    if delta.abs() <= clean_eps {
+    let abs_delta = f32::from_bits(delta.to_bits() & 0x7FFF_FFFF);
+    if abs_delta <= clean_eps {
         Lacuna::SelfRef
     } else {
         Lacuna::Exterior

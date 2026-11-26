@@ -598,6 +598,7 @@ pub(crate) const fn coherence_from_uniform_words_x8(wa: u64, wb: u64) -> f32 {
 /// directly from 8 SWAR Q7 circular difference words `(d0..=d7)`.
 #[inline(always)]
 #[must_use]
+// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
 #[allow(clippy::too_many_arguments)]
 pub fn coherence_from_diff_words_64(
     d0: u64,

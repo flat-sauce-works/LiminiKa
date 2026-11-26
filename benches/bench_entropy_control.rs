@@ -8,8 +8,6 @@
 //!   contrastive Bloom filter self-normalization, Chebyshev spectral filtering,
 //!   Hodge obstruction pairing, and non-finite / odd-remainder boundary cases.
 
-#![allow(missing_docs)]
-
 use criterion::{
     criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
 };
@@ -362,7 +360,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
     let mut group = c.benchmark_group("EntropyControl_Long_Dialogue_Reliability");
     group.noise_threshold(configured_noise_threshold());
 
-    // 1. Ultra-Long Token Stream Simulation (500,000 Tokens)
+    // 1. Very Long Token Stream Simulation (500,000 Tokens)
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(350));

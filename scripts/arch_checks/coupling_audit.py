@@ -15,7 +15,10 @@ DETERMINISTIC_INFRA_FILES: frozenset[str] = frozenset(
         "src/adapter/src/package.rs",
         "examples/candle_eval/src/metrics.rs",
         "examples/candle_eval/src/cli.rs",
-        "examples/candle_eval/src/model.rs",
+        "examples/candle_eval/src/model/mod.rs",
+        "examples/candle_eval/src/model/config.rs",
+        "examples/candle_eval/src/model/rope.rs",
+        "examples/candle_eval/src/model/layers.rs",
     }
 )
 
@@ -144,8 +147,10 @@ def audit_unreferenced_core_control_surfaces(repo_root: pathlib.Path) -> list[st
         return []
 
     downstream_chunks: list[str] = []
+    # `benches/` counts as a downstream consumer; `tests/` is excluded on purpose so that
+    # test-only surfaces stay visible in this radar.
     for _rel, rs_file in _iter_prod_files(
-        repo_root, ("src/adapter/src", "src/cli/src", "examples/candle_eval/src")
+        repo_root, ("src/adapter/src", "src/cli/src", "examples/candle_eval/src", "benches")
     ):
         downstream_chunks.append(extract_non_test_code(rs_file.read_text(encoding="utf-8")))
     downstream_blob = "\n".join(downstream_chunks)

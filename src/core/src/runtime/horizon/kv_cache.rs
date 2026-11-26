@@ -974,6 +974,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     /// # Errors
     /// Propagates [`LMNK_ERR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn step_with_gateway_and_override<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
         &mut self,

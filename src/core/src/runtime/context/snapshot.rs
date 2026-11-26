@@ -144,7 +144,7 @@ impl RuntimeContext {
         let host_substrate_slot_pin_floor = self.substrate.slot_pinned_mask;
 
         // ------------------------------------------------------------------
-        // Phase 1: Transactional parsing and validation (zero mutation on Err)
+        // Step 1: Transactional parsing and validation (zero mutation on Err)
         // ------------------------------------------------------------------
         let saved_step_counter = read_u64(0)?;
         let saved_active_count = read_u32(8)?;
@@ -234,7 +234,7 @@ impl RuntimeContext {
             host_mode_pin_floor | default_spine.pinned_action_mode_mask;
 
         // ------------------------------------------------------------------
-        // Phase 2: Atomic commit after all validation succeeded
+        // Step 2: Atomic commit after all validation succeeded
         // ------------------------------------------------------------------
         self.config.raw.head_dim = saved_head_dim;
         self.config.raw.num_heads = saved_num_heads;

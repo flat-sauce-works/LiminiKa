@@ -136,7 +136,7 @@ pub trait EpisodicPhaseSample {
     /// Extracts or deterministically projects the sample's 64-head Q7 phase coordinates on $SO(2)^{64}$.
     fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS];
 
-    /// Returns the initial mass / emotional or semantic salience of this sample point (`>= 0.0`).
+    /// Returns the initial mass / semantic salience of this sample point (`>= 0.0`).
     #[inline(always)]
     fn sample_mass(&self) -> f32 {
         1.0
@@ -424,7 +424,7 @@ impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32, u32) {
 // 2. Blanket RoPE Direct Steering & Attractor Growth
 // ===================================================================
 
-/// 16-byte [`Pod`] telemetry report summarizing the personality growth and precision gain achieved
+/// 16-byte [`Pod`] telemetry report summarizing the persona-anchor growth and precision gain achieved
 /// when absorbing one or more [`EpisodicPhaseSample`] points into the phase-anchor field.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]

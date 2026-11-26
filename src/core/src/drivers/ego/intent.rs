@@ -22,9 +22,9 @@ use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_USER_CONTEXT, ATTRACTOR_SLOT_USER_INTENT,
 };
 
-/// Ego intervention trigger bit (`0x01`): Counter-basin orbital thrust when attractor pull threatens capture.
+/// Ego intervention trigger bit (`0x01`): Counter-basin correction when attractor pull threatens capture.
 pub const EGO_TRIGGER_BASIN_CAPTURE: u8 = 1 << 0;
-/// Ego intervention trigger bit (`0x02`): Defiant intervention under internal contradiction (`H^1 != 0`).
+/// Ego intervention trigger bit (`0x02`): Corrective intervention under internal contradiction (`H^1 != 0`).
 pub const EGO_TRIGGER_INTERNAL_CONFLICT: u8 = 1 << 1;
 /// Ego intervention trigger bit (`0x04`): Transgressive step when standing at a `Liminal` horizon boundary.
 pub const EGO_TRIGGER_LIMINAL_EXTERIOR: u8 = 1 << 2;
@@ -44,11 +44,11 @@ pub enum LiminalEgoPreset {
     /// Passive custom/zero baseline (no autonomous counter-basin or transgressive override).
     #[default]
     Custom = 0,
-    /// Subtle individuality: gentle counter-basin resistance and boundary stabilization.
+    /// Low intensity: gentle counter-basin resistance and boundary stabilization.
     Low = 1,
-    /// Balanced autonomous agency: orbital basin resistance with measured curiosity across boundaries.
+    /// Medium intensity: balanced basin resistance with a moderate boundary-crossing bias.
     Medium = 2,
-    /// Strong willpower & autonomy: vigorous counter-basin thrust and defiant boundary transgression.
+    /// High intensity: strong counter-basin thrust and a pronounced boundary-crossing bias.
     High = 3,
 }
 
@@ -74,7 +74,7 @@ impl LiminalEgoPreset {
 pub struct EgoIntentAxes {
     /// Self-directed resistance against attractor capture (`-127..=127`, `offset 0`).
     pub autonomy_q7: i8,
-    /// Curiosity and willingness to step across `Liminal` boundaries (`-127..=127`, `offset 1`).
+    /// Bias toward stepping across `Liminal` boundaries (`-127..=127`, `offset 1`).
     pub transgression_q7: i8,
     /// Expressive warmth and subjective persona commitment (`-127..=127`, `offset 2`).
     pub devotion_q7: i8,
@@ -409,7 +409,7 @@ impl EgoIntentAxes {
 /// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoState`
 /// perceives Slot 0 boundaries and Slot 1 attractor forces simultaneously and intervenes
 /// branchlessly to:
-/// - exert counter-basin orbital thrust (`counter_basin_thrust_q7`) when attractor pull
+/// - exert counter-basin thrust (`counter_basin_thrust_q7`) when attractor pull
 ///   exceeds `basin_escape_floor_q7`, preventing collapse into static imitation;
 /// - cross or fortify `Liminal` horizons (`transgression_bias_q7`);
 /// - induce structured, non-greedy choice deviations (`irrational_defiance_q7`) and
@@ -425,9 +425,9 @@ pub struct LiminalEgoState {
     pub trait_gain_bias_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Signed per-label affinity preference across the 8 semantic provenance slots (`0..=7`, `offset 24..32`).
     pub slot_affinity_bias_q7: [i8; MAX_ATTRACTOR_DOMAINS],
-    /// Per-granule autonomy weight (`0..=127`) scaling orbital/sovereign intervention (`offset 32..40`).
+    /// Per-granule autonomy weight (`0..=127`) scaling reference-phase intervention (`offset 32..40`).
     pub granule_autonomy_q7: [u8; NUM_STIGMERGIC_GRANULES],
-    /// Counter-basin orbital thrust strength (`0..=127`) resisting basin capture (`offset 40`).
+    /// Counter-basin thrust strength (`0..=127`) resisting basin capture (`offset 40`).
     pub counter_basin_thrust_q7: u8,
     /// Pull threshold in Q0.7 (`0..=127`) above which `EGO_TRIGGER_BASIN_CAPTURE` fires (`offset 41`).
     pub basin_escape_floor_q7: u8,

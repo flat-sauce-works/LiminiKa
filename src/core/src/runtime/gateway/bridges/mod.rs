@@ -293,7 +293,7 @@ impl LiminalEgoState {
             | branchless_select_u8(t_distortion, EGO_TRIGGER_LAYER_DISTORTION, 0);
         let any_fired = fired_mask != 0;
 
-        // Modulate GatewayFrame phases with counter-basin orbital thrust / transgressive leap
+        // Modulate GatewayFrame phases with counter-basin thrust / transgressive leap
         let scale_to_word = |q7: PhaseQ7, w_u8: u8| -> u64 {
             let scaled_i32 = (i32::from(q7) * i32::from(w_u8.min(128))) >> 7;
             let clamped_i8 = scaled_i32.clamp(-128, 127) as i8;
@@ -391,7 +391,7 @@ impl LiminalEgoState {
     }
 
     /// Branchlessly evaluates active Ego triggers directly across Liminal (`liminal`), Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, updating both
-    /// sub-layers and injecting counter-basin orbital thrust or transgressive phase steering into `frame`
+    /// sub-layers and injecting counter-basin thrust or transgressive phase steering into `frame`
     /// in-place.
     #[inline]
     pub fn intervene_on_sublayers_and_frame_branchless(

@@ -24,7 +24,7 @@ pub const fn phase_clamp_upper_rot_dim(head_dim: usize) -> usize {
 /// integer in `2..=head_dim`) without manual hyperparameters:
 /// - **Narrow Fact Aperture ($\frac{1}{8}d_{\mathrm{head}}$)**: Selected when `provenance_bits`
 ///   carries Objective Fact grounding (`CAUSAL_AXIS_OBJECTIVE_FACT`, bit `1`) without contradiction
-///   or persona override, or when Toroidal $k$-Means concentration is ultra-sharp ($\kappa_c \ge 6.0$),
+///   or persona override, or when Toroidal $k$-Means concentration is very narrow ($\kappa_c \ge 6.0$),
 ///   preserving high- and mid-frequency syntactic/lexical RoPE channels.
 /// - **Baseline `PhaseClamp` Aperture ($\frac{1}{4}d_{\mathrm{head}}$)**: Standard upper-quarter rotation
 ///   (`phase_clamp_upper_rot_dim(head_dim)`).

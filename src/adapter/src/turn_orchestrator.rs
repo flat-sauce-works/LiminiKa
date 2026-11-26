@@ -551,6 +551,7 @@ pub trait TurnKvCacheStepping {
     ///
     /// # Errors
     /// Propagates invalid-argument or keyframe integrity errors from the backing KV cache.
+    // Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     fn step_turn_kv<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
         &mut self,

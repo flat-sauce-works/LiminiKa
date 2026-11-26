@@ -501,7 +501,6 @@ where
     let mut collision = false;
     let mut blended_w = [0u64; NUM_STIGMERGIC_GRANULES];
     let mut blended_uni = true;
-    #[allow(unused_mut)]
     let mut avx_precomputed_tag: Option<PhaseQ7> = None;
     let mut eff_energy = 0.0_f32;
     let mut raw_clamp = DEFAULT_PERSONA_PHASE_CLAMP_RAD;

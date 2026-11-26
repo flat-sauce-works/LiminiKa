@@ -36,6 +36,7 @@ impl StigmergicSubstrate {
     ///    and `exterior_granule_mask != 0` (`(lacuna_exterior_mask | discovery_excursion_mask) & !overlap_core_mask`),
     ///    leases a free lane via [`WorkbenchSlotSpec::auto_sandbox`] masked strictly to `exterior_granule_mask`.
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn step_sandbox_hypothesis_lifecycle(
         &mut self,
@@ -139,6 +140,7 @@ impl StigmergicSubstrate {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `centroids` is empty, `split_coherence_thresh`
     /// is non-finite, or tensor slices are invalid.
     #[inline]
+    // Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     fn commit_gateway_kmeans_and_select_action(
         &mut self,

@@ -860,6 +860,7 @@ impl<'a> LmnkContainerView<'a> {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on size overflow or [`LMNK_ERR_BUFFER_TOO_SMALL`] if
     /// `dst_bytes` is smaller than [`Self::required_standard_byte_len`].
     #[inline]
+    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
     pub fn write_standard_sections_to_bytes(
         container_flags: u32,
