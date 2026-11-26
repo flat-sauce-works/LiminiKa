@@ -1145,8 +1145,7 @@ LMNK_STATIC_ASSERT(sizeof(lmnk_lacuna_partition_t) == 16,
 LMNK_STATIC_ASSERT(sizeof(lmnk_container_header_t) == 64,
                    "lmnk_container_header_t must be 64 bytes");
 LMNK_STATIC_ASSERT(sizeof(lmnk_section_entry_t) == 16, "lmnk_section_entry_t must be 16 bytes");
-LMNK_STATIC_ASSERT(sizeof(lmnk_topology_matrix_t) == 64,
-                   "lmnk_topology_matrix_t must be 64 bytes");
+LMNK_STATIC_ASSERT(sizeof(lmnk_topology_matrix_t) == 64, "lmnk_topology_matrix_t must be 64 bytes");
 
 LMNK_EXTERN_C_END
 

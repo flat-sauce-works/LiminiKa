@@ -70,9 +70,8 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_reset(lmnk_context_
  * Configures spine and/or anonymous compute-pool policies atomically (`0 alloc`).
  * Caller must set `policy->struct_size = sizeof(lmnk_runtime_policy_t)`.
  */
-LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
-lmnk_context_configure_policy(lmnk_context_handle_t context,
-                              const lmnk_runtime_policy_t* LMNK_RESTRICT policy) LMNK_NOEXCEPT;
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_configure_policy(
+    lmnk_context_handle_t context, const lmnk_runtime_policy_t* LMNK_RESTRICT policy) LMNK_NOEXCEPT;
 
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_context_begin_turn(lmnk_context_handle_t context,
