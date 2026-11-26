@@ -128,9 +128,9 @@ void test_handshake_config_and_inline_tagged_ptr() {
         static_cast<uint8_t>(LMNK_ACTION_MODE_PHASE_STEER | LMNK_ACTION_MODE_SUBHEAD_ROUTE), 24);
     LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_addr(act) == 0x0000123456789AB0ULL);
     LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_attractor_slot(act) == LMNK_ATTRACTOR_SLOT_KNOWLEDGE);
-    LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_action_mode(act) ==
-                    static_cast<uint8_t>(LMNK_ACTION_MODE_PHASE_STEER |
-                                         LMNK_ACTION_MODE_SUBHEAD_ROUTE));
+    LMNK_TEST_CHECK(
+        lmnk_tagged_ptr_unpack_action_mode(act) ==
+        static_cast<uint8_t>(LMNK_ACTION_MODE_PHASE_STEER | LMNK_ACTION_MODE_SUBHEAD_ROUTE));
     LMNK_TEST_CHECK(lmnk_tagged_ptr_unpack_phase(act) == 24);
 }
 
@@ -177,8 +177,8 @@ void test_context_lifecycle_policy_decode_and_snapshot() {
     state.struct_size = static_cast<uint32_t>(sizeof(state));
     LMNK_TEST_CHECK(lmnk_context_get_state(ctx, &state) == LMNK_OK);
     LMNK_TEST_CHECK((state.baseline_pinned_compute_mask & 0x0081ULL) == 0x0081ULL);
-    LMNK_TEST_CHECK((state.baseline_pinned_compute_mask &
-                     LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK) != 0ULL);
+    LMNK_TEST_CHECK(
+        (state.baseline_pinned_compute_mask & LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK) != 0ULL);
     LMNK_TEST_CHECK(state.active_compute_mask == 0x0000FFFFULL);
     LMNK_TEST_CHECK(state.guard_hold_tokens == 3U);
     LMNK_TEST_CHECK(state.max_observe_stride == 4U);
@@ -365,7 +365,7 @@ void test_kernels_and_generic_container() {
     LMNK_TEST_CHECK(part.exterior_mask == 0x30U);
 
     // 4. Generic container write / verify / find_section (including unaligned container read)
-    const uint8_t custom_payload[16] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U,
+    const uint8_t custom_payload[16] = {1U, 2U,  3U,  4U,  5U,  6U,  7U,  8U,
                                         9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U};
     lmnk_section_input_t sec{};
     sec.struct_size = static_cast<uint32_t>(sizeof(sec));
@@ -409,9 +409,8 @@ void test_kernels_and_generic_container() {
 
     lmnk_container_section_view_t missing{};
     missing.struct_size = static_cast<uint32_t>(sizeof(missing));
-    LMNK_TEST_CHECK(lmnk_container_find_section(container.get(), written,
-                                                LMNK_SECTION_BLOOM_FILTER, &missing) ==
-                    LMNK_ERR_ANCHOR_NOT_FOUND);
+    LMNK_TEST_CHECK(lmnk_container_find_section(container.get(), written, LMNK_SECTION_BLOOM_FILTER,
+                                                &missing) == LMNK_ERR_ANCHOR_NOT_FOUND);
 }
 
 } // namespace
