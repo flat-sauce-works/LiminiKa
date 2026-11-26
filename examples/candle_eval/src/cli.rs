@@ -151,7 +151,7 @@ pub(crate) fn print_help() {
         "  --ja-eval                          Run fictional Japanese multilingual corpus and 28-probe suite in an isolated state"
     );
     println!(
-        "  --vlm-eval                         Run multimodal VLM boundary evaluation (Phases C-0, C-1, C-2)"
+        "  --vlm-eval                         Run multimodal VLM boundary evaluation (smoke, contrast, audit)"
     );
     println!(
         "  --kv-min-res=<i8>                  Override RAM Phase-KV minimum resonance Q7 threshold"

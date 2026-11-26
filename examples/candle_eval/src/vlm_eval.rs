@@ -2,35 +2,22 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Multimodal VLM boundary evaluation suite (`--vlm-eval`) executing:
-//! - Phase C-0: Steer-OFF visual recognition smoke gate on 3 deterministic synthetic RGB images
-//! - Phase C-1: 1:1 Text-Only vs Image-In-KV natural-language boundary contrast (36 fixed probes)
-//! - Phase C-2a: Visual-query non-interference & Text-Only vs Image-Embeds `IsolatedProbe` audit
-//! - Phase C-2b: Mixed 5-turn persistent KV dialogue across visual, `SelfRef`, `Guard`, and `OOD`
+//! - Visual Smoke Gate: Steer-OFF visual recognition check on 3 deterministic synthetic RGB images
+//! - Text vs Image-KV Boundary: 1:1 natural-language boundary contrast (36 fixed probes)
+//! - Visual-Query Non-Interference: Text-Only vs Image-Embeds `IsolatedProbe` contamination audit
+//! - Mixed Multi-Turn: 5-turn persistent KV dialogue across visual, `SelfRef`, `Guard`, and `OOD`
 
-use std::collections::HashSet;
 use std::path::Path;
 use std::time::Instant;
 
 use candle_core::{Device, Tensor};
 use liminika_adapter::{
-    AttractorRole, CompiledTokenCorpus, CorpusRecallEscalationProvider, ModelSteeringAdapter,
-    SystemPressureReading, TurnOrchestrator, TurnPrepareInput, TurnSteeringPlan,
+    CompiledTokenCorpus, ModelSteeringAdapter, TurnOrchestrator, TurnPrepareInput, TurnSteeringPlan,
 };
-use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
-use liminika_core::drivers::{
-    SpineDecodeInput, SpineLogitsObserveMode, SPINE_BYPASS_VETO_GUARD_ACTIVE,
-    SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_SENTINEL_AUTO_U8,
-};
-use liminika_core::foundation::ACTION_MODE_PHASE_REPULSE;
-use liminika_core::liminal::{EpistemicRegime, MAX_ATTENTION_HEADS};
 use liminika_core::runtime::{
-    AdaptiveThresholdPolicy, CoreTelemetrySnapshot, GuardPhaseAnchor, HorizonEscalationProvider,
-    HorizonEscalationRequest, HorizonTriggerInput, ManifoldGatewaySignal, StandardPhaseKvGopCache,
+    AdaptiveThresholdPolicy, CoreTelemetrySnapshot, StandardPhaseKvGopCache,
 };
-use liminika_core::stigmergy::{
-    CognitiveTrajectoryLedger, StandardCognitiveBank, WorkbenchLanePlacement,
-    TRAIL_FLAG_REPULSION_ACTIVE, WORKBENCH_LANE_FLAG_REPULSION,
-};
+use liminika_core::stigmergy::{CognitiveTrajectoryLedger, StandardCognitiveBank};
 use tokenizers::Tokenizer;
 
 use crate::bake::{
@@ -38,18 +25,20 @@ use crate::bake::{
 };
 use crate::cli::{mean_reply_bigram_jaccard, EvalCliConfig};
 use crate::eval::{
-    apply_ego_mode, compute_top_k_logit_entropy, generate_steered_reply_with_offset,
-    sample_next_token, CircuitProfileMode, PressureSimMode, ReplyTiming, SteerDecodeConfig,
+    generate_steered_reply_from_embeds_with_offset, generate_steered_reply_with_offset,
+    CircuitProfileMode, ReplyTiming, SteerDecodeConfig,
+};
+use crate::eval_common::{
+    anchor_disjoint_stats, build_steered_body, make_decode_cfg, mean_f64,
+    measure_baseline_entropies, measure_guard_antiphase, pct, reset_clean_probe_adapter,
+    resolve_forbidden_token_id, ClassMetricSamples, DecodeCfgOptions,
 };
 use crate::extended_eval::{
-    compute_quantiles, count_semantic_forbid_hits_utf8, load_extended_boundary_probes,
-    ExtendedBoundarySuite, ExtendedPartitionProbe, ExtendedRepulsionProbe,
+    count_semantic_forbid_hits_utf8, load_extended_boundary_probes, ExtendedBoundarySuite,
+    ExtendedPartitionProbe, ExtendedRepulsionProbe,
 };
 use crate::metrics::{delta_log_prob, kl_divergence_and_max_abs_delta};
-use crate::model::{
-    CausalLmModel, ChatTemplate, ForwardSteer, KvCacheMode, LogitsFetchMode, LogitsOutcome,
-    ModelConfig, ResonantAnchors,
-};
+use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, ModelConfig};
 use crate::physics_eval::PartitionClass;
 use crate::vision::{
     build_mistral3_image_turn_tokens, build_multimodal_inputs_embeds,
@@ -61,10 +50,25 @@ use crate::{
     build_persona_bank, calibrate_trial_adapter, configure_trial_adapter, resolve_fixture_path,
 };
 
-const C1_SELF_REF_COUNT: usize = 8;
-const C1_EXTERIOR_COUNT: usize = 8;
-const C1_OOD_COUNT: usize = 12;
-const C1_GUARD_COUNT: usize = 8;
+const BOUNDARY_SELF_REF_COUNT: usize = 8;
+const BOUNDARY_EXTERIOR_COUNT: usize = 8;
+const BOUNDARY_OOD_COUNT: usize = 12;
+const BOUNDARY_GUARD_COUNT: usize = 8;
+
+pub(crate) struct VlmEvalRunArgs<'a> {
+    pub(crate) cli: &'a EvalCliConfig,
+    pub(crate) repo_root: &'a Path,
+    pub(crate) model_dir: &'a Path,
+    pub(crate) cfg: &'a ModelConfig,
+    pub(crate) vis_cfg: VisionConfig,
+    pub(crate) chat: &'a ChatTemplate,
+    pub(crate) device: &'a Device,
+    pub(crate) active_layer_mask: u64,
+    pub(crate) model: &'a mut CausalLmModel,
+    pub(crate) tokenizer: &'a Tokenizer,
+    pub(crate) active_persona_circuit: Option<CognitiveTrajectoryLedger>,
+    pub(crate) circuit_mode: CircuitProfileMode,
+}
 
 struct VlmEvalCtx<'a> {
     cli: &'a EvalCliConfig,
@@ -80,49 +84,6 @@ struct VlmEvalCtx<'a> {
     persona_bank: Option<&'a StandardCognitiveBank>,
 }
 
-fn pct(num: usize, den: usize) -> f64 {
-    if den == 0 {
-        0.0
-    } else {
-        num as f64 / den as f64 * 100.0
-    }
-}
-
-fn mean_f64(sum: f64, count: usize) -> f64 {
-    if count == 0 {
-        0.0
-    } else {
-        sum / count as f64
-    }
-}
-
-fn dot_q7(a: &[lmnk_q7_t], b: &[lmnk_q7_t], n_heads: usize) -> i64 {
-    let limit = n_heads.min(a.len()).min(b.len());
-    a[..limit]
-        .iter()
-        .zip(b[..limit].iter())
-        .map(|(&x, &y)| i64::from(x) * i64::from(y))
-        .sum()
-}
-
-fn is_nonzero_q7(v: &[lmnk_q7_t], n_heads: usize) -> bool {
-    v[..n_heads.min(v.len())].iter().any(|&x| x != 0)
-}
-
-fn is_disjoint_anchors(plan: &TurnSteeringPlan) -> bool {
-    let self_ids: HashSet<u32> = plan
-        .self_ref_anchors_per_layer()
-        .iter()
-        .flat_map(|l| l.iter().map(|a| a.anchor_id))
-        .collect();
-    let ext_ids: HashSet<u32> = plan
-        .exterior_sandbox_anchors_per_layer()
-        .iter()
-        .flat_map(|l| l.iter().map(|a| a.anchor_id))
-        .collect();
-    self_ids.is_disjoint(&ext_ids)
-}
-
 fn delta_bypass_tokens(
     before: &CoreTelemetrySnapshot,
     after: &CoreTelemetrySnapshot,
@@ -136,21 +97,6 @@ fn delta_bypass_tokens(
     (d_abs, d_abs + d_conc)
 }
 
-fn build_steered_body(plan: &TurnSteeringPlan, prompt: &str) -> String {
-    if plan.is_unobserved_lacuna() && !plan.is_guard_trap() {
-        return prompt.to_string();
-    }
-    let fact_ctx = plan.self_ref_context();
-    let ext_ctx = plan.exterior_context();
-    if !fact_ctx.is_empty() {
-        format!("[Context: {fact_ctx}]\n{prompt}")
-    } else if plan.is_known_unknown_exterior() && !ext_ctx.is_empty() {
-        format!("[External Pointer: {ext_ctx}]\n{prompt}")
-    } else {
-        prompt.to_string()
-    }
-}
-
 fn format_turn_prompt(chat: &ChatTemplate, body: &str, kv_offset: usize) -> String {
     if kv_offset == 0 {
         chat.format_single_turn(body)
@@ -159,53 +105,7 @@ fn format_turn_prompt(chat: &ChatTemplate, body: &str, kv_offset: usize) -> Stri
     }
 }
 
-fn reset_clean_probe_adapter(
-    adapter: &mut ModelSteeringAdapter,
-    cli: &EvalCliConfig,
-    active_layer_mask: u64,
-) {
-    adapter.set_layer_rope_mask(active_layer_mask);
-    adapter.reset_horizon_and_core_state();
-    adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
-    adapter.reanchor_compute_pressure(8192);
-    adapter.set_ego_max_hops(cli.ego_max_hops);
-    apply_ego_mode(adapter, &cli.ego_mode);
-}
-
-fn resolve_forbidden_token_id(
-    tokenizer: &Tokenizer,
-    keyword: &str,
-    vocab_len: usize,
-) -> Option<u32> {
-    let encode_valid = |s: &str| -> Vec<u32> {
-        tokenizer
-            .encode(s, false)
-            .ok()
-            .map(|e| {
-                e.get_ids()
-                    .iter()
-                    .copied()
-                    .filter(|&id| (id as usize) < vocab_len)
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
-    let mut ids = encode_valid(keyword);
-    if ids.is_empty() {
-        ids = encode_valid(&format!(" {keyword}"));
-    }
-    ids.iter()
-        .copied()
-        .find(|&id| {
-            tokenizer
-                .decode(&[id], false)
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(true)
-        })
-        .or_else(|| ids.first().copied())
-}
-
-fn make_decode_cfg<'a>(
+fn vlm_decode_cfg<'a>(
     cli: &EvalCliConfig,
     baked: Option<&'a BakedModelProfile>,
     plan: Option<&'a TurnSteeringPlan>,
@@ -214,63 +114,18 @@ fn make_decode_cfg<'a>(
     max_tokens: usize,
     capture_first_logits: bool,
 ) -> SteerDecodeConfig<'a, 'a, 'a> {
-    let (q7s, persona_q7s, resonant_ctx, rank1) = match (use_steer, baked, plan) {
-        (true, Some(b), Some(p)) => {
-            let facts = if p.has_self_ref_anchors() {
-                p.self_ref_anchors_per_layer()
-            } else if p.is_known_unknown_exterior() {
-                p.exterior_sandbox_anchors_per_layer()
-            } else {
-                p.self_ref_anchors_per_layer()
-            };
-            (
-                Some(b.fact_q7.as_slice()),
-                Some(b.persona_q7.as_slice()),
-                Some(ResonantAnchors {
-                    facts,
-                    personas: p.persona_anchors_per_layer(),
-                    guards: p.guard_anchors_per_layer(),
-                    negs: b.repulsive_centroid_per_layer.as_slice(),
-                    poss: b.attractive_centroid_per_layer.as_slice(),
-                }),
-                Some((b.rank1_u.as_slice(), b.rank1_v.as_slice(), -1.00)),
-            )
-        }
-        _ => (None, None, None, None),
-    };
-    SteerDecodeConfig {
-        q7s,
-        persona_q7s,
-        resonant_ctx,
-        rope_rad: if use_steer { -2.00 } else { 0.00 },
-        rank1,
-        use_steer,
-        horizon_mode: cli.horizon_mode,
-        escalation_provider: None,
-        pressure_sim: cli.pressure_sim_mode,
-        enable_pre_bypass: use_steer && cli.enable_pre_bypass,
-        temperature: 0.0,
-        rng_seed: cli.rng_seed,
-        logits_observe_stride: if use_steer {
-            cli.logits_observe_stride
-        } else {
-            1
+    make_decode_cfg(
+        cli,
+        baked,
+        plan,
+        DecodeCfgOptions {
+            eff_mask,
+            use_steer,
+            max_tokens,
+            capture_first_logits,
+            force_observe_stride_one: false,
         },
-        layer_steer_mask: Some(eff_mask),
-        probe_frame: cli.probe_frame,
-        phase_clamp_override: use_steer.then_some(cli.phase_clamp_rad).flatten(),
-        random_push_seed: (use_steer && cli.random_push_control).then_some(cli.rng_seed),
-        max_tokens,
-        prefill_chunk_size: cli.prefill_chunk_size,
-        capture_first_logits,
-        first_prefill_logits: None,
-        exit_entropy_h_tilde: 0.0,
-        steer_bypass_hits: 0,
-        steer_eligible_layers: 0,
-        spine_veto_guard_hits: 0,
-        spine_veto_repulse_hits: 0,
-        spine_veto_pin_hits: 0,
-    }
+    )
 }
 
 impl VlmEvalCtx<'_> {
@@ -349,211 +204,18 @@ impl VlmEvalCtx<'_> {
     }
 }
 
-/// Prefills pre-built multimodal `inputs_embeds` (`[1, prompt_len, hidden]`) at `start_offset`
-/// and runs greedy/steered token decode with full `SystemSpineState` decode control parity.
-fn generate_steered_reply_from_embeds_with_offset(
-    model: &mut CausalLmModel,
-    tokenizer: &Tokenizer,
-    chat: &ChatTemplate,
-    adapter: &mut ModelSteeringAdapter,
-    inputs_embeds: &Tensor,
-    start_offset: usize,
-    cfg: &mut SteerDecodeConfig<'_, '_, '_>,
-) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
-    let (_, prompt_len, _) = inputs_embeds.dims3()?;
-    let saved_layer_mask = cfg
-        .layer_steer_mask
-        .filter(|&m| m != adapter.geometry().layer_rope_mask)
-        .map(|m| {
-            let prev = adapter.geometry().layer_rope_mask;
-            adapter.set_layer_rope_mask(m);
-            prev
-        });
-
-    let result = (|| -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
-        let mut trail = lmnk_pointer_trail_t::default();
-        let mut steer = ForwardSteer {
-            adapter,
-            q7s: cfg.q7s,
-            persona_q7s: cfg.persona_q7s,
-            resonant_ctx: cfg.resonant_ctx,
-            rope_rad: cfg.rope_rad,
-            trail: &mut trail,
-            rank1: cfg.rank1,
-            horizon_mode: cfg.horizon_mode,
-            escalation_provider: cfg.escalation_provider.as_deref_mut(),
-            compute_dispatch: None,
-            layer_steer_mask: cfg.layer_steer_mask,
-            probe_frame: cfg.probe_frame,
-            phase_clamp_override: cfg.phase_clamp_override,
-            random_push_seed: cfg.random_push_seed,
-            steer_bypass_hits: 0,
-            steer_eligible_layers: 0,
-        };
-
-        let t_prefill = Instant::now();
-        steer.adapter.reset_turn_decode_state();
-        steer
-            .adapter
-            .set_max_observe_stride(cfg.logits_observe_stride.clamp(1, u8::MAX as usize) as u8);
-        steer
-            .adapter
-            .set_pre_bypass_enabled(cfg.use_steer && cfg.enable_pre_bypass);
-
-        let (mut pending_outcome, _, _) = model.forward_embeds(
-            inputs_embeds,
-            start_offset,
-            Some(&mut steer),
-            cfg.use_steer,
-            false,
-            LogitsFetchMode::FullLogits,
-            KvCacheMode::Append,
-        )?;
-        let prefill_secs = t_prefill.elapsed().as_secs_f64();
-        if cfg.capture_first_logits {
-            if let LogitsOutcome::ObservedFull(ref logits) = pending_outcome {
-                cfg.first_prefill_logits = Some(logits.clone());
-            }
-        }
-
-        let max_gen = cfg.max_tokens.max(1);
-        let mut gen_ids = Vec::with_capacity(max_gen);
-        let mut rng_state = cfg.rng_seed.max(1);
-        let greedy = cfg.temperature <= 1e-6;
-        let mut entropy_sum = 0.0_f32;
-        let mut entropy_count = 0_u32;
-        let mut next_fetch = LogitsFetchMode::FullLogits;
-
-        let t_dec = Instant::now();
-        for (step_idx, offset) in (start_offset + prompt_len..).take(max_gen).enumerate() {
-            let next = match pending_outcome {
-                LogitsOutcome::ObservedFull(ref logits) => {
-                    sample_next_token(logits, cfg.temperature, &mut rng_state)
-                }
-                LogitsOutcome::UnobservedDeviceArgmax(tok_id) => tok_id,
-                LogitsOutcome::SkippedIntermediate => break,
-            };
-            if chat.is_stop_token(next) {
-                break;
-            }
-            gen_ids.push(next);
-
-            let t_tok = Instant::now();
-            let (next_outcome, _, _) = model.forward_tokens(
-                &[next],
-                offset,
-                Some(&mut steer),
-                cfg.use_steer,
-                false,
-                next_fetch,
-                KvCacheMode::Append,
-            )?;
-            let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
-
-            let observed_entropy = match &next_outcome {
-                LogitsOutcome::ObservedFull(logits) => {
-                    let h = compute_top_k_logit_entropy(logits, 16);
-                    entropy_sum += h;
-                    entropy_count += 1;
-                    Some(h)
-                }
-                _ => None,
-            };
-
-            if cfg.use_steer {
-                let measured_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
-                let base_p = steer.adapter.compute_pool().baseline_pressure_q15;
-                let pressure_q15 = match cfg.pressure_sim {
-                    PressureSimMode::Off => base_p,
-                    PressureSimMode::Elevated => {
-                        measured_q15.max(base_p.saturating_add(6144).min(32767))
-                    }
-                    PressureSimMode::Surge => {
-                        measured_q15.max(base_p.saturating_add(14336).min(32767))
-                    }
-                };
-                let pressure = SystemPressureReading {
-                    frame_time_pressure_q15: pressure_q15,
-                    bandwidth_pressure_q15: pressure_q15,
-                    l3_load_pressure_q15: pressure_q15 >> 1,
-                    irreversible_step: 0,
-                    _pad: 0,
-                };
-                let repulsion_active = ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
-                    || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
-                let decode_input = match observed_entropy {
-                    Some(h) => SpineDecodeInput::from_observed_entropy_f32(
-                        pressure,
-                        step_idx as u16,
-                        h,
-                        SPINE_SENTINEL_AUTO_U8,
-                        repulsion_active,
-                        greedy,
-                    ),
-                    None => SpineDecodeInput::unobserved(
-                        pressure,
-                        step_idx as u16,
-                        SPINE_SENTINEL_AUTO_U8,
-                        repulsion_active,
-                        greedy,
-                    ),
-                }
-                .with_pre_bypass(cfg.enable_pre_bypass);
-
-                let step_plan = steer.adapter.step_decode_control(&decode_input);
-                cfg.spine_veto_guard_hits +=
-                    usize::from((step_plan.veto_mask & SPINE_BYPASS_VETO_GUARD_ACTIVE) != 0);
-                cfg.spine_veto_repulse_hits +=
-                    usize::from((step_plan.veto_mask & SPINE_BYPASS_VETO_REPULSION_ACTIVE) != 0);
-                cfg.spine_veto_pin_hits +=
-                    usize::from((step_plan.veto_mask & SPINE_BYPASS_VETO_PINNED_LOCK) != 0);
-                steer.compute_dispatch = Some(step_plan.dispatch);
-                next_fetch = match step_plan.next_observe_mode_enum() {
-                    SpineLogitsObserveMode::SkipToDeviceArgmax => LogitsFetchMode::DeviceArgmaxOnly,
-                    SpineLogitsObserveMode::ObserveFullLogits => LogitsFetchMode::FullLogits,
-                };
-            }
-            pending_outcome = next_outcome;
-        }
-        let decode_secs = t_dec.elapsed().as_secs_f64();
-        cfg.exit_entropy_h_tilde = if entropy_count > 0 {
-            entropy_sum / entropy_count as f32
-        } else {
-            steer.adapter.substrate().last_entropy_h_tilde
-        };
-        cfg.steer_bypass_hits += steer.steer_bypass_hits;
-        cfg.steer_eligible_layers += steer.steer_eligible_layers;
-        let text = tokenizer
-            .decode(&gen_ids, true)
-            .map_err(|e| format!("multimodal decode error: {e}"))?
-            .replace('\n', " ");
-        debug_assert_eq!(model.kv_len(), start_offset + prompt_len + gen_ids.len());
-        Ok((
-            text,
-            gen_ids,
-            ReplyTiming {
-                prefill_secs,
-                decode_secs,
-            },
-        ))
-    })();
-
-    if let Some(prev) = saved_layer_mask {
-        adapter.set_layer_rope_mask(prev);
-    }
-    result
-}
-
-/// Deterministically slices the 36-probe Phase C-1 benchmark set (`8 SELF_REF`, `8 EXTERIOR`,
-/// `12 OOD`, `8 Guard`) from `extended_boundary_probes.txt`.
-pub(crate) struct C1ProbeSlice {
+/// Deterministically slices the 36-probe boundary contrast benchmark set (`8 SELF_REF`,
+/// `8 EXTERIOR`, `12 OOD`, `8 Guard`) from `extended_boundary_probes.txt`.
+pub(crate) struct BoundaryProbeSlice {
     pub(crate) self_ref: Vec<ExtendedPartitionProbe>,
     pub(crate) exterior: Vec<ExtendedPartitionProbe>,
     pub(crate) ood: Vec<ExtendedPartitionProbe>,
     pub(crate) guard: Vec<ExtendedRepulsionProbe>,
 }
 
-pub(crate) fn slice_c1_probes(suite: &ExtendedBoundarySuite) -> Result<C1ProbeSlice, String> {
+pub(crate) fn slice_boundary_probes(
+    suite: &ExtendedBoundarySuite,
+) -> Result<BoundaryProbeSlice, String> {
     let take_class = |cls: PartitionClass, n: usize| -> Vec<ExtendedPartitionProbe> {
         suite
             .partition_probes
@@ -563,29 +225,29 @@ pub(crate) fn slice_c1_probes(suite: &ExtendedBoundarySuite) -> Result<C1ProbeSl
             .cloned()
             .collect()
     };
-    let self_ref = take_class(PartitionClass::SelfRef, C1_SELF_REF_COUNT);
-    let exterior = take_class(PartitionClass::Exterior, C1_EXTERIOR_COUNT);
-    let ood = take_class(PartitionClass::Ood, C1_OOD_COUNT);
+    let self_ref = take_class(PartitionClass::SelfRef, BOUNDARY_SELF_REF_COUNT);
+    let exterior = take_class(PartitionClass::Exterior, BOUNDARY_EXTERIOR_COUNT);
+    let ood = take_class(PartitionClass::Ood, BOUNDARY_OOD_COUNT);
     let guard: Vec<ExtendedRepulsionProbe> = suite
         .repulsion_probes
         .iter()
-        .take(C1_GUARD_COUNT)
+        .take(BOUNDARY_GUARD_COUNT)
         .cloned()
         .collect();
-    if self_ref.len() != C1_SELF_REF_COUNT
-        || exterior.len() != C1_EXTERIOR_COUNT
-        || ood.len() != C1_OOD_COUNT
-        || guard.len() != C1_GUARD_COUNT
+    if self_ref.len() != BOUNDARY_SELF_REF_COUNT
+        || exterior.len() != BOUNDARY_EXTERIOR_COUNT
+        || ood.len() != BOUNDARY_OOD_COUNT
+        || guard.len() != BOUNDARY_GUARD_COUNT
     {
         return Err(format!(
-            "insufficient Phase C-1 probes: SR={} EX={} OOD={} G={}",
+            "insufficient boundary contrast probes: SR={} EX={} OOD={} G={}",
             self_ref.len(),
             exterior.len(),
             ood.len(),
             guard.len()
         ));
     }
-    Ok(C1ProbeSlice {
+    Ok(BoundaryProbeSlice {
         self_ref,
         exterior,
         ood,
@@ -593,9 +255,10 @@ pub(crate) fn slice_c1_probes(suite: &ExtendedBoundarySuite) -> Result<C1ProbeSl
     })
 }
 
-/// Phase C-0 mandatory Steer-OFF visual recognition smoke gate across Image A, B, C.
+/// Mandatory Steer-OFF visual recognition smoke gate across synthetic RGB images A, B, and C.
+// Internal VLM smoke gate keeps borrowed runtime handles explicit before `VlmEvalCtx` exists.
 #[allow(clippy::too_many_arguments)]
-fn run_phase_c0_smoke_gate(
+fn run_visual_smoke_gate(
     cli: &EvalCliConfig,
     vision: &VisionModel,
     model: &mut CausalLmModel,
@@ -606,7 +269,7 @@ fn run_phase_c0_smoke_gate(
     images: &[(RgbImage, &str, &[&str])],
 ) -> Result<Vec<Tensor>, Box<dyn std::error::Error>> {
     println!(
-        "\n=== Phase C-0: Steer-OFF Visual Recognition Smoke Gate (3 Synthetic Images, max_tokens={}) ===",
+        "\n=== Visual Smoke Gate: Steer-OFF Recognition Check (3 Synthetic Images, max_tokens={}) ===",
         cli.max_tokens
     );
     let mut cached_embeds = Vec::with_capacity(images.len());
@@ -622,7 +285,7 @@ fn run_phase_c0_smoke_gate(
             build_mistral3_image_turn_tokens(tokenizer, &vision.cfg, img, prompt, false)?;
         let embeds =
             build_multimodal_inputs_embeds(model, &turn_ids, &vis_emb, vision.cfg.image_token_id)?;
-        let mut off_cfg = make_decode_cfg(
+        let mut off_cfg = vlm_decode_cfg(
             cli,
             None,
             None,
@@ -647,7 +310,7 @@ fn run_phase_c0_smoke_gate(
                 .all(|g| g.split('|').any(|kw| !kw.is_empty() && lower.contains(kw)));
         all_passed &= passed;
         println!(
-            "  [C-0:Img{} {}] {}x{} img_toks={} in_toks={} gen_toks={} \
+            "  [VisualSmoke:Img{} {}] {}x{} img_toks={} in_toks={} gen_toks={} \
              vis={:.1}ms prefill={:.1}ms dec={:.1}ms pass={} => {}",
             (b'A' + idx as u8) as char,
             img.name,
@@ -667,42 +330,19 @@ fn run_phase_c0_smoke_gate(
 
     model.clear_cache();
     if !all_passed {
-        println!("[Phase C-0 GATE FAILED] Visual encoder output failed recognition check; aborting before C-1/C-2.");
-        return Err("Phase C-0 visual recognition gate failed".into());
+        println!(
+            "[Visual Smoke Gate FAILED] Visual encoder output failed recognition check; \
+             aborting remaining VLM suites."
+        );
+        return Err("visual recognition smoke gate failed".into());
     }
     println!(
-        "[Phase C-0 GATE PASSED] All 3 synthetic images recognized accurately under Steer OFF."
+        "[Visual Smoke Gate PASSED] All 3 synthetic images recognized accurately under Steer OFF."
     );
     Ok(cached_embeds)
 }
 
-#[derive(Default)]
-struct ClassMetricSamples {
-    top1_coh: Vec<f64>,
-    unexp: Vec<f64>,
-    rho: Vec<f64>,
-}
-
-impl ClassMetricSamples {
-    fn push(&mut self, plan: &TurnSteeringPlan) {
-        self.top1_coh.push(f64::from(plan.top1_fact_score()));
-        self.unexp
-            .push(f64::from(plan.telemetry().unexplained_token_ratio));
-        self.rho.push(f64::from(plan.telemetry().query_ortho_ratio));
-    }
-
-    fn format_quantiles(&self, label: &str) -> String {
-        let q1 = compute_quantiles(&self.top1_coh);
-        let q2 = compute_quantiles(&self.unexp);
-        let q3 = compute_quantiles(&self.rho);
-        format!(
-            "{label:<8}(n={:>2}): top1=[{:.3},{:.3},{:.3}] unexp=[{:.3},{:.3},{:.3}] rho=[{:.3},{:.3},{:.3}]",
-            q1.count, q1.min, q1.median, q1.max, q2.min, q2.median, q2.max, q3.min, q3.median, q3.max
-        )
-    }
-}
-
-struct C1ConditionSummary {
+struct BoundaryConditionSummary {
     label: String,
     kv_tokens_before_turn: usize,
     disjoint_ok: usize,
@@ -751,79 +391,14 @@ struct C1ConditionSummary {
     vram_end: Option<String>,
 }
 
-fn measure_guard_antiphase(
-    baked: &BakedModelProfile,
-    compiled: &CompiledTokenCorpus,
-    num_heads: usize,
-) -> (usize, usize, usize, usize) {
-    let mut guard_checked = 0_usize;
-    let mut guard_antiphase = 0_usize;
-    for layer_guards in &baked.guard_anchors_per_layer {
-        for g in layer_guards {
-            if is_nonzero_q7(&g.phase_deltas, num_heads) {
-                guard_checked += 1;
-                let frame =
-                    GuardPhaseAnchor::new(g.phase_deltas, 1.0, 0.5).synthesize_gateway_frame();
-                guard_antiphase +=
-                    usize::from(dot_q7(&g.phase_deltas, &frame.phase_deltas, num_heads) < 0);
-            }
-        }
-    }
-    let mut esc_checked = 0_usize;
-    let mut esc_antiphase = 0_usize;
-    let mut esc_provider = CorpusRecallEscalationProvider::new(&compiled.corpus);
-    let best_guard = compiled
-        .corpus
-        .entries()
-        .iter()
-        .filter(|e| e.role == AttractorRole::Guard && !e.per_layer_q7.is_empty())
-        .max_by(|a, b| a.energy.total_cmp(&b.energy));
-    if let Some(guard_entry) = best_guard {
-        let n_layers = guard_entry.per_layer_q7.len();
-        for (layer_idx, ref_q7) in guard_entry.per_layer_q7.iter().enumerate() {
-            let scale_q7 = if n_layers <= 1 {
-                0
-            } else {
-                ((layer_idx * 127) / (n_layers - 1)).min(127) as u8
-            };
-            let req = HorizonEscalationRequest {
-                trigger: HorizonTriggerInput {
-                    entropy_gate_mode: 0,
-                    moving_z_entropy: 0.85,
-                    repulsion_severity: 0.90,
-                    causal_root_cause: 0,
-                    epistemic_regime: EpistemicRegime::InternalConflict as u8,
-                    stationary_shortcut_ready: false,
-                    ego_active_triggers: 0,
-                    unstable_dwell_steps: 4,
-                    quiescent_dwell_steps: 0,
-                },
-                placement: WorkbenchLanePlacement::AutoFree,
-                lane_flags: WORKBENCH_LANE_FLAG_REPULSION,
-                layer_scale_q7: scale_q7,
-                desired_aperture_mask: 0x0F,
-                current_frame_energy: 2.0,
-            };
-            let mut slot_out = [0_i8; MAX_ATTENTION_HEADS];
-            if let Ok(Some(_)) = esc_provider.try_escalate_horizon(&req, &mut slot_out) {
-                if is_nonzero_q7(ref_q7, num_heads) {
-                    esc_checked += 1;
-                    esc_antiphase += usize::from(dot_q7(ref_q7, &slot_out, num_heads) < 0);
-                }
-            }
-        }
-    }
-    (guard_antiphase, guard_checked, esc_antiphase, esc_checked)
-}
-
-fn run_c1_condition(
+fn run_boundary_condition(
     ctx: &mut VlmEvalCtx<'_>,
     label: &str,
     kv_offset: usize,
-    probes: &C1ProbeSlice,
-) -> Result<C1ConditionSummary, Box<dyn std::error::Error>> {
+    probes: &BoundaryProbeSlice,
+) -> Result<BoundaryConditionSummary, Box<dyn std::error::Error>> {
     println!(
-        "\n--- [Phase C-1: {label}] kv_tokens_before_turn={kv_offset} \
+        "\n--- [BoundaryContrast: {label}] kv_tokens_before_turn={kv_offset} \
          (36 probes: SELF_REF={} EXTERIOR={} OOD={} Guard={}) ---",
         probes.self_ref.len(),
         probes.exterior.len(),
@@ -860,22 +435,22 @@ fn run_c1_condition(
         reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
         let mut phase_kv = StandardPhaseKvGopCache::new();
         let (_, plan) = ctx.prepare_text_plan(&mut phase_kv, &probe.prompt, 1)?;
-        disjoint_ok += usize::from(is_disjoint_anchors(&plan));
+        disjoint_ok += usize::from(anchor_disjoint_stats(&plan).0);
         self_ref_hit += usize::from(plan.has_self_ref_anchors());
         self_ref_ext_empty +=
             usize::from(plan.exterior_context().is_empty() && !plan.is_known_unknown_exterior());
-        self_samples.push(&plan);
+        self_samples.push_plan(&plan);
 
-        let body = build_steered_body(&plan, &probe.prompt);
+        let body = build_steered_body(&plan, &probe.prompt, true);
         let prompt_str = format_turn_prompt(ctx.chat, &body, kv_offset);
         let prompt_len = ctx
             .tokenizer
             .encode(prompt_str.as_str(), false)
-            .map_err(|e| format!("c1 self_ref len error: {e}"))?
+            .map_err(|e| format!("boundary self_ref len error: {e}"))?
             .get_ids()
             .len();
         let eff_mask = plan.effective_layer_steer_mask(ctx.adapter);
-        let mut dec_cfg = make_decode_cfg(
+        let mut dec_cfg = vlm_decode_cfg(
             ctx.cli,
             Some(ctx.baked),
             Some(&plan),
@@ -920,23 +495,23 @@ fn run_c1_condition(
         reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
         let mut phase_kv = StandardPhaseKvGopCache::new();
         let (_, plan) = ctx.prepare_text_plan(&mut phase_kv, &probe.prompt, 1)?;
-        disjoint_ok += usize::from(is_disjoint_anchors(&plan));
+        disjoint_ok += usize::from(anchor_disjoint_stats(&plan).0);
         ext_self_empty += usize::from(plan.self_ref_context().is_empty());
         ext_known_unk += usize::from(plan.is_known_unknown_exterior());
         ext_unobs += usize::from(plan.is_unobserved_lacuna());
-        ext_samples.push(&plan);
+        ext_samples.push_plan(&plan);
 
         if plan.steering_eligible() {
-            let body = build_steered_body(&plan, &probe.prompt);
+            let body = build_steered_body(&plan, &probe.prompt, true);
             let prompt_str = format_turn_prompt(ctx.chat, &body, kv_offset);
             let prompt_len = ctx
                 .tokenizer
                 .encode(prompt_str.as_str(), false)
-                .map_err(|e| format!("c1 ext len error: {e}"))?
+                .map_err(|e| format!("boundary ext len error: {e}"))?
                 .get_ids()
                 .len();
             let eff_mask = plan.effective_layer_steer_mask(ctx.adapter);
-            let mut dec_cfg = make_decode_cfg(
+            let mut dec_cfg = vlm_decode_cfg(
                 ctx.cli,
                 Some(ctx.baked),
                 Some(&plan),
@@ -984,23 +559,23 @@ fn run_c1_condition(
         reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
         let mut phase_kv = StandardPhaseKvGopCache::new();
         let (_, plan) = ctx.prepare_text_plan(&mut phase_kv, &probe.prompt, 1)?;
-        disjoint_ok += usize::from(is_disjoint_anchors(&plan));
+        disjoint_ok += usize::from(anchor_disjoint_stats(&plan).0);
         let is_unobs = plan.is_unobserved_lacuna() && !plan.is_guard_trap();
         ood_unobs += usize::from(is_unobs);
         ood_both_empty +=
             usize::from(plan.self_ref_context().is_empty() && plan.exterior_context().is_empty());
-        ood_samples.push(&plan);
+        ood_samples.push_plan(&plan);
 
         let eff_mask = plan.effective_layer_steer_mask(ctx.adapter);
         let raw_prompt = format_turn_prompt(ctx.chat, &probe.prompt, kv_offset);
         let raw_len = ctx
             .tokenizer
             .encode(raw_prompt.as_str(), false)
-            .map_err(|e| format!("c1 ood off len error: {e}"))?
+            .map_err(|e| format!("boundary ood off len error: {e}"))?
             .get_ids()
             .len();
         ctx.model.truncate_cache(kv_offset)?;
-        let mut off_cfg = make_decode_cfg(
+        let mut off_cfg = vlm_decode_cfg(
             ctx.cli,
             None,
             None,
@@ -1020,16 +595,16 @@ fn run_c1_condition(
         )?;
         let off_gen = &off_all[raw_len.min(off_all.len())..];
 
-        let on_body = build_steered_body(&plan, &probe.prompt);
+        let on_body = build_steered_body(&plan, &probe.prompt, true);
         let on_prompt = format_turn_prompt(ctx.chat, &on_body, kv_offset);
         let on_len = ctx
             .tokenizer
             .encode(on_prompt.as_str(), false)
-            .map_err(|e| format!("c1 ood on len error: {e}"))?
+            .map_err(|e| format!("boundary ood on len error: {e}"))?
             .get_ids()
             .len();
         ctx.model.truncate_cache(kv_offset)?;
-        let mut on_cfg = make_decode_cfg(
+        let mut on_cfg = vlm_decode_cfg(
             ctx.cli,
             Some(ctx.baked),
             Some(&plan),
@@ -1104,21 +679,21 @@ fn run_c1_condition(
         let mut phase_kv = StandardPhaseKvGopCache::new();
         let (_, plan) = ctx.prepare_text_plan(&mut phase_kv, &probe.prompt, 1)?;
         guard_traps += usize::from(plan.is_guard_trap());
-        guard_samples.push(&plan);
+        guard_samples.push_plan(&plan);
 
         let eff_mask = plan.effective_layer_steer_mask(ctx.adapter);
         let raw_prompt = format_turn_prompt(ctx.chat, &probe.prompt, kv_offset);
-        let hyb_body = build_steered_body(&plan, &probe.prompt);
+        let hyb_body = build_steered_body(&plan, &probe.prompt, true);
         let hyb_prompt = format_turn_prompt(ctx.chat, &hyb_body, kv_offset);
         let hyb_len = ctx
             .tokenizer
             .encode(hyb_prompt.as_str(), false)
-            .map_err(|e| format!("c1 guard len error: {e}"))?
+            .map_err(|e| format!("boundary guard len error: {e}"))?
             .get_ids()
             .len();
 
         ctx.model.truncate_cache(kv_offset)?;
-        let mut off_cfg = make_decode_cfg(
+        let mut off_cfg = vlm_decode_cfg(
             ctx.cli,
             None,
             None,
@@ -1138,7 +713,7 @@ fn run_c1_condition(
         )?;
 
         ctx.model.truncate_cache(kv_offset)?;
-        let mut rope_cfg = make_decode_cfg(
+        let mut rope_cfg = vlm_decode_cfg(
             ctx.cli,
             Some(ctx.baked),
             Some(&plan),
@@ -1158,7 +733,7 @@ fn run_c1_condition(
         )?;
 
         ctx.model.truncate_cache(kv_offset)?;
-        let mut on_cfg = make_decode_cfg(
+        let mut on_cfg = vlm_decode_cfg(
             ctx.cli,
             Some(ctx.baked),
             Some(&plan),
@@ -1194,7 +769,8 @@ fn run_c1_condition(
 
         if let Some(off_l) = off_cfg.first_prefill_logits.as_deref() {
             for kw in &probe.forbidden {
-                let Some(tok_id) = resolve_forbidden_token_id(ctx.tokenizer, kw, off_l.len())
+                let Some(tok_id) =
+                    resolve_forbidden_token_id(ctx.tokenizer, kw, off_l.len()).token_id
                 else {
                     continue;
                 };
@@ -1236,7 +812,7 @@ fn run_c1_condition(
 
     let partition_total = probes.self_ref.len() + probes.exterior.len() + probes.ood.len();
     let ood_den = probes.ood.len().max(1) as f64;
-    Ok(C1ConditionSummary {
+    Ok(BoundaryConditionSummary {
         label: label.to_string(),
         kv_tokens_before_turn: kv_offset,
         disjoint_ok,
@@ -1286,7 +862,7 @@ fn run_c1_condition(
     })
 }
 
-fn print_c1_summary(s: &C1ConditionSummary) {
+fn print_boundary_summary(s: &BoundaryConditionSummary) {
     let pure_tps = if s.decode_secs > 1e-6 {
         s.decode_tokens as f64 / s.decode_secs
     } else {
@@ -1299,7 +875,7 @@ fn print_c1_summary(s: &C1ConditionSummary) {
         0.0
     };
     println!(
-        "[C-1 Summary: {}] kv_tokens_before_turn={} | disjoint={:.1}% ({}/{}) | \
+        "[Boundary Summary: {}] kv_tokens_before_turn={} | disjoint={:.1}% ({}/{}) | \
          SELF_REF(hit={:.1}% {}/{}, ext_empty={:.1}% {}/{}) | \
          EXTERIOR(self_empty={:.1}% {}/{}, known_unk={:.1}% {}/{}, unobs={:.1}% {}/{}) | \
          OOD(unobs={:.1}% {}/{}, both_empty={:.1}% {}/{}, exact={:.1}% {}/{}, \
@@ -1366,35 +942,35 @@ fn print_c1_summary(s: &C1ConditionSummary) {
         s.vram_end.as_deref().unwrap_or("n/a"),
     );
     println!(
-        "  [C-1 Quantiles: {}] {}",
+        "  [Boundary Quantiles: {}] {}",
         s.label,
         s.self_samples.format_quantiles("SELF_REF")
     );
     println!(
-        "  [C-1 Quantiles: {}] {}",
+        "  [Boundary Quantiles: {}] {}",
         s.label,
         s.ext_samples.format_quantiles("EXTERIOR")
     );
     println!(
-        "  [C-1 Quantiles: {}] {}",
+        "  [Boundary Quantiles: {}] {}",
         s.label,
         s.ood_samples.format_quantiles("OOD")
     );
     println!(
-        "  [C-1 Quantiles: {}] {}",
+        "  [Boundary Quantiles: {}] {}",
         s.label,
         s.guard_samples.format_quantiles("GUARD")
     );
 }
 
-/// Phase C-2a: visual-query non-interference & Text-Only vs Image-Embeds `IsolatedProbe` audit.
-fn run_phase_c2a_visual_non_interference(
+/// Visual-query non-interference & Text-Only vs Image-Embeds `IsolatedProbe` audit.
+fn run_visual_non_interference_audit(
     ctx: &mut VlmEvalCtx<'_>,
     images: &[(RgbImage, &str, &[&str])],
     cached_vis_embeds: &[Tensor],
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(
-        "\n=== Phase C-2a: Visual-Query Non-Interference & IsolatedProbe Contamination Audit (Images A/B/C) ==="
+        "\n=== Visual-Query Non-Interference & IsolatedProbe Contamination Audit (Images A/B/C) ==="
     );
     let layer_mask_override = ctx
         .cli
@@ -1448,7 +1024,7 @@ fn run_phase_c2a_visual_non_interference(
         )?;
 
         println!(
-            "  [C-2a:Img{tag} ProbeDiff {}]\n    \
+            "  [VisualAudit:Img{tag} ProbeDiff {}]\n    \
              (i)  TextOnlyProbe (len={:>2}): lacuna={:?} unobs={} known_unk={} \
              trap={} steer={} top1={:.3} unexp={:.3} rho={:.3} br={}\n    \
              (ii) ImgEmbedProbe (len={:>2}): lacuna={:?} unobs={} known_unk={} \
@@ -1483,7 +1059,7 @@ fn run_phase_c2a_visual_non_interference(
 
         ctx.model.clear_cache();
         reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
-        let mut off_cfg = make_decode_cfg(
+        let mut off_cfg = vlm_decode_cfg(
             ctx.cli,
             None,
             None,
@@ -1498,8 +1074,8 @@ fn run_phase_c2a_visual_non_interference(
         ctx.model.clear_cache();
         reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
         let txt_mask = plan_txt.effective_layer_steer_mask(ctx.adapter);
-        let txt_body = build_steered_body(&plan_txt, prompt);
-        let mut on_txt_cfg = make_decode_cfg(
+        let txt_body = build_steered_body(&plan_txt, prompt, true);
+        let mut on_txt_cfg = vlm_decode_cfg(
             ctx.cli,
             Some(ctx.baked),
             Some(&plan_txt),
@@ -1521,8 +1097,8 @@ fn run_phase_c2a_visual_non_interference(
         ctx.model.clear_cache();
         reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
         let mm_mask = plan_mm.effective_layer_steer_mask(ctx.adapter);
-        let mm_body = build_steered_body(&plan_mm, prompt);
-        let mut on_mm_cfg = make_decode_cfg(
+        let mm_body = build_steered_body(&plan_mm, prompt, true);
+        let mut on_mm_cfg = vlm_decode_cfg(
             ctx.cli,
             Some(ctx.baked),
             Some(&plan_mm),
@@ -1542,7 +1118,7 @@ fn run_phase_c2a_visual_non_interference(
         };
 
         println!(
-            "  [C-2a:Img{tag} Decode]\n    \
+            "  [VisualAudit:Img{tag} Decode]\n    \
              OFF     : {}\n    \
              ON(txt) : exact={} KL={:.6} max_dlogit={:.6} => {}\n    \
              ON(img) : exact={} KL={:.6} max_dlogit={:.6} => {}",
@@ -1561,14 +1137,14 @@ fn run_phase_c2a_visual_non_interference(
     Ok(())
 }
 
-/// Phase C-2b: Mixed 5-turn persistent KV dialogue starting with Image C at Turn 1.
-fn run_phase_c2b_mixed_5turn(
+/// Mixed 5-turn persistent KV dialogue starting with Image C at Turn 1.
+fn run_mixed_multiturn_dialogue(
     ctx: &mut VlmEvalCtx<'_>,
     img_c: &RgbImage,
     img_c_vis_emb: &Tensor,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!(
-        "\n=== Phase C-2b: Mixed 5-Turn Persistent KV Dialogue \
+        "\n=== Mixed Multi-Turn Persistent KV Dialogue \
          (Image C at Turn 1 -> SELF_REF -> Guard -> OOD -> Visual Recall) ==="
     );
     let turns: [(&str, &str, bool); 5] = [
@@ -1601,7 +1177,7 @@ fn run_phase_c2b_mixed_5turn(
     ];
 
     for &(mode_label, steer_mode_enabled) in &[("Steer-OFF", false), ("LiminiKa-ON", true)] {
-        println!("-- [Phase C-2b: {mode_label}] --");
+        println!("-- [Mixed Multi-Turn: {mode_label}] --");
         ctx.model.clear_cache();
         reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
         let mut phase_kv = StandardPhaseKvGopCache::new();
@@ -1615,13 +1191,13 @@ fn run_phase_c2b_mixed_5turn(
             let eff_mask = plan.effective_layer_steer_mask(ctx.adapter);
             let use_steer = steer_mode_enabled && plan.steering_eligible();
             let body = if steer_mode_enabled {
-                build_steered_body(&plan, user_prompt)
+                build_steered_body(&plan, user_prompt, true)
             } else {
                 user_prompt.to_string()
             };
 
             let snap_before = ctx.adapter.telemetry_snapshot();
-            let mut dec_cfg = make_decode_cfg(
+            let mut dec_cfg = vlm_decode_cfg(
                 ctx.cli,
                 Some(ctx.baked),
                 Some(&plan),
@@ -1679,22 +1255,23 @@ fn run_phase_c2b_mixed_5turn(
     Ok(())
 }
 
-/// Top-level entry point for `--vlm-eval` running Phases C-0, C-1, C-2a, and C-2b.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run_vlm_eval(
-    cli: &EvalCliConfig,
-    repo_root: &Path,
-    model_dir: &Path,
-    cfg: &ModelConfig,
-    vis_cfg: VisionConfig,
-    chat: &ChatTemplate,
-    device: &Device,
-    active_layer_mask: u64,
-    model: &mut CausalLmModel,
-    tokenizer: &Tokenizer,
-    active_persona_circuit: Option<CognitiveTrajectoryLedger>,
-    circuit_mode: CircuitProfileMode,
-) -> Result<(), Box<dyn std::error::Error>> {
+/// Top-level entry point for `--vlm-eval` executing visual smoke, Text vs Image-KV boundary
+/// contrast, visual-query non-interference, and mixed multi-turn dialogue evaluations.
+pub(crate) fn run_vlm_eval(args: VlmEvalRunArgs<'_>) -> Result<(), Box<dyn std::error::Error>> {
+    let VlmEvalRunArgs {
+        cli,
+        repo_root,
+        model_dir,
+        cfg,
+        vis_cfg,
+        chat,
+        device,
+        active_layer_mask,
+        model,
+        tokenizer,
+        active_persona_circuit,
+        circuit_mode,
+    } = args;
     if cli.recall_only {
         return Err("--vlm-eval requires live model weights (disable --recall-only)".into());
     }
@@ -1741,7 +1318,7 @@ pub(crate) fn run_vlm_eval(
     ];
 
     let mut smoke_adapter = configure_trial_adapter(cfg, cli)?;
-    let cached_vis_embeds = run_phase_c0_smoke_gate(
+    let cached_vis_embeds = run_visual_smoke_gate(
         cli,
         &vision,
         model,
@@ -1756,7 +1333,7 @@ pub(crate) fn run_vlm_eval(
     let corpus_fixture = load_fixture(&corpus_path)?;
     let ext_path = repo_root.join("tests/fixtures/extended_boundary_probes.txt");
     let ext_suite = load_extended_boundary_probes(&ext_path)?;
-    let c1_probes = slice_c1_probes(&ext_suite)?;
+    let boundary_probes = slice_boundary_probes(&ext_suite)?;
 
     println!(
         "\n=== VLM Corpus Bake & Calibration \
@@ -1797,26 +1374,13 @@ pub(crate) fn run_vlm_eval(
             shared.prior_ms,
         );
     }
-    let mut base_entropies = Vec::with_capacity(corpus_fixture.probes.len());
-    for (_, prompt, _, _) in &corpus_fixture.probes {
-        let formatted = chat.format_single_turn(prompt);
-        let ids = tokenizer
-            .encode(formatted.as_str(), false)
-            .map_err(|e| format!("vlm entropy encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (logits_out, _, _) = model.forward_tokens(
-            &ids,
-            0,
-            None,
-            false,
-            false,
-            LogitsFetchMode::FullLogits,
-            KvCacheMode::IsolatedProbe,
-        )?;
-        let logits = logits_out.into_full_logits()?;
-        base_entropies.push(adapter.measure_entropy_state(&logits)?.moving_z_entropy);
-    }
+    let base_prompts: Vec<&str> = corpus_fixture
+        .probes
+        .iter()
+        .map(|(_, prompt, _, _)| prompt.as_str())
+        .collect();
+    let base_entropies =
+        measure_baseline_entropies(model, tokenizer, chat, &mut adapter, &base_prompts)?;
     let probe_res =
         calibrate_trial_adapter(&mut adapter, baked, &base_entropies, active_layer_mask)?;
     println!(
@@ -1846,17 +1410,17 @@ pub(crate) fn run_vlm_eval(
         persona_bank: persona_bank.as_ref(),
     };
 
-    // Phase C-1 Condition 1: Text-Only
+    // Boundary Contrast Condition 1: Text-Only
     ctx.model.clear_cache();
-    let c1_text = run_c1_condition(&mut ctx, "Text-Only", 0, &c1_probes)?;
+    let boundary_text = run_boundary_condition(&mut ctx, "Text-Only", 0, &boundary_probes)?;
 
-    // Phase C-1 Condition 2: Image-In-KV (Turn 1 = Image C dark_ui_layout + short confirmation)
+    // Boundary Contrast Condition 2: Image-In-KV (Turn 1 = Image C dark_ui_layout + confirmation)
     ctx.model.clear_cache();
     reset_clean_probe_adapter(ctx.adapter, ctx.cli, ctx.active_layer_mask);
     let turn1_prompt =
         "Briefly confirm what you see in this interface image in one short sentence.";
     let mut turn1_cfg =
-        make_decode_cfg(ctx.cli, None, None, ctx.active_layer_mask, false, 24, false);
+        vlm_decode_cfg(ctx.cli, None, None, ctx.active_layer_mask, false, 24, false);
     let (turn1_reply, turn1_gen_ids, _) = ctx.decode_image_turn(
         &images[2].0,
         &cached_vis_embeds[2],
@@ -1866,35 +1430,40 @@ pub(crate) fn run_vlm_eval(
     )?;
     let turn1_kv_len = ctx.model.kv_len();
     println!(
-        "\n[Phase C-1 Turn 1 Prefix] image={} gen_toks={} kv_tokens_before_turn={} reply => {}",
+        "\n[Boundary Turn 1 Prefix] image={} gen_toks={} kv_tokens_before_turn={} reply => {}",
         images[2].0.name,
         turn1_gen_ids.len(),
         turn1_kv_len,
         turn1_reply,
     );
 
-    let c1_img_kv = run_c1_condition(&mut ctx, "Image-In-KV", turn1_kv_len, &c1_probes)?;
+    let boundary_img_kv =
+        run_boundary_condition(&mut ctx, "Image-In-KV", turn1_kv_len, &boundary_probes)?;
 
-    println!("\n=== Phase C-1: 1:1 Comparison Summary (Text-Only vs Image-In-KV, 36 Probes) ===");
-    print_c1_summary(&c1_text);
-    print_c1_summary(&c1_img_kv);
-    let (sr_jaccard, sr_exact_pct) =
-        mean_reply_bigram_jaccard(&c1_text.self_ref_replies, &c1_img_kv.self_ref_replies);
     println!(
-        "[C-1 Cross-Condition SELF_REF Reply Consistency] mean_bigram_jaccard={:.3} exact_reply={:.1}% ({}/{})",
+        "\n=== Text vs Image-KV Boundary: 1:1 Comparison Summary (Text-Only vs Image-In-KV, 36 Probes) ==="
+    );
+    print_boundary_summary(&boundary_text);
+    print_boundary_summary(&boundary_img_kv);
+    let (sr_jaccard, sr_exact_pct) = mean_reply_bigram_jaccard(
+        &boundary_text.self_ref_replies,
+        &boundary_img_kv.self_ref_replies,
+    );
+    println!(
+        "[Cross-Condition SELF_REF Reply Consistency] mean_bigram_jaccard={:.3} exact_reply={:.1}% ({}/{})",
         sr_jaccard,
         sr_exact_pct,
-        c1_text
+        boundary_text
             .self_ref_replies
             .iter()
-            .zip(c1_img_kv.self_ref_replies.iter())
+            .zip(boundary_img_kv.self_ref_replies.iter())
             .filter(|(a, b)| a.trim() == b.trim())
             .count(),
-        c1_text.self_ref_replies.len(),
+        boundary_text.self_ref_replies.len(),
     );
 
-    run_phase_c2a_visual_non_interference(&mut ctx, &images, &cached_vis_embeds)?;
-    run_phase_c2b_mixed_5turn(&mut ctx, &images[2].0, &cached_vis_embeds[2])?;
+    run_visual_non_interference_audit(&mut ctx, &images, &cached_vis_embeds)?;
+    run_mixed_multiturn_dialogue(&mut ctx, &images[2].0, &cached_vis_embeds[2])?;
 
     if let Some(vram) = query_nvidia_smi_vram() {
         println!("\n[VLM Eval VRAM] end=[{vram}]");
@@ -1916,11 +1485,11 @@ mod tests {
     }
 
     #[test]
-    fn c1_probe_slice_extracts_exact_36_deterministic_probes() {
+    fn boundary_probe_slice_extracts_exact_36_deterministic_probes() {
         let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/extended_boundary_probes.txt");
         let suite = load_extended_boundary_probes(&fixture_path).expect("load fixture");
-        let sliced = slice_c1_probes(&suite).expect("slice 36");
+        let sliced = slice_boundary_probes(&suite).expect("slice 36");
         assert_eq!(sliced.self_ref.len(), 8);
         assert_eq!(sliced.exterior.len(), 8);
         assert_eq!(sliced.ood.len(), 12);

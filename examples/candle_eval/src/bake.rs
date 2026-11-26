@@ -403,6 +403,7 @@ pub(crate) struct SharedFixtureArtifacts {
 /// Captures the fixture entries in a single model forward pass and builds both the optional
 /// [`ContrastiveAnchorBank`] (when `!recall_only`) and the shared [`CompiledTokenCorpus`],
 /// dropping raw token activation buffers immediately after compilation to keep peak RAM low.
+// Evaluation-harness corpus baking entrypoint keeps explicit flat parameters for call-site clarity.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn capture_and_build_shared_corpus(
     model: &mut CausalLmModel,

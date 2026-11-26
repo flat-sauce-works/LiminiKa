@@ -224,6 +224,7 @@ fn dispatch_rope_orchestration_inner<S: ManifoldGatewaySignal + ?Sized>(
     Ok(())
 }
 
+// Internal RoPE steering dispatcher forwards per-layer evaluation slices without intermediate structs.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_rope_orchestration<S: ManifoldGatewaySignal + ?Sized>(
     adapter: &mut ModelSteeringAdapter,

@@ -92,6 +92,7 @@ struct EmptyKvProbeResult {
     init_logits: Vec<f32>,
 }
 
+// Single-probe helper passes borrowed evaluation context explicitly to keep call sites flat.
 #[allow(clippy::too_many_arguments)]
 fn run_single_empty_kv_probe(
     prompt: &str,
@@ -206,6 +207,7 @@ fn run_single_empty_kv_probe(
     })
 }
 
+// Benchmark entrypoint passes borrowed runtime handles directly from `main.rs`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_equilibrium_benchmark(
     cli: &EvalCliConfig,
@@ -221,20 +223,20 @@ pub(crate) fn run_equilibrium_benchmark(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let t_all = Instant::now();
     println!(
-        "\n=== Cross-Restart Equilibrium Persistence Benchmark (P2-C E2E) ===\n  \
+        "\n=== Cross-Restart Equilibrium Persistence Benchmark (Equilibrium E2E) ===\n  \
          topology_crc32=0x{:08x} corpus_anchors={} work_dir={}",
         CORE_TOPOLOGY.topology_crc32,
         compiled.corpus.entries().len(),
         work_dir.display(),
     );
 
-    let tmp_dir = work_dir.join(format!("p2c_e2e_{}", std::process::id()));
+    let tmp_dir = work_dir.join(format!("equilibrium_e2e_{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir)?;
     let lmnkc_path = tmp_dir.join("session_equilibrium.lmnkc");
     let lmnkp_path = tmp_dir.join("canonical_source.lmnkp");
 
     // ------------------------------------------------------------------
-    // Phase 1: Session 1 live turn + EquilibriumState + .lmnkc persist
+    // Step 1: Session 1 live turn + EquilibriumState + .lmnkc persist
     // ------------------------------------------------------------------
     let mut session1 = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
     session1.set_ego_max_hops(cli.ego_max_hops);
@@ -320,7 +322,7 @@ pub(crate) fn run_equilibrium_benchmark(
     println!("[Session 1 Out] {}", s1_reply.replace('\n', " "));
 
     // ------------------------------------------------------------------
-    // Phase 2: 100-Generation Flat Convergence Verification (on clone)
+    // Step 2: 100-Generation Flat Convergence Verification (on clone)
     // ------------------------------------------------------------------
     let mut eq_100 = eq.clone();
     eq_100.insert_anchor(
@@ -376,7 +378,7 @@ pub(crate) fn run_equilibrium_benchmark(
     );
 
     // ------------------------------------------------------------------
-    // Phase 3: Full Restart Simulation (drop adapter + clear KV cache)
+    // Step 3: Full Restart Simulation (drop adapter + clear KV cache)
     // ------------------------------------------------------------------
     drop(session1);
     drop(eq);
@@ -384,7 +386,7 @@ pub(crate) fn run_equilibrium_benchmark(
     let kv_after_restart = model.kv_len();
 
     // ------------------------------------------------------------------
-    // Phase 4: Session 2 restore from .lmnkc + empty-KV SelfRef & OOD
+    // Step 4: Session 2 restore from .lmnkc + empty-KV SelfRef & OOD
     // ------------------------------------------------------------------
     let mut restored_eq = EquilibriumState::load_lmnkc_from_path(&lmnkc_path, eq_cfg)?;
     let mut session2 = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
@@ -516,7 +518,7 @@ pub(crate) fn run_equilibrium_benchmark(
     );
 
     // ------------------------------------------------------------------
-    // Phase 5: Foreign Topology Rejection & Immutable .lmnkp Rebake
+    // Step 5: Foreign Topology Rejection & Immutable .lmnkp Rebake
     // ------------------------------------------------------------------
     let foreign_eq =
         EquilibriumState::with_topology_crc32(eq_cfg, CORE_TOPOLOGY.topology_crc32 ^ 0x55AA_1234);

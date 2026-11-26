@@ -30,6 +30,8 @@ mod bake;
 mod cli;
 mod equilibrium_bench;
 mod eval;
+mod eval_common;
+mod eval_suites;
 mod extended_eval;
 mod long_doc_bench;
 mod metrics;
@@ -263,37 +265,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !recall_only {
             eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
         }
-        vlm_eval::run_vlm_eval(
-            &cli,
-            &repo_root,
-            &model_dir,
-            &cfg,
+        vlm_eval::run_vlm_eval(vlm_eval::VlmEvalRunArgs {
+            cli: &cli,
+            repo_root: &repo_root,
+            model_dir: &model_dir,
+            cfg: &cfg,
             vis_cfg,
-            &chat,
-            &device,
+            chat: &chat,
+            device: &device,
             active_layer_mask,
-            &mut model,
-            &tokenizer,
+            model: &mut model,
+            tokenizer: &tokenizer,
             active_persona_circuit,
             circuit_mode,
-        )?;
+        })?;
         return Ok(());
     }
     if cli.extended_eval || cli.ja_eval {
         if !recall_only {
             eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
         }
-        extended_eval::run_extended_suites(
-            &cli,
-            &repo_root,
-            &cfg,
-            &chat,
+        extended_eval::run_extended_suites(extended_eval::ExtendedSuiteRunCtx {
+            cli: &cli,
+            repo_root: &repo_root,
+            cfg: &cfg,
+            chat: &chat,
             active_layer_mask,
-            &mut model,
-            &tokenizer,
+            model: &mut model,
+            tokenizer: &tokenizer,
             active_persona_circuit,
             circuit_mode,
-        )?;
+        })?;
         return Ok(());
     }
     let init_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
@@ -826,7 +828,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "--equilibrium-bench requires live model weights (disable --recall-only)".into(),
             );
         };
-        let work_dir = repo_root.join(".scratch/bench/v0.3.0/p2c");
+        let work_dir = repo_root.join(".scratch/bench/equilibrium");
         std::fs::create_dir_all(&work_dir)?;
         equilibrium_bench::run_equilibrium_benchmark(
             &cli,

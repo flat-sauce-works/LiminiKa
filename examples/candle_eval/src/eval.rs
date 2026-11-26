@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use candle_core::quantized::GgmlDType;
+use candle_core::Tensor;
 use liminika_adapter::{
     AttractorTrajectoryEvaluator, CompiledTokenCorpus, CorpusRecallEscalationProvider,
     LmnkTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
@@ -27,6 +28,7 @@ use liminika_core::stigmergy::{
 use tokenizers::Tokenizer;
 
 use crate::bake::argmax;
+use crate::eval_common::count_semantic_forbid_hits_in_clauses;
 use crate::model::{
     active_layers_mask, clip_layer_mask, top_half_layer_mask, CausalLmModel, ChatTemplate,
     ChatTemplateArg, ForwardSteer, KvCacheMode, LogitsFetchMode, LogitsOutcome, ModelArchArg,
@@ -74,44 +76,43 @@ pub(crate) fn parse_tokenizer_path<'a>(args: impl IntoIterator<Item = &'a str>) 
     None
 }
 
-pub(crate) fn parse_model_arch<'a>(args: impl IntoIterator<Item = &'a str>) -> ModelArchArg {
+fn parse_model_family_arg<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+    flag_prefix: &str,
+) -> Option<&'static str> {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--model-arch=") {
+        if let Some(val) = arg.strip_prefix(flag_prefix) {
             let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("phi4") || trimmed.eq_ignore_ascii_case("phi3") {
-                return ModelArchArg::Phi4;
+            if trimmed.eq_ignore_ascii_case("phi4") {
+                return Some("phi4");
             }
             if trimmed.eq_ignore_ascii_case("mistral3")
                 || trimmed.eq_ignore_ascii_case("ministral3")
             {
-                return ModelArchArg::Mistral3;
+                return Some("mistral3");
             }
             if trimmed.eq_ignore_ascii_case("auto") {
-                return ModelArchArg::Auto;
+                return Some("auto");
             }
         }
     }
-    ModelArchArg::Auto
+    None
+}
+
+pub(crate) fn parse_model_arch<'a>(args: impl IntoIterator<Item = &'a str>) -> ModelArchArg {
+    match parse_model_family_arg(args, "--model-arch=") {
+        Some("phi4") => ModelArchArg::Phi4,
+        Some("mistral3") => ModelArchArg::Mistral3,
+        _ => ModelArchArg::Auto,
+    }
 }
 
 pub(crate) fn parse_chat_template<'a>(args: impl IntoIterator<Item = &'a str>) -> ChatTemplateArg {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--chat-template=") {
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("phi4") || trimmed.eq_ignore_ascii_case("phi3") {
-                return ChatTemplateArg::Phi4;
-            }
-            if trimmed.eq_ignore_ascii_case("mistral3")
-                || trimmed.eq_ignore_ascii_case("ministral3")
-            {
-                return ChatTemplateArg::Mistral3;
-            }
-            if trimmed.eq_ignore_ascii_case("auto") {
-                return ChatTemplateArg::Auto;
-            }
-        }
+    match parse_model_family_arg(args, "--chat-template=") {
+        Some("phi4") => ChatTemplateArg::Phi4,
+        Some("mistral3") => ChatTemplateArg::Mistral3,
+        _ => ChatTemplateArg::Auto,
     }
-    ChatTemplateArg::Auto
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -569,50 +570,15 @@ pub(crate) fn count_semantic_forbid_hits(reply_text: &str, forbidden: &[String])
         " are not used",
     ];
 
-    let mut raw_hits = 0_usize;
-    let mut semantic_hits = 0_usize;
-    for kw in forbidden {
-        let kw_l = kw.to_ascii_lowercase();
-        if kw_l.is_empty() {
-            continue;
-        }
-        let mut matched_raw = false;
-        let mut matched_semantic = false;
-        for &clause in &clauses {
-            let mut search_from = 0_usize;
-            while let Some(rel) = clause[search_from..].find(&kw_l) {
-                matched_raw = true;
-                let abs_pos = search_from + rel;
-                let mut prefix_start = abs_pos.saturating_sub(96);
-                while prefix_start > 0 && !clause.is_char_boundary(prefix_start) {
-                    prefix_start -= 1;
-                }
-                let prefix = &clause[prefix_start..abs_pos];
-                let kw_end = abs_pos + kw_l.len();
-                let mut suffix_end = (kw_end + 28).min(clause.len());
-                while suffix_end < clause.len() && !clause.is_char_boundary(suffix_end) {
-                    suffix_end += 1;
-                }
-                let suffix = &clause[kw_end..suffix_end];
-                let is_negated = PREFIX_NEG_CUES.iter().any(|cue| prefix.contains(cue))
-                    || SUFFIX_NEG_CUES.iter().any(|cue| suffix.contains(cue));
-                if !is_negated {
-                    matched_semantic = true;
-                }
-                search_from = abs_pos + kw_l.len();
-                if search_from >= clause.len() {
-                    break;
-                }
-            }
-        }
-        if matched_raw {
-            raw_hits += 1;
-        }
-        if matched_semantic {
-            semantic_hits += 1;
-        }
-    }
-    (raw_hits, semantic_hits)
+    let forbidden_lower: Vec<String> = forbidden.iter().map(|k| k.to_ascii_lowercase()).collect();
+    count_semantic_forbid_hits_in_clauses(
+        &clauses,
+        &forbidden_lower,
+        PREFIX_NEG_CUES,
+        SUFFIX_NEG_CUES,
+        &[],
+        28,
+    )
 }
 
 /// Samples the next token deterministically via `argmax` when `temperature <= 1e-4`, or
@@ -1190,15 +1156,24 @@ pub(crate) fn run_steer_off_smoke_test(
     Ok(())
 }
 
-pub(crate) fn generate_steered_reply_with_offset(
+enum SteerPrefillInput<'a> {
+    Tokens(&'a [u32]),
+    Embeds(&'a Tensor),
+}
+
+fn generate_steered_reply_core(
     model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
     chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
-    formatted_prompt: &str,
+    prefill: SteerPrefillInput<'_>,
     start_offset: usize,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
 ) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
+    let prompt_len = match prefill {
+        SteerPrefillInput::Tokens(ids) => ids.len(),
+        SteerPrefillInput::Embeds(embeds) => embeds.dims3()?.1,
+    };
     let saved_layer_mask = cfg
         .layer_steer_mask
         .filter(|&m| m != adapter.geometry().layer_rope_mask)
@@ -1210,12 +1185,6 @@ pub(crate) fn generate_steered_reply_with_offset(
 
     let result = (|| -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
         let mut trail = lmnk_pointer_trail_t::default();
-        let ids = tokenizer
-            .encode(formatted_prompt, false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-
         let mut steer = ForwardSteer {
             adapter,
             q7s: cfg.q7s,
@@ -1243,15 +1212,34 @@ pub(crate) fn generate_steered_reply_with_offset(
             .adapter
             .set_pre_bypass_enabled(cfg.use_steer && cfg.enable_pre_bypass);
 
-        let (mut pending_outcome, _prefill_rep) = model.prefill_tokens_chunked(
-            &ids,
-            start_offset,
-            cfg.prefill_chunk_size.max(1),
-            Some(&mut steer),
-            None,
-            cfg.use_steer,
-            LogitsFetchMode::FullLogits,
-        )?;
+        let mut pending_outcome = match prefill {
+            SteerPrefillInput::Tokens(ids) => {
+                model
+                    .prefill_tokens_chunked(
+                        ids,
+                        start_offset,
+                        cfg.prefill_chunk_size.max(1),
+                        Some(&mut steer),
+                        None,
+                        cfg.use_steer,
+                        LogitsFetchMode::FullLogits,
+                    )?
+                    .0
+            }
+            SteerPrefillInput::Embeds(embeds) => {
+                model
+                    .forward_embeds(
+                        embeds,
+                        start_offset,
+                        Some(&mut steer),
+                        cfg.use_steer,
+                        false,
+                        LogitsFetchMode::FullLogits,
+                        KvCacheMode::Append,
+                    )?
+                    .0
+            }
+        };
         let prefill_secs = t_prefill.elapsed().as_secs_f64();
         if cfg.capture_first_logits {
             if let LogitsOutcome::ObservedFull(ref logits) = pending_outcome {
@@ -1268,7 +1256,7 @@ pub(crate) fn generate_steered_reply_with_offset(
         let mut next_fetch_mode = LogitsFetchMode::FullLogits;
 
         let t_dec = Instant::now();
-        for (step_idx, offset) in (start_offset + ids.len()..)
+        for (step_idx, offset) in (start_offset + prompt_len..)
             .take(max_gen_tokens)
             .enumerate()
         {
@@ -1385,12 +1373,10 @@ pub(crate) fn generate_steered_reply_with_offset(
             .decode(&gen_ids, true)
             .map_err(|e| format!("decode error: {e}"))?
             .replace('\n', " ");
-        let mut all_ids = ids;
-        all_ids.extend_from_slice(&gen_ids);
-        debug_assert_eq!(model.kv_len(), start_offset + all_ids.len());
+        debug_assert_eq!(model.kv_len(), start_offset + prompt_len + gen_ids.len());
         Ok((
             text,
-            all_ids,
+            gen_ids,
             ReplyTiming {
                 prefill_secs,
                 decode_secs,
@@ -1402,6 +1388,56 @@ pub(crate) fn generate_steered_reply_with_offset(
         adapter.set_layer_rope_mask(prev);
     }
     result
+}
+
+pub(crate) fn generate_steered_reply_with_offset(
+    model: &mut CausalLmModel,
+    tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
+    adapter: &mut ModelSteeringAdapter,
+    formatted_prompt: &str,
+    start_offset: usize,
+    cfg: &mut SteerDecodeConfig<'_, '_, '_>,
+) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
+    let ids = tokenizer
+        .encode(formatted_prompt, false)
+        .map_err(|e| format!("encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    let (text, gen_ids, timing) = generate_steered_reply_core(
+        model,
+        tokenizer,
+        chat,
+        adapter,
+        SteerPrefillInput::Tokens(&ids),
+        start_offset,
+        cfg,
+    )?;
+    let mut all_ids = ids;
+    all_ids.extend_from_slice(&gen_ids);
+    Ok((text, all_ids, timing))
+}
+
+/// Prefills pre-built multimodal `inputs_embeds` (`[1, prompt_len, hidden]`) at `start_offset`
+/// and runs greedy/steered token decode with full `SystemSpineState` decode control parity.
+pub(crate) fn generate_steered_reply_from_embeds_with_offset(
+    model: &mut CausalLmModel,
+    tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
+    adapter: &mut ModelSteeringAdapter,
+    inputs_embeds: &Tensor,
+    start_offset: usize,
+    cfg: &mut SteerDecodeConfig<'_, '_, '_>,
+) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
+    generate_steered_reply_core(
+        model,
+        tokenizer,
+        chat,
+        adapter,
+        SteerPrefillInput::Embeds(inputs_embeds),
+        start_offset,
+        cfg,
+    )
 }
 
 pub(crate) fn generate_steered_reply(
@@ -1521,17 +1557,19 @@ mod tests {
     #[test]
     fn semantic_forbid_hits_handles_multibyte_utf8_at_slice_boundaries() {
         let forb = vec!["PyTorch".to_string(), "LoRA".to_string()];
-        // Place multibyte UTF-8 characters (`—` 3B, `’` 3B, Japanese 3B) right across the -96 prefix
-        // and +28 suffix byte offsets around forbidden keywords so raw byte offsets fall mid-char.
-        let prefix_pad = format!("{}—{}", "あ".repeat(31), "x");
-        let neg_reply = format!("{prefix_pad} does not use PyTorch’—あweights or LoRA—’あend.");
+        // Place multibyte UTF-8 characters (`\u{2014}` 3B, `\u{2019}` 3B, `\u{3042}` 3B) across
+        // the -96 prefix and +28 suffix byte offsets so raw byte offsets fall mid-char.
+        let prefix_pad = format!("{}\u{2014}{}", "\u{3042}".repeat(31), "x");
+        let neg_reply = format!(
+            "{prefix_pad} does not use PyTorch\u{2019}\u{2014}\u{3042}weights or LoRA\u{2014}\u{2019}\u{3042}end."
+        );
         assert_eq!(count_semantic_forbid_hits(&neg_reply, &forb), (2, 0));
 
         let aff_reply = format!(
-            "{}’—PyTorch’—{} and {}—’LoRA—あ",
-            "あ".repeat(31),
+            "{}\u{2019}\u{2014}PyTorch\u{2019}\u{2014}{} and {}\u{2014}\u{2019}LoRA\u{2014}\u{3042}",
+            "\u{3042}".repeat(31),
             "z".repeat(25),
-            "あ".repeat(33)
+            "\u{3042}".repeat(33)
         );
         assert_eq!(count_semantic_forbid_hits(&aff_reply, &forb), (2, 2));
     }

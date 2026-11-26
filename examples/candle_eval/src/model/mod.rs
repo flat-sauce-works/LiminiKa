@@ -125,6 +125,7 @@ fn dispatch_rank1_signal_inner<S: ManifoldGatewaySignal + ?Sized>(
     Ok(())
 }
 
+// Internal Rank-1 dispatcher forwards per-layer evaluation slices without intermediate wrappers.
 #[allow(clippy::too_many_arguments)]
 fn dispatch_rank1_signal<S: ManifoldGatewaySignal + ?Sized>(
     ad: &mut ModelSteeringAdapter,
@@ -281,6 +282,7 @@ impl CausalLmModel {
         self.embed_tokens.embeddings().dtype()
     }
 
+    // Forward entrypoint mirrors `forward_embeds` flags directly across evaluation callers.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward_tokens(
         &mut self,
@@ -312,6 +314,7 @@ impl CausalLmModel {
     /// Runs the transformer backbone directly from pre-built `[1, seq_len, hidden_size]`
     /// embeddings (supporting multimodal `[IMG]` splice inputs) across both `Append` and
     /// `IsolatedProbe` KV modes with dynamic RoPE expansion and Llama-4 scaling parity.
+    // Multimodal forward entrypoint mirrors `forward_tokens` flags directly across evaluation callers.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward_embeds(
         &mut self,
@@ -578,6 +581,7 @@ impl CausalLmModel {
     /// Prefills an arbitrarily long token sequence into the persistent KV cache in bounded chunks
     /// (`chunk_size`, default [`DEFAULT_PREFILL_CHUNK_SIZE`]), preventing $O(L^2)$ attention VRAM
     /// spikes while preserving mathematical equivalence to monolithic causal prefill.
+    // Chunked prefill entrypoint keeps explicit steering/callback parameters for evaluation callers.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prefill_tokens_chunked(
         &mut self,
