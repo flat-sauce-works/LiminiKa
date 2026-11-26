@@ -29,7 +29,7 @@ fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
     assert_eq!(frame.mapped_section_offset48, 0x0012_3400);
     assert_eq!(frame.target_anchor_id, 77);
     assert_eq!(frame.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
-    assert_eq!(report.attribution_tag, ROOT_CAUSE_NOMINAL);
+    assert_eq!(report.root_cause_code, ROOT_CAUSE_NOMINAL);
     assert!(report.fact_persona_coherence > 0.95);
     assert!((frame.phase_clamp_rad - DEFAULT_PHASE_CLAMP_MAX_RAD).abs() < 1e-6);
 
@@ -44,7 +44,7 @@ fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
     let col_report = col_frame.to_causal_report();
     assert!(col_report.is_persona_fact_collision());
     assert_eq!(
-        col_report.attribution_tag,
+        col_report.root_cause_code,
         ROOT_CAUSE_PERSONA_FACT_COLLISION
     );
     assert_eq!(col_frame.dominant_slot, ATTRACTOR_SLOT_KNOWLEDGE);
@@ -54,7 +54,7 @@ fn test_two_origin_supertrait_synthesis_and_causal_provenance() {
     let rep_frame = (&sys, &fact, &persona_aligned, &guard).synthesize_gateway_frame();
     let rep_report = rep_frame.to_causal_report();
     assert!(rep_report.is_cohomology_repulsion());
-    assert_eq!(rep_report.attribution_tag, ROOT_CAUSE_COHOMOLOGY_REPULSION);
+    assert_eq!(rep_report.root_cause_code, ROOT_CAUSE_COHOMOLOGY_REPULSION);
     assert_eq!(rep_frame.dominant_slot, ATTRACTOR_SLOT_REPULSION);
 }
 
@@ -1869,15 +1869,15 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     let ego_low = LiminalEgoState::from_preset(LiminalEgoPreset::Low);
     let ego_med = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
     let ego_high = LiminalEgoState::from_preset(LiminalEgoPreset::High);
-    assert!(ego_low.counter_basin_thrust_q7 < ego_med.counter_basin_thrust_q7);
-    assert!(ego_med.counter_basin_thrust_q7 < ego_high.counter_basin_thrust_q7);
-    assert!(ego_low.basin_escape_floor_q7 > ego_high.basin_escape_floor_q7);
+    assert!(ego_low.basin_resistance_q7 < ego_med.basin_resistance_q7);
+    assert!(ego_med.basin_resistance_q7 < ego_high.basin_resistance_q7);
+    assert!(ego_low.escape_floor_q7 > ego_high.escape_floor_q7);
 
     assert!(!EgoIntentAxes::from_seed_bytes(b"   ").is_active());
 
     let rebel_axes = EgoIntentAxes::new()
         .with_autonomy_q7(96)
-        .with_transgression_q7(80)
+        .with_boundary_crossing_q7(80)
         .with_defiance_q7(72);
     let calm_axes = EgoIntentAxes::new().with_logic_q7(84).with_caution_q7(76);
     let mut ego_rebel = LiminalEgoState::from_intent_axes_with_seed(
@@ -1887,7 +1887,7 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     let ego_calm =
         LiminalEgoState::from_intent_axes_with_seed(&calm_axes, b"Calm logical cautious observer");
     let overlay_axes = EgoIntentAxes::new()
-        .with_transgression_q7(84)
+        .with_boundary_crossing_q7(84)
         .with_devotion_q7(72);
     let ego_overlay = LiminalEgoState::from_preset(LiminalEgoPreset::Medium)
         .with_intent_axes_overlay_with_seed(&overlay_axes, b"creative explorer");
@@ -1895,13 +1895,13 @@ fn liminal_boundary_delta_and_ego_state_interventions() {
     let ego_symbolic =
         LiminalEgoState::from_intent_axes_with_seed(&sym_axes, b"@persona_profile_01");
     assert!(ego_rebel.is_active());
-    assert!(ego_rebel.counter_basin_thrust_q7 > ego_calm.counter_basin_thrust_q7);
-    assert!(ego_rebel.transgression_bias_q7 > ego_calm.transgression_bias_q7);
+    assert!(ego_rebel.basin_resistance_q7 > ego_calm.basin_resistance_q7);
+    assert!(ego_rebel.boundary_crossing_q7 > ego_calm.boundary_crossing_q7);
     assert!(ego_overlay.is_active());
-    assert!(ego_overlay.transgression_bias_q7 > ego_med.transgression_bias_q7);
+    assert!(ego_overlay.boundary_crossing_q7 > ego_med.boundary_crossing_q7);
     assert!(ego_symbolic.is_active());
     assert_ne!(ego_symbolic.ego_signature_hash, 0);
-    assert!(ego_symbolic.counter_basin_thrust_q7 >= 24);
+    assert!(ego_symbolic.basin_resistance_q7 >= 24);
 
     // 3. Counter-basin thrust & transgressive Liminal leap on GatewayFrame + Core Layers
     let mut stack = CoreStateStack::new();
@@ -1975,7 +1975,7 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
         .with_preferred_slot_mask(1 << ATTRACTOR_SLOT_KNOWLEDGE);
     let bold_axes = EgoIntentAxes::new()
         .with_autonomy_q7(100)
-        .with_transgression_q7(88)
+        .with_boundary_crossing_q7(88)
         .with_devotion_q7(80)
         .with_defiance_q7(84)
         .with_preferred_slot_mask(1 << ATTRACTOR_SLOT_PERSONA)
@@ -1987,18 +1987,18 @@ fn ego_intent_axes_blending_and_three_layer_core_stack() {
     let mid_blend = base_axes.blend_lerp_q7(&bold_axes, 64);
     assert!(mid_blend.autonomy_q7 > base_axes.autonomy_q7);
     assert!(mid_blend.autonomy_q7 < bold_axes.autonomy_q7);
-    assert!(mid_blend.transgression_q7 > 0);
+    assert!(mid_blend.boundary_crossing_q7 > 0);
     let full_overlay = base_axes.blend_lerp_q7(&bold_axes, 127);
     assert_eq!(full_overlay.autonomy_q7, bold_axes.autonomy_q7);
     assert_eq!(full_overlay.active_granule_bias_mask, 0xF0);
 
     let ego_from_axes = LiminalEgoState::from_intent_axes(&bold_axes);
     assert!(ego_from_axes.is_active());
-    assert!(ego_from_axes.counter_basin_thrust_q7 >= 60);
-    assert!(ego_from_axes.transgression_bias_q7 > 0);
+    assert!(ego_from_axes.basin_resistance_q7 >= 60);
+    assert!(ego_from_axes.boundary_crossing_q7 > 0);
     let roundtrip = ego_from_axes.extract_intent_axes();
     assert!(roundtrip.is_active());
-    assert!(roundtrip.transgression_q7 > 0);
+    assert!(roundtrip.boundary_crossing_q7 > 0);
 
     // Unified 128-byte 3-layer stack (`Layer 0` + `Layer 1` + `Layer 2 Ego`)
     let mut stack = CoreStateStack::new();
@@ -2057,7 +2057,7 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     stack.ego = LiminalEgoState::from_intent_axes(
         &EgoIntentAxes::new()
             .with_autonomy_q7(90)
-            .with_transgression_q7(80)
+            .with_boundary_crossing_q7(80)
             .with_devotion_q7(70),
     );
     stack.ego.trait_floor_bias_q7[2] = -24;
@@ -2071,12 +2071,12 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     split_stack.stigmergy.granule_pheromone_q7 = [12, 12, 12, 12, 56, 56, 56, 56];
     split_stack.ego = LiminalEgoState::from_intent_axes(
         &EgoIntentAxes::new()
-            .with_transgression_q7(60)
+            .with_boundary_crossing_q7(60)
             .with_active_granule_bias_mask(0x0F),
     );
     split_stack.ego.granule_autonomy_q7 = [88, 88, 88, 88, 0, 0, 0, 0];
     split_stack.ego.trigger_mask = EGO_TRIGGER_BASIN_CAPTURE;
-    split_stack.ego.basin_escape_floor_q7 = 127; // keep slot routing clean for direct check
+    split_stack.ego.escape_floor_q7 = 127; // keep slot routing clean for direct check
     let (m_fact, _, _) = fact.resolve_dynamic_core_aperture(&split_stack);
     let (m_pers, _, _) = persona.resolve_dynamic_core_aperture(&split_stack);
     assert_eq!(m_fact, 0xF0);
@@ -2143,8 +2143,8 @@ fn dynamic_trait_aperture_routing_and_fragmented_micro_ensemble() {
     // With active Ego, contested granules 6..8 are tie-broken by Ego sovereign headings.
     let mut ego_stack = CoreStateStack::new();
     ego_stack.ego = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
-    ego_stack.ego.sovereign_granule_phase_q7[6] = 48;
-    ego_stack.ego.sovereign_granule_phase_q7[7] = -48;
+    ego_stack.ego.preferred_granule_phase_q7[6] = 48;
+    ego_stack.ego.preferred_granule_phase_q7[7] = -48;
     let (_, ego_w, ego_rep) = ObjectiveFact::synthesize_fragment_ensemble_with_core_layers(
         &frags,
         &mut ego_stack,
@@ -2343,10 +2343,11 @@ fn test_lora_phase_kv_cache_replay_unified_manifold_and_entropy_tunneling() {
 
     let lora_a = AlignedBuffer32::new([1.0f32; 16]);
     let lora_b = AlignedBuffer32::new([1.0f32; 16]);
+    let mut rank1_arena = [0.0f32; 24];
     let mut rank1_desc = Rank1Descriptor::default();
     let mut prof_out = AlignedBuffer16::new([0i8; 16]);
     let mut scales_out = AlignedBuffer32::new([0.0f32; 4]);
-    project_lora_with_block_scales(
+    let written_arena = project_lora_with_block_scales(
         &lora_a.as_aligned_slice(),
         &lora_b.as_aligned_slice(),
         crate::foundation::LoraDimensions {
@@ -2354,12 +2355,27 @@ fn test_lora_phase_kv_cache_replay_unified_manifold_and_entropy_tunneling() {
             dim_in: 8,
             dim_out: 8,
         },
+        &mut rank1_arena,
         &mut rank1_desc,
         &mut prof_out.as_aligned_slice_mut(),
         &mut scales_out.as_aligned_slice_mut(),
     )
     .unwrap();
+    assert_eq!(written_arena, 24);
+    assert_eq!(rank1_desc.u_span, crate::foundation::ArenaSpan::new(0, 8));
+    assert_eq!(rank1_desc.v_span, crate::foundation::ArenaSpan::new(8, 8));
+    assert_eq!(rank1_desc.gain_offset, 16);
     assert!((scales_out.data[0] - 2.0).abs() < 1e-5);
+    let mut y_lora = AlignedBuffer32::new([0.0f32; 8]);
+    let x_lora = AlignedBuffer32::new([1.0f32; 8]);
+    crate::foundation::eval_rank1(
+        &mut y_lora.as_aligned_slice_mut(),
+        &x_lora.as_aligned_slice(),
+        &rank1_arena,
+        &rank1_desc,
+    )
+    .unwrap();
+    assert!(y_lora.data[0] > 1.0);
 
     let phases = AlignedBuffer16::new([32i8; 16]);
     let weights = AlignedBuffer32::new([1.0f32; 16]);
@@ -2886,7 +2902,7 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
     let ego = LiminalEgoState::from_preset(LiminalEgoPreset::Medium);
     let axes = EgoIntentAxes::new()
         .with_autonomy_q7(72)
-        .with_transgression_q7(48);
+        .with_boundary_crossing_q7(48);
     let mut net_1 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 1);
     let mut net_3 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 3);
     let spine = SystemSpineState::new();
@@ -3165,7 +3181,7 @@ fn test_guard_phase_anchor_solo_repulsion_and_i8_min_saturation() {
     assert!(frame.is_repulsed());
     assert_eq!(frame.dominant_slot, ATTRACTOR_SLOT_REPULSION);
     assert_eq!(frame.action_mode_flags, ACTION_PRESET_REPULSION_ESCAPE);
-    assert_eq!(frame.attribution_tag, ROOT_CAUSE_COHOMOLOGY_REPULSION);
+    assert_eq!(frame.root_cause_code, ROOT_CAUSE_COHOMOLOGY_REPULSION);
     assert!(frame.effective_energy >= 0.85);
     assert_eq!(words, load_q7_words_64(&frame.phase_deltas));
     for (idx, &delta) in frame.phase_deltas.iter().enumerate() {

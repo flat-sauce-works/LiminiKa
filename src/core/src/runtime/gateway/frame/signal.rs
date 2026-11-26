@@ -348,7 +348,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             let ego_tie = contested & ego_can_break;
             ego_tiebreak_mask |= branchless_select_u8(ego_tie, bit, 0);
 
-            let ego_pref_pos = stack.ego.sovereign_granule_phase_q7[g] >= 0;
+            let ego_pref_pos = stack.ego.preferred_granule_phase_q7[g] >= 0;
             let e_pref_pos = pos_energy[g] >= neg_energy[g];
             let choose_pos = branchless_select_u8(
                 contested,
@@ -357,7 +357,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             ) != 0;
 
             let chosen_w = branchless_select_u64(choose_pos, pos_words[g], neg_words[g]);
-            let ego_word = (stack.ego.sovereign_granule_phase_q7[g] as u8 as u64)
+            let ego_word = (stack.ego.preferred_granule_phase_q7[g] as u8 as u64)
                 .wrapping_mul(SWAR_SPLAT_BYTE_64);
             let damped_contested = swar_q7_scale_le128_with_bias_x8(
                 chosen_w,
@@ -752,7 +752,7 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                 fp_coh = f.fact_persona_coherence;
                 rep_sev = f.repulsion_severity;
                 prov_bits = f.lineage_flags;
-                dom_cause = f.attribution_tag;
+                dom_cause = f.root_cause_code;
                 dom_slot = f.dominant_slot;
                 action_flags = f.action_mode_flags;
                 swarm_mask = f.active_swarm_cell_mask;
@@ -822,8 +822,8 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                 swarm_mask &= f.active_swarm_cell_mask;
                 prov_bits |= f.lineage_flags;
                 rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
-                if f.attribution_tag > dom_cause {
-                    dom_cause = f.attribution_tag;
+                if f.root_cause_code > dom_cause {
+                    dom_cause = f.root_cause_code;
                 }
             }
         }
@@ -855,7 +855,7 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
             fact_persona_coherence: fp_coh,
             repulsion_severity: rep_sev,
             lineage_flags: prov_bits,
-            attribution_tag: dom_cause,
+            root_cause_code: dom_cause,
             dominant_slot: dom_slot,
             action_mode_flags: action_flags,
             active_swarm_cell_mask: swarm_mask,

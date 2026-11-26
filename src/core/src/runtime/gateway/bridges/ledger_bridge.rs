@@ -266,7 +266,7 @@ impl ManifoldGatewaySignal for PointerTrail {
                 ),
                 repulsion_severity: branchless_select_f32(rep, 0.85, 0.0),
                 lineage_flags: self.causal_provenance_bits(),
-                attribution_tag: branchless_select_u8(
+                root_cause_code: branchless_select_u8(
                     rep,
                     ROOT_CAUSE_COHOMOLOGY_REPULSION,
                     ROOT_CAUSE_NOMINAL,

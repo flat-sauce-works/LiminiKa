@@ -56,6 +56,7 @@ impl Config {
     pub const fn new() -> Self {
         Self {
             raw: RuntimeConfig {
+                struct_size: core::mem::size_of::<RuntimeConfig>() as u32,
                 head_dim: 128,
                 num_heads: 32,
                 paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
@@ -72,7 +73,7 @@ impl Config {
                 rope_layout: 0,
                 guard_hold_tokens: 0,
                 max_observe_stride: 1,
-                reserved: [0; 18],
+                reserved: [0; 14],
             },
             hysteresis_band: DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND,
             tau_flux: DEFAULT_ENTROPY_GATE_TAU_FLUX,

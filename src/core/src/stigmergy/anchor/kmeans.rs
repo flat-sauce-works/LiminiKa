@@ -35,7 +35,7 @@ struct CentroidMergeSource<'a> {
     dominant_slot: u8,
     action_mode_flags: u8,
     active_swarm_mask: u8,
-    attribution_tag: u8,
+    root_cause_code: u8,
 }
 
 impl PhaseAnchorRecord {
@@ -65,7 +65,7 @@ impl PhaseAnchorRecord {
             self.dominant_slot = other.dominant_slot;
             self.phase_clamp_rad = other.phase_clamp_rad;
             self.effective_inv_temp = other.effective_inv_temp;
-            self.attribution_tag = other.attribution_tag;
+            self.root_cause_code = other.root_cause_code;
             if other.mapped_offset48 != 0 {
                 self.mapped_section_offset48 = other.mapped_offset48;
             }
@@ -240,7 +240,7 @@ impl PhaseAnchorRecord {
                                 dominant_slot: b_slot,
                                 action_mode_flags: centroids[b].action_mode_flags,
                                 active_swarm_mask: centroids[b].active_swarm_mask,
-                                attribution_tag: centroids[b].attribution_tag,
+                                root_cause_code: centroids[b].root_cause_code,
                             };
                             w_a = centroids[a]
                                 .merge_other_centroid_words_in_place(&w_a, a_uni, merge_src, coh);

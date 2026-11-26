@@ -410,6 +410,7 @@ jobs:
 
           ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("Cargo.toml"), "Cargo.toml version").group(1)
           candle_ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("examples/candle_eval/Cargo.toml"), "examples/candle_eval/Cargo.toml version").group(1)
+          fuzz_ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("fuzz/Cargo.toml"), "fuzz/Cargo.toml version").group(1)
           root_cmake = must_match(r'project\(LiminiKa\s+VERSION\s+(\d+\.\d+\.\d+)', read("CMakeLists.txt"), "CMakeLists.txt project VERSION").group(1)
 
           types_h = read("include/liminika/lmnk_types.h")
@@ -432,6 +433,7 @@ jobs:
 
           checks = [
               ("examples/candle_eval/Cargo.toml", candle_ver == ver),
+              ("fuzz/Cargo.toml", fuzz_ver == ver),
               ("CMakeLists.txt", root_cmake == ver),
               ("lmnk_types.h tuple", (c_maj, c_min, c_pat) == parts),
               ("lmnk_types.h string", c_str == ver),
@@ -861,7 +863,7 @@ jobs:
 
       - name: Run Miri on liminika-core and liminika-dsl
         env:
-          MIRIFLAGS: "-Zmiri-symbolic-alignment-check"
+          MIRIFLAGS: "-Zmiri-symbolic-alignment-check -Zmiri-strict-provenance"
         run: |
           cargo miri setup
           cargo miri test --locked -p liminika-core --lib

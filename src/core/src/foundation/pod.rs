@@ -2,18 +2,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Plain Old Data (`Pod`) zero-copy safety contracts, raw range overlap checks, and Level 1
-//! canonical Little-Endian binary structures (`TaggedPtr`, `PagedBitmask`, `SubheadConfig`,
-//! `Rank1Descriptor`, `KvMotionDeltaPacket`).
+//! canonical Little-Endian binary structures (`TaggedPtr`, `ArenaSpan`, `PagedBitmask`,
+//! `SubheadConfig`, `Rank1Descriptor`, `KvMotionDeltaPacket`).
 //!
-//! # Portable Device-Ready POD vs. Host FFI Descriptor Contract
-//! - **Portable Device-Ready PODs** (`TaggedPtr`, `PagedBitmask`, `SubheadConfig`,
-//!   `KvMotionDeltaPacket`): Canonical Little-Endian byte order, fixed-width primitives only (zero
-//!   `usize` / native pointers), 0 bytes implicit compiler padding, power-of-two `align`/`size`,
-//!   and 64 B-aligned `[PhaseQ7; 64]` vectors directly readable as `u32x16` / `u64x8` (WGSL,
-//!   Vulkan `std430`, Metal, CUDA, x86_64 64 B cache line, ARM64 / Apple Silicon 128 B cache line).
-//! - **Host FFI Descriptors** (`Rank1Descriptor`): Carry raw host buffer addresses (`u64` virtual
-//!   pointers `u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`) scoped to host CPU/FFI boundaries
-//!   rather than cross-device shader buffers.
+//! # Portable Device-Ready POD Contract
+//! - **Portable Device-Ready PODs** (`TaggedPtr`, `ArenaSpan`, `PagedBitmask`, `SubheadConfig`,
+//!   `Rank1Descriptor`, `KvMotionDeltaPacket`): Canonical Little-Endian byte order, fixed-width
+//!   primitives only (zero `usize` / native pointers), 0 bytes implicit compiler padding,
+//!   power-of-two `align`/`size`, and 64 B-aligned `[PhaseQ7; 64]` vectors directly readable as
+//!   `u32x16` / `u64x8` (WGSL, Vulkan `std430`, Metal, CUDA, x86_64 64 B cache line, ARM64 /
+//!   Apple Silicon 128 B cache line).
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val};
@@ -607,29 +605,98 @@ pub struct SubheadConfig {
     pub reserved: [u8; 12],
 }
 
-/// Host FFI descriptor for Sparse Dynamic Rank-1 residual injection (64 bytes, 32-byte aligned).
+/// Portable 8-byte (`#[repr(C)]`) offset-and-length span addressing a contiguous slice inside a
+/// caller-owned arena buffer without raw host pointers (identical layout across 32-bit, 64-bit,
+/// and GPU `std430`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ArenaSpan {
+    /// Element offset from the start of the backing arena (`offset 0..4`).
+    pub offset: u32,
+    /// Number of contiguous elements referenced by this span (`offset 4..8`).
+    pub len: u32,
+}
+
+impl ArenaSpan {
+    /// Constructs a new [`ArenaSpan`] from element `offset` and `len`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(offset: u32, len: u32) -> Self {
+        Self { offset, len }
+    }
+
+    /// Computes `offset + len` with 32-bit overflow protection so 32-bit and 64-bit targets agree.
+    #[inline(always)]
+    #[must_use]
+    pub const fn checked_end(self) -> Option<usize> {
+        match self.offset.checked_add(self.len) {
+            Some(end) => Some(end as usize),
+            None => None,
+        }
+    }
+
+    /// Resolves this span to an immutable sub-slice of `arena`, returning `None` on overflow or OOB.
+    #[inline(always)]
+    #[must_use]
+    pub fn slice<T>(self, arena: &[T]) -> Option<&[T]> {
+        let end = self.checked_end()?;
+        arena.get(self.offset as usize..end)
+    }
+
+    /// Resolves this span to a mutable sub-slice of `arena`, returning `None` on overflow or OOB.
+    #[inline(always)]
+    #[must_use]
+    pub fn slice_mut<T>(self, arena: &mut [T]) -> Option<&mut [T]> {
+        let end = self.checked_end()?;
+        arena.get_mut(self.offset as usize..end)
+    }
+}
+
+/// Sentinel value for [`Rank1Descriptor::gain_offset`] indicating no per-output diagonal gain
+/// vector is applied (`u32::MAX`).
+pub const RANK1_GAIN_UNUSED: u32 = u32::MAX;
+
+/// Portable 32-byte (`#[repr(C, align(32))]`) [`Pod`] descriptor for Sparse Dynamic Rank-1
+/// residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$),
+/// addressing all factor vectors via [`ArenaSpan`] element offsets inside a caller-owned `f32` arena.
 ///
-/// Classified as a **Host FFI Descriptor** (not a cross-device buffer) because it carries raw
-/// 64-bit host pointer addresses (`u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`).
+/// Identical layout across 32-bit (`wasm32`), 64-bit CPUs, and GPU `std430` with zero raw pointers
+/// and zero implicit padding.
+///
+/// # Gain Length Convention
+/// When `gain_offset != RANK1_GAIN_UNUSED` (`u32::MAX`), the optional diagonal gain vector occupies
+/// `arena[gain_offset .. gain_offset + u_span.len]` (one gain scalar per output element, matching
+/// `u_span.len == d_out`). When `gain_offset == RANK1_GAIN_UNUSED`, diagonal gain is omitted.
 #[repr(C, align(32))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rank1Descriptor {
-    /// Index of target Transformer layer for Rank-1 residual injection.
+    /// Index of target layer for Rank-1 residual injection (`offset 0..4`).
     pub layer_idx: u32,
-    /// Rank of low-rank adapter (fixed to `1` for Rank-1 residual).
+    /// Low-rank adapter rank (must equal `1` for Rank-1 kernels, `offset 4..8`).
     pub rank: u32,
-    /// Raw 64-bit pointer to left column projection vector $\mathbf{u}$.
-    pub u_vector_ptr: u64,
-    /// Raw 64-bit pointer to right row projection vector $\mathbf{v}$.
-    pub v_vector_ptr: u64,
-    /// Raw 64-bit pointer to optional diagonal gain vector $\mathbf{s}$ (`0` if unused).
-    pub gain_scalar_ptr: u64,
-    /// Global scaling multiplier for Rank-1 residual injection.
+    /// Element span of left column projection vector $\mathbf{u}$ (`len == d_out`, `offset 8..16`).
+    pub u_span: ArenaSpan,
+    /// Element span of right row projection vector $\mathbf{v}$ (`len == d_in`, `offset 16..24`).
+    pub v_span: ArenaSpan,
+    /// Element offset of optional diagonal gain vector $\mathbf{g}$ of length `u_span.len`
+    /// ([`RANK1_GAIN_UNUSED`] = `u32::MAX` when unused, `offset 24..28`).
+    pub gain_offset: u32,
+    /// Global finite scaling multiplier $s$ for Rank-1 residual injection (`offset 28..32`).
     pub scale_factor: f32,
-    /// Bitmask flags indicating precision format and activation state.
-    pub flags: u32,
-    /// Reserved space for 32-byte alignment requirements (24 bytes).
-    pub reserved: [u8; 24],
+}
+
+impl Default for Rank1Descriptor {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            layer_idx: 0,
+            rank: 0,
+            u_span: ArenaSpan::default(),
+            v_span: ArenaSpan::default(),
+            gain_offset: RANK1_GAIN_UNUSED,
+            scale_factor: 0.0,
+        }
+    }
 }
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Predictive Motion Delta (P-Frame) Packet** (Section 4.3).
@@ -680,6 +747,7 @@ impl_pod_for_primitives!(
     LacunaPartition8,
     LiminalThresholdState,
     TaggedPtr,
+    ArenaSpan,
     PagedBitmask,
     SubheadConfig,
     Rank1Descriptor,
@@ -704,9 +772,16 @@ pub fn cascade_tagged_ptr(
 
 const _: () = {
     assert!(size_of::<TaggedPtr>() == 8 && align_of::<TaggedPtr>() == 8);
+    assert!(size_of::<ArenaSpan>() == 8 && align_of::<ArenaSpan>() == 4);
     assert!(size_of::<PagedBitmask>() == 32 && align_of::<PagedBitmask>() == 32);
     assert!(size_of::<SubheadConfig>() == 32 && align_of::<SubheadConfig>() == 16);
-    assert!(size_of::<Rank1Descriptor>() == 64 && align_of::<Rank1Descriptor>() == 32);
+    assert!(size_of::<Rank1Descriptor>() == 32 && align_of::<Rank1Descriptor>() == 32);
+    assert!(core::mem::offset_of!(Rank1Descriptor, layer_idx) == 0);
+    assert!(core::mem::offset_of!(Rank1Descriptor, rank) == 4);
+    assert!(core::mem::offset_of!(Rank1Descriptor, u_span) == 8);
+    assert!(core::mem::offset_of!(Rank1Descriptor, v_span) == 16);
+    assert!(core::mem::offset_of!(Rank1Descriptor, gain_offset) == 24);
+    assert!(core::mem::offset_of!(Rank1Descriptor, scale_factor) == 28);
     assert!(size_of::<KvMotionDeltaPacket>() == 64 && align_of::<KvMotionDeltaPacket>() == 64);
     assert!((ATTRACTOR_SLOT_ID_MASK as usize) == (MAX_ATTRACTOR_DOMAINS - 1));
     assert!(pack_action_slot_tag(7, 0x1F) == 0xFF);

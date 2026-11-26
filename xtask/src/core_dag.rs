@@ -67,10 +67,6 @@ const ALLOWED_SUBSTRATE_DECLS: &[(&str, &str)] = &[
     ("PointerSubstrate", "stigmergy/trail/traits.rs"),
     ("StigmergicSubstrateOps", "stigmergy/trail/traits.rs"),
     ("SubstrateGatewayExt", "runtime/gateway/orchestrator.rs"),
-    ("LmnkSubstrateOpaque", "runtime/abi/handles.rs"),
-    ("LmnkSubstrateHandle", "runtime/abi/handles.rs"),
-    ("lmnk_substrate_handle_t", "runtime/abi/handles.rs"),
-    ("lmnk_substrate_step_report_t", "runtime/abi/types.rs"),
 ];
 
 /// Sibling driver isolation pairs (`(source_driver, forbidden_sibling)`).

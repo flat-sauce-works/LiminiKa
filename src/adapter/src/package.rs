@@ -1160,7 +1160,7 @@ mod tests {
     #[test]
     fn roundtrip_canonical_lmnkp_package_and_64b_alignment() {
         let manifest = format_package_manifest_json(
-            "0.3.0",
+            env!("CARGO_PKG_VERSION"),
             0xDEAD_BEEF_CAFE_BABE,
             4,
             0x1234_5678,
@@ -1514,7 +1514,7 @@ mod tests {
         use crate::host::integrity::{IntegrityTrustLevel, SigningKeyPair};
 
         let manifest = format_package_manifest_json(
-            "0.3.0",
+            env!("CARGO_PKG_VERSION"),
             0xCAFE_BABE_1234_5678,
             2,
             0x0102_0304,

@@ -372,12 +372,12 @@ impl ModelSteeringAdapter {
     pub fn render_liminal_topology_mermaid(
         &self,
         active_anchors: u8,
-        spawned_daughters: u8,
+        spawned_anchors: u8,
     ) -> String {
         let distortion = self.telemetry_snapshot().distortion;
         self.render_liminal_topology_mermaid_with_distortion(
             active_anchors,
-            spawned_daughters,
+            spawned_anchors,
             &distortion,
         )
     }
@@ -388,7 +388,7 @@ impl ModelSteeringAdapter {
     pub fn render_liminal_topology_mermaid_with_distortion(
         &self,
         active_anchors: u8,
-        spawned_daughters: u8,
+        spawned_anchors: u8,
         distortion: &LayerDistortionReport,
     ) -> String {
         let core_layers = self.ctx.core_layers();
@@ -396,7 +396,7 @@ impl ModelSteeringAdapter {
             &core_layers.liminal,
             self.ctx.last_horizon(),
             active_anchors,
-            spawned_daughters,
+            spawned_anchors,
         );
         let mut buf = [0u8; 2048];
         let written = snap.format_core_topology_mermaid_with_distortion(

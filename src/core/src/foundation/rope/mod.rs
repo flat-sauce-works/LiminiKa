@@ -105,7 +105,7 @@ pub use visual::*;
 const _: () = {
     assert!(size_of::<SubheadConfig>() == 32);
     assert!(align_of::<SubheadConfig>() == 16);
-    assert!(size_of::<Rank1Descriptor>() == 64);
+    assert!(size_of::<Rank1Descriptor>() == 32);
     assert!(align_of::<Rank1Descriptor>() == 32);
     assert!(NUM_SWARM_CELLS * HEADS_PER_CELL == MAX_ATTENTION_HEADS);
 };

@@ -119,7 +119,7 @@ fn combine_pair_aperture_from_frames(
             swar_q7_scale_le128_with_bias_x8(bw, s_u64, bias_b),
         );
         let ego_phase_word =
-            (stack.ego.sovereign_granule_phase_q7[g] as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
+            (stack.ego.preferred_granule_phase_q7[g] as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
         let coh_ea = coherence_from_uniform_words_x8(aw, ego_phase_word);
         let coh_eb = coherence_from_uniform_words_x8(bw, ego_phase_word);
         let prefer_b_tie =
@@ -180,10 +180,10 @@ fn combine_pair_aperture_from_frames(
         fact_persona_coherence: pair_coh,
         repulsion_severity: branchless_max_f32(fa.repulsion_severity, fb.repulsion_severity),
         lineage_flags: fa.lineage_flags | fb.lineage_flags,
-        attribution_tag: branchless_select_u8(
-            fa.attribution_tag >= fb.attribution_tag,
-            fa.attribution_tag,
-            fb.attribution_tag,
+        root_cause_code: branchless_select_u8(
+            fa.root_cause_code >= fb.root_cause_code,
+            fa.root_cause_code,
+            fb.root_cause_code,
         ),
         dominant_slot: branchless_select_u8(dom_a, fa.dominant_slot, fb.dominant_slot),
         action_mode_flags: fa.action_mode_flags | fb.action_mode_flags,
@@ -347,7 +347,7 @@ pub(super) fn apply_sys_and_guard_to_pair_frame<
             active_swarm_mask = sys.active_swarm_cells_mask();
         }
         frame.action_mode_flags = ACTION_PRESET_REPULSION_ESCAPE;
-        frame.attribution_tag = ROOT_CAUSE_COHOMOLOGY_REPULSION;
+        frame.root_cause_code = ROOT_CAUSE_COHOMOLOGY_REPULSION;
         frame.effective_inv_temp = 0.75;
     } else if force_skip {
         frame.action_mode_flags |= ACTION_MODE_LAYER_SKIP;
@@ -776,7 +776,7 @@ where
             fact_persona_coherence: fp_coh,
             repulsion_severity: branchless_max_f32(rep_sev, sys_sev),
             lineage_flags: prov_bits,
-            attribution_tag: dominant_cause,
+            root_cause_code: dominant_cause,
             dominant_slot: dom_slot,
             action_mode_flags: action_flags,
             active_swarm_cell_mask: active_swarm_mask,

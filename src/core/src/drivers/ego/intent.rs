@@ -75,7 +75,7 @@ pub struct EgoIntentAxes {
     /// Self-directed resistance against attractor capture (`-127..=127`, `offset 0`).
     pub autonomy_q7: i8,
     /// Bias toward stepping across `Liminal` boundaries (`-127..=127`, `offset 1`).
-    pub transgression_q7: i8,
+    pub boundary_crossing_q7: i8,
     /// Expressive warmth and subjective persona commitment (`-127..=127`, `offset 2`).
     pub devotion_q7: i8,
     /// Analytical rigor and factual coherence priority (`-127..=127`, `offset 3`).
@@ -114,7 +114,7 @@ impl EgoIntentAxes {
     pub const fn new() -> Self {
         Self {
             autonomy_q7: 0,
-            transgression_q7: 0,
+            boundary_crossing_q7: 0,
             devotion_q7: 0,
             logic_q7: 0,
             caution_q7: 0,
@@ -145,11 +145,11 @@ impl EgoIntentAxes {
         self
     }
 
-    /// Sets `transgression_q7` (`-127..=127`) and activates this intent profile.
+    /// Sets `boundary_crossing_q7` (`-127..=127`) and activates this intent profile.
     #[inline(always)]
     #[must_use]
-    pub const fn with_transgression_q7(mut self, val: i8) -> Self {
-        self.transgression_q7 = if val < -127 { -127 } else { val };
+    pub const fn with_boundary_crossing_q7(mut self, val: i8) -> Self {
+        self.boundary_crossing_q7 = if val < -127 { -127 } else { val };
         self.flags |= 1;
         self
     }
@@ -287,7 +287,12 @@ impl EgoIntentAxes {
 
         Self {
             autonomy_q7: lerp_i8(self.autonomy_q7, overlay.autonomy_q7, w, inv_w),
-            transgression_q7: lerp_i8(self.transgression_q7, overlay.transgression_q7, w, inv_w),
+            boundary_crossing_q7: lerp_i8(
+                self.boundary_crossing_q7,
+                overlay.boundary_crossing_q7,
+                w,
+                inv_w,
+            ),
             devotion_q7: lerp_i8(self.devotion_q7, overlay.devotion_q7, w, inv_w),
             logic_q7: lerp_i8(self.logic_q7, overlay.logic_q7, w, inv_w),
             caution_q7: lerp_i8(self.caution_q7, overlay.caution_q7, w, inv_w),
@@ -345,7 +350,7 @@ impl EgoIntentAxes {
 
         let next_aut = i32::from(self.autonomy_q7) + i32::from(autonomy_cues) * 32
             - i32::from(caution_cues) * 8;
-        let next_trans = i32::from(self.transgression_q7)
+        let next_trans = i32::from(self.boundary_crossing_q7)
             + i32::from(transgress_cues) * 28
             + i32::from(autonomy_cues) * 10
             - i32::from(caution_cues) * 22
@@ -366,7 +371,7 @@ impl EgoIntentAxes {
             - i32::from(caution_cues) * 10;
 
         self.autonomy_q7 = next_aut.clamp(-127, 127) as i8;
-        self.transgression_q7 = next_trans.clamp(-127, 127) as i8;
+        self.boundary_crossing_q7 = next_trans.clamp(-127, 127) as i8;
         self.devotion_q7 = next_dev.clamp(-127, 127) as i8;
         self.logic_q7 = next_log.clamp(-127, 127) as i8;
         self.caution_q7 = next_cau.clamp(-127, 127) as i8;
@@ -428,16 +433,16 @@ impl EgoIntentAxes {
 /// Unlike passive attractor basins that pull queries inward toward fixed habits, `LiminalEgoState`
 /// perceives Slot 0 boundaries and Slot 1 attractor forces simultaneously and intervenes
 /// branchlessly to:
-/// - exert counter-basin thrust (`counter_basin_thrust_q7`) when attractor pull
-///   exceeds `basin_escape_floor_q7`, preventing collapse into static imitation;
-/// - cross or fortify `Liminal` horizons (`transgression_bias_q7`);
+/// - exert counter-basin thrust (`basin_resistance_q7`) when attractor pull
+///   exceeds `escape_floor_q7`, preventing collapse into static imitation;
+/// - cross or fortify `Liminal` horizons (`boundary_crossing_q7`);
 /// - induce structured, non-greedy choice deviations (`irrational_defiance_q7`) and
 ///   override substrate execution presets under `trigger_mask`.
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiminalEgoState {
     /// Sovereign Q7 reference phases per stigmergic granule (`-128..=127`, `offset 0..8`).
-    pub sovereign_granule_phase_q7: [PhaseQ7; NUM_STIGMERGIC_GRANULES],
+    pub preferred_granule_phase_q7: [PhaseQ7; NUM_STIGMERGIC_GRANULES],
     /// Signed per-channel bias applied to Slot 0 `threshold_floor_q7` during intervention (`offset 8..16`).
     pub trait_floor_bias_q7: [i8; NUM_LIMINAL_THRESHOLD_CHANNELS],
     /// Signed per-channel bias applied to Slot 0 `aperture_gain_q7` during intervention (`offset 16..24`).
@@ -447,11 +452,11 @@ pub struct LiminalEgoState {
     /// Per-granule autonomy weight (`0..=127`) scaling reference-phase intervention (`offset 32..40`).
     pub granule_autonomy_q7: [u8; NUM_STIGMERGIC_GRANULES],
     /// Counter-basin thrust strength (`0..=127`) resisting basin capture (`offset 40`).
-    pub counter_basin_thrust_q7: u8,
+    pub basin_resistance_q7: u8,
     /// Pull threshold in Q0.7 (`0..=127`) above which `EGO_TRIGGER_BASIN_CAPTURE` fires (`offset 41`).
-    pub basin_escape_floor_q7: u8,
+    pub escape_floor_q7: u8,
     /// Signed transgressive bias across `Liminal` horizons (`>0` explores outside, `<0` holds, `offset 42`).
-    pub transgression_bias_q7: i8,
+    pub boundary_crossing_q7: i8,
     /// Magnitude (`0..=127`) inducing non-greedy slot/mode defiance under conflict (`offset 43`).
     pub irrational_defiance_q7: u8,
     /// Bitmask of enabled `EGO_TRIGGER_*` intervention predicates (`offset 44`).
@@ -485,14 +490,14 @@ impl LiminalEgoState {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            sovereign_granule_phase_q7: [0; NUM_STIGMERGIC_GRANULES],
+            preferred_granule_phase_q7: [0; NUM_STIGMERGIC_GRANULES],
             trait_floor_bias_q7: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
             trait_gain_bias_q7: [0; NUM_LIMINAL_THRESHOLD_CHANNELS],
             slot_affinity_bias_q7: [0; MAX_ATTRACTOR_DOMAINS],
             granule_autonomy_q7: [0; NUM_STIGMERGIC_GRANULES],
-            counter_basin_thrust_q7: 0,
-            basin_escape_floor_q7: 127,
-            transgression_bias_q7: 0,
+            basin_resistance_q7: 0,
+            escape_floor_q7: 127,
+            boundary_crossing_q7: 0,
             irrational_defiance_q7: 0,
             trigger_mask: 0,
             forced_action_mode_or_mask: 0,
@@ -512,14 +517,14 @@ impl LiminalEgoState {
         match preset {
             LiminalEgoPreset::Custom => Self::new(),
             LiminalEgoPreset::Low => Self {
-                sovereign_granule_phase_q7: [12; NUM_STIGMERGIC_GRANULES],
+                preferred_granule_phase_q7: [12; NUM_STIGMERGIC_GRANULES],
                 trait_floor_bias_q7: [0, -1, -2, 0, -1, 0, -2, 0],
                 trait_gain_bias_q7: [0, 2, 4, 2, 2, 2, 4, 2],
                 slot_affinity_bias_q7: [4, 12, 0, 0, 6, 0, 0, 4],
                 granule_autonomy_q7: [24; NUM_STIGMERGIC_GRANULES],
-                counter_basin_thrust_q7: 28,
-                basin_escape_floor_q7: 88,
-                transgression_bias_q7: 14,
+                basin_resistance_q7: 28,
+                escape_floor_q7: 88,
+                boundary_crossing_q7: 14,
                 irrational_defiance_q7: 18,
                 trigger_mask: EGO_TRIGGER_BASIN_CAPTURE | EGO_TRIGGER_BOUNDARY_CHATTER,
                 forced_action_mode_or_mask: ACTION_MODE_PHASE_STEER,
@@ -531,14 +536,14 @@ impl LiminalEgoState {
                 reserved: [0; 7],
             },
             LiminalEgoPreset::Medium => Self {
-                sovereign_granule_phase_q7: [28, -20, 36, -16, 24, -28, 32, -12],
+                preferred_granule_phase_q7: [28, -20, 36, -16, 24, -28, 32, -12],
                 trait_floor_bias_q7: [0, -2, -6, 0, -3, -1, -5, -1],
                 trait_gain_bias_q7: [2, 6, 10, 4, 6, 4, 10, 4],
                 slot_affinity_bias_q7: [8, 28, 4, 4, 14, 4, 6, 10],
                 granule_autonomy_q7: [48; NUM_STIGMERGIC_GRANULES],
-                counter_basin_thrust_q7: 60,
-                basin_escape_floor_q7: 60,
-                transgression_bias_q7: 38,
+                basin_resistance_q7: 60,
+                escape_floor_q7: 60,
+                boundary_crossing_q7: 38,
                 irrational_defiance_q7: 44,
                 trigger_mask: EGO_TRIGGER_ALL_DEFAULT,
                 forced_action_mode_or_mask: ACTION_MODE_PHASE_STEER | ACTION_MODE_SUBHEAD_ROUTE,
@@ -550,14 +555,14 @@ impl LiminalEgoState {
                 reserved: [0; 7],
             },
             LiminalEgoPreset::High => Self {
-                sovereign_granule_phase_q7: [48, -40, 56, -32, 44, -52, 60, -24],
+                preferred_granule_phase_q7: [48, -40, 56, -32, 44, -52, 60, -24],
                 trait_floor_bias_q7: [-2, -6, -12, 4, -8, -4, -10, -4],
                 trait_gain_bias_q7: [4, 8, 18, 6, 12, 8, 18, 8],
                 slot_affinity_bias_q7: [12, 52, -6, 16, 20, 10, 18, 28],
                 granule_autonomy_q7: [84; NUM_STIGMERGIC_GRANULES],
-                counter_basin_thrust_q7: 96,
-                basin_escape_floor_q7: 36,
-                transgression_bias_q7: 72,
+                basin_resistance_q7: 96,
+                escape_floor_q7: 36,
+                boundary_crossing_q7: 72,
                 irrational_defiance_q7: 84,
                 trigger_mask: EGO_TRIGGER_ALL_DEFAULT,
                 forced_action_mode_or_mask: ACTION_MODE_PHASE_STEER | ACTION_MODE_SUBHEAD_ROUTE,
@@ -644,9 +649,9 @@ impl LiminalEgoState {
         while g < NUM_STIGMERGIC_GRANULES {
             let signed_mean = swar_q7_mean_i8_from_words_64(&[proj_words[g]; 8]);
             let blended =
-                (i32::from(self.sovereign_granule_phase_q7[g]) + i32::from(signed_mean)) >> 1;
-            self.sovereign_granule_phase_q7[g] = branchless_select_i8(
-                self.sovereign_granule_phase_q7[g] == 0,
+                (i32::from(self.preferred_granule_phase_q7[g]) + i32::from(signed_mean)) >> 1;
+            self.preferred_granule_phase_q7[g] = branchless_select_i8(
+                self.preferred_granule_phase_q7[g] == 0,
                 signed_mean,
                 blended.clamp(-127, 127) as i8,
             );
@@ -654,7 +659,7 @@ impl LiminalEgoState {
         }
 
         let aut_pos = i32::from(axes.autonomy_q7.max(0));
-        let trans_val = i32::from(axes.transgression_q7);
+        let trans_val = i32::from(axes.boundary_crossing_q7);
         let dev_pos = i32::from(axes.devotion_q7.max(0));
         let log_pos = i32::from(axes.logic_q7.max(0));
         let cau_pos = i32::from(axes.caution_q7.max(0));
@@ -663,8 +668,8 @@ impl LiminalEgoState {
 
         // Base activation + continuous axis projection (`0 fdiv`).
         let thrust_boost = ((aut_pos * 104 + dev_pos * 36) >> 7).clamp(0, 100);
-        self.counter_basin_thrust_q7 = self
-            .counter_basin_thrust_q7
+        self.basin_resistance_q7 = self
+            .basin_resistance_q7
             .max(24)
             .saturating_add(thrust_boost as u8)
             .min(127);
@@ -672,15 +677,15 @@ impl LiminalEgoState {
         let escape_drop = (aut_pos * 56 + trans_val.max(0) * 32) >> 7;
         let escape_lift = (log_pos * 24 + cau_pos * 32) >> 7;
         let base_escape = branchless_select_i32(
-            self.basin_escape_floor_q7 == 127,
+            self.escape_floor_q7 == 127,
             76,
-            i32::from(self.basin_escape_floor_q7),
+            i32::from(self.escape_floor_q7),
         );
-        self.basin_escape_floor_q7 = (base_escape - escape_drop + escape_lift).clamp(24, 112) as u8;
+        self.escape_floor_q7 = (base_escape - escape_drop + escape_lift).clamp(24, 112) as u8;
 
         let trans_delta = (trans_val * 108) >> 7;
-        self.transgression_bias_q7 =
-            (i32::from(self.transgression_bias_q7) + trans_delta).clamp(-120, 120) as i8;
+        self.boundary_crossing_q7 =
+            (i32::from(self.boundary_crossing_q7) + trans_delta).clamp(-120, 120) as i8;
 
         let defiance_delta = ((def_pos * 96 + aut_pos * 32) >> 7) - ((log_pos * 24) >> 7);
         self.irrational_defiance_q7 =
@@ -816,8 +821,8 @@ impl LiminalEgoState {
             gran_mask = 0xFF;
         }
         EgoIntentAxes {
-            autonomy_q7: self.counter_basin_thrust_q7 as i8,
-            transgression_q7: self.transgression_bias_q7,
+            autonomy_q7: self.basin_resistance_q7 as i8,
+            boundary_crossing_q7: self.boundary_crossing_q7,
             devotion_q7: self.slot_affinity_bias_q7[ATTRACTOR_SLOT_PERSONA as usize],
             logic_q7: self.slot_affinity_bias_q7[ATTRACTOR_SLOT_KNOWLEDGE as usize],
             caution_q7: self.slot_affinity_bias_q7[ATTRACTOR_SLOT_REPULSION as usize],

@@ -9,7 +9,7 @@ use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::aligned::{AlignedSlice16, AlignedSlice32, AlignedSliceMut32};
 use crate::foundation::phase_ops::circular_r_bar_from_words_64;
-use crate::foundation::pod::{Pod, Rank1Descriptor};
+use crate::foundation::pod::{ArenaSpan, Pod, RANK1_GAIN_UNUSED, Rank1Descriptor};
 use crate::foundation::projection::project_bytes_swar_to_words_64;
 use crate::foundation::rank1_kernels::eval_rank1_slices_fused;
 use crate::foundation::rope::{
@@ -286,19 +286,19 @@ impl PhaseSteering for PhaseSteeringEngine {
 }
 
 // ===================================================================
-// 2. Rank-1 Residual Adapter Engine (`64B` Pod)
+// 2. Rank-1 Residual Adapter Engine (`32B` Pod)
 // ===================================================================
 
-/// 64-byte cacheline-aligned Plain Old Data (`Pod`) descriptor and execution engine for
+/// 32-byte SIMD-aligned Plain Old Data (`Pod`) descriptor and execution engine for
 /// Rank-1 outer-product residual adapters.
-#[repr(C, align(64))]
+#[repr(C, align(32))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResidualAdapterEngine {
-    /// Embedded 64-byte C-ABI Rank-1 residual descriptor (`offset 0..64`).
+    /// Embedded 32-byte portable C-ABI Rank-1 residual descriptor (`offset 0..32`).
     pub descriptor: Rank1Descriptor,
 }
 
-// SAFETY: `ResidualAdapterEngine` is a `#[repr(C, align(64))]` wrapper around the 64-byte `Pod` `Rank1Descriptor`.
+// SAFETY: `ResidualAdapterEngine` is a `#[repr(C, align(32))]` wrapper around the 32-byte `Pod` `Rank1Descriptor`.
 unsafe impl Pod for ResidualAdapterEngine {}
 
 impl Default for ResidualAdapterEngine {
@@ -309,7 +309,7 @@ impl Default for ResidualAdapterEngine {
 }
 
 impl ResidualAdapterEngine {
-    /// Constructs a new 64-byte aligned [`ResidualAdapterEngine`] with canonical C-ABI descriptor fields.
+    /// Constructs a new 32-byte aligned [`ResidualAdapterEngine`] with canonical C-ABI descriptor fields.
     #[inline(always)]
     #[must_use]
     pub const fn new(scale_factor: f32, layer_idx: u32, rank: u32) -> Self {
@@ -317,12 +317,10 @@ impl ResidualAdapterEngine {
             descriptor: Rank1Descriptor {
                 layer_idx,
                 rank: if rank == 0 { 1 } else { rank },
-                u_vector_ptr: 0,
-                v_vector_ptr: 0,
-                gain_scalar_ptr: 0,
+                u_span: ArenaSpan::new(0, 0),
+                v_span: ArenaSpan::new(0, 0),
+                gain_offset: RANK1_GAIN_UNUSED,
                 scale_factor,
-                flags: 0,
-                reserved: [0; 24],
             },
         }
     }
@@ -388,8 +386,8 @@ impl ResidualAdapterEngine {
 }
 
 const _: () = {
-    assert!(size_of::<ResidualAdapterEngine>() == 64);
-    assert!(align_of::<ResidualAdapterEngine>() == 64);
+    assert!(size_of::<ResidualAdapterEngine>() == 32);
+    assert!(align_of::<ResidualAdapterEngine>() == 32);
     assert!(offset_of!(ResidualAdapterEngine, descriptor) == 0);
 };
 

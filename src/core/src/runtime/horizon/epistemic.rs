@@ -110,13 +110,13 @@ impl EpistemicHorizonReading {
                 frame.action_mode_flags,
             ),
         );
-        frame.attribution_tag = branchless_select_u8(
+        frame.root_cause_code = branchless_select_u8(
             is_unobserved,
             ROOT_CAUSE_FACT_RETRIEVAL_MISS,
             branchless_select_u8(
                 high_repulse,
                 ROOT_CAUSE_COHOMOLOGY_REPULSION,
-                frame.attribution_tag,
+                frame.root_cause_code,
             ),
         );
         frame.lineage_flags = branchless_select_u32(
@@ -462,7 +462,7 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
         fact_persona_coherence: base_coh,
         repulsion_severity: norm_rep_sev,
         lineage_flags: horizon.causal_provenance_bits(),
-        attribution_tag: branchless_select_u8(
+        root_cause_code: branchless_select_u8(
             rep_dominates,
             ROOT_CAUSE_COHOMOLOGY_REPULSION,
             ROOT_CAUSE_NOMINAL,

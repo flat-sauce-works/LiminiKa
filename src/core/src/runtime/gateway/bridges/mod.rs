@@ -24,6 +24,7 @@ use crate::liminal::{
     branchless_select_i8, branchless_select_i32, branchless_select_u8, branchless_select_u64,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
+#[cfg(test)]
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
@@ -220,8 +221,8 @@ impl LiminalEgoState {
             127.0,
         ) as u8;
         let t_basin = ((self.trigger_mask & EGO_TRIGGER_BASIN_CAPTURE) != 0)
-            & (pull_q7 >= self.basin_escape_floor_q7)
-            & (self.counter_basin_thrust_q7 > 0);
+            & (pull_q7 >= self.escape_floor_q7)
+            & (self.basin_resistance_q7 > 0);
         let t_conflict = ((self.trigger_mask & EGO_TRIGGER_INTERNAL_CONFLICT) != 0)
             & horizon.is_internal_conflict()
             & (horizon.conflict_severity > 0.35);
@@ -248,21 +249,21 @@ impl LiminalEgoState {
             (clamped_i8 as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64)
         };
 
-        let trans_pos = self.transgression_bias_q7 > 0;
-        let trans_abs = self.transgression_bias_q7.unsigned_abs();
+        let trans_pos = self.boundary_crossing_q7 > 0;
+        let trans_abs = self.boundary_crossing_q7.unsigned_abs();
         let strong_trans =
             (t_liminal | t_distortion | (t_chatter & (delta.phase_transition_pulse != 0)))
                 & trans_pos
                 & (trans_abs >= 20);
         let apply_phase_override = t_basin | t_stagnate | strong_trans | t_distortion;
-        let thrust_q7 = self.counter_basin_thrust_q7.min(127);
+        let thrust_q7 = self.basin_resistance_q7.min(127);
         {
             let pw = frame.phase_words_mut();
             let mut cell = 0usize;
             while cell < NUM_STIGMERGIC_GRANULES {
                 let w = pw[cell];
                 let sov_word = scale_to_word(
-                    self.sovereign_granule_phase_q7[cell],
+                    self.preferred_granule_phase_q7[cell],
                     self.granule_autonomy_q7[cell],
                 );
                 // Antipodal pi-radian SO(2) flip (`^ SWAR_SIGN_MASK_64`) blended with sovereign heading.
@@ -385,8 +386,8 @@ impl LiminalEgoState {
                 branchless_select_u8(any_fired, next_sg, stigmergy.granule_step_gain_q7[g]);
             g += 1;
         }
-        let trans_pos = self.transgression_bias_q7 > 0;
-        let trans_abs = self.transgression_bias_q7.unsigned_abs();
+        let trans_pos = self.boundary_crossing_q7 > 0;
+        let trans_abs = self.boundary_crossing_q7.unsigned_abs();
         let trans_step = trans_abs >> 3;
         stigmergy.discovery_floor_q7 = branchless_select_u8(
             t_liminal & trans_pos,
@@ -404,6 +405,7 @@ impl LiminalEgoState {
     /// Branchlessly evaluates active Ego triggers across `stack`'s Layer 0 (`liminal`),
     /// Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, modulating `frame`
     /// in-place and synchronizing `self` onto `stack.ego` after intervention.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn intervene_on_layers_and_frame_branchless(
         &mut self,

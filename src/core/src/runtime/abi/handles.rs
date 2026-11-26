@@ -484,52 +484,19 @@ impl<'a, T> AsMut<T> for FfiHandleMut<'a, T> {
 }
 
 // ===================================================================
-// Strongly-Typed Opaque Handles (v0.3.0 `0x0000_0300`)
+// Strongly-Typed Opaque Handle (v0.4.0 `0x0000_0400`)
 // ===================================================================
 
-macro_rules! define_opaque_handles {
-    ($(($opaque:ident, $handle:ident, $c_alias:ident, $doc:expr)),* $(,)?) => {
-        $(
-            #[doc = $doc]
-            #[repr(C)]
-            pub struct $opaque {
-                _private: [u8; 0],
-            }
-
-            #[doc = $doc]
-            pub type $handle = *mut $opaque;
-
-            #[doc = $doc]
-            // C-ABI typedef aliases keep their `lmnk_*_t` spelling to mirror `include/liminika/lmnk_types.h`.
-            #[allow(non_camel_case_types)]
-            pub type $c_alias = $handle;
-        )*
-    };
+/// Opaque LiminiKa runtime context marker (`lmnk_context_handle_t`).
+#[repr(C)]
+pub struct LmnkContextOpaque {
+    _private: [u8; 0],
 }
 
-define_opaque_handles!(
-    (
-        LmnkContextOpaque,
-        LmnkContextHandle,
-        lmnk_context_handle_t,
-        "Opaque LiminiKa runtime context handle (`lmnk_context_handle_t`)."
-    ),
-    (
-        LmnkSubstrateOpaque,
-        LmnkSubstrateHandle,
-        lmnk_substrate_handle_t,
-        "Opaque LiminiKa stigmergic substrate handle (`lmnk_substrate_handle_t`)."
-    ),
-    (
-        LmnkEntropyControllerOpaque,
-        LmnkEntropyControllerHandle,
-        lmnk_entropy_controller_handle_t,
-        "Opaque LiminiKa entropy controller handle (`lmnk_entropy_controller_handle_t`)."
-    ),
-    (
-        LmnkPhaseSteeringOpaque,
-        LmnkPhaseSteeringHandle,
-        lmnk_phase_steering_handle_t,
-        "Opaque LiminiKa RoPE phase-steering engine handle (`lmnk_phase_steering_handle_t`)."
-    ),
-);
+/// Opaque LiminiKa runtime context handle (`lmnk_context_handle_t`).
+pub type LmnkContextHandle = *mut LmnkContextOpaque;
+
+/// Opaque LiminiKa runtime context handle (`lmnk_context_handle_t`).
+// C-ABI typedef alias keeps its `lmnk_*_t` spelling to mirror `include/liminika/lmnk_types.h`.
+#[allow(non_camel_case_types)]
+pub type lmnk_context_handle_t = LmnkContextHandle;

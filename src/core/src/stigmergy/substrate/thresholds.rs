@@ -8,26 +8,23 @@ use super::{
     DEFAULT_STIGMERGIC_EVAPORATION_RETAIN, DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH,
     DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY, DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH,
     DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN, DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH,
-    StigmergicActionDecision, SubstrateStepReport,
+    StigmergicActionDecision,
 };
 use crate::foundation::{
     ACTION_MODE_PHASE_STEER, ATTRACTOR_SLOT_ID_MASK, AlignedSliceMut32,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, Pod, SubheadConfig, TaggedPtr, branchless_abs_f32,
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
-    dispatch_fused_phase_clamp_and_subhead_words_core, pack_action_slot_tag,
-    phase_clamp_upper_rot_dim, scale_f32_slice_unrolled8, steer_from_swar_words_core_safe,
-    swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, unpack_attractor_slot_from_tag,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, Pod, SubheadConfig, branchless_abs_f32, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_min_f32,
+    branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    dispatch_fused_phase_clamp_and_subhead_words_core, phase_clamp_upper_rot_dim,
+    scale_f32_slice_unrolled8, steer_from_swar_words_core_safe, swar_q7_phase_step_filter_words_64,
+    swar_words_nonzero_64,
 };
 use crate::liminal::{
-    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES, branchless_select_f32, branchless_select_u8, branchless_select_u32,
-    branchless_select_u64,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    branchless_select_f32, branchless_select_u8, branchless_select_u32,
 };
 use crate::stigmergy::anchor::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
-use crate::stigmergy::gate::PhaseSteeringEngine;
 use crate::stigmergy::granule::StigmergicGranuleState;
-use crate::stigmergy::trail::{PointerTrail, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
@@ -280,65 +277,6 @@ impl StigmergicThresholds {
         (decision, mode_flags, target_slot, extra_flags)
     }
 
-    /// Evaluates the 7-regime stigmergic threshold ladder on `trail` and returns the 32-byte
-    /// [`SubstrateStepReport`] directly from this 32-byte [`StigmergicThresholds`] descriptor
-    /// (`0` bytes of [`super::StigmergicSubstrate`] stack allocation).
-    #[inline(always)]
-    #[must_use]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) const fn evaluate_report_on_trail(
-        &self,
-        trail: &PointerTrail,
-        repulsion_threshold: u8,
-        entropy_h_tilde: f32,
-        phase_coherence: f32,
-        transition_log_prob: f32,
-        selected_trail_id: u32,
-        bloom_repulsion_density: u8,
-        dominant_slot: u8,
-    ) -> SubstrateStepReport {
-        let repulsion_triggered = ((bloom_repulsion_density >= repulsion_threshold)
-            & (bloom_repulsion_density > 0))
-            | ((trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0);
-        let cur_ptr = TaggedPtr(trail.current_ptr);
-        let embedded_slot = unpack_attractor_slot_from_tag(cur_ptr.unpack_tag());
-        let pref_slot = branchless_select_u8(
-            dominant_slot < (MAX_ATTRACTOR_DOMAINS as u8),
-            dominant_slot,
-            embedded_slot,
-        );
-        let (decision, mode_flags, target_slot, _extra_flags) = self.select_action_decision(
-            trail.stigmergic_density,
-            entropy_h_tilde,
-            phase_coherence,
-            repulsion_triggered,
-            pref_slot,
-        );
-        let base_evolved = TaggedPtr::pack(
-            cur_ptr.unpack_addr(),
-            pack_action_slot_tag(target_slot, mode_flags),
-            cur_ptr.unpack_phase(),
-        );
-        let evolved_ptr = branchless_select_u64(
-            decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
-            base_evolved.conjugate_phase().raw(),
-            base_evolved.raw(),
-        );
-
-        SubstrateStepReport {
-            evolved_ptr,
-            updated_density: trail.stigmergic_density,
-            phase_coherence,
-            transition_log_prob,
-            selected_trail_id,
-            dominant_anchor_id: trail.target_anchor_id,
-            decision: decision as u8,
-            action_mode_flags: mode_flags,
-            target_slot,
-            bloom_repulsion_density,
-        }
-    }
-
     #[inline]
     pub(super) fn execute_decision_steering_and_logit_scaling(
         params: DecisionSteerParams<'_>,
@@ -496,147 +434,5 @@ impl StigmergicThresholds {
             scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
         }
         Ok((steered, subhead_routed, skip_compensated))
-    }
-
-    /// Executes a stateless one-shot stigmergic orchestration step directly from `self` and
-    /// `phase_steering` without allocating a 2,816-byte [`super::StigmergicSubstrate`] on the stack
-    /// (`0` stack table zero-init).
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor`, `key_tensor`, or `logits_opt`
-    /// alias or have invalid dimensions.
-    #[inline]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn orchestrate_stateless_action_step(
-        &self,
-        phase_steering: &PhaseSteeringEngine,
-        input_ptr: TaggedPtr,
-        entropy_h_tilde: f32,
-        dominant_slot: u8,
-        trail_inout: &mut PointerTrail,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> LmnkResult<SubstrateStepReport> {
-        let phase_step_min_rad = phase_steering.phase_step_min_rad();
-        let phase_clamp_max = phase_steering.phase_clamp_max_rad();
-        let head_dim = phase_steering.head_dim as usize;
-        let num_heads = phase_steering.num_heads as usize;
-        let expected_len = head_dim
-            .checked_mul(num_heads)
-            .ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
-        if head_dim == 0
-            || (head_dim & 1) != 0
-            || num_heads == 0
-            || num_heads > MAX_ATTENTION_HEADS
-            || phase_step_min_rad < 0.0
-            || !branchless_is_finite_f32(phase_step_min_rad)
-            || phase_clamp_max <= 0.0
-            || !branchless_is_finite_f32(phase_clamp_max)
-        {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        if let Some(ref q_ref) = query_tensor {
-            if q_ref.len() < expected_len {
-                return Err(LMNK_ERR_INVALID_ARGUMENT);
-            }
-            if let Some(ref k_ref) = key_tensor {
-                if k_ref.len() < expected_len {
-                    return Err(LMNK_ERR_INVALID_ARGUMENT);
-                }
-                q_ref.ensure_disjoint_mut(k_ref)?;
-            }
-            if let Some(ref l_ref) = logits_opt {
-                q_ref.ensure_disjoint_mut(l_ref)?;
-            }
-        } else if let Some(ref k_ref) = key_tensor {
-            if k_ref.len() < expected_len {
-                return Err(LMNK_ERR_INVALID_ARGUMENT);
-            }
-            if let Some(ref l_ref) = logits_opt {
-                k_ref.ensure_disjoint_mut(l_ref)?;
-            }
-        }
-
-        trail_inout.record_pointer_transition(input_ptr.raw(), 1, 0.0);
-        let embedded_phase = input_ptr.unpack_phase();
-        if embedded_phase != 0 {
-            trail_inout.accumulate_uniform_phase(embedded_phase);
-        }
-
-        let pref_slot = branchless_select_u8(
-            dominant_slot < (MAX_ATTRACTOR_DOMAINS as u8),
-            dominant_slot,
-            input_ptr.target_attractor_slot(),
-        ) & ATTRACTOR_SLOT_ID_MASK;
-
-        let steer_words = *trail_phase_words_ref(trail_inout);
-        let best_coh = 1.0_f32;
-        let log_prob = 0.0_f32;
-        let selected_id = trail_inout.linked_trail_id;
-
-        let retain = branchless_clamp_f32(branchless_relu_f32(self.evaporation_retain), 0.0, 1.0);
-        let reinf_gain = branchless_relu_f32(self.reinforcement_gain);
-        let base_rho = branchless_flush_subnormal_f32(
-            branchless_relu_f32(trail_inout.stigmergic_density) * retain,
-        );
-        let updated_rho = branchless_min_f32(
-            branchless_flush_subnormal_f32(base_rho + reinf_gain * 2.0),
-            MAX_STIGMERGIC_DENSITY,
-        );
-        trail_inout.stigmergic_density = updated_rho;
-
-        let (decision, mode_flags, target_slot, extra_flags) =
-            self.select_action_decision(updated_rho, entropy_h_tilde, best_coh, false, pref_slot);
-
-        let base_evolved = TaggedPtr::pack(
-            input_ptr.unpack_addr(),
-            pack_action_slot_tag(target_slot, mode_flags),
-            input_ptr.unpack_phase(),
-        );
-        let evolved_ptr = TaggedPtr(branchless_select_u64(
-            decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
-            base_evolved.conjugate_phase().raw(),
-            base_evolved.raw(),
-        ));
-
-        trail_inout.current_ptr = evolved_ptr.raw();
-        trail_inout.cluster_id = branchless_select_u32(
-            trail_inout.target_anchor_id != 0,
-            trail_inout.target_anchor_id,
-            u32::from(target_slot),
-        );
-        trail_inout.flags = (trail_inout.flags
-            & !(TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_INERTIAL_SKIP_ACTIVE))
-            | extra_flags;
-        trail_inout.sync_flags_with_current_ptr();
-
-        let _ = Self::execute_decision_steering_and_logit_scaling(
-            DecisionSteerParams {
-                decision,
-                steer_words: &steer_words,
-                phase_step_min_rad,
-                phase_clamp_max,
-                head_dim,
-                num_heads,
-                best_coh,
-            },
-            query_tensor,
-            key_tensor,
-            logits_opt,
-        )?;
-
-        Ok(SubstrateStepReport {
-            evolved_ptr: evolved_ptr.raw(),
-            updated_density: updated_rho,
-            phase_coherence: best_coh,
-            transition_log_prob: log_prob,
-            selected_trail_id: selected_id,
-            dominant_anchor_id: trail_inout.target_anchor_id,
-            decision: decision as u8,
-            action_mode_flags: mode_flags,
-            target_slot,
-            bloom_repulsion_density: 0,
-        })
     }
 }

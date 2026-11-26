@@ -3,8 +3,6 @@
 
 //! Pure synchronous Rank-1 outer-product residual kernels (`eval_rank1*` and AVX2/scalar SIMD leaves).
 
-use core::slice;
-
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use core::arch::x86_64::{
     _mm256_add_ps, _mm256_loadu_ps, _mm256_mul_ps, _mm256_set1_ps, _mm256_storeu_ps,
@@ -12,16 +10,12 @@ use core::arch::x86_64::{
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
 use crate::foundation::pod::{
-    ACTION_MODE_RANK1_INJECT, Rank1Descriptor, TaggedPtr, raw_byte_ranges_overlap,
-    validate_raw_slice_bounds,
+    ACTION_MODE_RANK1_INJECT, ArenaSpan, RANK1_GAIN_UNUSED, Rank1Descriptor, TaggedPtr,
 };
 use crate::foundation::rope::kernels::ptr_has_action_mode;
 use crate::foundation::scalar_math::{branchless_flush_subnormal_f32, branchless_is_finite_f32};
 use crate::foundation::simd_stats::dot_f32_unrolled4;
-use crate::liminal::{
-    LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
-    LMNK_ERR_NULL_POINTER, LmnkResult,
-};
+use crate::liminal::{LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT, LmnkResult};
 
 // ===================================================================
 // 1. AVX2 / Scalar SIMD Leaves for Rank-1 Outer Product
@@ -250,69 +244,38 @@ pub(crate) fn rank1_accum_outer_product_simd(
 // 2. Synchronous Rank-1 Residual Adapter Pure Functions
 // ===================================================================
 
-type UnpackedRank1Slices<'a> = (
-    AlignedSlice32<'a, f32>,
-    AlignedSlice32<'a, f32>,
-    Option<AlignedSlice32<'a, f32>>,
-);
+type ResolvedRank1Slices<'a> = (&'a [f32], &'a [f32], Option<&'a [f32]>);
 
-/// # Safety
-/// Caller must ensure `desc.u_vector_ptr` (`d_out` floats), `desc.v_vector_ptr` (`d_in` floats),
-/// and optional `desc.gain_scalar_ptr` (`d_out` floats) point to valid, initialized, 32-byte aligned
-/// memory readable for lifetime `'a` without concurrent mutation.
+/// Resolves and validates `desc`'s [`ArenaSpan`] offsets inside `arena` without raw pointer casts.
+///
+/// Enforces:
+/// - `desc.rank == 1`, `d_in > 0`, `d_out > 0`, and finite `desc.scale_factor`
+/// - `desc.u_span.len == d_out` and `desc.v_span.len == d_in`
+/// - All spans (`u_span`, `v_span`, and optional `gain_offset..gain_offset+u_span.len`) lie
+///   within `arena` without 32-bit integer overflow.
 #[inline(always)]
-unsafe fn validate_and_unpack_rank1_descriptor<'a>(
-    desc: &'a Rank1Descriptor,
+fn resolve_rank1_arena_slices<'a>(
+    desc: &Rank1Descriptor,
+    arena: &'a [f32],
     d_in: usize,
     d_out: usize,
-    y_out_ptr: *const f32,
-) -> LmnkResult<UnpackedRank1Slices<'a>> {
-    if desc.u_vector_ptr == 0 || desc.v_vector_ptr == 0 {
-        return Err(LMNK_ERR_NULL_POINTER);
-    }
-    if desc.rank != 1 || d_in == 0 || d_out == 0 || !branchless_is_finite_f32(desc.scale_factor) {
-        return Err(LMNK_ERR_INVALID_ARGUMENT);
-    }
-    let u_addr = usize::try_from(desc.u_vector_ptr).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
-    let v_addr = usize::try_from(desc.v_vector_ptr).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
-    let u_ptr = u_addr as *const f32;
-    let v_ptr = v_addr as *const f32;
-    if (u_addr & 31) != 0 || (v_addr & 31) != 0 {
-        return Err(LMNK_ERR_ALIGNMENT);
-    }
-    let y_bytes = validate_raw_slice_bounds(y_out_ptr, d_out)?;
-    let u_bytes = validate_raw_slice_bounds(u_ptr, d_out)?;
-    let v_bytes = validate_raw_slice_bounds(v_ptr, d_in)?;
-    if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, u_addr, u_bytes)
-        || raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, v_addr, v_bytes)
+) -> LmnkResult<ResolvedRank1Slices<'a>> {
+    if desc.rank != 1
+        || d_in == 0
+        || d_out == 0
+        || (desc.u_span.len as usize) != d_out
+        || (desc.v_span.len as usize) != d_in
+        || !branchless_is_finite_f32(desc.scale_factor)
     {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-
-    let g_ptr_opt = if desc.gain_scalar_ptr != 0 {
-        let g_addr =
-            usize::try_from(desc.gain_scalar_ptr).map_err(|_| LMNK_ERR_INVALID_ARGUMENT)?;
-        let g_ptr = g_addr as *const f32;
-        if (g_addr & 31) != 0 {
-            return Err(LMNK_ERR_ALIGNMENT);
-        }
-        let g_bytes = validate_raw_slice_bounds(g_ptr, d_out)?;
-        if raw_byte_ranges_overlap(y_out_ptr as usize, y_bytes, g_addr, g_bytes) {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        Some(g_ptr)
+    let u_slice = desc.u_span.slice(arena).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+    let v_slice = desc.v_span.slice(arena).ok_or(LMNK_ERR_INVALID_ARGUMENT)?;
+    let g_slice_opt = if desc.gain_offset != RANK1_GAIN_UNUSED {
+        let g_span = ArenaSpan::new(desc.gain_offset, desc.u_span.len);
+        Some(g_span.slice(arena).ok_or(LMNK_ERR_INVALID_ARGUMENT)?)
     } else {
         None
-    };
-
-    // SAFETY: `u_ptr`, `v_ptr`, and optional `g_ptr` are non-null, 32-byte aligned, bounds-checked,
-    // disjoint from `y_out_ptr`, and caller guarantees valid immutable lifetimes for `'a`.
-    let (u_slice, v_slice, g_slice_opt) = unsafe {
-        (
-            AlignedSlice32::new_unchecked(slice::from_raw_parts(u_ptr, d_out)),
-            AlignedSlice32::new_unchecked(slice::from_raw_parts(v_ptr, d_in)),
-            g_ptr_opt.map(|gp| AlignedSlice32::new_unchecked(slice::from_raw_parts(gp, d_out))),
-        )
     };
     Ok((u_slice, v_slice, g_slice_opt))
 }
@@ -409,103 +372,96 @@ pub fn eval_rank1_slices_fused(
 }
 
 /// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// from a C-ABI [`Rank1Descriptor`] (including optional 32B-aligned `gain_scalar_ptr`).
-///
-/// # Safety
-/// Caller must guarantee that `desc.u_vector_ptr` (`y_out.len()` `f32`s), `desc.v_vector_ptr`
-/// (`x_in.len()` `f32`s), and any non-zero `desc.gain_scalar_ptr` (`y_out.len()` `f32`s) point to
-/// valid, initialized, 32-byte aligned, immutable buffers for the duration of this call.
+/// from a portable 32-byte [`Rank1Descriptor`] and caller-owned `arena` slice (100% Strict Provenance safe).
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
-/// [`LMNK_ERR_ALIGNMENT`] if pointers are not 32B-aligned, or
-/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite,
-/// slices are empty, or input descriptors overlap `y_out`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite,
+/// `y_out` / `x_in` lengths disagree with `u_span` / `v_span`, or any arena span overflows/exceeds `arena`.
+/// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if $\mathbf{v}^T \mathbf{x}$ is non-finite.
 #[inline]
-pub unsafe fn eval_rank1(
+pub fn eval_rank1(
     y_out: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
+    arena: &[f32],
     desc: &Rank1Descriptor,
 ) -> LmnkResult<()> {
-    let y_ptr = y_out.as_ptr();
-    let y_len = y_out.len();
-    // SAFETY: Caller guarantees valid immutable lifetimes for `desc`'s raw pointers.
-    let (u_slice, v_slice, g_slice_opt) =
-        unsafe { validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_len, y_ptr)? };
-    eval_rank1_slices(
-        y_out,
-        x_in,
-        &u_slice,
-        &v_slice,
-        g_slice_opt.as_ref(),
-        desc.scale_factor,
-    )
+    let d_in = x_in.len();
+    let d_out = y_out.len();
+    let (u_slice, v_slice, g_slice_opt) = resolve_rank1_arena_slices(desc, arena, d_in, d_out)?;
+    let dot_vx = dot_f32_unrolled4(v_slice, x_in.as_slice(), d_in);
+    if !branchless_is_finite_f32(dot_vx) {
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
+    }
+    let eff_scale = branchless_flush_subnormal_f32(desc.scale_factor * dot_vx);
+    rank1_write_outer_product_simd(
+        &mut y_out.as_mut_slice()[..d_out],
+        u_slice,
+        g_slice_opt,
+        eff_scale,
+    );
+    Ok(())
 }
 
 /// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
-/// in-place into `y_inout` from a C-ABI [`Rank1Descriptor`] (including optional 32B-aligned `gain_scalar_ptr`).
-///
-/// # Safety
-/// Caller must guarantee that `desc.u_vector_ptr` (`y_inout.len()` `f32`s), `desc.v_vector_ptr`
-/// (`x_in.len()` `f32`s), and any non-zero `desc.gain_scalar_ptr` (`y_inout.len()` `f32`s) point to
-/// valid, initialized, 32-byte aligned, immutable buffers for the duration of this call.
+/// in-place into `y_inout` from a portable 32-byte [`Rank1Descriptor`] and caller-owned `arena` slice.
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_NULL_POINTER`] if `u_vector_ptr == 0` or `v_vector_ptr == 0`,
-/// [`LMNK_ERR_ALIGNMENT`] if pointers are not 32B-aligned, or
-/// [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite,
-/// slices are empty, or input descriptors overlap `y_inout`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `desc.rank != 1`, `desc.scale_factor` is non-finite,
+/// `y_inout` / `x_in` lengths disagree with `u_span` / `v_span`, or any arena span overflows/exceeds `arena`.
+/// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if $\mathbf{v}^T \mathbf{x}$ is non-finite.
 #[inline]
-pub unsafe fn eval_rank1_fused(
+pub fn eval_rank1_fused(
     y_inout: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
+    arena: &[f32],
     desc: &Rank1Descriptor,
 ) -> LmnkResult<()> {
-    let y_ptr = y_inout.as_ptr();
-    let y_len = y_inout.len();
-    // SAFETY: Caller guarantees valid immutable lifetimes for `desc`'s raw pointers.
-    let (u_slice, v_slice, g_slice_opt) =
-        unsafe { validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_len, y_ptr)? };
-    eval_rank1_slices_fused(
-        y_inout,
-        x_in,
-        &u_slice,
-        &v_slice,
-        g_slice_opt.as_ref(),
-        desc.scale_factor,
-    )
+    let d_in = x_in.len();
+    let d_out = y_inout.len();
+    let (u_slice, v_slice, g_slice_opt) = resolve_rank1_arena_slices(desc, arena, d_in, d_out)?;
+    let dot_vx = dot_f32_unrolled4(v_slice, x_in.as_slice(), d_in);
+    if !branchless_is_finite_f32(dot_vx) {
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
+    }
+    let eff_scale = branchless_flush_subnormal_f32(desc.scale_factor * dot_vx);
+    rank1_accum_outer_product_simd(
+        &mut y_inout.as_mut_slice()[..d_out],
+        u_slice,
+        g_slice_opt,
+        eff_scale,
+    );
+    Ok(())
 }
 
 /// Accumulates the fused Rank-1 outer product residual gated by `tagged_ptr`'s `ACTION_MODE_RANK1_INJECT` bit (`0x10`).
 ///
-/// # Safety
-/// Caller must guarantee that `desc`'s raw pointers satisfy the safety contract of [`eval_rank1_fused`].
-///
 /// # Errors
-/// Propagates any pointer/slice validation error from [`eval_rank1_fused`].
+/// Propagates any descriptor or arena validation error from [`eval_rank1_fused`].
 #[inline]
-pub unsafe fn eval_rank1_pointer_gated_fused(
+pub fn eval_rank1_pointer_gated_fused(
     tagged_ptr: TaggedPtr,
     y_inout: &mut AlignedSliceMut32<'_, f32>,
     x_in: &AlignedSlice32<'_, f32>,
+    arena: &[f32],
     desc: &Rank1Descriptor,
 ) -> LmnkResult<bool> {
-    let y_ptr = y_inout.as_ptr();
-    let y_len = y_inout.len();
-    // SAFETY: Caller guarantees valid immutable lifetimes for `desc`'s raw pointers.
-    let (u_slice, v_slice, g_slice_opt) =
-        unsafe { validate_and_unpack_rank1_descriptor(desc, x_in.len(), y_len, y_ptr)? };
+    let d_in = x_in.len();
+    let d_out = y_inout.len();
+    let (u_slice, v_slice, g_slice_opt) = resolve_rank1_arena_slices(desc, arena, d_in, d_out)?;
     if !ptr_has_action_mode(tagged_ptr, ACTION_MODE_RANK1_INJECT) {
         return Ok(false);
     }
-    eval_rank1_slices_fused(
-        y_inout,
-        x_in,
-        &u_slice,
-        &v_slice,
-        g_slice_opt.as_ref(),
-        desc.scale_factor,
-    )?;
+    let dot_vx = dot_f32_unrolled4(v_slice, x_in.as_slice(), d_in);
+    if !branchless_is_finite_f32(dot_vx) {
+        return Err(LMNK_ERR_ENTROPY_SINGULARITY);
+    }
+    let eff_scale = branchless_flush_subnormal_f32(desc.scale_factor * dot_vx);
+    rank1_accum_outer_product_simd(
+        &mut y_inout.as_mut_slice()[..d_out],
+        u_slice,
+        g_slice_opt,
+        eff_scale,
+    );
     Ok(true)
 }
 
@@ -519,46 +475,70 @@ mod tests {
     fn test_eval_rank1_pointer_gated_and_gain_fused() {
         let mut y_rank1 = AlignedBuffer32::new([1.0_f32; 8]);
         let x_rank1 = AlignedBuffer32::new([1.0_f32; 8]);
-        let u_rank1 = AlignedBuffer32::new([0.5_f32; 8]);
-        let v_rank1 = AlignedBuffer32::new([0.25_f32; 8]);
-        let g_rank1 = AlignedBuffer32::new([2.0_f32; 8]);
+        // Arena layout: [u (0..8), v (8..16), g (16..24)].
+        let mut arena = [0.0_f32; 24];
+        arena[0..8].fill(0.5);
+        arena[8..16].fill(0.25);
+        arena[16..24].fill(2.0);
         let desc = Rank1Descriptor {
             layer_idx: 0,
             rank: 1,
-            u_vector_ptr: u_rank1.as_aligned_slice().as_ptr() as u64,
-            v_vector_ptr: v_rank1.as_aligned_slice().as_ptr() as u64,
-            gain_scalar_ptr: 0,
+            u_span: ArenaSpan::new(0, 8),
+            v_span: ArenaSpan::new(8, 8),
+            gain_offset: RANK1_GAIN_UNUSED,
             scale_factor: 1.0,
-            flags: 0,
-            reserved: [0; 24],
         };
         let ptr = TaggedPtr::pack(0x1000, (1 << 5) | ACTION_PRESET_FULL_ORCHESTRATION, 0);
-        // SAFETY: `u_rank1`, `v_rank1`, and `g_rank1` are live, 32-byte aligned, and disjoint from `y_rank1`.
-        let injected = unsafe {
-            eval_rank1_pointer_gated_fused(
-                ptr,
-                &mut y_rank1.as_aligned_slice_mut(),
-                &x_rank1.as_aligned_slice(),
-                &desc,
-            )
-        }
+        let injected = eval_rank1_pointer_gated_fused(
+            ptr,
+            &mut y_rank1.as_aligned_slice_mut(),
+            &x_rank1.as_aligned_slice(),
+            &arena,
+            &desc,
+        )
         .unwrap();
         assert!(injected);
         assert!((y_rank1.data[0] - 2.0).abs() < 1.0e-5);
 
         let desc_with_gain = Rank1Descriptor {
-            gain_scalar_ptr: g_rank1.as_aligned_slice().as_ptr() as u64,
+            gain_offset: 16,
             ..desc
         };
-        // SAFETY: `u_rank1`, `v_rank1`, and `g_rank1` are live, 32-byte aligned, and disjoint from `y_rank1`.
-        unsafe {
-            eval_rank1_fused(
-                &mut y_rank1.as_aligned_slice_mut(),
-                &x_rank1.as_aligned_slice(),
-                &desc_with_gain,
-            )
-        }
+        eval_rank1_fused(
+            &mut y_rank1.as_aligned_slice_mut(),
+            &x_rank1.as_aligned_slice(),
+            &arena,
+            &desc_with_gain,
+        )
         .unwrap();
         assert!((y_rank1.data[0] - 4.0).abs() < 1.0e-5);
+
+        // Overflowing gain_offset and out-of-bounds span must fail closed.
+        let desc_overflow = Rank1Descriptor {
+            gain_offset: u32::MAX - 2,
+            ..desc
+        };
+        assert_eq!(
+            eval_rank1(
+                &mut y_rank1.as_aligned_slice_mut(),
+                &x_rank1.as_aligned_slice(),
+                &arena,
+                &desc_overflow,
+            ),
+            Err(LMNK_ERR_INVALID_ARGUMENT)
+        );
+        let desc_oob = Rank1Descriptor {
+            u_span: ArenaSpan::new(20, 8),
+            ..desc
+        };
+        assert_eq!(
+            eval_rank1(
+                &mut y_rank1.as_aligned_slice_mut(),
+                &x_rank1.as_aligned_slice(),
+                &arena,
+                &desc_oob,
+            ),
+            Err(LMNK_ERR_INVALID_ARGUMENT)
+        );
     }
 }

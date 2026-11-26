@@ -415,7 +415,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "liminika-adapter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
@@ -426,7 +426,7 @@ dependencies = [
 
 [[package]]
 name = "liminika-cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "liminika-adapter",
  "liminika-core",
@@ -435,14 +435,14 @@ dependencies = [
 
 [[package]]
 name = "liminika-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "criterion",
 ]
 
 [[package]]
 name = "liminika-dsl"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "memchr"
@@ -905,7 +905,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "liminika-core",
 ]

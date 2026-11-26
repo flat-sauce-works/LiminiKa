@@ -57,7 +57,7 @@ pub struct GatewayFrame {
     /// Bitwise OR of active origin axes (`CAUSAL_AXIS_*`) and diagnostic causes (`CAUSAL_CAUSE_*`, `offset 44..48`).
     pub lineage_flags: u32,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`, `offset 48`).
-    pub attribution_tag: u8,
+    pub root_cause_code: u8,
     /// Dominant 3-bit working lane ID (`ATTRACTOR_SLOT_*`, `0..=7`, `offset 49`).
     pub dominant_slot: u8,
     /// Resolved 5-bit `ACTION_MODE_*` execution flags (`offset 50`).
@@ -110,7 +110,7 @@ impl Default for GatewayFrame {
             fact_persona_coherence: 1.0,
             repulsion_severity: 0.0,
             lineage_flags: 0,
-            attribution_tag: ROOT_CAUSE_NOMINAL,
+            root_cause_code: ROOT_CAUSE_NOMINAL,
             dominant_slot: ATTRACTOR_SLOT_SYSTEM_BASELINE,
             action_mode_flags: ACTION_PRESET_EXPRESS_PHASE,
             active_swarm_cell_mask: 0xFF,
@@ -157,7 +157,7 @@ impl GatewayFrame {
     pub const fn is_repulsed(&self) -> bool {
         (self.repulsion_severity > 0.50)
             | ((self.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
-            | (self.attribution_tag == ROOT_CAUSE_COHOMOLOGY_REPULSION)
+            | (self.root_cause_code == ROOT_CAUSE_COHOMOLOGY_REPULSION)
             | ((self.lineage_flags & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0)
     }
 
@@ -189,7 +189,7 @@ impl GatewayFrame {
             lineage_flags: self.lineage_flags,
             fact_persona_coherence: self.fact_persona_coherence,
             anomaly_severity: self.repulsion_severity,
-            attribution_tag: self.attribution_tag,
+            root_cause_code: self.root_cause_code,
             dominant_slot: self.dominant_slot,
             action_mode_flags: self.action_mode_flags,
             active_swarm_mask: self.active_swarm_cell_mask,

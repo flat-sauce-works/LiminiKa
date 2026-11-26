@@ -917,7 +917,7 @@ impl LmnkTimeline {
             out.push(d.pheromone_q7);
             out.push(d.gain_q7);
             out.push(d.intent_delta.autonomy_q7 as u8);
-            out.push(d.intent_delta.transgression_q7 as u8);
+            out.push(d.intent_delta.boundary_crossing_q7 as u8);
             out.push(d.intent_delta.devotion_q7 as u8);
             out.push(d.intent_delta.logic_q7 as u8);
             out.push(d.intent_delta.caution_q7 as u8);
@@ -957,7 +957,7 @@ impl LmnkTimeline {
             let sig_hash = cur.read_u32_le()?;
             let intent_delta = EgoIntentAxes {
                 autonomy_q7: *ax.first().unwrap_or(&0) as i8,
-                transgression_q7: *ax.get(1).unwrap_or(&0) as i8,
+                boundary_crossing_q7: *ax.get(1).unwrap_or(&0) as i8,
                 devotion_q7: *ax.get(2).unwrap_or(&0) as i8,
                 logic_q7: *ax.get(3).unwrap_or(&0) as i8,
                 caution_q7: *ax.get(4).unwrap_or(&0) as i8,

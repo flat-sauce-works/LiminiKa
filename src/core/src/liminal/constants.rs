@@ -17,10 +17,10 @@ use core::mem::{align_of, offset_of, size_of};
 /// Unified LiminiKa C-ABI Major Version Component.
 pub const LMNK_ABI_VERSION_MAJOR: u32 = 0;
 /// Unified LiminiKa C-ABI Minor Version Component.
-pub const LMNK_ABI_VERSION_MINOR: u32 = 3;
+pub const LMNK_ABI_VERSION_MINOR: u32 = 4;
 /// Unified LiminiKa C-ABI Patch Version Component.
 pub const LMNK_ABI_VERSION_PATCH: u32 = 0;
-/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0300`).
+/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0400`).
 pub const LMNK_ABI_VERSION_HEX: u32 =
     (LMNK_ABI_VERSION_MAJOR << 16) | (LMNK_ABI_VERSION_MINOR << 8) | LMNK_ABI_VERSION_PATCH;
 /// Bitmask extracting `(MAJOR << 16) | (MINOR << 8)` for Pre-1.0 ABI compatibility checks.
@@ -30,7 +30,7 @@ pub const LMNK_ABI_COMPAT_VERSION_HEX: u32 = LMNK_ABI_VERSION_HEX & LMNK_ABI_COM
 /// String Representation of the active Unified ABI Version (derived from `Cargo.toml`).
 pub const LMNK_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
 /// NUL-terminated C string representation of the active Unified ABI Version.
-pub const LMNK_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.3.0";
+pub const LMNK_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.4.0";
 
 const _: () = {
     let c_bytes = LMNK_ABI_VERSION_CSTR.to_bytes();
@@ -358,64 +358,93 @@ pub type PhaseQ7 = i8;
 
 /// Portable environment-agnostic runtime configuration descriptor (64 bytes, `#[repr(C, align(64))]`).
 #[repr(C, align(64))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RuntimeConfig {
-    /// Dimension per attention head ($d_{\mathrm{head}}$, must be positive and even, `offset 0..4`).
+    /// Envelope byte size (`sizeof(lmnk_config_t)` == `64`, `offset 0..4`).
+    pub struct_size: u32,
+    /// Dimension per attention head ($d_{\mathrm{head}}$, must be positive and even, `offset 4..8`).
     pub head_dim: u32,
-    /// Total number of attention heads ($1 \le H \le 64$, `offset 4..8`).
+    /// Total number of attention heads ($1 \le H \le 64$, `offset 8..12`).
     pub num_heads: u32,
-    /// Tokens per paged KV cache block (`16` or `32`, `offset 8..12`).
+    /// Tokens per paged KV cache block (`16` or `32`, `offset 12..16`).
     pub paged_block_size: u32,
-    /// Floating-point scale factor for Q7 phase values ($\beta_{\mathrm{Q7}} = \pi / 128$, `offset 12..16`).
+    /// Floating-point scale factor for Q7 phase values ($\beta_{\mathrm{Q7}} = \pi / 128$, `offset 16..20`).
     pub q7_phase_scale: f32,
-    /// Maximum allowed rotation angle for soft phase clamping in radians ($\theta_{\max}$, `offset 16..20`).
+    /// Maximum allowed rotation angle for soft phase clamping in radians ($\theta_{\max}$, `offset 20..24`).
     pub phase_clamp_max_rad: f32,
-    /// Minimum rotation angle threshold for phase step filtering in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 20..24`).
+    /// Minimum rotation angle threshold for phase step filtering in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 24..28`).
     pub phase_step_min_rad: f32,
-    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$, `offset 24..28`).
+    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$, `offset 28..32`).
     pub entropy_singularity_eps: f32,
-    /// Maximum supported prompt anchor points (`offset 28..32`).
+    /// Maximum supported prompt anchor points (`offset 32..36`).
     pub max_prompt_anchors: u32,
-    /// Maximum logical trail capacity of the stigmergic substrate (`offset 32..36`).
+    /// Maximum logical trail capacity of the stigmergic substrate (`offset 36..40`).
     pub substrate_capacity: u32,
-    /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE, `offset 36..40`).
+    /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE, `offset 40..44`).
     pub rotary_dim: u32,
-    /// Vendor-neutral execution policy bitflags (`offset 40`).
+    /// Vendor-neutral execution policy bitflags (`offset 44`).
     pub execution_flags: u8,
-    /// Strict enforcement of zero dynamic allocations on Hot Path (`1` = strict, `offset 41`).
+    /// Strict enforcement of zero dynamic allocations on Hot Path (`1` = strict, `offset 45`).
     pub enable_zero_alloc_strict: u8,
-    /// Initial operational mode for `FastPathLedger` (`0`, `1`, or `2`, `offset 42`).
+    /// Initial operational mode for `FastPathLedger` (`0`, `1`, or `2`, `offset 46`).
     pub ledger_mode: u8,
-    /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit, `offset 43`).
+    /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit, `offset 47`).
     pub rope_layout: u8,
-    /// Opening decode token hold window for transient contradiction-guard pins (`0` = full turn, `offset 44`).
+    /// Opening decode token hold window for transient contradiction-guard pins (`0` = full turn, `offset 48`).
     pub guard_hold_tokens: u8,
-    /// Maximum dynamic logits D2H observation stride (`0` or `1` = observe every token, `offset 45`).
+    /// Maximum dynamic logits D2H observation stride (`0` or `1` = observe every token, `offset 49`).
     pub max_observe_stride: u8,
-    /// Explicit zero-padded space for future ABI extensions (`offset 46..64`).
-    pub reserved: [u8; 18],
+    /// Explicit zero-padded space for future ABI extensions (`offset 50..64`).
+    pub reserved: [u8; 14],
+}
+
+impl Default for RuntimeConfig {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            head_dim: 0,
+            num_heads: 0,
+            paged_block_size: 0,
+            q7_phase_scale: 0.0,
+            phase_clamp_max_rad: 0.0,
+            phase_step_min_rad: 0.0,
+            entropy_singularity_eps: 0.0,
+            max_prompt_anchors: 0,
+            substrate_capacity: 0,
+            rotary_dim: 0,
+            execution_flags: 0,
+            enable_zero_alloc_strict: 0,
+            ledger_mode: 0,
+            rope_layout: 0,
+            guard_hold_tokens: 0,
+            max_observe_stride: 0,
+            reserved: [0; 14],
+        }
+    }
 }
 
 const _: () = {
     assert!(size_of::<RuntimeConfig>() == 64);
     assert!(align_of::<RuntimeConfig>() == 64);
-    assert!(offset_of!(RuntimeConfig, head_dim) == 0);
-    assert!(offset_of!(RuntimeConfig, num_heads) == 4);
-    assert!(offset_of!(RuntimeConfig, paged_block_size) == 8);
-    assert!(offset_of!(RuntimeConfig, q7_phase_scale) == 12);
-    assert!(offset_of!(RuntimeConfig, phase_clamp_max_rad) == 16);
-    assert!(offset_of!(RuntimeConfig, phase_step_min_rad) == 20);
-    assert!(offset_of!(RuntimeConfig, entropy_singularity_eps) == 24);
-    assert!(offset_of!(RuntimeConfig, max_prompt_anchors) == 28);
-    assert!(offset_of!(RuntimeConfig, substrate_capacity) == 32);
-    assert!(offset_of!(RuntimeConfig, rotary_dim) == 36);
-    assert!(offset_of!(RuntimeConfig, execution_flags) == 40);
-    assert!(offset_of!(RuntimeConfig, enable_zero_alloc_strict) == 41);
-    assert!(offset_of!(RuntimeConfig, ledger_mode) == 42);
-    assert!(offset_of!(RuntimeConfig, rope_layout) == 43);
-    assert!(offset_of!(RuntimeConfig, guard_hold_tokens) == 44);
-    assert!(offset_of!(RuntimeConfig, max_observe_stride) == 45);
-    assert!(offset_of!(RuntimeConfig, reserved) == 46);
+    assert!(offset_of!(RuntimeConfig, struct_size) == 0);
+    assert!(offset_of!(RuntimeConfig, head_dim) == 4);
+    assert!(offset_of!(RuntimeConfig, num_heads) == 8);
+    assert!(offset_of!(RuntimeConfig, paged_block_size) == 12);
+    assert!(offset_of!(RuntimeConfig, q7_phase_scale) == 16);
+    assert!(offset_of!(RuntimeConfig, phase_clamp_max_rad) == 20);
+    assert!(offset_of!(RuntimeConfig, phase_step_min_rad) == 24);
+    assert!(offset_of!(RuntimeConfig, entropy_singularity_eps) == 28);
+    assert!(offset_of!(RuntimeConfig, max_prompt_anchors) == 32);
+    assert!(offset_of!(RuntimeConfig, substrate_capacity) == 36);
+    assert!(offset_of!(RuntimeConfig, rotary_dim) == 40);
+    assert!(offset_of!(RuntimeConfig, execution_flags) == 44);
+    assert!(offset_of!(RuntimeConfig, enable_zero_alloc_strict) == 45);
+    assert!(offset_of!(RuntimeConfig, ledger_mode) == 46);
+    assert!(offset_of!(RuntimeConfig, rope_layout) == 47);
+    assert!(offset_of!(RuntimeConfig, guard_hold_tokens) == 48);
+    assert!(offset_of!(RuntimeConfig, max_observe_stride) == 49);
+    assert!(offset_of!(RuntimeConfig, reserved) == 50);
 };
 
 // ===================================================================

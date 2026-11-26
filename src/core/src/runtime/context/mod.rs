@@ -88,6 +88,7 @@ pub const fn query_capability() -> u64 {
 #[inline(always)]
 pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
     *config = RuntimeConfig {
+        struct_size: core::mem::size_of::<RuntimeConfig>() as u32,
         head_dim: 128,
         num_heads: 32,
         paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
@@ -104,7 +105,7 @@ pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
         rope_layout: 0,
         guard_hold_tokens: 0,
         max_observe_stride: 1,
-        reserved: [0; 18],
+        reserved: [0; 14],
     };
     Ok(())
 }
@@ -112,9 +113,10 @@ pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
 /// Branchlessly validates a [`RuntimeConfig`] descriptor against LiminiKa architectural invariants.
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any dimension, scale, or capacity invariant is violated.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `struct_size` or any dimension, scale, or capacity invariant is violated.
 #[inline(always)]
 pub fn validate_config_invariants(config: &RuntimeConfig) -> LmnkResult<()> {
+    let valid_envelope = config.struct_size == core::mem::size_of::<RuntimeConfig>() as u32;
     let valid_dims = (config.head_dim != 0)
         & ((config.head_dim & 1) == 0)
         & (config.num_heads != 0)
@@ -135,7 +137,7 @@ pub fn validate_config_invariants(config: &RuntimeConfig) -> LmnkResult<()> {
         & (config.substrate_capacity != 0)
         & (config.ledger_mode <= 2);
 
-    if valid_dims & valid_scales & valid_caps {
+    if valid_envelope & valid_dims & valid_scales & valid_caps {
         Ok(())
     } else {
         Err(LMNK_ERR_INVALID_ARGUMENT)

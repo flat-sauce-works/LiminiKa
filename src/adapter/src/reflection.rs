@@ -288,7 +288,7 @@ pub trait AttractorTrajectoryEvaluator {
     /// Evaluates `draft` relative to `query` while respecting active Core Layer 2 Ego
     /// boundary-transgression intent (`LiminalEgoState`).
     ///
-    /// When `ego` is actively exploring beyond `Liminal` horizons (`transgression_bias_q7 >= 24` or
+    /// When `ego` is actively exploring beyond `Liminal` horizons (`boundary_crossing_q7 >= 24` or
     /// `EGO_TRIGGER_LIMINAL_EXTERIOR` fired) and the draft introduces no Guard conflict, controlled
     /// `BoundaryAmbiguity` / mild `LacunaDrift` excursions are accepted as intentional exploration
     /// (`ReflectionTriggerKind::Converged`) rather than penalized as accidental drift, while
@@ -303,7 +303,7 @@ pub trait AttractorTrajectoryEvaluator {
     ) -> ReflectionCritique {
         let mut critique = self.assess_trajectory(query, draft, recall_policy, policy);
         let ego_exploring = ego.is_active()
-            && (ego.transgression_bias_q7 >= 24
+            && (ego.boundary_crossing_q7 >= 24
                 || (ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0);
         let no_guard_conflict = draft.guard_conflict_margin <= policy.guard_trigger_margin;
         let controlled_excursion =
@@ -311,7 +311,7 @@ pub trait AttractorTrajectoryEvaluator {
                 critique.trigger,
                 ReflectionTriggerKind::BoundaryAmbiguity | ReflectionTriggerKind::LacunaDrift
             ) && (!matches!(draft.lacuna_state, LacunaBoundaryState::LiminalExterior)
-                || ego.transgression_bias_q7 >= 36
+                || ego.boundary_crossing_q7 >= 36
                 || (ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0);
 
         if ego_exploring && no_guard_conflict && controlled_excursion {
@@ -1094,7 +1094,7 @@ mod tests {
         let ego = LiminalEgoState::from_intent_axes(
             &EgoIntentAxes::new()
                 .with_autonomy_q7(80)
-                .with_transgression_q7(72),
+                .with_boundary_crossing_q7(72),
         );
 
         let query = make_snapshot(

@@ -59,7 +59,7 @@ pub const ROOT_CAUSE_PERSONA_FACT_COLLISION: u8 = 3;
 pub const ROOT_CAUSE_COHOMOLOGY_REPULSION: u8 = 4;
 
 const _: () = {
-    assert!(ROOT_CAUSE_NOMINAL == crate::stigmergy::ANCHOR_ATTRIBUTION_NOMINAL);
+    assert!(ROOT_CAUSE_NOMINAL == crate::stigmergy::ANCHOR_ROOT_CAUSE_NOMINAL);
     assert!(CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED == crate::stigmergy::ANCHOR_LINEAGE_MATURE_BIT);
 };
 
@@ -80,7 +80,7 @@ pub struct CausalProvenanceReport {
     /// Peak anomaly or repulsion severity in $[0, 1]$ across all contributing signals.
     pub anomaly_severity: f32,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`).
-    pub attribution_tag: u8,
+    pub root_cause_code: u8,
     /// Dominant 3-bit working lane ID (`ATTRACTOR_SLOT_*`, `0..=7`).
     pub dominant_slot: u8,
     /// Resolved 5-bit `ACTION_MODE_*` execution flags.
@@ -146,7 +146,7 @@ pub trait CausalProvenanceSignal {
     fn resolve_dynamic_core_aperture(&self, stack: &CoreStateStack) -> (u8, u8, i8) {
         let bits = self.causal_provenance_bits();
         let ego_active = stack.ego.is_active();
-        let ego_trans_pos = ego_active & (stack.ego.transgression_bias_q7 > 0);
+        let ego_trans_pos = ego_active & (stack.ego.boundary_crossing_q7 > 0);
         let mut active_granule_mask = 0u8;
         let mut weighted_gain_sum = 0u32;
         let mut weighted_shift_sum = 0i32;

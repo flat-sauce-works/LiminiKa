@@ -99,8 +99,8 @@ const _: () = {
 use crate::stigmergy::trail::{PointerTrail, trail_phase_words_ref};
 use crate::stigmergy::{ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY};
 
-/// Nominal cause code (`0`) stored in [`PhaseAnchorRecord::attribution_tag`].
-pub const ANCHOR_ATTRIBUTION_NOMINAL: u8 = 0;
+/// Nominal cause code (`0`) stored in [`PhaseAnchorRecord::root_cause_code`].
+pub const ANCHOR_ROOT_CAUSE_NOMINAL: u8 = 0;
 
 /// Provenance maturity flag (`bit 12`) stamped on [`PhaseAnchorRecord::lineage_flags`]
 /// once sample count and circular coherence cross the crystallization gate.
@@ -244,7 +244,7 @@ pub struct PhaseAnchorRecord {
     /// Active 8-cell Micro-Swarm mask (`0x00..=0xFF`, `offset 58`).
     pub active_swarm_mask: u8,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`, `offset 59`).
-    pub attribution_tag: u8,
+    pub root_cause_code: u8,
     /// Reserved 32-bit zero field aligning `phase_profile` to exact byte offset `64` (`offset 60..64`).
     pub reserved_align64: u32,
     /// Crystallized 64-head Q7 centroid phase profile on $SO(2)^{64}$ (`64` bytes at `offset 64..128`).
@@ -325,7 +325,7 @@ impl PhaseAnchorRecord {
             dominant_slot: dominant_slot & ATTRACTOR_SLOT_ID_MASK,
             action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
             active_swarm_mask: 0xFF,
-            attribution_tag: ANCHOR_ATTRIBUTION_NOMINAL,
+            root_cause_code: ANCHOR_ROOT_CAUSE_NOMINAL,
             reserved_align64: 0,
             phase_profile: [0i8; MAX_ATTENTION_HEADS],
         }
@@ -338,7 +338,7 @@ impl PhaseAnchorRecord {
             self.dominant_slot,
             self.action_mode_flags,
             self.active_swarm_mask,
-            self.attribution_tag,
+            self.root_cause_code,
         ])
     }
 
@@ -468,12 +468,12 @@ impl PhaseAnchorRecord {
             crc32_slice16_dep_lo0(self.lineage_flags)
         };
         const DEFAULT_W7_MASK_CAUSE_CRC_C3: u32 = CRC32_IEEE_SLICE16_REF[5][0xFF]
-            ^ CRC32_IEEE_SLICE16_REF[4][ANCHOR_ATTRIBUTION_NOMINAL as usize];
+            ^ CRC32_IEEE_SLICE16_REF[4][ANCHOR_ROOT_CAUSE_NOMINAL as usize];
         const DEFAULT_W7_MASK_CAUSE_FINAL_CONTRIB: u32 =
             crc32_step_l4(DEFAULT_W7_MASK_CAUSE_CRC_C3);
         let slot_fast = (self.dominant_slot & 0xF8) == 0;
         let mask_cause_default =
-            (self.active_swarm_mask == 0xFF) & (self.attribution_tag == ANCHOR_ATTRIBUTION_NOMINAL);
+            (self.active_swarm_mask == 0xFF) & (self.root_cause_code == ANCHOR_ROOT_CAUSE_NOMINAL);
         let w7_c = if slot_fast & mask_cause_default {
             final_acc ^= CRC32_ANCHOR_SLOT_BYTE56_LUT_8[(self.dominant_slot & 7) as usize]
                 ^ CRC32_ANCHOR_ACTION_BYTE57_REF[self.action_mode_flags as usize]
@@ -484,7 +484,7 @@ impl PhaseAnchorRecord {
                 ^ if mask_cause_default {
                     DEFAULT_W7_MASK_CAUSE_CRC_C3
                 } else {
-                    lut[5][self.active_swarm_mask as usize] ^ lut[4][self.attribution_tag as usize]
+                    lut[5][self.active_swarm_mask as usize] ^ lut[4][self.root_cause_code as usize]
                 }
         };
         let res_c = if self.reserved_align64 == 0 {
@@ -635,7 +635,7 @@ impl PhaseAnchorRecord {
         self.dominant_slot = src.dominant_slot;
         self.action_mode_flags = src.action_mode_flags;
         self.active_swarm_mask = src.active_swarm_mask;
-        self.attribution_tag = src.attribution_tag;
+        self.root_cause_code = src.root_cause_code;
         self.reserved_align64 = src.reserved_align64;
         *self.phase_words_mut() = *src.phase_words_ref();
     }
@@ -667,7 +667,7 @@ impl PhaseAnchorRecord {
             && ((self.dominant_slot & !ATTRACTOR_SLOT_ID_MASK) == 0)
             && (self.action_mode_flags == ACTION_PRESET_PASSIVE_SIDECAR)
             && (self.active_swarm_mask == 0xFF)
-            && (self.attribution_tag == ANCHOR_ATTRIBUTION_NOMINAL)
+            && (self.root_cause_code == ANCHOR_ROOT_CAUSE_NOMINAL)
             && ((((pw[0] | pw[1]) | (pw[2] | pw[3])) | ((pw[4] | pw[5]) | (pw[6] | pw[7]))) == 0)
         {
             return self.checksum_crc32
@@ -1065,7 +1065,7 @@ impl PhaseAnchorRecord {
         self.dominant_slot = slot;
         self.action_mode_flags = ACTION_PRESET_PASSIVE_SIDECAR;
         self.active_swarm_mask = 0xFF;
-        self.attribution_tag = ANCHOR_ATTRIBUTION_NOMINAL;
+        self.root_cause_code = ANCHOR_ROOT_CAUSE_NOMINAL;
         self.reserved_align64 = 0;
         if was_active {
             *self.phase_words_mut() = [0u64; NUM_STIGMERGIC_GRANULES];
@@ -1217,7 +1217,7 @@ const _: () = {
     assert!(offset_of!(PhaseAnchorRecord, lineage_flags) == 48);
     assert!(offset_of!(PhaseAnchorRecord, checksum_crc32) == 52);
     assert!(offset_of!(PhaseAnchorRecord, dominant_slot) == 56);
-    assert!(offset_of!(PhaseAnchorRecord, attribution_tag) == 59);
+    assert!(offset_of!(PhaseAnchorRecord, root_cause_code) == 59);
     assert!(offset_of!(PhaseAnchorRecord, reserved_align64) == 60);
     assert!(offset_of!(PhaseAnchorRecord, phase_profile) == 64);
 };

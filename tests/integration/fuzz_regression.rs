@@ -291,7 +291,7 @@ fn fuzz_regression_lmnkp_package_and_path_guard_deep_mutations() {
     let req_sig = IntegrityPolicy::RequireSignature(pubkey);
 
     let manifest = format_package_manifest_json(
-        "0.3.0",
+        env!("CARGO_PKG_VERSION"),
         0xCAFE_BABE_1234_5678,
         2,
         CORE_TOPOLOGY.topology_crc32,

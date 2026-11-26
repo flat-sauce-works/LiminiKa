@@ -880,7 +880,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "liminika-adapter"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "liminika-candle-eval"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "liminika-core"
-version = "0.3.0"
+version = "0.4.0"
 
 [[package]]
 name = "log"

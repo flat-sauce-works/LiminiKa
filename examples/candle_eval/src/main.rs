@@ -189,9 +189,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if adapter.ego_state().is_active() {
         println!(
             "[Ego   ] active: thrust={} escape_floor={} transgress={} defiance={} trigger=0x{:02X} hash=0x{:08X}",
-            adapter.ego_state().counter_basin_thrust_q7,
-            adapter.ego_state().basin_escape_floor_q7,
-            adapter.ego_state().transgression_bias_q7,
+            adapter.ego_state().basin_resistance_q7,
+            adapter.ego_state().escape_floor_q7,
+            adapter.ego_state().boundary_crossing_q7,
             adapter.ego_state().irrational_defiance_q7,
             adapter.ego_state().trigger_mask,
             adapter.ego_state().ego_signature_hash,

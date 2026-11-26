@@ -8,16 +8,24 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use liminika_core::abi::{
-    LMNK_OK, LmnkContextHandle, lmnk_config_init_default, lmnk_config_t, lmnk_context_align,
-    lmnk_context_create, lmnk_context_deinit_in_place, lmnk_context_destroy,
-    lmnk_context_init_in_place, lmnk_context_reset, lmnk_context_size, lmnk_context_step_token,
-    lmnk_phase_steering_apply_fused_safe, lmnk_pointer_trail_t,
-    lmnk_substrate_resolve_trail_in_swarm,
+    LMNK_OK, LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE, LmnkContextHandle,
+    lmnk_abi_info, lmnk_abi_info_t, lmnk_config_init_default, lmnk_config_t,
+    lmnk_container_find_section, lmnk_container_section_view_t, lmnk_container_verify,
+    lmnk_container_verify_report_t, lmnk_container_write, lmnk_container_write_params_t,
+    lmnk_context_begin_turn, lmnk_context_configure_policy, lmnk_context_create,
+    lmnk_context_deinit_in_place, lmnk_context_destroy, lmnk_context_get_state,
+    lmnk_context_init_in_place, lmnk_context_reset, lmnk_context_step_decode,
+    lmnk_decode_step_params_t, lmnk_decode_step_report_t, lmnk_gateway_steer,
+    lmnk_gateway_steer_params_t, lmnk_lacuna_eval_params_t, lmnk_lacuna_partition_eval,
+    lmnk_lacuna_partition_t, lmnk_pointer_trail_t, lmnk_rank1_eval, lmnk_rank1_eval_params_t,
+    lmnk_rope_steer_params_t, lmnk_rope_steer_q, lmnk_runtime_policy_t, lmnk_runtime_state_view_t,
+    lmnk_section_input_t, lmnk_spine_decode_input_t, lmnk_system_pressure_reading_t,
+    lmnk_turn_begin_params_t,
 };
 use liminika_core::foundation::{
-    AlignedBuffer16, AlignedBuffer32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
+    AlignedBuffer16, AlignedBuffer32, ArenaSpan, DEFAULT_PHASE_CLAMP_MAX_RAD, Pod,
+    RANK1_GAIN_UNUSED, Rank1Descriptor,
 };
-use liminika_core::stigmergy::StigmergicReconstitutionReport;
 
 thread_local! {
     static ENFORCE_ZERO_ALLOC: Cell<bool> = const { Cell::new(false) };
@@ -69,72 +77,88 @@ fn test_context_step_token_zero_allocation_guarantee() {
     assert_eq!(status, LMNK_OK);
     assert!(!ctx_handle.is_null());
 
-    let mut query_buf = AlignedBuffer32::<f32, 128>::new([0.5; 128]);
-    let mut key_buf = AlignedBuffer32::<f32, 128>::new([0.25; 128]);
     let mut trail_out = lmnk_pointer_trail_t::default();
 
     const HEAD_DIM: usize = 128;
     const NUM_HEADS: usize = 16;
     let mut steer_q =
         AlignedBuffer32::<f32, { HEAD_DIM * NUM_HEADS }>::new([1.0; HEAD_DIM * NUM_HEADS]);
-    let mut steer_k =
-        AlignedBuffer32::<f32, { HEAD_DIM * NUM_HEADS }>::new([0.5; HEAD_DIM * NUM_HEADS]);
     let mut phases = [0i8; 64];
     for (i, slot) in phases.iter_mut().enumerate() {
         *slot = ((i as i8).wrapping_mul(7)).wrapping_sub(32);
     }
     let phase_buf = AlignedBuffer16::<i8, 64>::new(phases);
-    let mut swarm_report = StigmergicReconstitutionReport::default();
+    let arena = [0.25f32; 64];
+    let r1_desc = Rank1Descriptor {
+        layer_idx: 0,
+        rank: 1,
+        u_span: ArenaSpan::new(0, 32),
+        v_span: ArenaSpan::new(32, 32),
+        gain_offset: RANK1_GAIN_UNUSED,
+        scale_factor: 0.5,
+    };
+    let r1_x = AlignedBuffer32::<f32, 32>::new([1.0; 32]);
+    let mut r1_y = AlignedBuffer32::<f32, 32>::new([0.0; 32]);
+    let lac_params = lmnk_lacuna_eval_params_t {
+        self_ref_mask: 0x0F,
+        deadband_q7: 16,
+        other_density_q7: [8, 8, 8, 8, 64, 64, 0, 0],
+        noise_tolerance_q7: [4; 8],
+        ..Default::default()
+    };
+    let mut lac_out = lmnk_lacuna_partition_t::default();
 
     // 2. Enable Strict Zero-Allocation Guard for Hot Path.
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(true));
 
     // 3. Execute Hot Path step loop (verified zero-allocation).
     let hot_iters: u32 = if cfg!(miri) { 4 } else { 100 };
-    for token_id in 0..hot_iters {
-        // SAFETY: `ctx_handle` is valid, `query_buf`/`key_buf` are disjoint 32-byte-aligned
-        // 128-element buffers, and `trail_out` is 64-byte aligned.
-        let step_status = unsafe {
-            lmnk_context_step_token(
-                ctx_handle,
-                token_id,
-                query_buf.as_mut_slice().as_mut_ptr(),
-                key_buf.as_mut_slice().as_mut_ptr(),
-                &mut trail_out,
-            )
+    for _ in 0..hot_iters {
+        let steer_p = lmnk_rope_steer_params_t {
+            head_dim: HEAD_DIM as u32,
+            rotary_dim: HEAD_DIM as u32,
+            num_heads: NUM_HEADS as u32,
+            rope_layout: 0,
+            max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+            query_tensor: steer_q.as_mut_slice().as_mut_ptr(),
+            phase_deltas: phase_buf.as_slice().as_ptr(),
+            ..Default::default()
         };
-        assert_eq!(step_status, LMNK_OK);
+        // SAFETY: `steer_q` is 32B-aligned and `phase_buf` is 16B-aligned and disjoint.
+        assert_eq!(unsafe { lmnk_rope_steer_q(&steer_p) }, LMNK_OK);
 
-        // SAFETY: `steer_q` and `steer_k` are disjoint 32B-aligned tensors, `phase_buf` is 16B-aligned.
-        let steer_status = unsafe {
-            lmnk_phase_steering_apply_fused_safe(
-                steer_q.as_mut_slice().as_mut_ptr(),
-                steer_k.as_mut_slice().as_mut_ptr(),
-                phase_buf.as_slice().as_ptr(),
-                HEAD_DIM,
-                NUM_HEADS,
-                DEFAULT_PHASE_CLAMP_MAX_RAD,
-            )
+        let gw_p = lmnk_gateway_steer_params_t {
+            head_dim: HEAD_DIM as u32,
+            rotary_dim: HEAD_DIM as u32,
+            num_heads: NUM_HEADS as u32,
+            rope_layout: 0,
+            fact_energy: 1.5,
+            persona_energy: 1.0,
+            query_tensor: steer_q.as_mut_slice().as_mut_ptr(),
+            fact_phases: phase_buf.as_slice().as_ptr(),
+            persona_phases: phase_buf.as_slice().as_ptr(),
+            trail_inout: &mut trail_out,
+            ..Default::default()
         };
-        assert_eq!(steer_status, LMNK_OK);
+        // SAFETY: Buffers are valid, aligned, and disjoint.
+        assert_eq!(unsafe { lmnk_gateway_steer(&gw_p) }, LMNK_OK);
 
-        // SAFETY: `trail_out`, `phase_buf`, and `swarm_report` are valid, aligned, and disjoint.
-        let swarm_status = unsafe {
-            lmnk_substrate_resolve_trail_in_swarm(
-                &mut trail_out,
-                u64::from(token_id) + 1,
-                phase_buf.as_slice().as_ptr(),
-                0xFF,
-                64,
-                ((DEFAULT_PHASE_STEP_MIN_RAD / core::f32::consts::PI) * 128.0) as u8,
-                16,
-                4,
-                0.5,
-                0.2,
-                &mut swarm_report,
-            )
+        let r1_p = lmnk_rank1_eval_params_t {
+            dim_in: 32,
+            dim_out: 32,
+            arena_len: arena.len() as u32,
+            desc: &r1_desc,
+            arena: arena.as_ptr(),
+            x_in: r1_x.as_slice().as_ptr(),
+            y_inout: r1_y.as_mut_slice().as_mut_ptr(),
+            ..Default::default()
         };
-        assert_eq!(swarm_status, LMNK_OK);
+        // SAFETY: Aligned disjoint buffers matching `dim_in == dim_out == 32`.
+        assert_eq!(unsafe { lmnk_rank1_eval(&r1_p) }, LMNK_OK);
+
+        // SAFETY: Valid stack pointers for `lac_params` and `lac_out`.
+        let lac_status = unsafe { lmnk_lacuna_partition_eval(&lac_params, &mut lac_out) };
+        assert_eq!(lac_status, LMNK_OK);
     }
 
     // 4. Disable Guard before Cold Path cleanup.
@@ -151,19 +175,18 @@ fn test_zero_alloc_in_place_context_lifecycle() {
 
     let mut config = lmnk_config_t::default();
     let mut backing = AlignedContextBacking([0u8; 8192]);
-    let mut q_buf = AlignedBuffer32::<f32, 128>::new([0.5; 128]);
-    let mut k_buf = AlignedBuffer32::<f32, 128>::new([0.25; 128]);
-    let mut trail_out = lmnk_pointer_trail_t::default();
 
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(true));
 
-    // SAFETY: Stack backing satisfies `lmnk_context_size()` and 64-byte alignment without heap ops.
+    // SAFETY: Stack backing satisfies `info.context_size` and 64-byte alignment without heap ops.
     unsafe {
-        assert_eq!(lmnk_config_init_default(&mut config), LMNK_OK);
-        let req_size = lmnk_context_size();
-        let req_align = lmnk_context_align();
+        let mut info = lmnk_abi_info_t::default();
+        assert_eq!(lmnk_abi_info(&mut info), LMNK_OK);
+        let req_size = info.context_size as usize;
+        let req_align = info.context_align as usize;
         assert_eq!(req_align, 64);
         assert!(req_size > 0 && req_size <= backing.0.len());
+        assert_eq!(lmnk_config_init_default(&mut config), LMNK_OK);
         assert_eq!(
             lmnk_context_init_in_place(&config, backing.0.as_mut_ptr(), req_size),
             LMNK_OK
@@ -172,59 +195,45 @@ fn test_zero_alloc_in_place_context_lifecycle() {
             .0
             .as_mut_ptr()
             .cast::<liminika_core::abi::LmnkContextOpaque>();
-        assert_eq!(
-            lmnk_context_step_token(
-                ctx_handle,
-                77,
-                q_buf.as_mut_slice().as_mut_ptr(),
-                k_buf.as_mut_slice().as_mut_ptr(),
-                &mut trail_out,
-            ),
-            LMNK_OK
-        );
-        assert_eq!(trail_out.step_count, 1);
-        assert_eq!(
-            liminika_core::abi::lmnk_context_configure_compute_pool(
-                ctx_handle,
-                0x0000_FFFF,
-                0x0000_0004,
-                0x0000_FFFC,
-                8000,
-            ),
-            LMNK_OK
-        );
-        assert_eq!(
-            liminika_core::abi::lmnk_context_configure_spine(ctx_handle, 0x0081, 3, 4, 1),
-            LMNK_OK
-        );
-        let mut spine_state = liminika_core::abi::lmnk_spine_state_t::default();
-        assert_eq!(
-            liminika_core::abi::lmnk_context_get_spine_state(ctx_handle, &mut spine_state),
-            LMNK_OK
-        );
-        assert_eq!(spine_state.guard_hold_tokens, 3);
-        assert_eq!(spine_state.max_observe_stride, 4);
-        assert_eq!(
-            liminika_core::abi::lmnk_context_begin_turn_spine_policy(ctx_handle, 0, 0),
-            LMNK_OK
-        );
-        let decode_in = liminika_core::abi::lmnk_spine_decode_input_t::from_observed_entropy_f32(
-            liminika_core::abi::lmnk_system_pressure_reading_t::default(),
-            0,
-            0.35,
-            8,
-            false,
-            true,
-        )
-        .with_exit_reward_override_q7(88);
-        let mut decode_plan = liminika_core::abi::lmnk_spine_step_plan_t::default();
-        assert_eq!(
-            liminika_core::abi::lmnk_context_step_decode_control(
-                ctx_handle,
-                &decode_in,
+
+        let pol = lmnk_runtime_policy_t {
+            flags: LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_COMPUTE_POOL,
+            baseline_pinned_compute_mask: 0x0081,
+            active_compute_mask: 0x0000_FFFF,
+            repulsion_compute_mask: 0x0000_0004,
+            reversible_compute_mask: 0x0000_FFFC,
+            baseline_pressure_q15: 8000,
+            guard_hold_tokens: 3,
+            max_observe_stride: 4,
+            pre_bypass_enabled: 1,
+            ..Default::default()
+        };
+        assert_eq!(lmnk_context_configure_policy(ctx_handle, &pol), LMNK_OK);
+
+        let mut state_view = lmnk_runtime_state_view_t::default();
+        assert_eq!(lmnk_context_get_state(ctx_handle, &mut state_view), LMNK_OK);
+        assert_eq!(state_view.guard_hold_tokens, 3);
+        assert_eq!(state_view.max_observe_stride, 4);
+        assert_eq!(state_view.active_compute_mask, 0x0000_FFFF);
+
+        let turn = lmnk_turn_begin_params_t::default();
+        assert_eq!(lmnk_context_begin_turn(ctx_handle, &turn), LMNK_OK);
+
+        let decode_in = lmnk_decode_step_params_t {
+            decode_input: lmnk_spine_decode_input_t::from_observed_entropy_f32(
+                lmnk_system_pressure_reading_t::default(),
                 0,
-                &mut decode_plan
-            ),
+                0.35,
+                8,
+                false,
+                true,
+            )
+            .with_exit_reward_override_q7(88),
+            ..Default::default()
+        };
+        let mut decode_rep = lmnk_decode_step_report_t::default();
+        assert_eq!(
+            lmnk_context_step_decode(ctx_handle, &decode_in, &mut decode_rep),
             LMNK_OK
         );
         assert_eq!(lmnk_context_reset(ctx_handle), LMNK_OK);
@@ -235,37 +244,51 @@ fn test_zero_alloc_in_place_context_lifecycle() {
             liminika_core::abi::LMNK_ERR_INVALID_STATE
         );
 
-        let mut topo = liminika_core::abi::lmnk_topology_matrix_t::default();
-        assert_eq!(
-            liminika_core::abi::lmnk_topology_get_matrix(&mut topo),
-            LMNK_OK
-        );
-        assert!(topo.verify_crc32());
-
         let anchor = liminika_core::PhaseAnchorRecord::new_empty(
             7,
             liminika_core::stigmergy::ATTRACTOR_SLOT_PERSONA,
             0x1000,
         );
+        let anchor_bytes = anchor.as_bytes();
+        let sec = lmnk_section_input_t {
+            kind: liminika_core::LMNK_SECTION_PHASE_ANCHORS,
+            flags: 0,
+            payload_len: anchor_bytes.len() as u32,
+            payload: anchor_bytes.as_ptr(),
+            ..Default::default()
+        };
         #[repr(C, align(64))]
         struct AlignedContainerBacking([u8; 512]);
         let mut container_buf = AlignedContainerBacking([0u8; 512]);
-        let written = liminika_core::LmnkContainerView::write_standard_sections_to_bytes(
-            liminika_core::runtime::StandardSectionsInput {
-                container_flags: liminika_core::LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-                anchors: &[anchor],
-                trails: &[],
-                bloom: None,
-                ledger: None,
-                provenance_reports: &[],
-                timestamp_epoch_sec: 1_774_900_000,
-            },
-            &mut container_buf.0,
-        )
-        .expect("container write succeeds");
-        let parsed = liminika_core::LmnkContainerView::parse(&container_buf.0[..written])
-            .expect("zero-alloc parse succeeds");
-        assert_eq!(parsed.phase_anchor_count(), 1);
+        let mut written = 0usize;
+        let wp = lmnk_container_write_params_t {
+            container_flags: liminika_core::LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            timestamp_epoch_sec: 1_774_900_000,
+            section_count: 1,
+            sections: &sec,
+            out_bytes: container_buf.0.as_mut_ptr(),
+            out_capacity: container_buf.0.len(),
+            written_bytes_out: &mut written,
+            ..Default::default()
+        };
+        assert_eq!(lmnk_container_write(&wp), LMNK_OK);
+        let mut vrep = lmnk_container_verify_report_t::default();
+        assert_eq!(
+            lmnk_container_verify(container_buf.0.as_ptr(), written, &mut vrep),
+            LMNK_OK
+        );
+        assert_eq!(vrep.section_count, 1);
+        let mut sview = lmnk_container_section_view_t::default();
+        assert_eq!(
+            lmnk_container_find_section(
+                container_buf.0.as_ptr(),
+                written,
+                liminika_core::LMNK_SECTION_PHASE_ANCHORS,
+                &mut sview,
+            ),
+            LMNK_OK
+        );
+        assert_eq!(sview.length as usize, anchor_bytes.len());
     }
 
     ENFORCE_ZERO_ALLOC.with(|flag| flag.set(false));

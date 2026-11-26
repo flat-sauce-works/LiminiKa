@@ -1,117 +1,20 @@
 // name: src/core/src/runtime/abi/runtime.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Tagged-pointer bit-packing, version/capability queries, heap & caller-buffered `in_place`
-//! context lifecycle, and unified `.lmnk` zero-copy container FFI.
+//! Version handshake, configuration, `RuntimeContext` lifecycle/policy/decode/state/persistence,
+//! and generic `.lmnk` container C-ABI entry points (`v0.4.0`, `0x0000_0400`).
 
 use super::*;
-use crate::runtime::storage::{LMNK_CONTAINER_FLAG_COMPILED_CACHE, LmnkContainerView};
+use crate::runtime::storage::{
+    LmnkContainerView, LmnkSectionInput, required_container_byte_len,
+    write_container_sections_to_bytes,
+};
 
 // ===================================================================
-// 0. Tagged Pointer Bit-Packing & Mode Evolution C-ABI
+// 1. Two-Stage Version Handshake & Configuration (6 functions)
 // ===================================================================
 
-/// Packs a 48-bit virtual address, 8-bit tag, and Q7 phase offset into a 64-bit tagged pointer.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_pack(raw_addr: u64, tag: u8, phase: lmnk_q7_t) -> u64 {
-    lmnk_tagged_ptr_t::pack(raw_addr, tag, phase).raw()
-}
-
-/// Unpacks the canonical 48-bit address from a 64-bit tagged pointer.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_unpack_addr(ptr: u64) -> u64 {
-    TaggedPtr(ptr).unpack_addr()
-}
-
-/// Unpacks the 8-bit micro-orchestration tag from a 64-bit tagged pointer.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_unpack_tag(ptr: u64) -> u8 {
-    TaggedPtr(ptr).unpack_tag()
-}
-
-/// Unpacks the 8-bit Q7 phase state from a 64-bit tagged pointer.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_unpack_phase(ptr: u64) -> lmnk_q7_t {
-    TaggedPtr(ptr).unpack_phase()
-}
-
-/// Packs a 48-bit address, 3-bit target working lane ID (`0..=7`), 5-bit Action Mode mask,
-/// and Q7 phase offset into a 64-bit tagged pointer (`0` branches).
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_pack_action(
-    raw_addr: u64,
-    attractor_slot: u8,
-    action_mode_flags: u8,
-    phase: lmnk_q7_t,
-) -> u64 {
-    lmnk_tagged_ptr_t::pack(
-        raw_addr,
-        pack_action_slot_tag(attractor_slot, action_mode_flags),
-        phase,
-    )
-    .raw()
-}
-
-/// Extracts the 5-bit Action Mode execution mask (`bits 0..=4` of the tag) from a 64-bit tagged pointer.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_unpack_action_mode(ptr: u64) -> u8 {
-    unpack_action_mode_from_tag(TaggedPtr(ptr).unpack_tag())
-}
-
-/// Extracts the 3-bit target working lane ID (`0..=7`, `bits 5..=7` of the tag) from a 64-bit tagged pointer.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_unpack_attractor_slot(ptr: u64) -> u8 {
-    unpack_attractor_slot_from_tag(TaggedPtr(ptr).unpack_tag())
-}
-
-/// Evolves a 64-bit tagged pointer's Action Mode flags and target working lane ID bottom-up
-/// in $\mathcal{O}(1)$ from stigmergic trail density $\rho$, entropy $\tilde{H}$, and Bloom
-/// filter repulsion status (`0` branches).
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_tagged_ptr_evolve_mode(
-    ptr: u64,
-    stigmergic_density: f32,
-    entropy_h_tilde: f32,
-    repulsion_triggered: u8,
-    dominant_attractor_slot: u8,
-    low_entropy_skip_thresh: f32,
-    high_density_rank1_thresh: f32,
-) -> u64 {
-    TaggedPtr(ptr)
-        .evolve_mode_stigmergically(
-            stigmergic_density,
-            entropy_h_tilde,
-            repulsion_triggered != 0,
-            dominant_attractor_slot,
-            low_entropy_skip_thresh,
-            high_density_rank1_thresh,
-        )
-        .raw()
-}
-
-// ===================================================================
-// 1. Version, Capability & Configuration Management
-// ===================================================================
-
-/// Returns the C-ABI major version number ([`LMNK_ABI_VERSION_MAJOR`]).
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_abi_version_major() -> u32 {
-    LMNK_ABI_VERSION_MAJOR
-}
-
-/// Returns the C-ABI minor version number ([`LMNK_ABI_VERSION_MINOR`]).
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_abi_version_minor() -> u32 {
-    LMNK_ABI_VERSION_MINOR
-}
-
-/// Returns the C-ABI patch version number ([`LMNK_ABI_VERSION_PATCH`]).
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_abi_version_patch() -> u32 {
-    LMNK_ABI_VERSION_PATCH
-}
-
-/// Returns the packed hexadecimal C-ABI version identifier (`0x0000_0300`).
+/// Returns the packed hexadecimal C-ABI version identifier (`0x0000_0400`).
 #[unsafe(no_mangle)]
 pub extern "C" fn lmnk_abi_version_hex() -> u32 {
     LMNK_ABI_VERSION_HEX
@@ -135,15 +38,20 @@ pub unsafe extern "C" fn lmnk_status_to_string(status: LmnkStatus) -> *const c_c
     status.as_c_bytes().as_ptr().cast::<c_char>()
 }
 
-/// Queries core execution capabilities supported by the current build/runtime (`LMNK_CAP_*`).
+/// Populates a versioned [`lmnk_abi_info_t`] handshake structure with ABI version,
+/// `RuntimeContext` footprint, snapshot byte budget, topology CRC32, and capability flags.
+///
+/// Caller must initialize `info_out->struct_size = sizeof(lmnk_abi_info_t)` before calling.
 ///
 /// # Safety
-/// `flags_out` must be a non-null, naturally aligned writable `u64` pointer.
+/// `info_out` must be a non-null, naturally aligned writable [`lmnk_abi_info_t`] pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_abi_query_capability(flags_out: *mut u64) -> LmnkStatus {
+pub unsafe extern "C" fn lmnk_abi_info(info_out: *mut lmnk_abi_info_t) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
-        let mut out_flags = unsafe { FfiHandleMut::from_raw(flags_out)? };
+        let mut out = unsafe { FfiHandleMut::from_raw(info_out)? };
+        validate_envelope_size::<lmnk_abi_info_t>(out.struct_size)?;
+
         let caps = query_capability();
         #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
         let caps = if std::is_x86_feature_detected!("avx2") {
@@ -151,12 +59,22 @@ pub unsafe extern "C" fn lmnk_abi_query_capability(flags_out: *mut u64) -> LmnkS
         } else {
             caps
         };
-        *out_flags = caps;
+
+        *out = lmnk_abi_info_t {
+            struct_size: size_of::<lmnk_abi_info_t>() as u32,
+            abi_version_hex: LMNK_ABI_VERSION_HEX,
+            context_size: size_of::<RuntimeContext>() as u32,
+            context_align: align_of::<RuntimeContext>() as u32,
+            snapshot_max_bytes: LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES as u32,
+            topology_crc32: CORE_TOPOLOGY.topology_crc32,
+            capability_flags: caps,
+            reserved: [0; 32],
+        };
         Ok(LMNK_OK)
     })
 }
 
-/// Initializes a [`lmnk_config_t`] structure with canonical default hyperparameters.
+/// Initializes a [`lmnk_config_t`] structure with canonical defaults (including `struct_size = 64`).
 ///
 /// # Safety
 /// `config` must be a non-null, 64-byte aligned writable [`lmnk_config_t`] pointer.
@@ -170,7 +88,7 @@ pub unsafe extern "C" fn lmnk_config_init_default(config: *mut lmnk_config_t) ->
     })
 }
 
-/// Validates a [`lmnk_config_t`] structure against LiminiKa mathematical and architectural invariants.
+/// Validates a [`lmnk_config_t`] structure (including `struct_size == 64`) against invariants.
 ///
 /// # Safety
 /// `config` must be a non-null, 64-byte aligned readable [`lmnk_config_t`] pointer.
@@ -185,26 +103,14 @@ pub unsafe extern "C" fn lmnk_config_validate(config: *const lmnk_config_t) -> L
 }
 
 // ===================================================================
-// 2. Context Lifecycle (`in_place` & Heap), Hot Step & `.lmnk` Persistence
+// 2. RuntimeContext Lifecycle, Policy, Decode & Snapshot (11 functions)
 // ===================================================================
-
-/// Returns the exact byte size of `RuntimeContext` required for `lmnk_context_init_in_place`.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_context_size() -> usize {
-    size_of::<RuntimeContext>()
-}
-
-/// Returns the required byte alignment (`64`) of `RuntimeContext` for `lmnk_context_init_in_place`.
-#[unsafe(no_mangle)]
-pub extern "C" fn lmnk_context_align() -> usize {
-    align_of::<RuntimeContext>()
-}
 
 /// Initializes a `RuntimeContext` in caller-owned memory with zero heap allocation.
 ///
 /// # Safety
 /// `config` must be valid and 64-byte aligned. `mem_out` must be non-null, aligned to
-/// [`lmnk_context_align`], writable for at least [`lmnk_context_size`] (`mem_bytes`) bytes,
+/// `info.context_align` (`64`), writable for at least `info.context_size` (`mem_bytes`) bytes,
 /// and disjoint from `config`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_init_in_place(
@@ -215,6 +121,7 @@ pub unsafe extern "C" fn lmnk_context_init_in_place(
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and 64-byte alignment of `config`.
         let cfg = unsafe { FfiHandleRef::from_raw(config)? };
+        validate_config_invariants(&cfg)?;
         let req_size = size_of::<RuntimeContext>();
         let req_align = align_of::<RuntimeContext>();
         validate_ptr_aligned(mem_out, req_align)?;
@@ -222,9 +129,9 @@ pub unsafe extern "C" fn lmnk_context_init_in_place(
             return Err(LMNK_ERR_BUFFER_TOO_SMALL);
         }
         if raw_byte_ranges_overlap(
-            config as usize,
+            config.addr(),
             size_of::<lmnk_config_t>(),
-            mem_out as usize,
+            mem_out.addr(),
             req_size,
         ) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
@@ -244,11 +151,11 @@ pub unsafe extern "C" fn lmnk_context_init_in_place(
 
 /// Deinitializes a caller-owned `in_place` `RuntimeContext` and scrubs its backing buffer.
 ///
-/// Returns [`LMNK_ERR_INVALID_STATE`] if `context` was allocated via `lmnk_context_create`
-/// or `lmnk_context_deserialize` rather than `lmnk_context_init_in_place`.
+/// Returns [`LMNK_ERR_INVALID_STATE`] if `context` was allocated via [`lmnk_context_create`]
+/// or [`lmnk_context_deserialize`] rather than [`lmnk_context_init_in_place`].
 ///
 /// # Safety
-/// `context` must be `NULL` or a handle previously initialized via `lmnk_context_init_in_place`.
+/// `context` must be `NULL` or a handle previously initialized via [`lmnk_context_init_in_place`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_deinit_in_place(context: LmnkContextHandle) -> LmnkStatus {
     if context.is_null() {
@@ -260,8 +167,8 @@ pub unsafe extern "C" fn lmnk_context_deinit_in_place(context: LmnkContextHandle
     }
     ffi_boundary!({
         // SAFETY: `typed` is verified non-null and aligned to `align_of::<RuntimeContext>()`.
-        // Reading `allocation_mode` and scrubbing through the same raw pointer avoids forming an
-        // intermediate `&mut RuntimeContext` reference whose Stacked Borrows tag would be invalidated.
+        // Reading `allocation_mode` and scrubbing through the same raw pointer avoids invalidating
+        // Stacked Borrows tags via an intermediate `&mut RuntimeContext`.
         unsafe {
             if RuntimeContext::read_allocation_mode_raw(typed) != CTX_ALLOC_IN_PLACE {
                 return Err(LMNK_ERR_INVALID_STATE);
@@ -275,7 +182,7 @@ pub unsafe extern "C" fn lmnk_context_deinit_in_place(context: LmnkContextHandle
 /// Allocates and initializes a boxed LiminiKa runtime context from a configuration descriptor.
 ///
 /// # Safety
-/// `config` (64B aligned) and `context_out` must be non-null and naturally aligned.
+/// `config` (64B aligned) and `context_out` must be non-null, aligned, and disjoint.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_create(
     config: *const lmnk_config_t,
@@ -285,8 +192,8 @@ pub unsafe extern "C" fn lmnk_context_create(
         validate_ptr(config)?;
         validate_ptr(context_out)?;
         check_disjoint_rw(
-            &[(context_out as usize, size_of::<LmnkContextHandle>())],
-            &[(config as usize, size_of::<lmnk_config_t>())],
+            &[(context_out.addr(), size_of::<LmnkContextHandle>())],
+            &[(config.addr(), size_of::<lmnk_config_t>())],
         )?;
         // SAFETY: Validated for non-nullness, alignment, and disjointness above.
         let (cfg, mut out_handle) = unsafe {
@@ -295,6 +202,7 @@ pub unsafe extern "C" fn lmnk_context_create(
                 FfiHandleMut::from_raw(context_out)?,
             )
         };
+        validate_config_invariants(&cfg)?;
 
         let mut ctx = RuntimeContext::new(Config::from_raw(*cfg))?;
         ctx.set_allocation_mode(CTX_ALLOC_HEAP_BOXED);
@@ -307,11 +215,10 @@ pub unsafe extern "C" fn lmnk_context_create(
 /// [`lmnk_context_deserialize`].
 ///
 /// Returns [`LMNK_ERR_INVALID_STATE`] if `context` was initialized via
-/// [`lmnk_context_init_in_place`] instead of heap boxing.
+/// [`lmnk_context_init_in_place`].
 ///
 /// # Safety
-/// `context` must be `NULL` or a handle returned by [`lmnk_context_create`] or
-/// [`lmnk_context_deserialize`]. `NULL` safely returns [`LMNK_OK`].
+/// `context` must be `NULL` or a heap-boxed handle. `NULL` safely returns [`LMNK_OK`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_destroy(context: LmnkContextHandle) -> LmnkStatus {
     if context.is_null() {
@@ -353,166 +260,55 @@ pub unsafe extern "C" fn lmnk_context_reset(context: LmnkContextHandle) -> LmnkS
     })
 }
 
-/// Processes a single token step on the Hot Path in zero-allocation mode ($C_{\mathrm{alloc}} = 0$).
+/// Configures runtime spine and/or anonymous compute pool policies atomically (`0 alloc`).
+///
+/// Controlled by `policy->flags` (`LMNK_POLICY_FLAG_SPINE`, `LMNK_POLICY_FLAG_COMPUTE_POOL`).
+/// When both flags are set, spine pin floors are applied first and compute-pool masks are clamped
+/// against the updated floor, guaranteeing identical commutative behavior regardless of call order.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
+/// `context` (64B aligned) and `policy` must be non-null, naturally aligned, and disjoint.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_context_step_token(
+pub unsafe extern "C" fn lmnk_context_configure_policy(
     context: LmnkContextHandle,
-    token_id: u32,
-    query_tensor: *mut f32,
-    key_tensor: *mut f32,
-    trail_out: *mut lmnk_pointer_trail_t,
+    policy: *const lmnk_runtime_policy_t,
 ) -> LmnkStatus {
     ffi_boundary!({
         let typed = context.cast::<RuntimeContext>();
         validate_ptr(typed)?;
-        // SAFETY: `typed` is verified non-null and 64-byte aligned; read scalar `head_dim` before taking `&mut`.
-        let tensor_len = unsafe { (*typed).head_dim() as usize };
-        if tensor_len == 0 {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        let ctx_bytes = size_of::<RuntimeContext>();
-        let q_bytes = if query_tensor.is_null() {
-            0
-        } else {
-            validate_ptr_aligned(query_tensor, 32)?;
-            validate_raw_slice_bounds(query_tensor, tensor_len)?
-        };
-        let k_bytes = if key_tensor.is_null() {
-            0
-        } else {
-            validate_ptr_aligned(key_tensor, 32)?;
-            validate_raw_slice_bounds(key_tensor, tensor_len)?
-        };
-        let t_bytes = if trail_out.is_null() {
-            0
-        } else {
-            validate_ptr(trail_out)?;
-            size_of::<lmnk_pointer_trail_t>()
-        };
-        if raw_byte_ranges_overlap(typed as usize, ctx_bytes, query_tensor as usize, q_bytes)
-            || raw_byte_ranges_overlap(typed as usize, ctx_bytes, key_tensor as usize, k_bytes)
-            || raw_byte_ranges_overlap(typed as usize, ctx_bytes, trail_out as usize, t_bytes)
-            || raw_byte_ranges_overlap(query_tensor as usize, q_bytes, key_tensor as usize, k_bytes)
-            || raw_byte_ranges_overlap(query_tensor as usize, q_bytes, trail_out as usize, t_bytes)
-            || raw_byte_ranges_overlap(key_tensor as usize, k_bytes, trail_out as usize, t_bytes)
-        {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-
-        // SAFETY: All non-null pointers are aligned, bounds-checked, and pairwise disjoint above.
-        let (mut ctx, mut q_opt, mut k_opt, mut trail_opt) = unsafe {
+        validate_ptr(policy)?;
+        check_disjoint_rw(
+            &[(typed.addr(), size_of::<RuntimeContext>())],
+            &[(policy.addr(), size_of::<lmnk_runtime_policy_t>())],
+        )?;
+        // SAFETY: `typed` and `policy` are verified non-null, aligned, and disjoint above.
+        let (mut ctx, pol) = unsafe {
             (
                 FfiHandleMut::from_raw(typed)?,
-                AlignedSliceMut32::from_raw_parts_mut_opt(query_tensor, tensor_len)?,
-                AlignedSliceMut32::from_raw_parts_mut_opt(key_tensor, tensor_len)?,
-                FfiHandleMut::from_raw_opt(trail_out)?,
+                FfiHandleRef::from_raw(policy)?,
             )
         };
+        validate_envelope_size::<lmnk_runtime_policy_t>(pol.struct_size)?;
+        if (pol.flags & !LMNK_POLICY_KNOWN_FLAGS) != 0 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
 
-        ctx.step_token(
-            token_id,
-            q_opt.as_mut(),
-            k_opt.as_mut(),
-            trail_opt.as_deref_mut(),
-        )?;
-        Ok(LMNK_OK)
-    })
-}
-
-/// Configures runtime mechanical spine policy parameters (`0 alloc`) while monotonically raising
-/// the permanent host compute pin floor (`baseline_pinned_compute_mask`).
-///
-/// Passing `0` for `baseline_pinned_compute_mask` preserves the active host floor while enforcing
-/// [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`]. `max_observe_stride == 0` is normalized to `1`.
-///
-/// # Safety
-/// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_context_configure_spine(
-    context: LmnkContextHandle,
-    baseline_pinned_compute_mask: u64,
-    guard_hold_tokens: u8,
-    max_observe_stride: u8,
-    pre_bypass_enabled: u8,
-) -> LmnkStatus {
-    ffi_boundary!({
-        let typed = context.cast::<RuntimeContext>();
-        validate_ptr(typed)?;
-        // SAFETY: `typed` is verified non-null, 64B-aligned, and exclusively mutably accessed.
-        let mut ctx = unsafe { FfiHandleMut::from_raw(typed)? };
-        ctx.configure_spine(
-            baseline_pinned_compute_mask,
-            guard_hold_tokens,
-            max_observe_stride,
-            pre_bypass_enabled != 0,
-        );
-        Ok(LMNK_OK)
-    })
-}
-
-/// Configures the embedded `AnonymousComputePool` slot bitmasks (`active`, `repulsion`,
-/// `reversible`) and optional Gauge-Zero baseline pressure (`0 alloc`).
-///
-/// - Bits outside `active_mask` and host-pinned bits (`pinned_compute_mask |
-///   baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK`) are clamped out of
-///   `repulsion_mask` and `reversible_mask` without stripping host pin floors.
-/// - `baseline_pressure_q15 == 0` preserves the active baseline pressure (default `8192`);
-///   non-zero values re-anchor via `reanchor_baseline_pressure` (clamped to `32767`).
-/// - Commutes with [`lmnk_context_configure_spine`] in either call order.
-///
-/// # Safety
-/// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_context_configure_compute_pool(
-    context: LmnkContextHandle,
-    active_mask: u64,
-    repulsion_mask: u64,
-    reversible_mask: u64,
-    baseline_pressure_q15: u16,
-) -> LmnkStatus {
-    ffi_boundary!({
-        let typed = context.cast::<RuntimeContext>();
-        validate_ptr(typed)?;
-        // SAFETY: `typed` is verified non-null, 64B-aligned, and exclusively mutably accessed.
-        let mut ctx = unsafe { FfiHandleMut::from_raw(typed)? };
-        ctx.configure_compute_pool(
-            active_mask,
-            repulsion_mask,
-            reversible_mask,
-            baseline_pressure_q15,
-        );
-        Ok(LMNK_OK)
-    })
-}
-
-/// Copies a read-only 64-byte [`lmnk_spine_state_t`] snapshot out of `context` (`0 alloc`).
-///
-/// # Safety
-/// `context` (`64 B` aligned) and `state_out` (`64 B` aligned) must be non-null and non-overlapping.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_context_get_spine_state(
-    context: LmnkContextHandle,
-    state_out: *mut lmnk_spine_state_t,
-) -> LmnkStatus {
-    ffi_boundary!({
-        let typed = context.cast_const().cast::<RuntimeContext>();
-        validate_ptr(typed)?;
-        validate_ptr(state_out)?;
-        check_disjoint_rw(
-            &[(state_out as usize, size_of::<lmnk_spine_state_t>())],
-            &[(typed as usize, size_of::<RuntimeContext>())],
-        )?;
-        // SAFETY: `typed` and `state_out` are verified non-null, 64B-aligned, and disjoint above.
-        let (ctx, mut out_ref) = unsafe {
-            (
-                FfiHandleRef::from_raw(typed)?,
-                FfiHandleMut::from_raw(state_out)?,
-            )
-        };
-        *out_ref = *ctx.system_spine();
+        if (pol.flags & LMNK_POLICY_FLAG_SPINE) != 0 {
+            ctx.configure_spine(
+                pol.baseline_pinned_compute_mask,
+                pol.guard_hold_tokens,
+                pol.max_observe_stride,
+                pol.pre_bypass_enabled != 0,
+            );
+        }
+        if (pol.flags & LMNK_POLICY_FLAG_COMPUTE_POOL) != 0 {
+            ctx.configure_compute_pool(
+                pol.active_compute_mask,
+                pol.repulsion_compute_mask,
+                pol.reversible_compute_mask,
+                pol.baseline_pressure_q15,
+            );
+        }
         Ok(LMNK_OK)
     })
 }
@@ -520,65 +316,145 @@ pub unsafe extern "C" fn lmnk_context_get_spine_state(
 /// Initializes per-turn mechanical spine policy at prompt / turn boundaries (`0 alloc`).
 ///
 /// # Safety
-/// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
+/// `context` (64B aligned) and `params` must be non-null, naturally aligned, and disjoint.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_context_begin_turn_spine_policy(
+pub unsafe extern "C" fn lmnk_context_begin_turn(
     context: LmnkContextHandle,
-    guard_turn: u8,
-    unobserved_locked: u8,
+    params: *const lmnk_turn_begin_params_t,
 ) -> LmnkStatus {
     ffi_boundary!({
         let typed = context.cast::<RuntimeContext>();
         validate_ptr(typed)?;
-        // SAFETY: `typed` is verified non-null, 64B-aligned, and exclusively mutably accessed.
-        let mut ctx = unsafe { FfiHandleMut::from_raw(typed)? };
-        ctx.begin_turn_spine_policy(guard_turn != 0, unobserved_locked != 0);
+        validate_ptr(params)?;
+        check_disjoint_rw(
+            &[(typed.addr(), size_of::<RuntimeContext>())],
+            &[(params.addr(), size_of::<lmnk_turn_begin_params_t>())],
+        )?;
+        // SAFETY: `typed` and `params` are verified non-null, aligned, and disjoint above.
+        let (mut ctx, p) = unsafe {
+            (
+                FfiHandleMut::from_raw(typed)?,
+                FfiHandleRef::from_raw(params)?,
+            )
+        };
+        validate_envelope_size::<lmnk_turn_begin_params_t>(p.struct_size)?;
+        if (p.flags & !LMNK_TURN_KNOWN_FLAGS) != 0 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        let guard_turn = (p.flags & LMNK_TURN_FLAG_GUARD_ACTIVE) != 0;
+        let unobserved_locked = (p.flags & LMNK_TURN_FLAG_UNOBSERVED_LOCKED) != 0;
+        ctx.begin_turn_spine_policy(guard_turn, unobserved_locked);
         Ok(LMNK_OK)
     })
 }
 
-/// Evaluates one 4-stage decode control step on [`RuntimeContext`] (`0 alloc`, `0 fdiv`), reading
-/// `input` (`32 B`, `16 B` aligned) and writing `plan_out` (`64 B`, `64 B` aligned).
+/// Evaluates one 4-stage decode control step on [`RuntimeContext`] (`0 alloc`, `0 fdiv`).
+///
+/// Caller must initialize `params->struct_size = sizeof(lmnk_decode_step_params_t)` and
+/// `report_out->struct_size = sizeof(lmnk_decode_step_report_t)`.
 ///
 /// # Safety
 /// All pointers must be non-null, naturally aligned, and pairwise disjoint in memory.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_context_step_decode_control(
+pub unsafe extern "C" fn lmnk_context_step_decode(
     context: LmnkContextHandle,
-    input: *const lmnk_spine_decode_input_t,
-    external_guard_active: u8,
-    plan_out: *mut lmnk_spine_step_plan_t,
+    params: *const lmnk_decode_step_params_t,
+    report_out: *mut lmnk_decode_step_report_t,
 ) -> LmnkStatus {
     ffi_boundary!({
         let typed = context.cast::<RuntimeContext>();
         validate_ptr(typed)?;
-        validate_ptr(input)?;
-        validate_ptr(plan_out)?;
+        validate_ptr(params)?;
+        validate_ptr(report_out)?;
         check_disjoint_rw(
             &[
-                (typed as usize, size_of::<RuntimeContext>()),
-                (plan_out as usize, size_of::<lmnk_spine_step_plan_t>()),
+                (typed.addr(), size_of::<RuntimeContext>()),
+                (report_out.addr(), size_of::<lmnk_decode_step_report_t>()),
             ],
-            &[(input as usize, size_of::<lmnk_spine_decode_input_t>())],
+            &[(params.addr(), size_of::<lmnk_decode_step_params_t>())],
         )?;
-        // SAFETY: All pointers are non-null, aligned, and verified pairwise disjoint above.
-        let (mut ctx, sig_ref, mut out_ref) = unsafe {
+        // SAFETY: All pointers are verified non-null, aligned, and pairwise disjoint above.
+        let (mut ctx, p, mut out) = unsafe {
             (
                 FfiHandleMut::from_raw(typed)?,
-                FfiHandleRef::from_raw(input)?,
-                FfiHandleMut::from_raw(plan_out)?,
+                FfiHandleRef::from_raw(params)?,
+                FfiHandleMut::from_raw(report_out)?,
             )
         };
-        *out_ref = ctx.step_decode_control(sig_ref.as_ref(), external_guard_active != 0);
+        validate_envelope_size::<lmnk_decode_step_params_t>(p.struct_size)?;
+        validate_envelope_size::<lmnk_decode_step_report_t>(out.struct_size)?;
+
+        let plan = ctx.step_decode_control(&p.decode_input, p.external_guard_active != 0);
+        *out = lmnk_decode_step_report_t {
+            struct_size: size_of::<lmnk_decode_step_report_t>() as u32,
+            next_observe_mode: plan.next_observe_mode,
+            veto_mask: plan.veto_mask,
+            event_flags: plan.event_flags,
+            effective_observe_stride: plan.effective_observe_stride,
+            dispatch: plan.dispatch,
+            reserved: [0; 32],
+        };
         Ok(LMNK_OK)
     })
 }
 
-/// Serializes active runtime state into a `512`-byte `.lmnk` binary snapshot conforming to
-/// [`LMNK_ABI_VERSION_HEX`] with an IEEE 802.3 CRC32 payload checksum.
+/// Copies an abstracted 64-byte [`lmnk_runtime_state_view_t`] snapshot out of `context` (`0 alloc`).
+///
+/// Caller must initialize `state_out->struct_size = sizeof(lmnk_runtime_state_view_t)`.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, and bounds invariants.
+/// `context` (64B aligned) and `state_out` must be non-null, aligned, and disjoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lmnk_context_get_state(
+    context: LmnkContextHandle,
+    state_out: *mut lmnk_runtime_state_view_t,
+) -> LmnkStatus {
+    ffi_boundary!({
+        let typed = context.cast_const().cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        validate_ptr(state_out)?;
+        check_disjoint_rw(
+            &[(state_out.addr(), size_of::<lmnk_runtime_state_view_t>())],
+            &[(typed.addr(), size_of::<RuntimeContext>())],
+        )?;
+        // SAFETY: `typed` and `state_out` are verified non-null, aligned, and disjoint above.
+        let (ctx, mut out) = unsafe {
+            (
+                FfiHandleRef::from_raw(typed)?,
+                FfiHandleMut::from_raw(state_out)?,
+            )
+        };
+        validate_envelope_size::<lmnk_runtime_state_view_t>(out.struct_size)?;
+
+        let spine = ctx.system_spine();
+        let pool = ctx.compute_pool();
+        *out = lmnk_runtime_state_view_t {
+            struct_size: size_of::<lmnk_runtime_state_view_t>() as u32,
+            control_flags: spine.control_flags,
+            last_veto_mask: spine.last_veto_mask,
+            guard_hold_tokens: spine.guard_hold_tokens,
+            max_observe_stride: spine.max_observe_stride,
+            baseline_pinned_compute_mask: spine.baseline_pinned_compute_mask,
+            pinned_compute_mask: spine.pinned_compute_mask,
+            last_executed_mask: spine.last_executed_mask,
+            active_compute_mask: pool.active_mask,
+            last_observed_entropy_q15: spine.last_observed_entropy_q15,
+            baseline_pressure_q15: pool.baseline_pressure_q15,
+            whole_token_bypass_active: spine.whole_token_bypass_active,
+            unobserved_locked: spine.unobserved_locked,
+            reserved: [0; 18],
+        };
+        Ok(LMNK_OK)
+    })
+}
+
+/// Serializes active runtime state into a `.lmnk` binary snapshot conforming to
+/// [`LMNK_ABI_VERSION_HEX`] with an IEEE 802.3 CRC32 payload checksum.
+///
+/// Passing `buffer == NULL` writes the required byte length into `*buffer_size` and returns [`LMNK_OK`].
+///
+/// # Safety
+/// Pointers must satisfy non-null, alignment, bounds, and disjointness invariants.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_serialize(
     context: LmnkContextHandle,
@@ -590,9 +466,9 @@ pub unsafe extern "C" fn lmnk_context_serialize(
         validate_ptr(typed)?;
         validate_ptr(buffer_size)?;
         if raw_byte_ranges_overlap(
-            typed as usize,
+            typed.addr(),
             size_of::<RuntimeContext>(),
-            buffer_size as usize,
+            buffer_size.addr(),
             size_of::<usize>(),
         ) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
@@ -621,21 +497,21 @@ pub unsafe extern "C" fn lmnk_context_serialize(
         let _ = validate_raw_slice_bounds(buffer, *size_io)?;
         let buf_bytes = validate_raw_slice_bounds(buffer, required)?;
         if raw_byte_ranges_overlap(
-            typed as usize,
+            typed.addr(),
             size_of::<RuntimeContext>(),
-            buffer as usize,
+            buffer.addr(),
             buf_bytes,
         ) || raw_byte_ranges_overlap(
-            buffer as usize,
+            buffer.addr(),
             buf_bytes,
-            buffer_size as usize,
+            buffer_size.addr(),
             size_of::<usize>(),
         ) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // Drop `size_io` before reborrowing `*mut usize` after `serialize_to_bytes`, or copy scalar first.
+
         let mut written = *size_io;
-        // SAFETY: `buffer` is non-null, `<= isize::MAX`, and disjoint from `context` and `buffer_size`.
+        // SAFETY: `buffer` is non-null, bounded, and disjoint from `context` and `buffer_size`.
         let out_bytes = unsafe { checked_slice_from_raw_parts_mut(buffer, required)? };
         ctx.serialize_to_bytes(out_bytes, &mut written)?;
         *size_io = written;
@@ -647,7 +523,7 @@ pub unsafe extern "C" fn lmnk_context_serialize(
 /// [`LMNK_ABI_VERSION_HEX`] and IEEE 802.3 CRC32 verification.
 ///
 /// # Safety
-/// `buffer` and `context_out` must be non-null and valid for `buffer_size` bytes.
+/// `buffer` and `context_out` must be non-null, valid for `buffer_size` bytes, and disjoint.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_deserialize(
     buffer: *const u8,
@@ -664,9 +540,9 @@ pub unsafe extern "C" fn lmnk_context_deserialize(
         }
         let buf_bytes = validate_raw_slice_bounds(buffer, buffer_size)?;
         if raw_byte_ranges_overlap(
-            buffer as usize,
+            buffer.addr(),
             buf_bytes,
-            context_out as usize,
+            context_out.addr(),
             size_of::<LmnkContextHandle>(),
         ) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
@@ -688,373 +564,247 @@ pub unsafe extern "C" fn lmnk_context_deserialize(
     })
 }
 
-/// Serializes a unified 64B-aligned `.lmnk` zero-copy container ([`LmnkContainerView`]) including
-/// [`CausalProvenanceReport`] diagnostic history entries.
+// ===================================================================
+// 3. Generic `.lmnk` Container I/O (3 functions)
+// ===================================================================
+
+/// Serializes arbitrary non-empty sections into a unified 64B-aligned `.lmnk` container (`0 alloc`).
+///
+/// Supports two-pass sizing: setting `params->out_bytes == NULL` writes the required byte size
+/// into `*params->written_bytes_out` and returns [`LMNK_OK`].
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
+/// All non-null pointers in `params` and its section array must be valid, aligned, and disjoint
+/// from `out_bytes` and `written_bytes_out`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_container_write_with_reports_zero_copy(
-    container_flags: u32,
-    anchors: *const lmnk_phase_anchor_record_t,
-    num_anchors: usize,
-    trails: *const lmnk_pointer_trail_t,
-    num_trails: usize,
-    bloom_opt: *const lmnk_bloom_filter_t,
-    ledger_opt: *const lmnk_ledger_slot_t,
-    reports: *const lmnk_causal_report_t,
-    num_reports: usize,
-    timestamp_epoch_sec: u64,
-    out_bytes: *mut u8,
-    buffer_size_inout: *mut usize,
+pub unsafe extern "C" fn lmnk_container_write(
+    params: *const lmnk_container_write_params_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        // SAFETY: Validated for non-nullness and alignment.
-        let mut size_io = unsafe { FfiHandleMut::from_raw(buffer_size_inout)? };
+        // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment of `params`.
+        let p = unsafe { FfiHandleRef::from_raw(params)? };
+        validate_envelope_size::<lmnk_container_write_params_t>(p.struct_size)?;
 
-        let required = LmnkContainerView::required_standard_byte_len(
-            num_anchors,
-            num_trails,
-            !bloom_opt.is_null(),
-            !ledger_opt.is_null(),
-            num_reports,
-        )?;
-
-        if out_bytes.is_null() {
-            *size_io = required;
-            return Ok(LMNK_OK);
-        }
-        if *size_io < required {
-            *size_io = required;
-            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
-        }
-
-        let a_bytes = if num_anchors == 0 {
-            0
-        } else {
-            validate_ptr(anchors)?;
-            validate_raw_slice_bounds(anchors, num_anchors)?
-        };
-        let t_bytes = if num_trails == 0 {
-            0
-        } else {
-            validate_ptr(trails)?;
-            validate_raw_slice_bounds(trails, num_trails)?
-        };
-        let r_bytes = if num_reports == 0 {
-            0
-        } else {
-            validate_ptr(reports)?;
-            validate_raw_slice_bounds(reports, num_reports)?
-        };
-        let b_bytes = if bloom_opt.is_null() {
-            0
-        } else {
-            validate_ptr(bloom_opt)?;
-            size_of::<lmnk_bloom_filter_t>()
-        };
-        let l_bytes = if ledger_opt.is_null() {
-            0
-        } else {
-            validate_ptr(ledger_opt)?;
-            size_of::<lmnk_ledger_slot_t>()
-        };
-        let out_b = validate_raw_slice_bounds(out_bytes, required)?;
-        if raw_byte_ranges_overlap(out_bytes as usize, out_b, anchors as usize, a_bytes)
-            || raw_byte_ranges_overlap(out_bytes as usize, out_b, trails as usize, t_bytes)
-            || raw_byte_ranges_overlap(out_bytes as usize, out_b, reports as usize, r_bytes)
-            || raw_byte_ranges_overlap(out_bytes as usize, out_b, bloom_opt as usize, b_bytes)
-            || raw_byte_ranges_overlap(out_bytes as usize, out_b, ledger_opt as usize, l_bytes)
-            || raw_byte_ranges_overlap(
-                out_bytes as usize,
-                out_b,
-                buffer_size_inout as usize,
-                size_of::<usize>(),
-            )
-        {
+        let sec_count = p.section_count as usize;
+        if sec_count > usize::from(LMNK_MAX_CONTAINER_SECTIONS) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
-        // SAFETY: All non-empty inputs and destination buffer are aligned, bounded, and disjoint.
-        let ((anchors_slice, trails_slice, reports_slice), ((bloom_ref, ledger_ref), dst_slice)) = unsafe {
-            (
-                (
-                    checked_slice_from_raw_parts(anchors, num_anchors)?,
-                    checked_slice_from_raw_parts(trails, num_trails)?,
-                    checked_slice_from_raw_parts(reports, num_reports)?,
-                ),
-                (
-                    (
-                        FfiHandleRef::from_raw_opt(bloom_opt)?,
-                        FfiHandleRef::from_raw_opt(ledger_opt)?,
-                    ),
-                    checked_slice_from_raw_parts_mut(out_bytes, required)?,
-                ),
-            )
+        validate_ptr(p.written_bytes_out)?;
+        check_disjoint_rw(
+            &[(p.written_bytes_out.addr(), size_of::<usize>())],
+            &[(params.addr(), size_of::<lmnk_container_write_params_t>())],
+        )?;
+
+        let raw_sections = if sec_count == 0 {
+            &[]
+        } else {
+            validate_ptr(p.sections)?;
+            let sec_bytes = validate_raw_slice_bounds(p.sections, sec_count)?;
+            check_disjoint_rw(
+                &[(p.written_bytes_out.addr(), size_of::<usize>())],
+                &[(p.sections.addr(), sec_bytes)],
+            )?;
+            // SAFETY: `p.sections` is non-null, aligned, bounded, and disjoint from outputs.
+            unsafe { checked_slice_from_raw_parts(p.sections, sec_count)? }
         };
 
-        let written = LmnkContainerView::write_standard_sections_to_bytes(
-            crate::runtime::storage::StandardSectionsInput {
-                container_flags,
-                anchors: anchors_slice,
-                trails: trails_slice,
-                bloom: bloom_ref.as_deref(),
-                ledger: ledger_ref.as_deref(),
-                provenance_reports: reports_slice,
-                timestamp_epoch_sec,
-            },
-            dst_slice,
+        let mut rust_sections = [LmnkSectionInput {
+            kind: 0,
+            flags: 0,
+            payload: &[],
+        }; LMNK_MAX_CONTAINER_SECTIONS as usize];
+
+        let mut idx = 0usize;
+        while idx < sec_count {
+            let entry = &raw_sections[idx];
+            validate_envelope_size::<lmnk_section_input_t>(entry.struct_size)?;
+            if entry.flags != 0 || entry.payload_len == 0 {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            }
+            if entry.payload.is_null() {
+                return Err(LMNK_ERR_NULL_POINTER);
+            }
+            let payload_len = entry.payload_len as usize;
+            let payload_bytes = validate_raw_slice_bounds(entry.payload, payload_len)?;
+            if raw_byte_ranges_overlap(
+                p.written_bytes_out.addr(),
+                size_of::<usize>(),
+                entry.payload.addr(),
+                payload_bytes,
+            ) {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            }
+            // SAFETY: `entry.payload` is verified non-null, bounded, and disjoint from `written_bytes_out`.
+            let payload_slice =
+                unsafe { checked_slice_from_raw_parts(entry.payload, payload_len)? };
+            rust_sections[idx] = LmnkSectionInput {
+                kind: entry.kind,
+                flags: entry.flags,
+                payload: payload_slice,
+            };
+            idx += 1;
+        }
+
+        let active_sections = &rust_sections[..sec_count];
+        let required = required_container_byte_len(active_sections)?;
+
+        // SAFETY: `p.written_bytes_out` is verified non-null, aligned, and disjoint from all inputs.
+        let mut written_out = unsafe { FfiHandleMut::from_raw(p.written_bytes_out)? };
+
+        if p.out_bytes.is_null() {
+            *written_out = required;
+            return Ok(LMNK_OK);
+        }
+        if p.out_capacity < required {
+            *written_out = required;
+            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
+        }
+
+        let _ = validate_raw_slice_bounds(p.out_bytes, p.out_capacity)?;
+        let out_span = validate_raw_slice_bounds(p.out_bytes, required)?;
+        check_disjoint_rw(
+            &[
+                (p.out_bytes.addr(), out_span),
+                (p.written_bytes_out.addr(), size_of::<usize>()),
+            ],
+            &[(params.addr(), size_of::<lmnk_container_write_params_t>())],
         )?;
-        *size_io = written;
+        if sec_count > 0 {
+            let sec_bytes = sec_count * size_of::<lmnk_section_input_t>();
+            if raw_byte_ranges_overlap(p.out_bytes.addr(), out_span, p.sections.addr(), sec_bytes) {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            }
+            let mut j = 0usize;
+            while j < sec_count {
+                let entry = &raw_sections[j];
+                if raw_byte_ranges_overlap(
+                    p.out_bytes.addr(),
+                    out_span,
+                    entry.payload.addr(),
+                    entry.payload_len as usize,
+                ) {
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
+                }
+                j += 1;
+            }
+        }
+
+        // SAFETY: `p.out_bytes` is non-null, bounded, and verified disjoint from every input and `written_bytes_out`.
+        let dst = unsafe { checked_slice_from_raw_parts_mut(p.out_bytes, required)? };
+        let written = write_container_sections_to_bytes(
+            p.container_flags,
+            p.timestamp_epoch_sec,
+            active_sections,
+            dst,
+        )?;
+        *written_out = written;
         Ok(LMNK_OK)
     })
 }
 
-/// Serializes a compiled-cache `.lmnk` zero-copy container ([`LmnkContainerView`]).
+/// Verifies a `.lmnk` container buffer (magic, ABI version, header CRC32, topology CRC32,
+/// section table, per-section CRC32, and record integrity) and populates `report_out` (`0 alloc`).
+///
+/// Caller must initialize `report_out->struct_size = sizeof(lmnk_container_verify_report_t)`.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
+/// `bytes` must be valid for `byte_len` bytes, and `report_out` must be non-null, aligned, and disjoint.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_container_write_zero_copy(
-    anchors: *const lmnk_phase_anchor_record_t,
-    num_anchors: usize,
-    trails: *const lmnk_pointer_trail_t,
-    num_trails: usize,
-    bloom_opt: *const lmnk_bloom_filter_t,
-    ledger_opt: *const lmnk_ledger_slot_t,
-    timestamp_epoch_sec: u64,
-    out_bytes: *mut u8,
-    buffer_size_inout: *mut usize,
-) -> LmnkStatus {
-    // SAFETY: Delegates directly to `lmnk_container_write_with_reports_zero_copy` with compiled-cache flag and 0 reports.
-    unsafe {
-        lmnk_container_write_with_reports_zero_copy(
-            LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-            anchors,
-            num_anchors,
-            trails,
-            num_trails,
-            bloom_opt,
-            ledger_opt,
-            ptr::null(),
-            0,
-            timestamp_epoch_sec,
-            out_bytes,
-            buffer_size_inout,
-        )
-    }
-}
-
-/// Validates and maps a 64B-aligned unified `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$)
-/// via [`LmnkContainerView::parse`], exposing typed zero-copy section pointers.
-///
-/// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_container_verify_with_reports_zero_copy(
-    container_bytes: *const u8,
+pub unsafe extern "C" fn lmnk_container_verify(
+    bytes: *const u8,
     byte_len: usize,
-    num_anchors_out: *mut usize,
-    num_trails_out: *mut usize,
-    num_reports_out: *mut usize,
-    anchors_ptr_out: *mut *const lmnk_phase_anchor_record_t,
-    trails_ptr_out: *mut *const lmnk_pointer_trail_t,
-    bloom_ptr_out: *mut *const lmnk_bloom_filter_t,
-    ledger_ptr_out: *mut *const lmnk_ledger_slot_t,
-    reports_ptr_out: *mut *const lmnk_causal_report_t,
+    report_out: *mut lmnk_container_verify_report_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        if container_bytes.is_null() {
+        if bytes.is_null() {
             return Err(LMNK_ERR_NULL_POINTER);
         }
-        if byte_len < LMNK_CONTAINER_HEADER_BYTES {
-            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
-        }
-        let c_bytes = validate_raw_slice_bounds(container_bytes, byte_len)?;
-        // SAFETY: `container_bytes` is non-null, `byte_len >= 64`, and within `isize::MAX`.
-        let bytes = unsafe { checked_slice_from_raw_parts(container_bytes, byte_len)? };
-        let view = LmnkContainerView::parse(bytes)?;
-        if ((container_bytes as usize) & 63) != 0 {
-            return Err(LMNK_ERR_ALIGNMENT);
-        }
+        validate_ptr(report_out)?;
+        let buf_bytes = validate_raw_slice_bounds(bytes, byte_len)?;
         check_disjoint_rw(
-            &[
-                opt_span(num_anchors_out)?,
-                opt_span(num_trails_out)?,
-                opt_span(num_reports_out)?,
-                opt_span(anchors_ptr_out)?,
-                opt_span(trails_ptr_out)?,
-                opt_span(bloom_ptr_out)?,
-                opt_span(ledger_ptr_out)?,
-                opt_span(reports_ptr_out)?,
-            ],
-            &[(container_bytes as usize, c_bytes)],
+            &[(
+                report_out.addr(),
+                size_of::<lmnk_container_verify_report_t>(),
+            )],
+            &[(bytes.addr(), buf_bytes)],
         )?;
+        // SAFETY: `bytes` and `report_out` are validated non-null, aligned, bounded, and disjoint.
+        let (in_bytes, mut out) = unsafe {
+            (
+                checked_slice_from_raw_parts(bytes, byte_len)?,
+                FfiHandleMut::from_raw(report_out)?,
+            )
+        };
+        validate_envelope_size::<lmnk_container_verify_report_t>(out.struct_size)?;
 
-        let anchors = view.phase_anchors_zero_copy()?;
-        let trails = view.pointer_trails_zero_copy()?;
-        let bloom = view.bloom_filter_zero_copy()?;
-        let ledger = view.ledger_slot_zero_copy()?;
-        let reports = view.causal_provenance_zero_copy()?;
-
-        // SAFETY: Optional output pointers are validated non-null and naturally aligned inside `write_opt_out` / `FfiHandleMut::from_raw_opt`.
-        unsafe {
-            write_opt_out(num_anchors_out, anchors.len())?;
-            write_opt_out(num_trails_out, trails.len())?;
-            write_opt_out(num_reports_out, reports.len())?;
-            if let Some(mut ap_out) = FfiHandleMut::from_raw_opt(anchors_ptr_out)? {
-                *ap_out = if anchors.is_empty() {
-                    ptr::null()
-                } else {
-                    anchors.as_ptr()
-                };
-            }
-            if let Some(mut tp_out) = FfiHandleMut::from_raw_opt(trails_ptr_out)? {
-                *tp_out = if trails.is_empty() {
-                    ptr::null()
-                } else {
-                    trails.as_ptr()
-                };
-            }
-            if let Some(mut bp_out) = FfiHandleMut::from_raw_opt(bloom_ptr_out)? {
-                *bp_out = match bloom {
-                    Some(b_ref) => b_ref as *const lmnk_bloom_filter_t,
-                    None => ptr::null(),
-                };
-            }
-            if let Some(mut dp_out) = FfiHandleMut::from_raw_opt(ledger_ptr_out)? {
-                *dp_out = match ledger {
-                    Some(d_ref) => d_ref as *const lmnk_ledger_slot_t,
-                    None => ptr::null(),
-                };
-            }
-            if let Some(mut rp_out) = FfiHandleMut::from_raw_opt(reports_ptr_out)? {
-                *rp_out = if reports.is_empty() {
-                    ptr::null()
-                } else {
-                    reports.as_ptr()
-                };
-            }
-        }
+        let view = LmnkContainerView::parse(in_bytes)?;
+        let hdr = view.header();
+        *out = lmnk_container_verify_report_t {
+            struct_size: size_of::<lmnk_container_verify_report_t>() as u32,
+            abi_version: hdr.version,
+            topology_crc32: hdr.topology_crc32,
+            container_flags: hdr.container_flags,
+            total_size: hdr.total_size,
+            timestamp_epoch_sec: hdr.timestamp_epoch_sec,
+            section_count: hdr.section_count,
+            reserved: [0; 6],
+        };
         Ok(LMNK_OK)
     })
 }
 
-/// Validates and maps a 64B-aligned unified `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$)
-/// via [`LmnkContainerView::parse`].
+/// Verifies a `.lmnk` container buffer and locates section `kind`, returning a zero-copy
+/// [`lmnk_container_section_view_t`] pointing directly into `bytes` (`0 alloc`).
+///
+/// Returns [`LMNK_ERR_ANCHOR_NOT_FOUND`] when the container is valid but section `kind` is absent.
+/// Caller must initialize `view_out->struct_size = sizeof(lmnk_container_section_view_t)`.
 ///
 /// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
+/// `bytes` must be valid for `byte_len` bytes, and `view_out` must be non-null, aligned, and disjoint.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_container_verify_zero_copy(
-    container_bytes: *const u8,
+pub unsafe extern "C" fn lmnk_container_find_section(
+    bytes: *const u8,
     byte_len: usize,
-    num_anchors_out: *mut usize,
-    num_trails_out: *mut usize,
-    anchors_ptr_out: *mut *const lmnk_phase_anchor_record_t,
-    trails_ptr_out: *mut *const lmnk_pointer_trail_t,
-) -> LmnkStatus {
-    // SAFETY: Delegates to `lmnk_container_verify_with_reports_zero_copy`.
-    unsafe {
-        lmnk_container_verify_with_reports_zero_copy(
-            container_bytes,
-            byte_len,
-            num_anchors_out,
-            num_trails_out,
-            ptr::null_mut(),
-            anchors_ptr_out,
-            trails_ptr_out,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-        )
-    }
-}
-
-/// Validates and maps a 64B-aligned unified `.lmnk` container in-place ($C_{\mathrm{alloc}} = 0$),
-/// folds `PhaseAnchors` [`PhaseAnchorRecord`]s onto `trail_inout` by **Phase-Proximity Gravity**,
-/// applies `BloomFilter` contrastive Phase-Conjugate Repulsion ($-\boldsymbol{\Delta\theta}$)
-/// if active, and steers `query_tensor` (and optional `key_tensor`) in a single register-resident FFI call.
-///
-/// # Safety
-/// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn lmnk_container_map_and_steer_zero_copy_safe(
-    container_bytes: *const u8,
-    byte_len: usize,
-    trail_inout: *mut lmnk_pointer_trail_t,
-    min_step_rad: f32,
-    query_tensor: *mut f32,
-    key_tensor: *mut f32,
-    head_dim: usize,
-    num_heads: usize,
-    num_anchors_out: *mut usize,
-    total_pull_out: *mut f32,
-    dominant_anchor_id_out: *mut u32,
-    effective_phase_clamp_rad_out: *mut f32,
+    kind: u16,
+    view_out: *mut lmnk_container_section_view_t,
 ) -> LmnkStatus {
     ffi_boundary!({
-        if container_bytes.is_null() {
+        if bytes.is_null() {
             return Err(LMNK_ERR_NULL_POINTER);
         }
-        if byte_len < LMNK_CONTAINER_HEADER_BYTES {
-            return Err(LMNK_ERR_BUFFER_TOO_SMALL);
-        }
-        let c_bytes = validate_raw_slice_bounds(container_bytes, byte_len)?;
-        validate_ptr(trail_inout)?;
-        let (_, total_len) = init_phase_engine(head_dim, num_heads)?;
-        let qk_bytes = validate_raw_slice_bounds(query_tensor, total_len)?;
-        let k_bytes = if key_tensor.is_null() { 0 } else { qk_bytes };
+        validate_ptr(view_out)?;
+        let buf_bytes = validate_raw_slice_bounds(bytes, byte_len)?;
         check_disjoint_rw(
-            &[
-                (trail_inout as usize, size_of::<lmnk_pointer_trail_t>()),
-                (query_tensor as usize, qk_bytes),
-                (key_tensor as usize, k_bytes),
-                opt_span(num_anchors_out)?,
-                opt_span(total_pull_out)?,
-                opt_span(dominant_anchor_id_out)?,
-                opt_span(effective_phase_clamp_rad_out)?,
-            ],
-            &[(container_bytes as usize, c_bytes)],
+            &[(view_out.addr(), size_of::<lmnk_container_section_view_t>())],
+            &[(bytes.addr(), buf_bytes)],
         )?;
-
-        // SAFETY: `container_bytes` is non-null and bounds-checked; `bind_qk_32` validates Q/K
-        // alignment and disjointness; `trail_inout` is disjoint from Q/K and `container_bytes`.
-        let (bytes, (_engine, mut q_aligned, mut k_opt)) = unsafe {
+        // SAFETY: `bytes` and `view_out` are validated non-null, aligned, bounded, and disjoint.
+        let (in_bytes, mut out) = unsafe {
             (
-                checked_slice_from_raw_parts(container_bytes, byte_len)?,
-                bind_qk_32(query_tensor, key_tensor, head_dim, num_heads)?,
+                checked_slice_from_raw_parts(bytes, byte_len)?,
+                FfiHandleMut::from_raw(view_out)?,
             )
         };
-        let view = LmnkContainerView::parse(bytes)?;
-        if ((container_bytes as usize) & 63) != 0 {
-            return Err(LMNK_ERR_ALIGNMENT);
-        }
-        let anchors = view.phase_anchors_zero_copy()?;
-        let bloom = view.bloom_filter_zero_copy()?;
-        // SAFETY: `trail_inout` is validated aligned and disjoint above.
-        let mut trail = unsafe { FfiHandleMut::from_raw(trail_inout)? };
+        validate_envelope_size::<lmnk_container_section_view_t>(out.struct_size)?;
 
-        let (tot_pull, dom_id, eff_clamp) = steer_crystallized_records_with_optional_bloom_safe(
-            anchors,
-            bloom,
-            &mut trail,
-            min_step_rad,
-            AbiTensorShape {
-                head_dim,
-                num_heads,
-            },
-            &mut q_aligned,
-            k_opt.as_mut(),
-        )?;
+        let view = LmnkContainerView::parse(in_bytes)?;
+        let entry = view.find_section(kind).ok_or(LMNK_ERR_ANCHOR_NOT_FOUND)?;
+        let offset_usize = entry.offset as usize;
+        // SAFETY: `LmnkContainerView::parse` verified `entry.offset + entry.length <= byte_len`,
+        // so `bytes.add(offset_usize)` stays within the same allocation with Strict Provenance.
+        let payload_ptr = unsafe { bytes.add(offset_usize) };
 
-        // SAFETY: `write_opt_out` validates optional output pointers.
-        unsafe {
-            write_opt_out(num_anchors_out, anchors.len())?;
-            write_opt_out(total_pull_out, tot_pull)?;
-            write_opt_out(dominant_anchor_id_out, dom_id)?;
-            write_opt_out(effective_phase_clamp_rad_out, eff_clamp)?;
-        }
+        *out = lmnk_container_section_view_t {
+            struct_size: size_of::<lmnk_container_section_view_t>() as u32,
+            kind: entry.kind,
+            flags: entry.flags,
+            offset: entry.offset,
+            length: entry.length,
+            payload_crc32: entry.payload_crc32,
+            reserved0: 0,
+            payload_ptr,
+        };
         Ok(LMNK_OK)
     })
 }

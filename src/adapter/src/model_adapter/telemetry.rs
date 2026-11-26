@@ -459,10 +459,10 @@ impl ModelSteeringAdapter {
             } else {
                 self.configured_ego
             };
-            let shift_base = local_ego.transgression_bias_q7;
+            let shift_base = local_ego.boundary_crossing_q7;
             let mut phases = [0 as lmnk_q7_t; MAX_ATTENTION_HEADS];
             for (g, &gv_q7) in local_ego
-                .sovereign_granule_phase_q7
+                .preferred_granule_phase_q7
                 .iter()
                 .enumerate()
                 .take(NUM_STIGMERGIC_GRANULES)
@@ -752,13 +752,13 @@ impl ModelSteeringAdapter {
         let ego = &mut self.ctx.core_layers_mut().ego;
         if report.ego_wakeup_recommended {
             ego.trigger_mask |= EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_BASIN_CAPTURE;
-            ego.counter_basin_thrust_q7 = ego.counter_basin_thrust_q7.max(48);
-            if ego.transgression_bias_q7.abs() < 24 {
-                ego.transgression_bias_q7 = 24;
+            ego.basin_resistance_q7 = ego.basin_resistance_q7.max(48);
+            if ego.boundary_crossing_q7.abs() < 24 {
+                ego.boundary_crossing_q7 = 24;
             }
         } else if report.ego_cooldown_recommended {
             ego.trigger_mask &= !(EGO_TRIGGER_LAYER_DISTORTION | EGO_TRIGGER_INTERNAL_CONFLICT);
-            ego.counter_basin_thrust_q7 = self.configured_ego.counter_basin_thrust_q7 >> 1;
+            ego.basin_resistance_q7 = self.configured_ego.basin_resistance_q7 >> 1;
             ego.irrational_defiance_q7 = self.configured_ego.irrational_defiance_q7 >> 1;
         } else {
             let epochs = ego.intervention_epochs;

@@ -257,7 +257,7 @@ impl ManifoldGatewaySignal for StigmergicSubstrate {
             fact_persona_coherence: 1.0 - 2.0 * self.last_anomaly_severity,
             repulsion_severity: self.last_anomaly_severity,
             lineage_flags: self.causal_provenance_bits(),
-            attribution_tag: cause_code,
+            root_cause_code: cause_code,
             dominant_slot: dom_slot,
             action_mode_flags: mode_flags,
             active_swarm_cell_mask: self.slot_enabled_mask,

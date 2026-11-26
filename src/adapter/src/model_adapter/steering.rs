@@ -438,7 +438,7 @@ impl ModelSteeringAdapter {
                 entropy_gate_mode: this.ctx.entropy_controller().state().active_branch_mode,
                 moving_z_entropy: entropy_h_tilde,
                 repulsion_severity: frame.repulsion_severity,
-                causal_root_cause: frame.attribution_tag,
+                causal_root_cause: frame.root_cause_code,
                 epistemic_regime: this.ctx.last_horizon().regime_code,
                 stationary_shortcut_ready: this.ctx.last_boundary_delta().stationary_shortcut_ready
                     != 0,
@@ -467,7 +467,7 @@ impl ModelSteeringAdapter {
                 res
             };
 
-            let qos_throttled = frame.attribution_tag == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
+            let qos_throttled = frame.root_cause_code == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
             let last_horizon = *this.ctx.last_horizon();
             let last_delta = *this.ctx.last_boundary_delta();
             let last_overlap = *this.ctx.last_overlap_report();

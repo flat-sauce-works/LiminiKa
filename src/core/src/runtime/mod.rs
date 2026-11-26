@@ -3,7 +3,7 @@
 
 //! Level 4 (`Runtime`): Stateful orchestration context ([`RuntimeContext`]), configuration
 //! ([`Config`]), telemetry ([`CoreTelemetryBank`]), Composite Manifold Gateway (`gateway`),
-//! Latent Horizon (`horizon`), `.lmnk` zero-copy `storage`, and C11/C++20 `v0.3.0` FFI boundary (`abi`).
+//! Latent Horizon (`horizon`), `.lmnk` zero-copy `storage`, and C11/C++20 `v0.4.0` FFI boundary (`abi`).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]

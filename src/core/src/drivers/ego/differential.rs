@@ -577,10 +577,10 @@ impl EgoDifferentialNet {
         };
         n0.scope_region_selector = SCOPE_REGION_SELF_REF;
         n0.pheromone_q7 = 88;
-        n0.gain_q7 = ego.counter_basin_thrust_q7.clamp(32, 127);
+        n0.gain_q7 = ego.basin_resistance_q7.clamp(32, 127);
         n0.intent_delta = *axes;
         n0.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
-        n0.delta_phase_q7 = make_phase(&ego.sovereign_granule_phase_q7, 4, false);
+        n0.delta_phase_q7 = make_phase(&ego.preferred_granule_phase_q7, 4, false);
 
         let mut n1 = DistortionDelta::new_empty(2, u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE) + 2);
         n1.next_hop_idx = 2;
@@ -592,8 +592,8 @@ impl EgoDifferentialNet {
         n1.intent_delta = *axes;
         n1.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
         n1.delta_phase_q7 = make_phase(
-            &ego.sovereign_granule_phase_q7,
-            ego.transgression_bias_q7 >> 2,
+            &ego.preferred_granule_phase_q7,
+            ego.boundary_crossing_q7 >> 2,
             true,
         );
 
@@ -604,12 +604,12 @@ impl EgoDifferentialNet {
         n2.scope_region_selector =
             SCOPE_REGION_EXTERIOR | SCOPE_REGION_INTERIOR | SCOPE_REGION_SELF_REF;
         n2.pheromone_q7 = 64;
-        n2.gain_q7 = ego.transgression_bias_q7.unsigned_abs().clamp(24, 127);
+        n2.gain_q7 = ego.boundary_crossing_q7.unsigned_abs().clamp(24, 127);
         n2.intent_delta = *axes;
         n2.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
         n2.delta_phase_q7 = make_phase(
-            &ego.sovereign_granule_phase_q7,
-            -(ego.transgression_bias_q7 >> 2),
+            &ego.preferred_granule_phase_q7,
+            -(ego.boundary_crossing_q7 >> 2),
             false,
         );
 
@@ -917,7 +917,7 @@ mod tests {
         let ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
         let axes = EgoIntentAxes::new()
             .with_autonomy_q7(72)
-            .with_transgression_q7(48);
+            .with_boundary_crossing_q7(48);
         let mut net_1 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 1);
         let net_3 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 3);
         let partition = LacunaPartition8 {

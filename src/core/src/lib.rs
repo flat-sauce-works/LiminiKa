@@ -1,7 +1,7 @@
 // name: src/core/src/lib.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Core execution engine library for `LiminiKa` (`v0.3.0`, `0x0000_0300`).
+//! Core execution engine library for `LiminiKa` (`v0.4.0`, `0x0000_0400`).
 //!
 //! This crate serves as the primary `#![no_std]` runtime engine for `LiminiKa`, implementing
 //! non-invasive LLM steering and low-VRAM (2-4 GB) orchestration across a Y-shaped 5-layer
@@ -27,7 +27,7 @@
 //! - **Level 4 — `runtime` ([`crate::runtime`])**: Single orchestrator facade (`RuntimeContext`,
 //!   `#[repr(C, align(64))]`, caller-owned `in_place` initialization), Manifold Gateway
 //!   (`ManifoldGatewaySignal`, `GatewayFrame`), Latent Horizon (`LatentHorizonSlot`),
-//!   `.lmnk` snapshot storage, telemetry, and the C11/C++20 `v0.3.0` (`lmnk_*`) C-ABI firewall (`abi`).
+//!   `.lmnk` snapshot storage, telemetry, and the C11/C++20 `v0.4.0` (`lmnk_*`) C-ABI firewall (`abi`).
 //!
 //! # Core Mathematical & Systems Design Principles
 //! 1. **Sequential Conditional Transition Probability x Attention Phase Interference**:
@@ -87,7 +87,7 @@ pub mod drivers;
 /// Latent Horizon, `.lmnk` storage, and C-ABI translation firewall (`abi`).
 pub mod runtime;
 
-/// C-ABI `v0.3.0` (`0x0000_0300`) bindings, FFI safety barriers, binary layout contracts, and status codes.
+/// C-ABI `v0.4.0` (`0x0000_0400`) bindings, FFI safety barriers, binary layout contracts, and status codes.
 pub use crate::runtime::abi;
 
 // ===================================================================
@@ -129,24 +129,24 @@ pub use crate::foundation::{
     AlignedBuffer64, AlignedBuffer128, AlignedBuffer256, AlignedBuffer512, AlignedSlice,
     AlignedSlice16, AlignedSlice32, AlignedSlice64, AlignedSlice128, AlignedSlice256,
     AlignedSlice512, AlignedSliceMut, AlignedSliceMut16, AlignedSliceMut32, AlignedSliceMut64,
-    AlignedSliceMut128, AlignedSliceMut256, AlignedSliceMut512, CHEBYSHEV_COEFF_LEN,
+    AlignedSliceMut128, AlignedSliceMut256, AlignedSliceMut512, ArenaSpan, CHEBYSHEV_COEFF_LEN,
     CHEBYSHEV_FILTER_DEGREE, DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_CLAMP_MAX_RAD,
     DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_PHASE_STEER_HEAD_DIM,
     DEFAULT_PHASE_STEER_NUM_HEADS, DEFAULT_PHASE_STEP_MIN_RAD, DisjointMutPair, DisjointMutTriple,
     DisjointRefMut, F32_MIN_POSITIVE_NORMAL, INV_PARALLEL_COUNT_Q7, KvMotionDeltaPacket,
     LoraDimensions, MAX_PHASE_INTERFERENCE_INV_TEMP, MIN_PHASE_INTERFERENCE_INV_TEMP,
-    PAGED_BITMASK_BITS, PAGED_BITMASK_WORDS, PagedBitmask, PhaseSteering, Pod, Rank1Descriptor,
-    RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
-    SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64, SWAR_SIGN_MASK_64,
-    SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, SubheadConfig, SubheadSlotBinding, TAG_ACTION_MODE_MASK,
-    TAG_ATTRACTOR_SLOT_SHIFT, TaggedPtr, branchless_abs_f32, branchless_argmin_f32_x8_masked,
-    branchless_argmin_u8_x8_masked, branchless_atan2_f32, branchless_atan2_to_q7_fast,
-    branchless_clamp_f32, branchless_copysign_f32, branchless_cos_q7, branchless_crc32_128b_words,
-    branchless_crc32_ieee, branchless_exp_f32, branchless_eyring_kramers_escape,
-    branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
-    branchless_hysteresis_quantize_depth, branchless_inv_pos_f32, branchless_is_finite_f32,
-    branchless_is_nan_f32, branchless_lerp_f32, branchless_ln_f32, branchless_mask8_min_delta,
-    branchless_max_f32, branchless_min_f32, branchless_phase_clamp_rad,
+    PAGED_BITMASK_BITS, PAGED_BITMASK_WORDS, PagedBitmask, PhaseSteering, Pod, RANK1_GAIN_UNUSED,
+    Rank1Descriptor, RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout,
+    RopeSteeringTarget, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, SubheadConfig, SubheadSlotBinding,
+    TAG_ACTION_MODE_MASK, TAG_ATTRACTOR_SLOT_SHIFT, TaggedPtr, branchless_abs_f32,
+    branchless_argmin_f32_x8_masked, branchless_argmin_u8_x8_masked, branchless_atan2_f32,
+    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_copysign_f32, branchless_cos_q7,
+    branchless_crc32_128b_words, branchless_crc32_ieee, branchless_exp_f32,
+    branchless_eyring_kramers_escape, branchless_fast_transition_log_prob,
+    branchless_flush_subnormal_f32, branchless_hysteresis_quantize_depth, branchless_inv_pos_f32,
+    branchless_is_finite_f32, branchless_is_nan_f32, branchless_lerp_f32, branchless_ln_f32,
+    branchless_mask8_min_delta, branchless_max_f32, branchless_min_f32, branchless_phase_clamp_rad,
     branchless_phase_coherence_inv_temp_scale, branchless_phase_proximity_gravity_f32,
     branchless_phase_step_filter_q7, branchless_project_f32_slice_to_q7_64, branchless_q7_abs_u8,
     branchless_q7_accumulate_64, branchless_q7_add_sat, branchless_q7_circular_diff,
@@ -202,7 +202,7 @@ pub use crate::foundation::{
 };
 
 pub use crate::stigmergy::{
-    ANCHOR_ATTRIBUTION_NOMINAL, ANCHOR_LINEAGE_MATURE_BIT, ATTRACTOR_SLOT_CRYSTALLIZED,
+    ANCHOR_LINEAGE_MATURE_BIT, ANCHOR_ROOT_CAUSE_NOMINAL, ATTRACTOR_SLOT_CRYSTALLIZED,
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
     ATTRACTOR_SLOT_SYSTEM_BASELINE, ATTRACTOR_SLOT_TEMPORAL, ATTRACTOR_SLOT_USER_CONTEXT,
     ATTRACTOR_SLOT_USER_INTENT, AttractorGrowthReport, ChainTraverseParams, CoarseToFineParams,
@@ -327,22 +327,27 @@ pub use crate::runtime::{
 };
 
 pub use crate::runtime::abi::{
-    FfiHandleMut, FfiHandleRef, LmnkContextHandle, LmnkContextOpaque, LmnkEntropyControllerHandle,
-    LmnkEntropyControllerOpaque, LmnkPhaseSteeringHandle, LmnkPhaseSteeringOpaque,
-    LmnkSubstrateHandle, LmnkSubstrateOpaque, lmnk_action_decision_t, lmnk_attribution_tag_t,
+    FfiHandleMut, FfiHandleRef, LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE,
+    LMNK_POLICY_KNOWN_FLAGS, LMNK_RANK1_FLAG_FUSED, LMNK_RANK1_KNOWN_FLAGS,
+    LMNK_ROPE_STEER_FLAG_UNCLAMPED, LMNK_ROPE_STEER_KNOWN_FLAGS, LMNK_TURN_FLAG_GUARD_ACTIVE,
+    LMNK_TURN_FLAG_UNOBSERVED_LOCKED, LMNK_TURN_KNOWN_FLAGS, LmnkContextHandle, LmnkContextOpaque,
+    lmnk_abi_info_t, lmnk_action_decision_t, lmnk_arena_span_t, lmnk_attribution_tag_t,
     lmnk_bloom_filter_t, lmnk_boundary_delta_t, lmnk_capability_flags_t, lmnk_causal_report_t,
     lmnk_cognitive_ledger_t, lmnk_compute_dispatch_mask_t, lmnk_config_t, lmnk_container_header_t,
-    lmnk_core_primitive_state_t, lmnk_core_state_stack_t, lmnk_distortion_delta_t,
-    lmnk_distortion_tension_t, lmnk_ego_intent_axes_t, lmnk_entropy_state_t,
-    lmnk_epistemic_horizon_t, lmnk_fragment_ensemble_report_t, lmnk_gateway_frame_t,
-    lmnk_kv_keyframe_header_t, lmnk_lacuna_partition_t, lmnk_ledger_slot_t,
-    lmnk_liminal_ego_state_t, lmnk_liminal_threshold_state_t, lmnk_overlap_discovery_report_t,
-    lmnk_paged_bitmask_t, lmnk_phase_anchor_record_t, lmnk_pointer_trail_t, lmnk_q7_t,
-    lmnk_rank1_descriptor_t, lmnk_reconstitution_report_t, lmnk_section_entry_t,
-    lmnk_spine_decode_input_t, lmnk_spine_state_t, lmnk_spine_step_plan_t, lmnk_status_t,
-    lmnk_stigmergic_granule_state_t, lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t,
-    lmnk_substrate_step_report_t, lmnk_system_pressure_reading_t, lmnk_tagged_ptr_t,
-    lmnk_topology_matrix_t, lmnk_topology_snapshot_t,
+    lmnk_container_section_view_t, lmnk_container_verify_report_t, lmnk_container_write_params_t,
+    lmnk_core_primitive_state_t, lmnk_core_state_stack_t, lmnk_decode_step_params_t,
+    lmnk_decode_step_report_t, lmnk_distortion_delta_t, lmnk_distortion_tension_t,
+    lmnk_ego_intent_axes_t, lmnk_entropy_state_t, lmnk_epistemic_horizon_t,
+    lmnk_fragment_ensemble_report_t, lmnk_gateway_frame_t, lmnk_gateway_steer_params_t,
+    lmnk_kv_keyframe_header_t, lmnk_lacuna_eval_params_t, lmnk_lacuna_partition_t,
+    lmnk_ledger_slot_t, lmnk_liminal_ego_state_t, lmnk_liminal_threshold_state_t,
+    lmnk_overlap_discovery_report_t, lmnk_paged_bitmask_t, lmnk_phase_anchor_record_t,
+    lmnk_pointer_trail_t, lmnk_q7_t, lmnk_rank1_descriptor_t, lmnk_rank1_eval_params_t,
+    lmnk_reconstitution_report_t, lmnk_rope_procrustes_params_t, lmnk_rope_steer_params_t,
+    lmnk_runtime_policy_t, lmnk_runtime_state_view_t, lmnk_section_entry_t, lmnk_section_input_t,
+    lmnk_spine_decode_input_t, lmnk_status_t, lmnk_stigmergic_granule_state_t,
+    lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t, lmnk_system_pressure_reading_t,
+    lmnk_tagged_ptr_t, lmnk_topology_matrix_t, lmnk_topology_snapshot_t, lmnk_turn_begin_params_t,
 };
 
 // ===================================================================
@@ -362,22 +367,23 @@ pub mod prelude {
         AlignedBuffer512, AlignedSlice, AlignedSlice16, AlignedSlice32, AlignedSlice64,
         AlignedSlice128, AlignedSlice256, AlignedSlice512, AlignedSliceMut, AlignedSliceMut16,
         AlignedSliceMut32, AlignedSliceMut64, AlignedSliceMut128, AlignedSliceMut256,
-        AlignedSliceMut512, CHEBYSHEV_COEFF_LEN, DEFAULT_MAX_VALID_Z_SCORE,
+        AlignedSliceMut512, ArenaSpan, CHEBYSHEV_COEFF_LEN, DEFAULT_MAX_VALID_Z_SCORE,
         DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE,
         DEFAULT_PHASE_GRAVITY_EPS, DEFAULT_PHASE_STEP_MIN_RAD, DisjointMutPair, DisjointMutTriple,
         DisjointRefMut, F32_MIN_POSITIVE_NORMAL, INV_PARALLEL_COUNT_Q7, KvMotionDeltaPacket,
         LoraDimensions, MAX_PHASE_INTERFERENCE_INV_TEMP, MIN_PHASE_INTERFERENCE_INV_TEMP,
-        PAGED_BITMASK_BITS, PagedBitmask, PhaseSteering, Pod, Rank1Descriptor, RawPhaseProjectable,
-        RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget, SubheadConfig,
-        SubheadSlotBinding, TAG_ACTION_MODE_MASK, TaggedPtr, branchless_atan2_to_q7_fast,
-        branchless_crc32_ieee, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
-        branchless_phase_coherence_inv_temp_scale, branchless_phase_proximity_gravity_f32,
-        branchless_project_f32_slice_to_q7_64, branchless_q7_coherence_64,
-        branchless_q7_coherence_and_resultant_64, branchless_q7_fold_s1_geodesic,
-        branchless_q7_gravity_fold_64, branchless_q7_inhibit_64, branchless_q7_inhibit_words_64,
-        branchless_q7_resonant_pull_64, branchless_q7_synergy_fuse_64,
-        branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_64,
-        branchless_q7_transition_log_prob_words_64, branchless_q7_unified_manifold_fold_64,
+        PAGED_BITMASK_BITS, PagedBitmask, PhaseSteering, Pod, RANK1_GAIN_UNUSED, Rank1Descriptor,
+        RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout, RopeSteeringTarget,
+        SubheadConfig, SubheadSlotBinding, TAG_ACTION_MODE_MASK, TaggedPtr,
+        branchless_atan2_to_q7_fast, branchless_crc32_ieee, branchless_flush_subnormal_f32,
+        branchless_inv_pos_f32, branchless_phase_coherence_inv_temp_scale,
+        branchless_phase_proximity_gravity_f32, branchless_project_f32_slice_to_q7_64,
+        branchless_q7_coherence_64, branchless_q7_coherence_and_resultant_64,
+        branchless_q7_fold_s1_geodesic, branchless_q7_gravity_fold_64, branchless_q7_inhibit_64,
+        branchless_q7_inhibit_words_64, branchless_q7_resonant_pull_64,
+        branchless_q7_synergy_fuse_64, branchless_q7_synergy_fuse_words_64,
+        branchless_q7_transition_log_prob_64, branchless_q7_transition_log_prob_words_64,
+        branchless_q7_unified_manifold_fold_64,
         branchless_q7_unified_manifold_fold_with_init_weight_64,
         branchless_q7_unified_manifold_fold_words_with_init_weight_64,
         branchless_q7_weighted_ensemble_contiguous_words_64,
@@ -411,23 +417,29 @@ pub mod prelude {
     };
     pub use crate::liminal::*;
     pub use crate::runtime::abi::{
-        FfiHandleMut, FfiHandleRef, LmnkContextHandle, LmnkContextOpaque,
-        LmnkEntropyControllerHandle, LmnkEntropyControllerOpaque, LmnkPhaseSteeringHandle,
-        LmnkPhaseSteeringOpaque, LmnkSubstrateHandle, LmnkSubstrateOpaque, lmnk_action_decision_t,
+        FfiHandleMut, FfiHandleRef, LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE,
+        LMNK_POLICY_KNOWN_FLAGS, LMNK_RANK1_FLAG_FUSED, LMNK_RANK1_KNOWN_FLAGS,
+        LMNK_ROPE_STEER_FLAG_UNCLAMPED, LMNK_ROPE_STEER_KNOWN_FLAGS, LMNK_TURN_FLAG_GUARD_ACTIVE,
+        LMNK_TURN_FLAG_UNOBSERVED_LOCKED, LMNK_TURN_KNOWN_FLAGS, LmnkContextHandle,
+        LmnkContextOpaque, lmnk_abi_info_t, lmnk_action_decision_t, lmnk_arena_span_t,
         lmnk_attribution_tag_t, lmnk_bloom_filter_t, lmnk_boundary_delta_t,
         lmnk_capability_flags_t, lmnk_causal_report_t, lmnk_cognitive_ledger_t,
         lmnk_compute_dispatch_mask_t, lmnk_config_t, lmnk_container_header_t,
-        lmnk_core_primitive_state_t, lmnk_core_state_stack_t, lmnk_distortion_delta_t,
+        lmnk_container_section_view_t, lmnk_container_verify_report_t,
+        lmnk_container_write_params_t, lmnk_core_primitive_state_t, lmnk_core_state_stack_t,
+        lmnk_decode_step_params_t, lmnk_decode_step_report_t, lmnk_distortion_delta_t,
         lmnk_distortion_tension_t, lmnk_ego_intent_axes_t, lmnk_entropy_state_t,
         lmnk_epistemic_horizon_t, lmnk_fragment_ensemble_report_t, lmnk_gateway_frame_t,
-        lmnk_kv_keyframe_header_t, lmnk_lacuna_partition_t, lmnk_ledger_slot_t,
-        lmnk_liminal_ego_state_t, lmnk_liminal_threshold_state_t, lmnk_overlap_discovery_report_t,
-        lmnk_paged_bitmask_t, lmnk_phase_anchor_record_t, lmnk_pointer_trail_t, lmnk_q7_t,
-        lmnk_rank1_descriptor_t, lmnk_reconstitution_report_t, lmnk_section_entry_t,
-        lmnk_spine_decode_input_t, lmnk_spine_state_t, lmnk_spine_step_plan_t, lmnk_status_t,
+        lmnk_gateway_steer_params_t, lmnk_kv_keyframe_header_t, lmnk_lacuna_eval_params_t,
+        lmnk_lacuna_partition_t, lmnk_ledger_slot_t, lmnk_liminal_ego_state_t,
+        lmnk_liminal_threshold_state_t, lmnk_overlap_discovery_report_t, lmnk_paged_bitmask_t,
+        lmnk_phase_anchor_record_t, lmnk_pointer_trail_t, lmnk_q7_t, lmnk_rank1_descriptor_t,
+        lmnk_rank1_eval_params_t, lmnk_reconstitution_report_t, lmnk_rope_procrustes_params_t,
+        lmnk_rope_steer_params_t, lmnk_runtime_policy_t, lmnk_runtime_state_view_t,
+        lmnk_section_entry_t, lmnk_section_input_t, lmnk_spine_decode_input_t, lmnk_status_t,
         lmnk_stigmergic_granule_state_t, lmnk_stigmergic_thresholds_t, lmnk_subhead_config_t,
-        lmnk_substrate_step_report_t, lmnk_system_pressure_reading_t, lmnk_tagged_ptr_t,
-        lmnk_topology_matrix_t, lmnk_topology_snapshot_t,
+        lmnk_system_pressure_reading_t, lmnk_tagged_ptr_t, lmnk_topology_matrix_t,
+        lmnk_topology_snapshot_t, lmnk_turn_begin_params_t,
     };
     pub use crate::runtime::{
         AdaptiveThresholdPolicy, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,

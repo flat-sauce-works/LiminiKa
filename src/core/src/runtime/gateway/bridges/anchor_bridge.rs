@@ -213,8 +213,10 @@ impl PhaseAnchorRecord {
         (winning_anchor_id, final_coh, updated_mass)
     }
 
+    /// Performs an Online Toroidal $k$-Means / DP-Means E+M step using preloaded SWAR phase words,
+    /// returning `(assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass, spawned_new_cluster)`.
     #[inline]
-    pub(crate) fn step_online_toroidal_kmeans_frame_with_words_64(
+    pub fn step_online_toroidal_kmeans_frame_with_words_64(
         centroids: &mut [Self],
         frame: &GatewayFrame,
         sample_w: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -314,7 +316,7 @@ impl PhaseAnchorRecord {
 
         let is_repulsed = (frame.repulsion_severity > 0.50)
             | ((frame.action_mode_flags & ACTION_MODE_PHASE_REPULSE) != 0)
-            | (frame.attribution_tag == ROOT_CAUSE_COHOMOLOGY_REPULSION)
+            | (frame.root_cause_code == ROOT_CAUSE_COHOMOLOGY_REPULSION)
             | ((frame.lineage_flags & CAUSAL_CAUSE_COHOMOLOGY_REPULSION) != 0);
         let (idx_1, coh_1, _grav_1, empty_opt, weakest_idx, w_1, sample_uni, best_1_uni, _) =
             Self::find_nearest_toroidal_centroid_with_cache_64(centroids, sample_w, None);
@@ -634,26 +636,9 @@ impl PhaseAnchorRecord {
         (target_idx, final_aid, true)
     }
 
-    /// **Classical Online Toroidal $k$-Means / DP-Means Closed-Loop E+M Step ($\mathcal{O}(K)$)**:
-    /// Returns `(assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass, spawned_new_cluster)`.
-    #[inline(always)]
-    pub(crate) fn step_online_toroidal_kmeans_frame_64(
-        centroids: &mut [Self],
-        frame: &GatewayFrame,
-        split_coherence_thresh: f32,
-        trail_opt: Option<&mut PointerTrail>,
-    ) -> (usize, u32, f32, f32, bool) {
-        Self::step_online_toroidal_kmeans_frame_with_words_64(
-            centroids,
-            frame,
-            frame.phase_words_ref(),
-            split_coherence_thresh,
-            trail_opt,
-        )
-    }
-
     /// Executes Online Toroidal $k$-Means / DP-Means across a batch of [`GatewayFrame`]s,
     /// returning `(last_assigned_idx, last_assigned_anchor_id, mean_coherence, spawned_clusters_count)`.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn step_online_toroidal_kmeans_batch_frames_64(
         centroids: &mut [Self],
@@ -769,7 +754,7 @@ impl ManifoldGatewaySignal for PhaseAnchorRecord {
                     dominant_slot: self.dominant_slot,
                     action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
                     active_swarm_cell_mask: self.active_swarm_mask,
-                    attribution_tag: self.attribution_tag,
+                    root_cause_code: self.root_cause_code,
                     frame_flags: packed_tag as u16,
                     ..GatewayFrame::default()
                 },
@@ -817,7 +802,7 @@ impl ManifoldGatewaySignal for PhaseAnchorRecord {
                 fact_persona_coherence: self.resultant_r_bar,
                 repulsion_severity: 0.0,
                 lineage_flags: prov_bits,
-                attribution_tag: self.attribution_tag,
+                root_cause_code: self.root_cause_code,
                 dominant_slot: self.dominant_slot,
                 action_mode_flags: eff_action,
                 active_swarm_cell_mask: self.active_swarm_mask,
@@ -848,7 +833,7 @@ impl ManifoldGatewaySignal for PhaseAnchorRecord {
                     dominant_slot: self.dominant_slot,
                     action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
                     active_swarm_cell_mask: self.active_swarm_mask,
-                    attribution_tag: self.attribution_tag,
+                    root_cause_code: self.root_cause_code,
                     ..GatewayFrame::default()
                 },
                 [0u64; NUM_STIGMERGIC_GRANULES],
@@ -890,7 +875,7 @@ impl ManifoldGatewaySignal for PhaseAnchorRecord {
                 fact_persona_coherence: self.resultant_r_bar,
                 repulsion_severity: 0.0,
                 lineage_flags: prov_bits,
-                attribution_tag: self.attribution_tag,
+                root_cause_code: self.root_cause_code,
                 dominant_slot: self.dominant_slot,
                 action_mode_flags: self.action_mode_flags,
                 active_swarm_cell_mask: self.active_swarm_mask,
@@ -971,7 +956,7 @@ impl ManifoldGatewaySignal for PhaseAnchorRecord {
                     action_flags = rec.action_mode_flags;
                     swarm_mask = rec.active_swarm_mask;
                     prov_bits = rec_prov;
-                    dom_cause = rec.attribution_tag;
+                    dom_cause = rec.root_cause_code;
                     has_active = true;
                 } else if f_e > DEFAULT_ENTROPY_EPS {
                     let new_tot = tot_e + f_e;
@@ -1013,8 +998,8 @@ impl ManifoldGatewaySignal for PhaseAnchorRecord {
                     swarm_mask &= rec.active_swarm_mask;
                     prov_bits |= rec_prov;
                     dom_cause = branchless_select_u8(
-                        rec.attribution_tag > dom_cause,
-                        rec.attribution_tag,
+                        rec.root_cause_code > dom_cause,
+                        rec.root_cause_code,
                         dom_cause,
                     );
                     tot_e = new_tot;
@@ -1071,7 +1056,7 @@ impl ManifoldGatewaySignal for PhaseAnchorRecord {
                 fact_persona_coherence: fp_coh,
                 repulsion_severity: 0.0,
                 lineage_flags: prov_bits,
-                attribution_tag: dom_cause,
+                root_cause_code: dom_cause,
                 dominant_slot: dom_slot,
                 action_mode_flags: action_flags,
                 active_swarm_cell_mask: swarm_mask,

@@ -10,19 +10,22 @@
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
 
+#[cfg(test)]
+use crate::foundation::load_q7_words_64;
 use crate::foundation::{
     ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_PRESET_EXPRESS_PHASE,
     ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
     ATTRACTOR_SLOT_ID_MASK, Pod, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TaggedPtr,
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_min_f32, branchless_relu_f32, is_word_array_uniform_64, load_q7_words_64,
-    swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8, swar_q7_circular_add_x8,
-    swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_mean_round_x8,
-    swar_words_nonzero_64,
+    branchless_min_f32, branchless_relu_f32, is_word_array_uniform_64, swar_q7_abs_u8_x8,
+    swar_q7_add_sat_x8, swar_q7_avg_round_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
+    swar_q7_scale_le128_with_bias_x8, swar_u8_mean_round_x8, swar_words_nonzero_64,
 };
+#[cfg(test)]
+use crate::liminal::{MAX_ATTENTION_HEADS, PhaseQ7};
 use crate::liminal::{
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
-    branchless_select_u8, branchless_select_u32, branchless_select_u64,
+    NUM_STIGMERGIC_GRANULES, branchless_select_f32, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64,
 };
 use crate::stigmergy::circuit::StigmergicScaleGranularity;
 use crate::stigmergy::ledger::ContrastivePhaseBloomFilter;
@@ -477,6 +480,7 @@ impl PointerTrail {
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches),
     /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
+    #[cfg(test)]
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_resolve_action_in_swarm_to_words(
@@ -518,6 +522,7 @@ impl PointerTrail {
 
     /// Subdivides the Stigmergic Substrate's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches).
+    #[cfg(test)]
     #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_resolve_action_in_swarm_masked(

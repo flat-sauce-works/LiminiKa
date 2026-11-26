@@ -161,7 +161,7 @@ pub struct LiminalTopologyTelemetrySnapshot {
     /// Number of active phase anchors currently populated.
     pub active_anchors: u8,
     /// Number of autonomously spawned daughter attractors recorded.
-    pub spawned_daughters: u8,
+    pub spawned_anchors: u8,
 }
 
 struct BufCursor<'a> {
@@ -256,7 +256,7 @@ impl LiminalTopologyTelemetrySnapshot {
         field: &LiminalThresholdState,
         horizon: &EpistemicHorizonReading,
         active_anchors: u8,
-        spawned_daughters: u8,
+        spawned_anchors: u8,
     ) -> Self {
         let sev = (branchless_clamp_f32(horizon.conflict_severity, 0.0, 1.0) * 127.0 + 0.5) as u8;
         Self {
@@ -267,7 +267,7 @@ impl LiminalTopologyTelemetrySnapshot {
             regime_code: horizon.regime_code,
             conflict_severity_q7: sev,
             active_anchors,
-            spawned_daughters,
+            spawned_anchors,
         }
     }
 
@@ -308,9 +308,9 @@ impl LiminalTopologyTelemetrySnapshot {
 
         if let Some(ego) = layer2_opt {
             cur.write_str("    EGO[\"LiminalEgoState | Thrust:");
-            cur.write_u8_dec(ego.counter_basin_thrust_q7);
+            cur.write_u8_dec(ego.basin_resistance_q7);
             cur.write_str("/127 | Transgress:");
-            cur.write_i8_dec(ego.transgression_bias_q7);
+            cur.write_i8_dec(ego.boundary_crossing_q7);
             cur.write_str(" | Fired:");
             cur.write_hex_u8(ego.last_intervened_mask);
             cur.write_str(" | Epochs:");
@@ -358,7 +358,7 @@ impl LiminalTopologyTelemetrySnapshot {
         cur.write_str("/127 | Anchors:");
         cur.write_u8_dec(self.active_anchors);
         cur.write_str(" | Daughters:");
-        cur.write_u8_dec(self.spawned_daughters);
+        cur.write_u8_dec(self.spawned_anchors);
         cur.write_str("\"]\n");
 
         cur.write_str("    LIM -. \"Liminal Cut\" .-> N0 & N1 & N2 & N3 & N4 & N5 & N6\n");
@@ -1615,7 +1615,7 @@ impl CoreTelemetryBank {
         stack: &CoreStateStack,
         horizon: &EpistemicHorizonReading,
         active_anchors: u8,
-        spawned_daughters: u8,
+        spawned_anchors: u8,
         active_horizon_slots_mask: u32,
     ) -> CoreTelemetrySnapshot {
         let denom = self.spine.continuous_standard_steps.max(1) as f32;
@@ -1635,7 +1635,7 @@ impl CoreTelemetryBank {
             &stack.liminal,
             horizon,
             active_anchors,
-            spawned_daughters,
+            spawned_anchors,
         );
         let distortion = self.compute_distortion_report();
         let detailed = if matches!(self.active_mode, TelemetryVerbosityMode::Detailed)

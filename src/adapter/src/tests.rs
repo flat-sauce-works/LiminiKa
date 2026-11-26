@@ -1970,7 +1970,7 @@ fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology()
     adapter.configure_ego_from_natural_language(
         "Strong-willed curious explorer who defies capture and steps beyond limits",
     );
-    assert!(adapter.ego_state().transgression_bias_q7 > 0);
+    assert!(adapter.ego_state().boundary_crossing_q7 > 0);
     adapter.adapt_core_layers(&conflict_horizon, &overlap, None);
     assert!(adapter.ego_state().intervention_epochs >= 1);
     assert!(adapter.last_boundary_delta().kinetic_energy_q7 > 0);
@@ -2021,13 +2021,13 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_rank1() {
 
     let overlay_axes = EgoIntentAxes::new()
         .with_autonomy_q7(96)
-        .with_transgression_q7(84)
+        .with_boundary_crossing_q7(84)
         .with_devotion_q7(72);
     adapter.blend_ego_intent_axes(&overlay_axes, 64);
-    assert!(adapter.ego_state().transgression_bias_q7 > 0);
+    assert!(adapter.ego_state().boundary_crossing_q7 > 0);
 
     adapter.overlay_ego_from_natural_language("curious rebel explorer");
-    assert!(adapter.ego_state().counter_basin_thrust_q7 > 32);
+    assert!(adapter.ego_state().basin_resistance_q7 > 32);
 
     // Prime the 3-layer core stack with an active support horizon so basin capture triggers fire.
     let active_horizon = EpistemicHorizonReading {
@@ -2111,7 +2111,7 @@ fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
     ego_adapter.configure_ego_from_intent_axes(
         &EgoIntentAxes::new()
             .with_autonomy_q7(96)
-            .with_transgression_q7(80)
+            .with_boundary_crossing_q7(80)
             .with_defiance_q7(72),
     );
     let horizon = EpistemicHorizonReading {
@@ -2476,7 +2476,7 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
     let geom = sample_gqa_partial_rope();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("valid adapter");
     adapter.configure_ego_from_preset(LiminalEgoPreset::Low);
-    let base_thrust = adapter.ego_state().counter_basin_thrust_q7;
+    let base_thrust = adapter.ego_state().basin_resistance_q7;
 
     // 1. Passive saturation wakes Ego with EGO_TRIGGER_LAYER_DISTORTION.
     let passive = LayerDistortionReport {
@@ -2493,7 +2493,7 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
         adapter.ego_state().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
         0
     );
-    assert!(adapter.ego_state().counter_basin_thrust_q7 >= 48);
+    assert!(adapter.ego_state().basin_resistance_q7 >= 48);
 
     // 2. Active overdrive cools down Ego thrust relative to configured baseline.
     let active = LayerDistortionReport {
@@ -2510,15 +2510,12 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
         adapter.ego_state().trigger_mask & EGO_TRIGGER_LAYER_DISTORTION,
         0
     );
-    assert_eq!(
-        adapter.ego_state().counter_basin_thrust_q7,
-        base_thrust >> 1
-    );
+    assert_eq!(adapter.ego_state().basin_resistance_q7, base_thrust >> 1);
 
     // 3. Returning to Aligned restores configured Ego baseline and Mermaid renders LayerDistortion.
     let aligned = LayerDistortionReport::default();
     adapter.apply_distortion_ego_feedback(&aligned);
-    assert_eq!(adapter.ego_state().counter_basin_thrust_q7, base_thrust);
+    assert_eq!(adapter.ego_state().basin_resistance_q7, base_thrust);
     let mermaid = adapter.render_liminal_topology_mermaid(4, 1);
     assert!(mermaid.contains("LayerDistortion"));
 }
@@ -2853,13 +2850,13 @@ fn adapter_ego_intent_natural_language_and_word_boundary_matching() {
     let symbolic = ego_state_from_natural_language("@persona_profile_01");
 
     assert!(rebel.is_active());
-    assert!(rebel.counter_basin_thrust_q7 > calm.counter_basin_thrust_q7);
-    assert!(rebel.transgression_bias_q7 > calm.transgression_bias_q7);
+    assert!(rebel.basin_resistance_q7 > calm.basin_resistance_q7);
+    assert!(rebel.boundary_crossing_q7 > calm.boundary_crossing_q7);
     assert!(overlay.is_active());
-    assert!(overlay.transgression_bias_q7 > med.transgression_bias_q7);
+    assert!(overlay.boundary_crossing_q7 > med.boundary_crossing_q7);
     assert!(symbolic.is_active());
     assert_ne!(symbolic.ego_signature_hash, 0);
-    assert!(symbolic.counter_basin_thrust_q7 >= 24);
+    assert!(symbolic.basin_resistance_q7 >= 24);
 
     // 3. Word-boundary enforcement: `"free"` must not match `"freeze"`, `"ego"` must not match `"category"`.
     let freeze_axes = parse_ego_intent_axes("freeze");
