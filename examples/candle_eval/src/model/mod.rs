@@ -260,10 +260,62 @@ impl CausalLmModel {
         Ok(())
     }
 
+    pub(crate) fn embed_token_ids(&self, tokens: &[u32]) -> CResult<Tensor> {
+        if tokens.is_empty() {
+            return Err(candle_core::Error::Msg(
+                "embed_token_ids requires at least one token".to_string(),
+            ));
+        }
+        if self.embed_on_cpu {
+            let input_cpu = Tensor::from_slice(tokens, (1, tokens.len()), &Device::Cpu)?;
+            self.embed_tokens
+                .forward(&input_cpu)?
+                .to_device(&self.device)
+        } else {
+            let input = Tensor::from_slice(tokens, (1, tokens.len()), &self.device)?;
+            self.embed_tokens.forward(&input)
+        }
+    }
+
+    pub(crate) fn active_dtype(&self) -> DType {
+        self.embed_tokens.embeddings().dtype()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn forward_tokens(
         &mut self,
         tokens: &[u32],
+        offset: usize,
+        steer: Option<&mut ForwardSteer<'_, '_, '_>>,
+        use_entropy_gate: bool,
+        collect_bake_data: bool,
+        fetch_mode: LogitsFetchMode,
+        kv_mode: KvCacheMode,
+    ) -> CResult<ForwardTokensOutput> {
+        if tokens.is_empty() {
+            return Err(candle_core::Error::Msg(
+                "forward_tokens requires at least one token".to_string(),
+            ));
+        }
+        let h = self.embed_token_ids(tokens)?;
+        self.forward_embeds(
+            &h,
+            offset,
+            steer,
+            use_entropy_gate,
+            collect_bake_data,
+            fetch_mode,
+            kv_mode,
+        )
+    }
+
+    /// Runs the transformer backbone directly from pre-built `[1, seq_len, hidden_size]`
+    /// embeddings (supporting multimodal `[IMG]` splice inputs) across both `Append` and
+    /// `IsolatedProbe` KV modes with dynamic RoPE expansion and Llama-4 scaling parity.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn forward_embeds(
+        &mut self,
+        embeds: &Tensor,
         offset: usize,
         mut steer: Option<&mut ForwardSteer<'_, '_, '_>>,
         use_entropy_gate: bool,
@@ -274,23 +326,20 @@ impl CausalLmModel {
         if kv_mode == KvCacheMode::Append {
             debug_assert_eq!(self.kv_len(), offset);
         }
-        if tokens.is_empty() {
-            return Err(candle_core::Error::Msg(
-                "forward_tokens requires at least one token".to_string(),
-            ));
+        let (batch, seq_len, _) = embeds.dims3()?;
+        if batch != 1 || seq_len == 0 {
+            return Err(candle_core::Error::Msg(format!(
+                "forward_embeds requires [1, seq_len >= 1, hidden], got [{batch}, {seq_len}, _]"
+            )));
         }
-        let required_len = offset.checked_add(tokens.len()).ok_or_else(|| {
-            candle_core::Error::Msg("forward_tokens offset + len overflow".to_string())
+        let required_len = offset.checked_add(seq_len).ok_or_else(|| {
+            candle_core::Error::Msg("forward_embeds offset + len overflow".to_string())
         })?;
         self.rope.ensure_capacity(required_len)?;
-        let mut h = if self.embed_on_cpu {
-            let input_cpu = Tensor::from_slice(tokens, (1, tokens.len()), &Device::Cpu)?;
-            self.embed_tokens
-                .forward(&input_cpu)?
-                .to_device(&self.device)?
+        let mut h = if embeds.device().same_device(&self.device) {
+            embeds.clone()
         } else {
-            let input = Tensor::from_slice(tokens, (1, tokens.len()), &self.device)?;
-            self.embed_tokens.forward(&input)?
+            embeds.to_device(&self.device)?
         };
         let mut per_layer_q = if collect_bake_data {
             Vec::with_capacity(self.layers.len())
@@ -372,7 +421,7 @@ impl CausalLmModel {
         }
 
         let h = self.norm.forward(&h)?;
-        let mut last = h.i((0, tokens.len() - 1, ..))?.unsqueeze(0)?;
+        let mut last = h.i((0, seq_len - 1, ..))?.unsqueeze(0)?;
         let last_hidden = if collect_bake_data {
             last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?
         } else {

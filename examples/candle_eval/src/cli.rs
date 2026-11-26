@@ -55,6 +55,7 @@ pub(crate) struct EvalCliConfig {
     pub(crate) physics_eval: bool,
     pub(crate) extended_eval: bool,
     pub(crate) ja_eval: bool,
+    pub(crate) vlm_eval: bool,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
     pub(crate) circuit_mode: CircuitProfileMode,
     pub(crate) ego_mode: EgoProfileMode,
@@ -150,6 +151,9 @@ pub(crate) fn print_help() {
         "  --ja-eval                          Run fictional Japanese multilingual corpus and 28-probe suite in an isolated state"
     );
     println!(
+        "  --vlm-eval                         Run multimodal VLM boundary evaluation (Phases C-0, C-1, C-2)"
+    );
+    println!(
         "  --kv-min-res=<i8>                  Override RAM Phase-KV minimum resonance Q7 threshold"
     );
     println!("  --circuit=<analytical|integrative|hybrid[:N]>");
@@ -197,6 +201,7 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--physics-eval",
         "--extended-eval",
         "--ja-eval",
+        "--vlm-eval",
     ];
     const PREFIX_FLAGS: &[&str] = &[
         "--model=",
@@ -276,6 +281,7 @@ impl EvalCliConfig {
         let physics_eval = cli_args.iter().any(|a| a == "--physics-eval");
         let extended_eval = cli_args.iter().any(|a| a == "--extended-eval");
         let ja_eval = cli_args.iter().any(|a| a == "--ja-eval");
+        let vlm_eval = cli_args.iter().any(|a| a == "--vlm-eval");
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
         let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
         let ego_mode = parse_ego_mode(cli_args.iter().map(String::as_str));
@@ -331,6 +337,7 @@ impl EvalCliConfig {
             physics_eval,
             extended_eval,
             ja_eval,
+            vlm_eval,
             kv_min_res,
             circuit_mode,
             ego_mode,

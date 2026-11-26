@@ -37,6 +37,8 @@ mod model;
 mod multi_turn;
 mod physics_eval;
 mod step2;
+mod vision;
+mod vlm_eval;
 
 use bake::{
     argmax, capture_and_build_shared_corpus, kl_div, load_fixture, print_runtime_profile,
@@ -169,6 +171,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let chat = ChatTemplate::new(chat_kind, &cfg, &tokenizer);
     let active_layer_mask = cli.resolve_layer_mask(cfg.num_hidden_layers);
+    let vlm_cfg_opt = if cli.vlm_eval {
+        Some(vision::VisionConfig::load_from_dir(&model_dir, &tokenizer)?)
+    } else {
+        None
+    };
 
     let mut adapter = configure_trial_adapter(&cfg, &cli)?;
     let recall_only = cli.recall_only;
@@ -252,6 +259,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let active_persona_circuit = resolve_persona_circuit(circuit_mode, persona_lmnk_in.as_deref());
+    if let Some(vis_cfg) = vlm_cfg_opt {
+        if !recall_only {
+            eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+        }
+        vlm_eval::run_vlm_eval(
+            &cli,
+            &repo_root,
+            &model_dir,
+            &cfg,
+            vis_cfg,
+            &chat,
+            &device,
+            active_layer_mask,
+            &mut model,
+            &tokenizer,
+            active_persona_circuit,
+            circuit_mode,
+        )?;
+        return Ok(());
+    }
     if cli.extended_eval || cli.ja_eval {
         if !recall_only {
             eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
