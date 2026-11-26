@@ -204,7 +204,18 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
         let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..8 {
             engine
-                .eval_surrogate_and_step(0.68, 0.24, 0.35, 0.15, 0.09, 1.0, 0.5, &mut state_out)
+                .eval_surrogate_and_step(
+                    liminika_core::drivers::spine::entropy::SurrogateEntropyInput {
+                        p_max: 0.68,
+                        p_2nd: 0.24,
+                        cosine_dist: 0.35,
+                        mu_dist: 0.15,
+                        sigma_dist: 0.09,
+                        alpha_z: 1.0,
+                        gamma_mod: 0.5,
+                    },
+                    &mut state_out,
+                )
                 .unwrap();
         }
 
@@ -213,13 +224,15 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
             let (alpha, beta, d0, d_tau) = black_box((0.15f32, 0.09f32, 1.0f32, 0.5f32));
             let h = engine
                 .eval_surrogate_and_step(
-                    p_max,
-                    p_2nd,
-                    cos_d,
-                    alpha,
-                    beta,
-                    d0,
-                    d_tau,
+                    liminika_core::drivers::spine::entropy::SurrogateEntropyInput {
+                        p_max,
+                        p_2nd,
+                        cosine_dist: cos_d,
+                        mu_dist: alpha,
+                        sigma_dist: beta,
+                        alpha_z: d0,
+                        gamma_mod: d_tau,
+                    },
                     black_box(&mut state_out),
                 )
                 .unwrap();
@@ -528,15 +541,17 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             reset_engine_fast(&mut engine, &base_engine);
             let res = engine
                 .eval_stateful_with_lacuna_and_pointer(
-                    black_box(2.2f32),
-                    black_box(0.35f32),
-                    black_box(1.2f32),
-                    black_box(0.8f32),
-                    black_box(0.5f32),
-                    black_box(ptr),
-                    black_box(1.1f32),
-                    black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                    black_box(1.5f32),
+                    liminika_core::drivers::spine::entropy::LacunaPointerInput {
+                        token_z_score: black_box(2.2f32),
+                        lacuna_score: black_box(0.35f32),
+                        alpha: black_box(1.2f32),
+                        beta: black_box(0.8f32),
+                        d0: black_box(0.5f32),
+                        input_ptr: black_box(ptr),
+                        trail_density: black_box(1.1f32),
+                        dominant_attractor_slot: black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                        high_density_rank1_thresh: black_box(1.5f32),
+                    },
                 )
                 .unwrap();
             black_box(res);
@@ -632,11 +647,13 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 black_box(parent_ptr),
                 black_box(&curr_mask),
                 black_box(&anchor_mask),
-                black_box(0.15f32),
-                black_box(3u32),
-                black_box(0.10f32),
-                black_box(&offsets),
-                black_box(&deltas),
+                liminika_core::stigmergy::QdptCascadeParams {
+                    w_key: black_box(0.15f32),
+                    current_level: black_box(3u32),
+                    hysteresis_band: black_box(0.10f32),
+                    addr_offsets: black_box(&offsets),
+                    phase_deltas: black_box(&deltas),
+                },
             )
             .unwrap();
             black_box(res);

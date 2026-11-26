@@ -15,7 +15,6 @@ pub(crate) use self::coherence::{
     avx2_slerp_vec64, avx2_vec64_to_words64, avx2_words64_to_vec64,
     avx2_words64_to_vec64_with_uniform,
 };
-pub(crate) use self::gravity_fold::branchless_q7_unified_manifold_fold_words_with_flags_64;
 pub use self::gravity_fold::*;
 pub(crate) use self::toroidal_centroid::step_toroidal_centroid_words_cached_64;
 pub use self::toroidal_centroid::*;

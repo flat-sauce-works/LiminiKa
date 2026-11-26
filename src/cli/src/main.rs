@@ -577,14 +577,33 @@ impl liminika_adapter::SubtitleActivationEncoder for CliProjectionEncoder {
 }
 
 fn resolve_cli_rope_geometry(profile: &str) -> Result<liminika_adapter::RopeGeometry, String> {
+    const CLI_GQA_HEAD_DIM: usize = 128;
+    const CLI_GQA_PARTIAL_ROTARY_DIM: usize = 96;
+    const CLI_GQA_FULL_ROTARY_DIM: usize = 128;
+    const CLI_GQA_NUM_Q_HEADS: usize = 24;
+    const CLI_GQA_NUM_KV_HEADS: usize = 8;
+    const CLI_GQA_NUM_LAYERS: usize = 32;
+    const CLI_GQA_LAYER_MASK: u64 = 0xFFFF_FFFF;
+
     match profile {
-        "phi4-mini" => Ok(liminika_adapter::RopeGeometry::phi4_mini()),
-        "alt-128" => {
-            let mut g = liminika_adapter::RopeGeometry::phi4_mini();
-            g.head_dim = 128;
-            g.rotary_dim = 128;
-            Ok(g)
-        }
+        "phi4-mini" => Ok(liminika_adapter::RopeGeometry::new(
+            liminika_adapter::RopeLayout::HalfSplit,
+            CLI_GQA_HEAD_DIM,
+            CLI_GQA_PARTIAL_ROTARY_DIM,
+            CLI_GQA_NUM_Q_HEADS,
+            CLI_GQA_NUM_KV_HEADS,
+            CLI_GQA_NUM_LAYERS,
+            CLI_GQA_LAYER_MASK,
+        )),
+        "alt-128" => Ok(liminika_adapter::RopeGeometry::new(
+            liminika_adapter::RopeLayout::HalfSplit,
+            CLI_GQA_HEAD_DIM,
+            CLI_GQA_FULL_ROTARY_DIM,
+            CLI_GQA_NUM_Q_HEADS,
+            CLI_GQA_NUM_KV_HEADS,
+            CLI_GQA_NUM_LAYERS,
+            CLI_GQA_LAYER_MASK,
+        )),
         other => Err(format!(
             "unknown geometry profile '{other}' (expected phi4-mini or alt-128)"
         )),

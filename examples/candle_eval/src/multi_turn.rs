@@ -488,9 +488,16 @@ pub(crate) fn run_multi_turn_and_step3(
                 }
 
                 if matches!(horizon_mode, HorizonAblationMode::SlowLoop) {
-                    // Intentional discard: adjustment is applied to adapter state in-place;
-                    // this multi-turn harness only observes subsequent decode telemetry.
-                    let _ = adapter.apply_slow_loop_telemetry_epoch(64);
+                    let slow_adj = adapter.apply_slow_loop_telemetry_epoch(64);
+                    if slow_adj.applied {
+                        println!(
+                            "    [MT:slow_loop] steps={} alpha_q7={} repulse_bias_q7={} dwell_delta={}",
+                            slow_adj.sampled_steps,
+                            slow_adj.suggested_derivative_alpha_q7,
+                            slow_adj.suggested_repulse_bias_q7,
+                            slow_adj.suggested_slide_out_dwell_delta,
+                        );
+                    }
                 }
 
                 let lower = reply_text.to_lowercase();

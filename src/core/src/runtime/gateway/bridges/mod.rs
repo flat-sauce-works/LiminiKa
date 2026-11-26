@@ -35,6 +35,8 @@ mod anchor_bridge;
 mod ledger_bridge;
 mod substrate_bridge;
 
+pub use substrate_bridge::SandboxLifecycleInput;
+
 impl ResidualAdapterEngine {
     /// Applies norm-adaptive fused Rank-1 residual injection driven by `frame`.
     ///
@@ -140,60 +142,6 @@ impl EgoDifferentialNet {
             ego, spine, partition, stigmergy, tension, frame,
         );
         (norm, hops)
-    }
-
-    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network in-place on `frame`
-    /// and returns `(delta_norm_q7, hops_traversed, entry_idx)` (`entry_idx` in `0..8`) for
-    /// reinforcement telemetry tracking.
-    #[inline]
-    pub fn evaluate_pframe_chain_with_entry_branchless(
-        &self,
-        ego: &LiminalEgoState,
-        spine: &SystemSpineState,
-        partition: &LacunaPartition8,
-        stigmergy: &StigmergicGranuleState,
-        tension: &DistortionTension,
-        frame: &mut GatewayFrame,
-    ) -> (u8, u8, u8) {
-        if !pframe_transition_allowed(spine, partition) {
-            return (0, 0, 0);
-        }
-        let (acc_words, avg_delta, hops_traversed, entry_idx, matched_mask) = self
-            .evaluate_pframe_words_branchless(
-                ego,
-                partition,
-                stigmergy,
-                tension.effective_ego_scale_q7,
-                frame.phase_words_ref(),
-            );
-        if matched_mask == 0 {
-            return (0, 0, 0);
-        }
-        let (full_lock, eff_slot, eff_modes) = spine.isolate_slot_and_modes_branchless(
-            frame.dominant_slot,
-            frame.action_mode_flags,
-            frame.dominant_slot,
-            frame.action_mode_flags,
-        );
-        if full_lock {
-            return (avg_delta, hops_traversed, entry_idx);
-        }
-        frame.dominant_slot = eff_slot;
-        frame.action_mode_flags = eff_modes;
-        *frame.phase_words_mut() = acc_words;
-        frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
-        let ptr_tag = pack_action_slot_tag(
-            frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
-            frame.action_mode_flags,
-        );
-        frame.frame_flags = u16::from(ptr_tag);
-        frame.tagged_ptr = TaggedPtr::pack(
-            frame.mapped_section_offset48,
-            ptr_tag,
-            frame.mean_phase_tag_q7,
-        )
-        .raw();
-        (avg_delta, hops_traversed, entry_idx)
     }
 
     /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network in-place on `frame`
@@ -457,7 +405,7 @@ impl LiminalEgoState {
     /// Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, modulating `frame`
     /// in-place and synchronizing `self` onto `stack.ego` after intervention.
     #[inline]
-    pub fn intervene_on_layers_and_frame_branchless(
+    pub(crate) fn intervene_on_layers_and_frame_branchless(
         &mut self,
         stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,

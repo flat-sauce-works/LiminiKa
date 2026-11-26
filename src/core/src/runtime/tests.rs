@@ -74,20 +74,24 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_unified_container_view
     let mut trail = PointerTrail::default();
 
     let fact_a = ObjectiveFact::new([28i8; MAX_ATTENTION_HEADS], 2.5, 0x0010_0000, 101);
-    let (f1, idx1, id1, _coh1, mass1, spawned1) =
-        PhaseAnchorRecord::step_online_toroidal_kmeans_signal_64(
+    let (f1, w1) = fact_a.synthesize_gateway_frame_with_words();
+    let (idx1, id1, _coh1, mass1, spawned1) =
+        PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
             &mut centroids,
-            &fact_a,
+            &f1,
+            &w1,
             DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
             Some(&mut trail),
         );
     assert!(spawned1 && idx1 == 0 && id1 == 101 && trail.cluster_id == 101 && mass1 > 0.0);
 
     let fact_a2 = ObjectiveFact::new([30i8; MAX_ATTENTION_HEADS], 3.0, 0x0010_0000, 101);
-    let (f2, idx2, id2, coh2, mass2, spawned2) =
-        PhaseAnchorRecord::step_online_toroidal_kmeans_signal_64(
+    let (f2, w2) = fact_a2.synthesize_gateway_frame_with_words();
+    let (idx2, id2, coh2, mass2, spawned2) =
+        PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
             &mut centroids,
-            &fact_a2,
+            &f2,
+            &w2,
             DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
             Some(&mut trail),
         );
@@ -95,10 +99,12 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_unified_container_view
     assert_eq!(centroids[0].sample_count, 2);
 
     let persona_b = SubjectivePersona::new([-80i8; MAX_ATTENTION_HEADS], 2.8, 0x0024_0000, 202);
-    let (_f3, idx3, id3, _coh3, mass3, spawned3) =
-        PhaseAnchorRecord::step_online_toroidal_kmeans_signal_64(
+    let (f3, w3) = persona_b.synthesize_gateway_frame_with_words();
+    let (idx3, id3, _coh3, mass3, spawned3) =
+        PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
             &mut centroids,
-            &persona_b,
+            &f3,
+            &w3,
             DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
             Some(&mut trail),
         );
@@ -180,13 +186,15 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_unified_container_view
     let trails_arr = [query_trail];
     let mut container_buf = AlignedBuffer128::<u8, 1024>::new([0u8; 1024]);
     let no_rep_len = LmnkContainerView::write_standard_sections_to_bytes(
-        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-        &centroids[..2],
-        &trails_arr,
-        Some(&bloom),
-        Some(&ledger),
-        &[],
-        1_774_900_000,
+        StandardSectionsInput {
+            container_flags: LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            anchors: &centroids[..2],
+            trails: &trails_arr,
+            bloom: Some(&bloom),
+            ledger: Some(&ledger),
+            provenance_reports: &[],
+            timestamp_epoch_sec: 1_774_900_000,
+        },
         &mut container_buf.data,
     )
     .unwrap();
@@ -194,13 +202,15 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_unified_container_view
     assert_eq!(no_rep_view.phase_anchor_count(), 2);
 
     let total_len = LmnkContainerView::write_standard_sections_to_bytes(
-        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-        &centroids,
-        &trails_arr,
-        Some(&bloom),
-        Some(&ledger),
-        &reports_arr,
-        1_774_900_000,
+        StandardSectionsInput {
+            container_flags: LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            anchors: &centroids,
+            trails: &trails_arr,
+            bloom: Some(&bloom),
+            ledger: Some(&ledger),
+            provenance_reports: &reports_arr,
+            timestamp_epoch_sec: 1_774_900_000,
+        },
         &mut container_buf.data,
     )
     .unwrap();
@@ -273,12 +283,14 @@ fn test_online_toroidal_kmeans_dp_means_consolidation_and_unified_container_view
             &lim_centroids,
             &mut src_trail,
             &[cand_orthogonal, cand_aligned],
-            128,
-            1.0,
-            0.25,
-            0.10,
-            0.50,
-            0.35,
+            crate::stigmergy::CoarseToFineParams {
+                head_dim: 128,
+                phase_interference_gain: 1.0,
+                stigmergic_prior_gain: 0.25,
+                pointer_link_bonus: 0.10,
+                cluster_bonus_gain: 0.50,
+                contradiction_threshold: 0.35,
+            },
         );
     assert!(found_ok && win_c == 0 && sel_tid == 1 && best_sc > 0.5 && best_c > 0.95);
 }
@@ -450,11 +462,13 @@ fn test_multi_scale_layer_cascade_and_cognitive_trajectory_circuit() {
         .orchestrate_adaptive_depth_n(
             &layer_array,
             3,
-            TaggedPtr::default(),
-            &input_words,
+            ScaleCascadeInput {
+                input_ptr: TaggedPtr::default(),
+                input_words: &input_words,
+                bloom_filter: None,
+            },
             &mut ledger,
             &mut trail,
-            None,
         )
         .unwrap();
     assert_eq!(orch_proj.total_layers, 3);
@@ -551,11 +565,13 @@ fn test_synaptic_transitions_cross_trajectory_and_adaptive_cascade() {
         .orchestrate_adaptive_depth_n(
             &early_layers,
             3,
-            TaggedPtr::default(),
-            &aligned_words,
+            ScaleCascadeInput {
+                input_ptr: TaggedPtr::default(),
+                input_words: &aligned_words,
+                bloom_filter: None,
+            },
             &mut early_slot,
             &mut early_trail,
-            None,
         )
         .unwrap();
     // Early-exit stopped after layer 0, so only 1 step was added (3 -> 4 total steps).
@@ -622,13 +638,15 @@ fn test_cognitive_circuit_plasticity_composition_and_unified_container_roundtrip
     let mut buf = [0u8; 1024];
     let off = buf.as_ptr().align_offset(128);
     let written = LmnkContainerView::write_standard_sections_to_bytes(
-        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-        &anchors,
-        &trails,
-        None,
-        Some(&slot),
-        &[],
-        1_700_000_000,
+        StandardSectionsInput {
+            container_flags: LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            anchors: &anchors,
+            trails: &trails,
+            bloom: None,
+            ledger: Some(&slot),
+            provenance_reports: &[],
+            timestamp_epoch_sec: 1_700_000_000,
+        },
         &mut buf[off..off + req_len],
     )
     .unwrap();
@@ -693,12 +711,14 @@ fn test_hybrid_scale_circuit_and_adaptive_threshold_policy() {
         .orchestrate_adaptive_depth_n_with_policy(
             &layers,
             1,
-            TaggedPtr::default(),
-            &input_words,
+            ScaleCascadeInput {
+                input_ptr: TaggedPtr::default(),
+                input_words: &input_words,
+                bloom_filter: None,
+            },
+            &strict_policy,
             &mut slot,
             &mut trail,
-            None,
-            &strict_policy,
         )
         .unwrap();
     assert_eq!(proj.total_layers, 1);
@@ -769,7 +789,15 @@ fn test_ram_phase_kv_cache_exact_hit_resonance_lru_and_gateway_synthesis() {
         ..Default::default()
     };
 
-    cache.store_context_keyframe(0xAAAA_0001, 10, 101, &phases_a, circuit_a, act_a, 1);
+    cache.store_context_keyframe(KvKeyframeStoreInput {
+        context_hash: 0xAAAA_0001,
+        token_index: 10,
+        anchor_id: 101,
+        phases: &phases_a,
+        circuit: circuit_a,
+        activation: act_a,
+        epoch: 1,
+    });
 
     // 1. Exact context hash hit returns slot 0 with exact_hit = true and bumps reuse_count.
     let q_words_a = load_q7_words_64(&phases_a);
@@ -799,11 +827,35 @@ fn test_ram_phase_kv_cache_exact_hit_resonance_lru_and_gateway_synthesis() {
     // 4. LRU eviction replaces oldest epoch when capacity is full.
     let mut tiny = [RamPhaseKvEntry::default(); 2];
     tiny.as_mut_slice()
-        .store_context_keyframe(1, 0, 1, &phases_a, circuit_a, act_a, 10);
+        .store_context_keyframe(KvKeyframeStoreInput {
+            context_hash: 1,
+            token_index: 0,
+            anchor_id: 1,
+            phases: &phases_a,
+            circuit: circuit_a,
+            activation: act_a,
+            epoch: 10,
+        });
     tiny.as_mut_slice()
-        .store_context_keyframe(2, 0, 2, &phases_a, circuit_a, act_a, 20);
+        .store_context_keyframe(KvKeyframeStoreInput {
+            context_hash: 2,
+            token_index: 0,
+            anchor_id: 2,
+            phases: &phases_a,
+            circuit: circuit_a,
+            activation: act_a,
+            epoch: 20,
+        });
     tiny.as_mut_slice()
-        .store_context_keyframe(3, 0, 3, &phases_a, circuit_a, act_a, 30);
+        .store_context_keyframe(KvKeyframeStoreInput {
+            context_hash: 3,
+            token_index: 0,
+            anchor_id: 3,
+            phases: &phases_a,
+            circuit: circuit_a,
+            activation: act_a,
+            epoch: 30,
+        });
     assert_eq!(tiny[0].context_hash, 3);
     assert_eq!(tiny[1].context_hash, 2);
 }
@@ -824,7 +876,15 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let p3 = [36i8; MAX_ATTENTION_HEADS];
 
     let slot = gop_cache
-        .store_keyframe_and_reset_gop(0xCAFE_0001, 100, 7, &p0, circuit, act, 1)
+        .store_keyframe_and_reset_gop(KvKeyframeStoreInput {
+            context_hash: 0xCAFE_0001,
+            token_index: 100,
+            anchor_id: 7,
+            phases: &p0,
+            circuit,
+            activation: act,
+            epoch: 1,
+        })
         .expect("slot allocated");
     assert_eq!(gop_cache.slot_pframe_count(slot), 0);
 
@@ -856,7 +916,15 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut topic_neg = [0i8; MAX_ATTENTION_HEADS];
     topic_neg[0] = 1;
     orth_cache
-        .store_keyframe_and_reset_gop(0x1111, 1, 1, &topic_a, circuit, act, 1)
+        .store_keyframe_and_reset_gop(KvKeyframeStoreInput {
+            context_hash: 0x1111,
+            token_index: 1,
+            anchor_id: 1,
+            phases: &topic_a,
+            circuit,
+            activation: act,
+            epoch: 1,
+        })
         .unwrap();
     assert!(
         orth_cache
@@ -888,7 +956,18 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let empty_frame = GatewayFrame::default();
     assert_eq!(
         auto_cache
-            .step_with_gateway_autonomous(0, 1, &empty_frame, &mut auto_circuit, act, &policy, 1)
+            .step_with_gateway_and_override(
+                KvGatewayStepInput {
+                    context_hash: 0,
+                    token_index: 1,
+                    frame: &empty_frame,
+                    activation: act,
+                    policy: &policy,
+                    override_min_resonance_q7: None,
+                    epoch: 1,
+                },
+                &mut auto_circuit,
+            )
             .unwrap(),
         RamPhaseKvStepOutcome::SkippedLiminal
     );
@@ -899,28 +978,34 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     fact_frame.active_head_count = 24;
     assert!(matches!(
         auto_cache
-            .step_with_gateway_autonomous(
-                0x5555,
-                10,
-                &fact_frame,
+            .step_with_gateway_and_override(
+                KvGatewayStepInput {
+                    context_hash: 0x5555,
+                    token_index: 10,
+                    frame: &fact_frame,
+                    activation: act,
+                    policy: &policy,
+                    override_min_resonance_q7: None,
+                    epoch: 2,
+                },
                 &mut auto_circuit,
-                act,
-                &policy,
-                2
             )
             .unwrap(),
         RamPhaseKvStepOutcome::StoredKeyframe { slot_idx: 0, .. }
     ));
     assert!(matches!(
         auto_cache
-            .step_with_gateway_autonomous(
-                0x6666,
-                12,
-                &fact_frame,
+            .step_with_gateway_and_override(
+                KvGatewayStepInput {
+                    context_hash: 0x6666,
+                    token_index: 12,
+                    frame: &fact_frame,
+                    activation: act,
+                    policy: &policy,
+                    override_min_resonance_q7: None,
+                    epoch: 3,
+                },
                 &mut auto_circuit,
-                act,
-                &policy,
-                3
             )
             .unwrap(),
         RamPhaseKvStepOutcome::ResonatedSeeked {
@@ -939,14 +1024,17 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
         let mut step_frame = ObjectiveFact::new(delta_arr, 2.5, 0, 77).synthesize_gateway_frame();
         step_frame.active_head_count = 24;
         let out = auto_cache
-            .step_with_gateway_autonomous(
-                0x5555,
-                14 + step_idx,
-                &step_frame,
+            .step_with_gateway_and_override(
+                KvGatewayStepInput {
+                    context_hash: 0x5555,
+                    token_index: 14 + step_idx,
+                    frame: &step_frame,
+                    activation: act,
+                    policy: &policy,
+                    override_min_resonance_q7: None,
+                    epoch: 4 + step_idx,
+                },
                 &mut auto_circuit,
-                act,
-                &policy,
-                4 + step_idx,
             )
             .unwrap();
         assert!(matches!(
@@ -964,14 +1052,17 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut reanchor_frame = ObjectiveFact::new(delta_arr, 2.5, 0, 77).synthesize_gateway_frame();
     reanchor_frame.active_head_count = 24;
     let reanchored = auto_cache
-        .step_with_gateway_autonomous(
-            0x5555,
-            20,
-            &reanchor_frame,
+        .step_with_gateway_and_override(
+            KvGatewayStepInput {
+                context_hash: 0x5555,
+                token_index: 20,
+                frame: &reanchor_frame,
+                activation: act,
+                policy: &policy,
+                override_min_resonance_q7: None,
+                epoch: 8,
+            },
             &mut auto_circuit,
-            act,
-            &policy,
-            8,
         )
         .unwrap();
     assert!(matches!(
@@ -991,20 +1082,34 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut opp_frame = ObjectiveFact::new(opp_arr, 2.5, 0, 78).synthesize_gateway_frame();
     opp_frame.active_head_count = 24;
     let _ = auto_cache
-        .step_with_gateway_autonomous(0x5555, 21, &opp_frame, &mut auto_circuit, act, &policy, 9)
+        .step_with_gateway_and_override(
+            KvGatewayStepInput {
+                context_hash: 0x5555,
+                token_index: 21,
+                frame: &opp_frame,
+                activation: act,
+                policy: &policy,
+                override_min_resonance_q7: None,
+                epoch: 9,
+            },
+            &mut auto_circuit,
+        )
         .unwrap();
     assert_eq!(auto_cache.slot_pframe_count(0), 1);
     auto_cache.pframes[0][0] =
         crate::foundation::KvMotionDeltaPacket::new([-120; MAX_ATTENTION_HEADS]);
     let repulsed_out = auto_cache
-        .step_with_gateway_autonomous(
-            0x5555,
-            22,
-            &reanchor_frame,
+        .step_with_gateway_and_override(
+            KvGatewayStepInput {
+                context_hash: 0x5555,
+                token_index: 22,
+                frame: &reanchor_frame,
+                activation: act,
+                policy: &policy,
+                override_min_resonance_q7: None,
+                epoch: 10,
+            },
             &mut auto_circuit,
-            act,
-            &policy,
-            10,
         )
         .unwrap();
     assert!(matches!(
@@ -1101,20 +1206,26 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     );
     let (mod_frame, _, _) = substrate
         .orchestrate_gateway_layer_with_core_layers_safe(
-            &sig,
-            &geom,
-            None,
-            &policy,
-            &sys,
-            &probe,
-            StigmergicScaleGranularity::MacroCoalition,
-            0.35,
+            GatewayLayerInput {
+                signal: &sig,
+                geometry: &geom,
+                core_ctx: None,
+                scale: StigmergicScaleGranularity::MacroCoalition,
+                entropy_h_tilde: 0.35,
+                unresolved_damping_u7: 128,
+            },
+            GatewayPolicyContext {
+                policy: &policy,
+                system: &sys,
+                probe: &probe,
+            },
             &mut fuse_slot,
             &mut trail,
-            128,
-            None,
-            None,
-            None,
+            GatewayLayerTargets {
+                query_tensor: None,
+                rank1_hidden: None,
+                logits_opt: None,
+            },
         )
         .unwrap();
     assert!(mod_frame.effective_inv_temp > 1.0);
@@ -1143,20 +1254,26 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut peel_trail = fixed_trail;
     let (_, _, dec_peel) = substrate
         .orchestrate_gateway_layer_with_core_layers_safe(
-            &sig,
-            &geom,
-            None,
-            &policy,
-            &sys,
-            &probe,
-            StigmergicScaleGranularity::CellTrail,
-            0.45,
+            GatewayLayerInput {
+                signal: &sig,
+                geometry: &geom,
+                core_ctx: None,
+                scale: StigmergicScaleGranularity::CellTrail,
+                entropy_h_tilde: 0.45,
+                unresolved_damping_u7: 128,
+            },
+            GatewayPolicyContext {
+                policy: &policy,
+                system: &sys,
+                probe: &probe,
+            },
             &mut peel_hub_slot,
             &mut peel_trail,
-            128,
-            None,
-            None,
-            None,
+            GatewayLayerTargets {
+                query_tensor: None,
+                rank1_hidden: None,
+                logits_opt: None,
+            },
         )
         .unwrap();
 
@@ -1165,20 +1282,26 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     let mut fuse_trail = fixed_trail;
     let (_, _, dec_fuse) = substrate
         .orchestrate_gateway_layer_with_core_layers_safe(
-            &sig,
-            &geom,
-            None,
-            &policy,
-            &sys,
-            &probe,
-            StigmergicScaleGranularity::MacroCoalition,
-            0.45,
+            GatewayLayerInput {
+                signal: &sig,
+                geometry: &geom,
+                core_ctx: None,
+                scale: StigmergicScaleGranularity::MacroCoalition,
+                entropy_h_tilde: 0.45,
+                unresolved_damping_u7: 128,
+            },
+            GatewayPolicyContext {
+                policy: &policy,
+                system: &sys,
+                probe: &probe,
+            },
             &mut fuse_hub_slot,
             &mut fuse_trail,
-            128,
-            None,
-            None,
-            None,
+            GatewayLayerTargets {
+                query_tensor: None,
+                rank1_hidden: None,
+                logits_opt: None,
+            },
         )
         .unwrap();
     assert_ne!(dec_peel, dec_fuse);
@@ -1321,9 +1444,11 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
     // Case A: Closest to slot #0 (`|22-0| < |48-22|`), yet under high dispersion/saturation pressure,
     // the peeled residual (`22 - 0 = 22`) matches slot #1 (`48`) and scatters onto slot #1.
     let fact_scatter = ObjectiveFact::new([22i8; MAX_ATTENTION_HEADS], 1.5, 0x0030_0000, 90);
-    let (_, report_scatter) = PhaseAnchorRecord::step_dissipative_overflow_signal_64(
+    let (f_scatter, w_scatter) = fact_scatter.synthesize_gateway_frame_with_words();
+    let report_scatter = PhaseAnchorRecord::step_dissipative_overflow_scatter_or_spawn_64(
         &mut pool,
-        &fact_scatter,
+        &f_scatter,
+        &w_scatter,
         0.65,
         Some(&mut trail),
     );
@@ -1343,9 +1468,11 @@ fn dissipative_overflow_peels_residual_scatters_and_spawns_daughter_with_relativ
 
     // Case B: Saturated basin cannot absorb an orthogonal sample into any existing node -> autonomous daughter birth.
     let fact_orphan = ObjectiveFact::new([-96i8; MAX_ATTENTION_HEADS], 1.8, 0x0040_0000, 91);
-    let (_, report_birth) = PhaseAnchorRecord::step_dissipative_overflow_signal_64(
+    let (f_orphan, w_orphan) = fact_orphan.synthesize_gateway_frame_with_words();
+    let report_birth = PhaseAnchorRecord::step_dissipative_overflow_scatter_or_spawn_64(
         &mut pool,
-        &fact_orphan,
+        &f_orphan,
+        &w_orphan,
         0.65,
         Some(&mut trail),
     );
@@ -2135,15 +2262,17 @@ fn test_canonical_modules_and_substrate_composite() {
 
     let density = substrate
         .execute_stigmergic_token_cascade(
-            input_ptr.raw(),
+            crate::stigmergy::TokenCascadeParams {
+                input_ptr: input_ptr.raw(),
+                bloom_filter: &bloom,
+                head_dim: substrate.head_dim,
+                num_heads: substrate.num_heads,
+                repulsion_threshold: 2,
+                repulsion_scale_u7: 128,
+                phase_step_min_rad: DEFAULT_PHASE_STEP_MIN_RAD,
+                max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+            },
             &mut ledger,
-            &bloom,
-            substrate.head_dim,
-            substrate.num_heads,
-            2,
-            128,
-            DEFAULT_PHASE_STEP_MIN_RAD,
-            DEFAULT_PHASE_CLAMP_MAX_RAD,
             Some(&mut q_buf.as_aligned_slice_mut()),
             None,
             &mut trail,
@@ -2220,9 +2349,11 @@ fn test_lora_phase_kv_cache_replay_unified_manifold_and_entropy_tunneling() {
     project_lora_with_block_scales(
         &lora_a.as_aligned_slice(),
         &lora_b.as_aligned_slice(),
-        2,
-        8,
-        8,
+        crate::foundation::LoraDimensions {
+            rank: 2,
+            dim_in: 8,
+            dim_out: 8,
+        },
         &mut rank1_desc,
         &mut prof_out.as_aligned_slice_mut(),
         &mut scales_out.as_aligned_slice_mut(),
@@ -2329,18 +2460,15 @@ fn test_lora_phase_kv_cache_replay_unified_manifold_and_entropy_tunneling() {
 }
 
 #[test]
-fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
-    let mut substrate =
+fn test_substrate_gateway_kmeans_and_rot_dim_resolution() {
+    let substrate =
         StigmergicSubstrate::with_dimensions_and_thresholds(8, 2, 16, StigmergicThresholds::new())
             .unwrap();
-    let mut q_buf = AlignedBuffer32::new([1.0f32; 16]);
-    let mut k_buf = AlignedBuffer32::new([1.0f32; 16]);
     let mut active_trail = PointerTrail {
         stigmergic_density: 1.2,
         accumulated_phase_delta: [24i8; MAX_ATTENTION_HEADS],
         ..Default::default()
     };
-    // Verify Gateway + Online Toroidal k-Means closed-loop orchestration
     let sys_cfg = RuntimeConfig {
         head_dim: 8,
         num_heads: 2,
@@ -2352,73 +2480,23 @@ fn test_substrate_gateway_kmeans_and_swarm_step_closed_loop() {
     let fact = ObjectiveFact::new([28i8; MAX_ATTENTION_HEADS], 2.0, 0x0010_0000, 77);
     let persona = SubjectivePersona::new([24i8; MAX_ATTENTION_HEADS], 2.5, 0x0020_0000, 42);
     let composite = (sys, fact, persona);
+    let (gw_frame, gw_words) = composite.synthesize_gateway_frame_with_words();
     let mut centroids = [PhaseAnchorRecord::default(); 2];
-
-    let (gw_frame, gw_rep, c_idx, c_aid, c_coh, _spawned) = substrate
-        .orchestrate_gateway_kmeans_and_select_action(
-            &composite,
-            0.30,
+    let (c_idx, c_aid, c_coh, _mass, _spawned) =
+        PhaseAnchorRecord::step_online_toroidal_kmeans_frame_with_words_64(
             &mut centroids,
+            &gw_frame,
+            &gw_words,
             0.55,
-            &mut active_trail,
-            None,
-            Some(&mut q_buf.as_aligned_slice_mut()),
-            Some(&mut k_buf.as_aligned_slice_mut()),
-            None,
-        )
-        .unwrap();
-
+            Some(&mut active_trail),
+        );
     assert_eq!(c_idx, 0);
     assert_eq!(c_aid, 42);
     assert!(c_coh > 0.90);
     assert_eq!(gw_frame.target_anchor_id, 42);
     assert_eq!(gw_frame.resolve_autonomous_rot_dim(16, 0.20, 1.5), 4);
     assert_eq!(substrate.resolve_autonomous_rot_dim(0x04, 0xFF, 1.5), 2);
-    assert!(gw_rep.updated_density >= 1.8);
     assert!(centroids[0].verify_integrity());
-
-    struct MockExternalSearchReceptor {
-        fired_count: u32,
-        last_anchor_id: u32,
-        last_slot: u8,
-    }
-    impl StigmergicReceptor for MockExternalSearchReceptor {
-        fn on_stigmergic_emergence(
-            &mut self,
-            _frame: &GatewayFrame,
-            report: &SubstrateStepReport,
-            _trail: &PointerTrail,
-        ) -> LmnkResult<()> {
-            if report.is_action_emergent(1.0) {
-                self.fired_count += 1;
-                self.last_anchor_id = report.dominant_anchor_id;
-                self.last_slot = report.target_slot;
-            }
-            Ok(())
-        }
-    }
-
-    let mut search_receptor = MockExternalSearchReceptor {
-        fired_count: 0,
-        last_anchor_id: 0,
-        last_slot: 0,
-    };
-    let (_f2, rep2, _idx2, aid2, _coh2, _sp2) = substrate
-        .orchestrate_gateway_attractor_swarm_step(
-            &composite,
-            0.30,
-            &mut centroids,
-            &mut active_trail,
-            &mut search_receptor,
-            None,
-            Some(&mut q_buf.as_aligned_slice_mut()),
-            Some(&mut k_buf.as_aligned_slice_mut()),
-            None,
-        )
-        .unwrap();
-    assert_eq!(search_receptor.fired_count, 1);
-    assert_eq!(search_receptor.last_anchor_id, aid2);
-    assert!(rep2.emergence_potential() > 1.5);
 }
 
 #[test]
@@ -2521,20 +2599,24 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     let mut trail = PointerTrail::default();
     let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
-            &MockSignal {
-                flags: ACTION_PRESET_EXPRESS_PHASE,
+            GatewayLayerInput {
+                signal: &MockSignal {
+                    flags: ACTION_PRESET_EXPRESS_PHASE,
+                },
+                geometry: &Geom,
+                core_ctx,
+                scale: StigmergicScaleGranularity::PointerBit,
+                entropy_h_tilde: 0.30,
+                unresolved_damping_u7: 128,
             },
-            &Geom,
-            core_ctx,
             &thresh,
-            StigmergicScaleGranularity::PointerBit,
-            0.30,
             &mut ledger,
             &mut trail,
-            128,
-            None,
-            None,
-            None,
+            GatewayLayerTargets {
+                query_tensor: None,
+                rank1_hidden: None,
+                logits_opt: None,
+            },
         )
         .unwrap();
     assert_eq!(trail.accumulated_phase_delta[0], 10);
@@ -2544,20 +2626,24 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     let mut trail_rep = PointerTrail::default();
     let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
-            &MockSignal {
-                flags: ACTION_MODE_PHASE_STEER | ACTION_MODE_PHASE_REPULSE,
+            GatewayLayerInput {
+                signal: &MockSignal {
+                    flags: ACTION_MODE_PHASE_STEER | ACTION_MODE_PHASE_REPULSE,
+                },
+                geometry: &Geom,
+                core_ctx,
+                scale: StigmergicScaleGranularity::PointerBit,
+                entropy_h_tilde: 0.30,
+                unresolved_damping_u7: 128,
             },
-            &Geom,
-            core_ctx,
             &thresh,
-            StigmergicScaleGranularity::PointerBit,
-            0.30,
             &mut ledger,
             &mut trail_rep,
-            128,
-            None,
-            None,
-            None,
+            GatewayLayerTargets {
+                query_tensor: None,
+                rank1_hidden: None,
+                logits_opt: None,
+            },
         )
         .unwrap();
     assert_eq!(trail_rep.accumulated_phase_delta[0], -20);
@@ -2568,20 +2654,24 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
     let mut trail_prom = PointerTrail::default();
     let _ = substrate
         .orchestrate_gateway_layer_with_scale_and_core_layers_safe(
-            &MockSignal {
-                flags: ACTION_PRESET_EXPRESS_PHASE,
+            GatewayLayerInput {
+                signal: &MockSignal {
+                    flags: ACTION_PRESET_EXPRESS_PHASE,
+                },
+                geometry: &Geom,
+                core_ctx,
+                scale: StigmergicScaleGranularity::PointerBit,
+                entropy_h_tilde: 0.30,
+                unresolved_damping_u7: 128,
             },
-            &Geom,
-            core_ctx,
             &thresh,
-            StigmergicScaleGranularity::PointerBit,
-            0.30,
             &mut ledger,
             &mut trail_prom,
-            128,
-            None,
-            None,
-            None,
+            GatewayLayerTargets {
+                query_tensor: None,
+                rank1_hidden: None,
+                logits_opt: None,
+            },
         )
         .unwrap();
     assert_eq!(trail_prom.accumulated_phase_delta[0], 30);
@@ -2609,18 +2699,18 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let candidate_words = [0x0A0A_0A0A_0A0A_0A0A_u64; NUM_STIGMERGIC_GRANULES];
 
     for _ in 0..20 {
-        bank.record_step(
-            StigmergicActionDecision::ExpressPhaseSteer,
-            &horizon,
-            &delta,
-            &overlap,
-            &ego,
-            0,
-            0,
-            0,
-            false,
-            false,
-        );
+        bank.record_step(StepTelemetryInput {
+            decision: StigmergicActionDecision::ExpressPhaseSteer,
+            horizon: &horizon,
+            delta: &delta,
+            overlap: &overlap,
+            ego: &ego,
+            entropy_gate_mode: 0,
+            slid_in_bits: 0,
+            slid_out_bits: 0,
+            escalated: false,
+            qos_throttled: false,
+        });
         let _ = bank.update_assimilation_ema(0.75, 0.25, 0.65, &baseline, 0.15);
     }
 
@@ -2628,13 +2718,15 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let ev_off = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
-        StigmergicActionDecision::ExpressPhaseSteer,
-        false,
-        0xF0,
-        &candidate_words,
-        0.5,
-        3,
-        3,
+        SandboxLifecycleInput {
+            decision: StigmergicActionDecision::ExpressPhaseSteer,
+            ego_active: false,
+            exterior_granule_mask: 0xF0,
+            candidate_words: &candidate_words,
+            candidate_weight: 0.5,
+            drift_dwell_threshold: 3,
+            settle_dwell_threshold: 3,
+        },
     );
     assert_eq!(ev_off, SandboxLifecycleEvent::Idle);
     assert_eq!(active_sandbox, None);
@@ -2644,13 +2736,15 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let ev_nuc = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
-        StigmergicActionDecision::ExpressPhaseSteer,
-        true,
-        0xF0,
-        &candidate_words,
-        0.5,
-        3,
-        3,
+        SandboxLifecycleInput {
+            decision: StigmergicActionDecision::ExpressPhaseSteer,
+            ego_active: true,
+            exterior_granule_mask: 0xF0,
+            candidate_words: &candidate_words,
+            candidate_weight: 0.5,
+            drift_dwell_threshold: 3,
+            settle_dwell_threshold: 3,
+        },
     );
     let lane = match ev_nuc {
         SandboxLifecycleEvent::Nucleated(l) => l,
@@ -2669,13 +2763,15 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let ev_prom = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
-        StigmergicActionDecision::ExpressPhaseSteer,
-        true,
-        0xF0,
-        &candidate_words,
-        0.5,
-        3,
-        3,
+        SandboxLifecycleInput {
+            decision: StigmergicActionDecision::ExpressPhaseSteer,
+            ego_active: true,
+            exterior_granule_mask: 0xF0,
+            candidate_words: &candidate_words,
+            candidate_weight: 0.5,
+            drift_dwell_threshold: 3,
+            settle_dwell_threshold: 3,
+        },
     );
     assert_eq!(ev_prom, SandboxLifecycleEvent::Settled(lane));
     assert_eq!(active_sandbox, None);
@@ -2689,25 +2785,29 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let ev_nuc2 = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
-        StigmergicActionDecision::ExpressPhaseSteer,
-        true,
-        0xF0,
-        &candidate_words,
-        0.5,
-        3,
-        3,
+        SandboxLifecycleInput {
+            decision: StigmergicActionDecision::ExpressPhaseSteer,
+            ego_active: true,
+            exterior_granule_mask: 0xF0,
+            candidate_words: &candidate_words,
+            candidate_weight: 0.5,
+            drift_dwell_threshold: 3,
+            settle_dwell_threshold: 3,
+        },
     );
     assert!(matches!(ev_nuc2, SandboxLifecycleEvent::Nucleated(_)));
     let ev_rel = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
-        StigmergicActionDecision::RepulsionEscape,
-        true,
-        0xF0,
-        &candidate_words,
-        0.5,
-        3,
-        3,
+        SandboxLifecycleInput {
+            decision: StigmergicActionDecision::RepulsionEscape,
+            ego_active: true,
+            exterior_granule_mask: 0xF0,
+            candidate_words: &candidate_words,
+            candidate_weight: 0.5,
+            drift_dwell_threshold: 3,
+            settle_dwell_threshold: 3,
+        },
     );
     assert_eq!(ev_rel, SandboxLifecycleEvent::Released(1));
     assert_eq!(active_sandbox, None);
@@ -2717,18 +2817,18 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let mut active_ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
     active_ego.last_intervened_mask = EGO_TRIGGER_BASIN_CAPTURE;
     for _ in 0..40 {
-        bank.record_step(
-            StigmergicActionDecision::RepulsionEscape,
-            &horizon,
-            &delta,
-            &overlap,
-            &active_ego,
-            0,
-            0,
-            0,
-            false,
-            false,
-        );
+        bank.record_step(StepTelemetryInput {
+            decision: StigmergicActionDecision::RepulsionEscape,
+            horizon: &horizon,
+            delta: &delta,
+            overlap: &overlap,
+            ego: &active_ego,
+            entropy_gate_mode: 0,
+            slid_in_bits: 0,
+            slid_out_bits: 0,
+            escalated: false,
+            qos_throttled: false,
+        });
         let _ = bank.update_assimilation_ema(0.85, 0.15, 0.75, &baseline, 0.15);
     }
     let lane3 = substrate
@@ -2741,13 +2841,15 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
     let ev_od = substrate.step_sandbox_hypothesis_lifecycle(
         &mut bank,
         &mut active_sandbox,
-        StigmergicActionDecision::ExpressPhaseSteer,
-        true,
-        0xF0,
-        &candidate_words,
-        0.5,
-        3,
-        3,
+        SandboxLifecycleInput {
+            decision: StigmergicActionDecision::ExpressPhaseSteer,
+            ego_active: true,
+            exterior_granule_mask: 0xF0,
+            candidate_words: &candidate_words,
+            candidate_weight: 0.5,
+            drift_dwell_threshold: 3,
+            settle_dwell_threshold: 3,
+        },
     );
     assert_eq!(ev_od, SandboxLifecycleEvent::Released(1));
     assert_eq!(active_sandbox, None);
@@ -2802,9 +2904,10 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
     let (_n1, h1, mask1) = net_1.evaluate_pframe_chain_with_mask_branchless(
         &ego, &spine, &overlap, &stig, &tension, &mut f1,
     );
-    let (_n3, h3, entry) = net_3.evaluate_pframe_chain_with_entry_branchless(
+    let (_n3, h3, mask3) = net_3.evaluate_pframe_chain_with_mask_branchless(
         &ego, &spine, &overlap, &stig, &tension, &mut f3,
     );
+    let entry = mask3.trailing_zeros() as u8;
     assert_eq!(h1, 1);
     assert!(
         mask1.count_ones() >= 2,
@@ -2866,7 +2969,18 @@ fn test_entropy_controller_init_setters_and_reset() {
 
     let mut out_state = EntropyState::default();
     let h = engine
-        .eval_surrogate_and_step(0.5, 0.5, 0.8, 0.2, 0.1, 1.0, 0.5, &mut out_state)
+        .eval_surrogate_and_step(
+            crate::drivers::spine::entropy::SurrogateEntropyInput {
+                p_max: 0.5,
+                p_2nd: 0.5,
+                cosine_dist: 0.8,
+                mu_dist: 0.2,
+                sigma_dist: 0.1,
+                alpha_z: 1.0,
+                gamma_mod: 0.5,
+            },
+            &mut out_state,
+        )
         .unwrap();
     assert!(h > 0.0 && out_state.moving_z_entropy == h);
 }
@@ -2899,9 +3013,18 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
         } else {
             StigmergicActionDecision::ExpressPhaseSteer
         };
-        bank.record_step(
-            dec, &horizon, &delta, &overlap, &ego_off, 0, 0, 0, false, false,
-        );
+        bank.record_step(StepTelemetryInput {
+            decision: dec,
+            horizon: &horizon,
+            delta: &delta,
+            overlap: &overlap,
+            ego: &ego_off,
+            entropy_gate_mode: 0,
+            slid_in_bits: 0,
+            slid_out_bits: 0,
+            escalated: false,
+            qos_throttled: false,
+        });
         if i % 2 == 0 {
             bank.record_whole_token_bypass();
         }
@@ -2920,18 +3043,18 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
     // Genuine passive stagnation (dominant PassiveSidecar) must still trigger PassiveSaturation.
     let mut stagnant_bank = CoreTelemetryBank::default();
     for _ in 0..80 {
-        stagnant_bank.record_step(
-            StigmergicActionDecision::PassiveSidecar,
-            &horizon,
-            &delta,
-            &overlap,
-            &ego_off,
-            0,
-            0,
-            0,
-            false,
-            false,
-        );
+        stagnant_bank.record_step(StepTelemetryInput {
+            decision: StigmergicActionDecision::PassiveSidecar,
+            horizon: &horizon,
+            delta: &delta,
+            overlap: &overlap,
+            ego: &ego_off,
+            entropy_gate_mode: 0,
+            slid_in_bits: 0,
+            slid_out_bits: 0,
+            escalated: false,
+            qos_throttled: false,
+        });
     }
     let stagnant_report = stagnant_bank.compute_distortion_report();
     assert_eq!(stagnant_report.kind, LayerDistortionKind::PassiveSaturation);
@@ -2957,13 +3080,15 @@ fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
     let ev = substrate.step_sandbox_hypothesis_lifecycle(
         &mut telemetry,
         &mut active_handle,
-        StigmergicActionDecision::RepulsionEscape,
-        true,
-        0x00,
-        &cand_words,
-        0.5,
-        2,
-        2,
+        SandboxLifecycleInput {
+            decision: StigmergicActionDecision::RepulsionEscape,
+            ego_active: true,
+            exterior_granule_mask: 0x00,
+            candidate_words: &cand_words,
+            candidate_weight: 0.5,
+            drift_dwell_threshold: 2,
+            settle_dwell_threshold: 2,
+        },
     );
     assert_eq!(ev, SandboxLifecycleEvent::Idle);
     assert_eq!(active_handle, Some(pinned_sb));
@@ -2995,10 +3120,8 @@ fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
         accumulated_phase_delta: [32; MAX_ATTENTION_HEADS],
         ..Default::default()
     };
-    let mut out_base = [0i8; MAX_ATTENTION_HEADS];
-    let mut out_sb_rep = [0i8; MAX_ATTENTION_HEADS];
-    let pull_base = ctx_base.evaluate_multi_domain_superposition(&trail, &mut out_base);
-    let pull_sb_rep = ctx_sb_rep.evaluate_multi_domain_superposition(&trail, &mut out_sb_rep);
+    let (out_base, pull_base) = ctx_base.evaluate_multi_domain_superposition_words(&trail);
+    let (out_sb_rep, pull_sb_rep) = ctx_sb_rep.evaluate_multi_domain_superposition_words(&trail);
     assert_eq!(out_base, out_sb_rep);
     assert!((pull_base - pull_sb_rep).abs() < 1.0e-6);
 }

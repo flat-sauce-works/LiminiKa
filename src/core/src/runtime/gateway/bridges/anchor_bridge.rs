@@ -538,26 +538,6 @@ impl PhaseAnchorRecord {
         }
     }
 
-    /// Evaluates [`step_dissipative_overflow_scatter_or_spawn_64`](Self::step_dissipative_overflow_scatter_or_spawn_64)
-    /// directly from any [`ManifoldGatewaySignal`] implementor.
-    #[inline]
-    pub fn step_dissipative_overflow_signal_64<S: ManifoldGatewaySignal + ?Sized>(
-        centroids: &mut [Self],
-        signal: &S,
-        split_coherence_thresh: f32,
-        trail_opt: Option<&mut PointerTrail>,
-    ) -> (GatewayFrame, DissipativeOverflowReport) {
-        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
-        let report = Self::step_dissipative_overflow_scatter_or_spawn_64(
-            centroids,
-            &frame,
-            &frm_w,
-            split_coherence_thresh,
-            trail_opt,
-        );
-        (frame, report)
-    }
-
     /// Autonomously nucleates a new attractor inside `centroids` when approximation noise in
     /// [`OverlapDiscoveryReport`] pushes a fragmented granule outside all existing
     /// anchors' lacuna apertures into `Liminal` (`discovery_triggered != 0`).
@@ -657,7 +637,7 @@ impl PhaseAnchorRecord {
     /// **Classical Online Toroidal $k$-Means / DP-Means Closed-Loop E+M Step ($\mathcal{O}(K)$)**:
     /// Returns `(assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass, spawned_new_cluster)`.
     #[inline(always)]
-    pub fn step_online_toroidal_kmeans_frame_64(
+    pub(crate) fn step_online_toroidal_kmeans_frame_64(
         centroids: &mut [Self],
         frame: &GatewayFrame,
         split_coherence_thresh: f32,
@@ -675,7 +655,7 @@ impl PhaseAnchorRecord {
     /// Executes Online Toroidal $k$-Means / DP-Means across a batch of [`GatewayFrame`]s,
     /// returning `(last_assigned_idx, last_assigned_anchor_id, mean_coherence, spawned_clusters_count)`.
     #[inline]
-    pub fn step_online_toroidal_kmeans_batch_frames_64(
+    pub(crate) fn step_online_toroidal_kmeans_batch_frames_64(
         centroids: &mut [Self],
         frames: &[GatewayFrame],
         split_coherence_thresh: f32,
@@ -719,27 +699,6 @@ impl PhaseAnchorRecord {
             0.0
         };
         (last_idx, last_aid, mean_coh, spawned_count)
-    }
-
-    /// **Online Toroidal $k$-Means / DP-Means on Any [`ManifoldGatewaySignal`]**:
-    /// Synthesizes `signal` into a [`GatewayFrame`] and executes E-step + M-step over `centroids`.
-    #[inline]
-    pub fn step_online_toroidal_kmeans_signal_64<S: ManifoldGatewaySignal + ?Sized>(
-        centroids: &mut [Self],
-        signal: &S,
-        split_coherence_thresh: f32,
-        trail_opt: Option<&mut PointerTrail>,
-    ) -> (GatewayFrame, usize, u32, f32, f32, bool) {
-        let (frame, frm_w) = signal.synthesize_gateway_frame_with_words();
-        let (cluster_idx, anchor_id, coh, mass, spawned) =
-            Self::step_online_toroidal_kmeans_frame_with_words_64(
-                centroids,
-                &frame,
-                &frm_w,
-                split_coherence_thresh,
-                trail_opt,
-            );
-        (frame, cluster_idx, anchor_id, coh, mass, spawned)
     }
 }
 

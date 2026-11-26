@@ -443,6 +443,33 @@ pub const fn swar_subswarm_resolve_x8(
     )
 }
 
+/// Parameters for [`PointerTrail::try_resolve_action_in_swarm_from_words`].
+#[derive(Debug, Clone, Copy)]
+pub struct SwarmResolveParams<'a> {
+    /// Incoming tagged pointer describing target slot and action mode.
+    pub action_ptr: TaggedPtr,
+    /// Bitmask of active 8-head micro-swarm cells (`0xFF` for all 8 cells).
+    pub active_cell_mask: u8,
+    /// Per-cell phase step gain (`0..=128`).
+    pub step_gain_u7: u8,
+    /// Minimum Q7 phase step filter threshold.
+    pub min_step_q7: u8,
+    /// Maximum residual Q7 tolerance for cell convergence.
+    pub tolerance_q7: u8,
+    /// Minimum number of converged cells required for hot-path quorum (`1..=8`).
+    pub quorum_threshold: u8,
+    /// Current normalized entropy observation $\tilde{H}$.
+    pub entropy_h_tilde: f32,
+    /// Low-entropy inertial skip threshold.
+    pub low_entropy_skip_thresh: f32,
+    /// Optional contrastive phase Bloom filter for repulsion gating.
+    pub bloom_filter: Option<&'a ContrastivePhaseBloomFilter>,
+    /// Bloom repulsion density threshold (`0..=255`).
+    pub repulsion_threshold: u8,
+    /// Repulsion conjugate blend scale (`0..=128`).
+    pub repulsion_scale_u7: u8,
+}
+
 /// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
 /// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
 impl PointerTrail {
@@ -451,9 +478,8 @@ impl PointerTrail {
     /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
-    pub fn try_resolve_action_in_swarm_to_words(
+    pub(crate) fn try_resolve_action_in_swarm_to_words(
         &mut self,
         action_ptr: TaggedPtr,
         target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -473,27 +499,28 @@ impl PointerTrail {
     ) {
         let tgt_w = load_q7_words_64(target_phases);
         self.try_resolve_action_in_swarm_from_words(
-            action_ptr,
             &tgt_w,
-            active_cell_mask,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
+            SwarmResolveParams {
+                action_ptr,
+                active_cell_mask,
+                step_gain_u7,
+                min_step_q7,
+                tolerance_q7,
+                quorum_threshold,
+                entropy_h_tilde,
+                low_entropy_skip_thresh,
+                bloom_filter,
+                repulsion_threshold,
+                repulsion_scale_u7,
+            },
         )
     }
 
     /// Subdivides the Stigmergic Substrate's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches).
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
-    pub fn try_resolve_action_in_swarm_masked(
+    pub(crate) fn try_resolve_action_in_swarm_masked(
         &mut self,
         action_ptr: TaggedPtr,
         target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -525,47 +552,12 @@ impl PointerTrail {
         .0
     }
 
-    /// Subdivides the Stigmergic Substrate's target 64-head phase command across all 8 Micro-Swarm cells (`0xFF`).
-    #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn try_resolve_action_in_swarm(
-        &mut self,
-        action_ptr: TaggedPtr,
-        target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
-        step_gain_u7: u8,
-        min_step_q7: u8,
-        tolerance_q7: u8,
-        quorum_threshold: u8,
-        entropy_h_tilde: f32,
-        low_entropy_skip_thresh: f32,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-        repulsion_threshold: u8,
-        repulsion_scale_u7: u8,
-    ) -> StigmergicReconstitutionReport {
-        self.try_resolve_action_in_swarm_masked(
-            action_ptr,
-            target_phases,
-            0xFF,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
-        )
-    }
-
     /// Fragments the trail across 8 myopic granules, drifts each along `target_words` gated by
     /// `active_granule_mask`, and reconstitutes the resulting state transition into
     /// `(StigmergicReconstitutionReport, reconstituted_words)` in branchless constant time.
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
-    pub fn reconstitute_from_stigmergy_words(
+    pub(crate) fn reconstitute_from_stigmergy_words(
         &mut self,
         action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -584,18 +576,20 @@ impl PointerTrail {
         [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         self.try_resolve_action_in_swarm_from_words(
-            action_ptr,
             target_words,
-            active_granule_mask,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
+            SwarmResolveParams {
+                action_ptr,
+                active_cell_mask: active_granule_mask,
+                step_gain_u7,
+                min_step_q7,
+                tolerance_q7,
+                quorum_threshold,
+                entropy_h_tilde,
+                low_entropy_skip_thresh,
+                bloom_filter,
+                repulsion_threshold,
+                repulsion_scale_u7,
+            },
         )
     }
 
@@ -834,45 +828,34 @@ impl PointerTrail {
     }
 
     /// Resolves a Stigmergic Substrate command across all 8 SWAR Micro-Swarm cells directly from
+    /// Subdivides the Stigmergic Substrate's target 64-head phase command directly from
     /// pre-loaded target SWAR words (`target_words`), avoiding any 64-byte stack reload when
     /// chained after `ManifoldGatewaySignal::synthesize_gateway_frame_with_words`.
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn try_resolve_action_in_swarm_from_words(
         &mut self,
-        action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        active_cell_mask: u8,
-        step_gain_u7: u8,
-        min_step_q7: u8,
-        tolerance_q7: u8,
-        quorum_threshold: u8,
-        entropy_h_tilde: f32,
-        low_entropy_skip_thresh: f32,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-        repulsion_threshold: u8,
-        repulsion_scale_u7: u8,
+        params: SwarmResolveParams<'_>,
     ) -> (
         StigmergicReconstitutionReport,
         [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         let cur_w = *trail_phase_words_ref(self);
         self.try_resolve_action_in_swarm_with_cur_words(
-            action_ptr,
+            params.action_ptr,
             &cur_w,
             target_words,
             false,
-            active_cell_mask,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
+            params.active_cell_mask,
+            params.step_gain_u7,
+            params.min_step_q7,
+            params.tolerance_q7,
+            params.quorum_threshold,
+            params.entropy_h_tilde,
+            params.low_entropy_skip_thresh,
+            params.bloom_filter,
+            params.repulsion_threshold,
+            params.repulsion_scale_u7,
         )
     }
 
@@ -927,9 +910,8 @@ impl PointerTrail {
     /// Resolves `target_words` inside the 8-cell SWAR Micro-Swarm using parameters derived
     /// structurally from `(granularity, layer_index, total_layers)` and optional Bloom guards.
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
-    pub fn resolve_swarm_with_scale_layer(
+    pub(crate) fn resolve_swarm_with_scale_layer(
         &mut self,
         action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -951,18 +933,20 @@ impl PointerTrail {
             active_cell_mask
         };
         self.try_resolve_action_in_swarm_from_words(
-            action_ptr,
             target_words,
-            mask,
-            gain_q7,
-            2,
-            tol_q7,
-            quorum,
-            0.40,
-            0.15,
-            bloom_filter,
-            3,
-            96,
+            SwarmResolveParams {
+                action_ptr,
+                active_cell_mask: mask,
+                step_gain_u7: gain_q7,
+                min_step_q7: 2,
+                tolerance_q7: tol_q7,
+                quorum_threshold: quorum,
+                entropy_h_tilde: 0.40,
+                low_entropy_skip_thresh: 0.15,
+                bloom_filter,
+                repulsion_threshold: 3,
+                repulsion_scale_u7: 96,
+            },
         )
     }
 }

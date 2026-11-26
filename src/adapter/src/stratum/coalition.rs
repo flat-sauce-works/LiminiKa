@@ -124,18 +124,20 @@ impl LocalTokenResonanceStratum {
         let mut swarm_trail = lmnk_pointer_trail_t::default();
         swarm_trail.copy_from_with_words_fast(&lmnk_pointer_trail_t::default(), &g_words);
         let (swarm_report, _) = swarm_trail.try_resolve_action_in_swarm_from_words(
-            Default::default(),
             &l_words,
-            0xFF,
-            64,
-            4,
-            24,
-            4,
-            0.40,
-            0.15,
-            None,
-            3,
-            96,
+            liminika_core::stigmergy::SwarmResolveParams {
+                action_ptr: Default::default(),
+                active_cell_mask: 0xFF,
+                step_gain_u7: 64,
+                min_step_q7: 4,
+                tolerance_q7: 24,
+                quorum_threshold: 4,
+                entropy_h_tilde: 0.40,
+                low_entropy_skip_thresh: 0.15,
+                bloom_filter: None,
+                repulsion_threshold: 3,
+                repulsion_scale_u7: 96,
+            },
         );
         swarm_report
     }
@@ -227,18 +229,20 @@ impl LocalTokenResonanceStratum {
                     continue;
                 }
                 let (rep, _swarm_w) = trail_states[slot].try_resolve_action_in_swarm_from_words(
-                    lmnk_tagged_ptr_t::default(),
                     &dep.token_phase_words,
-                    0xFF,
-                    64,
-                    4,
-                    24,
-                    4,
-                    0.45,
-                    0.15,
-                    Some(&substrate.bloom_filter),
-                    3,
-                    96,
+                    liminika_core::stigmergy::SwarmResolveParams {
+                        action_ptr: lmnk_tagged_ptr_t::default(),
+                        active_cell_mask: 0xFF,
+                        step_gain_u7: 64,
+                        min_step_q7: 4,
+                        tolerance_q7: 24,
+                        quorum_threshold: 4,
+                        entropy_h_tilde: 0.45,
+                        low_entropy_skip_thresh: 0.15,
+                        bloom_filter: Some(&substrate.bloom_filter),
+                        repulsion_threshold: 3,
+                        repulsion_scale_u7: 96,
+                    },
                 );
                 let consensus = (rep.resolved_cell_count as f32) / (NUM_STIGMERGIC_GRANULES as f32);
                 let bloom_repulsed = rep.stigmergic_delta_density < 0.0;
@@ -668,9 +672,11 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         let mut receptor = TrailEmergenceReceptor::default();
         if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = substrate
             .traverse_pointer_chain_and_orchestrate(
-                0,
-                chain_len,
-                0.58,
+                liminika_core::stigmergy::ChainTraverseParams {
+                    start_trail_idx: 0,
+                    max_hops: chain_len,
+                    entropy_h_tilde: 0.58,
+                },
                 &mut chain_trail,
                 None,
                 None,

@@ -8,8 +8,8 @@ use crate::foundation::{
     ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_ID_MASK, AlignedSlice16, DEFAULT_PHASE_CLAMP_MAX_RAD,
     PhaseSteering, TaggedPtr, branchless_clamp_f32, branchless_is_finite_f32, branchless_max_f32,
     branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
-    branchless_rad_to_phase_step_u8, branchless_relu_f32, is_phase_profile_nonzero_64,
-    load_q7_words_64, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
+    branchless_rad_to_phase_step_u8, branchless_relu_f32, load_q7_words_64,
+    swar_or_avx2_q7_add_sat_words_64,
 };
 use crate::liminal::{
     LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
@@ -278,50 +278,6 @@ impl RuntimeContext {
         }
 
         (best_id, branchless_relu_f32(best_score))
-    }
-
-    /// Evaluates the phase vector and pull force for a single workbench domain lane.
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
-    #[inline]
-    pub fn evaluate_slot_force(
-        &self,
-        domain_id: u32,
-        _trail: &PointerTrail,
-        slot_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-    ) -> Result<f32> {
-        let idx = domain_id as usize;
-        if idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        let enabled = ((self.substrate.slot_enabled_mask >> idx) & 1) != 0;
-        if !enabled {
-            *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
-            return Ok(0.0);
-        }
-
-        let bank_slice = self.substrate.slot_phase_bank.as_aligned_slice();
-        let bank_slot = bank_slice.slot_exact::<MAX_ATTENTION_HEADS>(idx)?;
-        if is_phase_profile_nonzero_64(bank_slot) {
-            *slot_phase_out = *bank_slot;
-            return Ok(self.substrate.slot_weights[idx]);
-        }
-
-        *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
-        Ok(self.substrate.slot_weights[idx])
-    }
-
-    /// Evaluates unified multi-domain superposition across active workbench lanes.
-    #[inline]
-    pub fn evaluate_multi_domain_superposition(
-        &self,
-        trail: &PointerTrail,
-        composite_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-    ) -> f32 {
-        let (run_w, pull) = self.evaluate_multi_domain_superposition_words(trail);
-        store_q7_words_64(composite_phase_out, &run_w);
-        pull
     }
 
     /// Releases all workbench lanes and clears any escalated lane marker.

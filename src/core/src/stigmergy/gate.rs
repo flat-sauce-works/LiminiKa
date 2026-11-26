@@ -184,23 +184,6 @@ impl PhaseSteeringEngine {
         (self.head_dim as usize) * (self.num_heads as usize)
     }
 
-    /// Non-generic [`Active`] closure entry point for [`PhaseSteering::apply_phase_steering`].
-    ///
-    /// Keeps the underlying AVX2/scalar RoPE kernel strictly non-generic (`0 B` L1I duplication)
-    /// while statically excluding [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`], and
-    /// unclassified origins at compile time.
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slice lengths are insufficient.
-    #[inline(always)]
-    pub fn apply_phase_steering_active(
-        &self,
-        tensor: &mut AlignedSliceMut32<'_, f32>,
-        phase_deltas: Indivisible<Active, PhaseDeltaSlice<'_>>,
-    ) -> LmnkResult<()> {
-        self.apply_phase_steering(tensor, &phase_deltas.as_ref().0)
-    }
-
     /// Non-generic [`Indivisible<Active, _>`] closure entry point for
     /// [`PhaseSteeringGeometryExt::apply_phase_steering_for_geometry_safe`].
     ///
@@ -438,7 +421,11 @@ mod tests {
         {
             let mut raw_mut = AlignedSliceMut32::new(&mut raw_buf.0).unwrap();
             engine
-                .apply_phase_steering(&mut raw_mut, &deltas_slice)
+                .apply_phase_steering_safe(
+                    &mut raw_mut,
+                    &deltas_slice,
+                    engine.phase_clamp_max_rad(),
+                )
                 .unwrap();
         }
         {
@@ -450,9 +437,13 @@ mod tests {
                 _ => panic!("expected exterior active cut"),
             };
             assert_eq!(active.domain_id(), "stigmergy.phase_delta_slice");
-            engine
-                .apply_phase_steering_active(&mut gated_mut, active)
-                .unwrap();
+            PhaseSteeringActiveExt::apply_phase_steering_safe_active(
+                &engine,
+                &mut gated_mut,
+                active,
+                engine.phase_clamp_max_rad(),
+            )
+            .unwrap();
         }
 
         for (lhs, rhs) in raw_buf.0.iter().zip(gated_buf.0.iter()) {

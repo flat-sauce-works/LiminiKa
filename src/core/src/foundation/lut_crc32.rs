@@ -39,6 +39,7 @@ pub(crate) const TWO_PI_F64: f64 = 2.0 * core::f64::consts::PI;
 pub(crate) const INV_LN2_F32: f32 = core::f32::consts::LOG2_E;
 pub(crate) const LN2_HI_F32: f32 = 0.693_145_75;
 pub(crate) const LN2_LO_F32: f32 = 1.428_606_8e-6;
+#[cfg(test)]
 pub(crate) const MAX_BAYESIAN_STIGMERGIC_DENSITY: f32 = 16.0;
 pub(crate) const INV_64_Q14_F32: f32 = f32::from_bits((127 - 20) << 23);
 pub(crate) const INV_8_Q14_F32: f32 = f32::from_bits((127 - 17) << 23);

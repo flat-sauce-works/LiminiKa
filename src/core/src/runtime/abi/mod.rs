@@ -122,8 +122,7 @@ mod tests {
     };
     use crate::runtime::context::LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES;
     use crate::runtime::storage::{
-        LmnkContainerView, init_container_header, init_descriptor_header,
-        validate_descriptor_header, write_container_sections_to_bytes,
+        LmnkContainerView, init_container_header, write_container_sections_to_bytes,
     };
     use crate::stigmergy::{
         ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
@@ -1127,18 +1126,22 @@ mod tests {
 
     #[test]
     fn test_pod_unaligned_bulk_io_and_incremental_crc32() {
-        let hdr = init_descriptor_header::<lmnk_config_t>();
-        assert_eq!(validate_descriptor_header::<lmnk_config_t>(&hdr), Ok(()));
+        let sample = lmnk_boundary_delta_t {
+            chattering_channel_mask: 0x05,
+            phase_transition_pulse: 1,
+            stationary_shortcut_ready: 0,
+            ..lmnk_boundary_delta_t::default()
+        };
 
-        let mut buf = [0u8; 32];
-        let src_arr = [hdr, hdr];
+        let mut buf = [0u8; 40];
+        let src_arr = [sample, sample];
         assert_eq!(
-            lmnk_descriptor_header_t::write_unaligned_slice_to(&src_arr, &mut buf, 3),
+            lmnk_boundary_delta_t::write_unaligned_slice_to(&src_arr, &mut buf, 3),
             Ok(())
         );
-        let mut dst_arr = [lmnk_descriptor_header_t::default(); 2];
+        let mut dst_arr = [lmnk_boundary_delta_t::default(); 2];
         assert_eq!(
-            lmnk_descriptor_header_t::read_unaligned_slice_from(&buf, 3, &mut dst_arr),
+            lmnk_boundary_delta_t::read_unaligned_slice_from(&buf, 3, &mut dst_arr),
             Ok(())
         );
         assert_eq!(dst_arr, src_arr);

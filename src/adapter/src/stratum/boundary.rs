@@ -206,11 +206,13 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
         if let Ok((proj, mut ledger, _rep)) = boundary_substrate.orchestrate_adaptive_depth_n(
             &scale_stack,
             scale_stack.len(),
-            liminika_core::foundation::TaggedPtr(frame.tagged_ptr),
-            frame.phase_words_ref(),
+            liminika_core::ScaleCascadeInput {
+                input_ptr: liminika_core::foundation::TaggedPtr(frame.tagged_ptr),
+                input_words: frame.phase_words_ref(),
+                bloom_filter: None,
+            },
             &mut ledger_slot,
             &mut boundary_trail,
-            None,
         ) {
             let final_op = match action_decision {
                 StigmergicActionDecision::RepulsionEscape => CognitiveOpKind::RepulseAudit,

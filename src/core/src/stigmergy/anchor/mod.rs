@@ -143,6 +143,7 @@ pub mod routing;
 /// Episodic phase sample projection and steering traits.
 pub mod sample_steering;
 
+pub use self::routing::CoarseToFineParams;
 pub use self::sample_steering::*;
 
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous

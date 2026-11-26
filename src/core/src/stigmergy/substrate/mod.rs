@@ -34,6 +34,7 @@ mod cascade;
 mod lanes;
 mod thresholds;
 
+pub use cascade::ChainTraverseParams;
 pub use thresholds::StigmergicThresholds;
 
 /// Number of inline 128-byte [`PointerTrail`] cells stored inside [`StigmergicSubstrate`] (`16` = 2,048 bytes).

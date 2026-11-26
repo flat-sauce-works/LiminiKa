@@ -216,20 +216,21 @@ pub trait StigmergicSubstrateOps: PointerSubstrate + FastPathLedger {
     }
 
     /// Filters `raw_words` via 8-lane SWAR `PhaseStepFilter` and steers `query_tensor` / `key_tensor` using
-    /// caller-validated `(head_dim, num_heads)`.
+    /// caller-validated `params`.
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn steer_phase_step_words_prevalidated_core(
         &self,
         raw_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        head_dim: usize,
-        num_heads: usize,
-        phase_step_min_rad: f32,
-        max_rad: f32,
+        params: PhaseStepSteerParams,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> bool {
+        let PhaseStepSteerParams {
+            head_dim,
+            num_heads,
+            phase_step_min_rad,
+            max_rad,
+        } = params;
         let steered = query_tensor.is_some() | key_tensor.is_some();
         if !steered {
             return false;
@@ -268,10 +269,10 @@ pub trait StigmergicSubstrateOps: PointerSubstrate + FastPathLedger {
 
     /// Executes a constant-time per-token stigmergic cascade over [`StigmergicSubstrateOps`]:
     /// 1. Validates tensor dimensions, `LMNK_RESTRICT` disjointness, and radian thresholds.
-    /// 2. Resolves `input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
+    /// 2. Resolves `params.input_ptr` against `ledger_slot`'s $\mathcal{O}(1)$ shortcut table, steps the
     ///    pointer transition in `trail_out`, and applies [`ContrastivePhaseBloomFilter`] repulsion.
     /// 3. Filters `trail_out.accumulated_phase_delta` via 8-lane SWAR `PhaseStepFilter` and steers
-    ///    `query_tensor` and/or `key_tensor` with `PhaseClamp` soft-clamping (`max_rad`).
+    ///    `query_tensor` and/or `key_tensor` with `PhaseClamp` soft-clamping (`params.max_rad`).
     /// 4. Pushes the combined telemetry metric code (`LEDGER_METRIC_*`) into `ledger_slot`.
     ///
     /// Returns the observed Bloom repulsion bucket density (`0..=255`).
@@ -281,46 +282,39 @@ pub trait StigmergicSubstrateOps: PointerSubstrate + FastPathLedger {
     /// [`StigmergicSubstrateOps::step_substrate_with_bloom_repulsion_to_words`], or
     /// [`FastPathLedger::telemetry_push`].
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn execute_stigmergic_token_cascade(
         &mut self,
-        input_ptr: u64,
+        params: TokenCascadeParams<'_>,
         ledger_slot: &mut LedgerSlot,
-        bloom_filter: &ContrastivePhaseBloomFilter,
-        head_dim: u32,
-        num_heads: u32,
-        repulsion_threshold: u8,
-        repulsion_scale_u7: u8,
-        phase_step_min_rad: f32,
-        max_rad: f32,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         trail_out: &mut PointerTrail,
     ) -> LmnkResult<u8> {
         let (head_dim, num_heads, _expected_len) = self.validate_substrate_cascade_params(
-            head_dim,
-            num_heads,
-            phase_step_min_rad,
-            max_rad,
+            params.head_dim,
+            params.num_heads,
+            params.phase_step_min_rad,
+            params.max_rad,
             query_tensor.as_deref(),
             key_tensor.as_deref(),
         )?;
         let (bypass_hit, _eff_ptr, density, repulsion_active, post_rep_words) = self
             .step_substrate_with_bloom_repulsion_to_words(
-                TaggedPtr(input_ptr),
+                TaggedPtr(params.input_ptr),
                 ledger_slot,
-                bloom_filter,
-                repulsion_threshold,
-                repulsion_scale_u7,
+                params.bloom_filter,
+                params.repulsion_threshold,
+                params.repulsion_scale_u7,
                 trail_out,
             )?;
         let steered = self.steer_phase_step_words_prevalidated_core(
             &post_rep_words,
-            head_dim,
-            num_heads,
-            phase_step_min_rad,
-            max_rad,
+            PhaseStepSteerParams {
+                head_dim,
+                num_heads,
+                phase_step_min_rad: params.phase_step_min_rad,
+                max_rad: params.max_rad,
+            },
             query_tensor,
             key_tensor,
         );
@@ -330,6 +324,41 @@ pub trait StigmergicSubstrateOps: PointerSubstrate + FastPathLedger {
         self.telemetry_push(ledger_slot, metric)?;
         Ok(density)
     }
+}
+
+/// Pre-validated phase-step filtering and RoPE steering parameters for
+/// [`StigmergicSubstrateOps::steer_phase_step_words_prevalidated_core`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PhaseStepSteerParams {
+    /// Attention head dimension.
+    pub head_dim: usize,
+    /// Number of attention heads.
+    pub num_heads: usize,
+    /// Minimum phase-step filter threshold in radians.
+    pub phase_step_min_rad: f32,
+    /// Maximum phase clamp in radians.
+    pub max_rad: f32,
+}
+
+/// Parameters for [`StigmergicSubstrateOps::execute_stigmergic_token_cascade`].
+#[derive(Debug, Clone, Copy)]
+pub struct TokenCascadeParams<'a> {
+    /// Raw 64-bit tagged pointer input.
+    pub input_ptr: u64,
+    /// Contrastive phase Bloom filter for repulsion detection.
+    pub bloom_filter: &'a ContrastivePhaseBloomFilter,
+    /// Attention head dimension.
+    pub head_dim: u32,
+    /// Number of attention heads.
+    pub num_heads: u32,
+    /// Bloom repulsion density threshold (`0..=255`).
+    pub repulsion_threshold: u8,
+    /// Repulsion conjugate blend scale (`0..=128`).
+    pub repulsion_scale_u7: u8,
+    /// Minimum phase-step filter threshold in radians.
+    pub phase_step_min_rad: f32,
+    /// Maximum phase clamp in radians.
+    pub max_rad: f32,
 }
 
 impl<T> StigmergicSubstrateOps for T where T: PointerSubstrate + FastPathLedger + ?Sized {}

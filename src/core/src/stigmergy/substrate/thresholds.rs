@@ -285,9 +285,8 @@ impl StigmergicThresholds {
     /// (`0` bytes of [`super::StigmergicSubstrate`] stack allocation).
     #[inline(always)]
     #[must_use]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
-    pub const fn evaluate_report_on_trail(
+    pub(crate) const fn evaluate_report_on_trail(
         &self,
         trail: &PointerTrail,
         repulsion_threshold: u8,
@@ -507,9 +506,8 @@ impl StigmergicThresholds {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor`, `key_tensor`, or `logits_opt`
     /// alias or have invalid dimensions.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
-    pub fn orchestrate_stateless_action_step(
+    pub(crate) fn orchestrate_stateless_action_step(
         &self,
         phase_steering: &PhaseSteeringEngine,
         input_ptr: TaggedPtr,

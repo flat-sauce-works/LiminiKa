@@ -750,6 +750,31 @@ impl Default for CoreTelemetryBank {
     }
 }
 
+/// Per-step telemetry inputs for [`CoreTelemetryBank::record_step`].
+#[derive(Debug, Clone, Copy)]
+pub struct StepTelemetryInput<'a> {
+    /// Stigmergic action decision selected for this step.
+    pub decision: StigmergicActionDecision,
+    /// Epistemic horizon reading for the current step.
+    pub horizon: &'a EpistemicHorizonReading,
+    /// Temporal boundary velocity analyzer reading.
+    pub delta: &'a LiminalBoundaryDelta,
+    /// Multi-attractor overlap and discovery excursion report.
+    pub overlap: &'a OverlapDiscoveryReport,
+    /// Active subjective Ego state snapshot.
+    pub ego: &'a LiminalEgoState,
+    /// Active entropy controller branch mode (`0`, `1`, `2`).
+    pub entropy_gate_mode: u32,
+    /// Bitmask of latent horizon slots slid in on this step.
+    pub slid_in_bits: u32,
+    /// Bitmask of latent horizon slots slid out on this step.
+    pub slid_out_bits: u32,
+    /// Whether cold-path horizon escalation fired on this step.
+    pub escalated: bool,
+    /// Whether system QoS throttling was active on this step.
+    pub qos_throttled: bool,
+}
+
 impl CoreTelemetryBank {
     /// Creates a new [`CoreTelemetryBank`] governed by `policy`.
     #[inline]
@@ -1190,21 +1215,19 @@ impl CoreTelemetryBank {
     /// In [`TelemetryVerbosityMode::Coarse`], returns immediately after incrementing `total_steps`
     /// (and `qos_throttle_events` when throttled) so Hot-Path L1D stays clean.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_step(
-        &mut self,
-        decision: StigmergicActionDecision,
-        horizon: &EpistemicHorizonReading,
-        delta: &LiminalBoundaryDelta,
-        overlap: &OverlapDiscoveryReport,
-        ego: &LiminalEgoState,
-        entropy_gate_mode: u32,
-        slid_in_bits: u32,
-        slid_out_bits: u32,
-        escalated: bool,
-        qos_throttled: bool,
-    ) {
+    pub fn record_step(&mut self, input: StepTelemetryInput<'_>) {
+        let StepTelemetryInput {
+            decision,
+            horizon,
+            delta,
+            overlap,
+            ego,
+            entropy_gate_mode,
+            slid_in_bits,
+            slid_out_bits,
+            escalated,
+            qos_throttled,
+        } = input;
         self.spine.total_steps = self.spine.total_steps.saturating_add(1);
         if qos_throttled {
             self.spine.qos_throttle_events = self.spine.qos_throttle_events.saturating_add(1);

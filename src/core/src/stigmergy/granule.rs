@@ -93,7 +93,7 @@ impl StigmergicGranuleEngine {
     }
 
     /// Fragments, stigmergically drifts, and reconstitutes `trail` against this engine's 8 myopic
-    /// granules via [`PointerTrail::reconstitute_from_stigmergy_words`], keeping
+    /// granules via `PointerTrail::reconstitute_from_stigmergy_words`, keeping
     /// `self.cell_phases` synchronized with the reconstituted SWAR words in $\mathcal{O}(1)$.
     #[inline(always)]
     pub fn reconstitute_trail_stigmergically(

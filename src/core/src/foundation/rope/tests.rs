@@ -87,12 +87,14 @@ fn test_subhead_routing_and_visual_mse_bitmask() {
         DEFAULT_PHASE_CLAMP_MAX_RAD,
         &subhead_cfg,
         &bank.relax_slice::<16>(),
-        2,
-        1,
-        2,
-        DEFAULT_PHASE_CLAMP_MAX_RAD,
-        8,
-        12,
+        SubheadSlotBinding {
+            fact_slot_id: 2,
+            logic_slot_id: 1,
+            explore_slot_id: 2,
+            max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+            explore_pulse_q7: 8,
+            head_dim: 12,
+        },
         true,
     )
     .unwrap();

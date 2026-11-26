@@ -304,7 +304,7 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
     {
         let coh = match precomputed_coh_opt {
             Some(c) => c,
-            None => coherence_from_diff_words_64(
+            None => coherence_from_diff_words_64([
                 d0,
                 d1,
                 swar_q7_circular_diff_x8(sample_words[2], centroid_words[2]),
@@ -313,7 +313,7 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
                 swar_q7_circular_diff_x8(sample_words[5], centroid_words[5]),
                 swar_q7_circular_diff_x8(sample_words[6], centroid_words[6]),
                 swar_q7_circular_diff_x8(sample_words[7], centroid_words[7]),
-            ),
+            ]),
         };
         let eff_sample_e = clean_e * branchless_clamp_f32(0.5 * (1.0 + coh), 0.25, 1.0);
         let next_e = prev_e + 0.5 * eff_sample_e;
@@ -365,9 +365,8 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
 /// and word-uniform flags, returning `(next_words, next_energy, next_r_bar, next_kappa)`.
 #[inline(always)]
 #[must_use]
-// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
 #[allow(clippy::too_many_arguments)]
-pub fn branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
+pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
     centroid_words: &[u64; 8],
     prev_sample_count: u32,
     prev_base_energy: f32,
@@ -546,7 +545,7 @@ pub fn branchless_q7_synergy_fuse_words_64(
 
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        let coherence = coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7);
+        let coherence = coherence_from_diff_words_64([d0, d1, d2, d3, d4, d5, d6, d7]);
         let pos_resonance = branchless_relu_f32(coherence);
         let liminal_beat = branchless_relu_f32(-coherence);
         let effective_pull = base_sum + safe_gain * base_sum * pos_resonance;
@@ -952,7 +951,7 @@ pub fn apply_pframe_motion_step_words_64(
     safe_thresh: f32,
 ) -> (f32, bool) {
     let dw = load_q7_words_64(&pframe.motion_deltas);
-    let coh = coherence_from_diff_words_64(dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7]);
+    let coh = coherence_from_diff_words_64(dw);
     let log_p = branchless_fast_transition_log_prob(coh);
     let repulsed = coh < -safe_thresh;
     if repulsed {

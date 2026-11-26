@@ -136,7 +136,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     #[inline(always)]
     pub fn new(slice: &'a [T]) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
-        let is_valid = slice.is_empty() | (((slice.as_ptr() as usize) & (ALIGN - 1)) == 0);
+        let is_valid = slice.is_empty() | ((slice.as_ptr().addr() & (ALIGN - 1)) == 0);
         if is_valid {
             Ok(Self { slice })
         } else {
@@ -183,7 +183,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
         if ptr.is_null() {
             return Err(LMNK_ERR_NULL_POINTER);
         }
-        if ((ptr as usize) & (ALIGN - 1)) != 0 {
+        if (ptr.addr() & (ALIGN - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         let _ = validate_raw_slice_bounds(ptr, len)?;
@@ -270,8 +270,8 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     #[must_use]
     pub fn contains_ptr(&self, ptr: *const T) -> bool {
         let range = self.as_ptr_range();
-        let addr = ptr as usize;
-        (addr >= (range.start as usize)) & (addr < (range.end as usize))
+        let addr = ptr.addr();
+        (addr >= range.start.addr()) & (addr < range.end.addr())
     }
 
     /// Branchlessly checks whether the byte range of this slice overlaps with another aligned slice.
@@ -282,9 +282,9 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
         other: &AlignedSlice<'_, T, OTHER_ALIGN>,
     ) -> bool {
         raw_byte_ranges_overlap(
-            self.as_ptr() as usize,
+            self.as_ptr().addr(),
             self.byte_len(),
-            other.as_ptr() as usize,
+            other.as_ptr().addr(),
             other.byte_len(),
         )
     }
@@ -382,7 +382,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     pub fn is_aligned(slice: &[T]) -> bool {
         (ALIGN != 0)
             & ALIGN.is_power_of_two()
-            & (slice.is_empty() | (((slice.as_ptr() as usize) & (ALIGN - 1)) == 0))
+            & (slice.is_empty() | ((slice.as_ptr().addr() & (ALIGN - 1)) == 0))
     }
 
     /// Extracts a fixed-capacity slot `&'a [T; SLOT_LEN]` at `slot_idx` (`offset = slot_idx * SLOT_LEN`)
@@ -397,7 +397,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
         slot_idx: usize,
     ) -> LmnkResult<&'a [T; SLOT_LEN]> {
         let offset = validate_slot_offset::<T, ALIGN, SLOT_LEN>(
-            self.slice.as_ptr() as usize,
+            self.slice.as_ptr().addr(),
             self.slice.len(),
             slot_idx,
         )?;
@@ -493,7 +493,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     #[inline(always)]
     pub fn new(slice: &'a mut [T]) -> LmnkResult<Self> {
         let () = TypeAlignCheck::<T, ALIGN>::VALID;
-        let is_valid = slice.is_empty() | (((slice.as_ptr() as usize) & (ALIGN - 1)) == 0);
+        let is_valid = slice.is_empty() | ((slice.as_ptr().addr() & (ALIGN - 1)) == 0);
         if is_valid {
             Ok(Self { slice })
         } else {
@@ -532,7 +532,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         if ptr.is_null() {
             return Err(LMNK_ERR_NULL_POINTER);
         }
-        if ((ptr as usize) & (ALIGN - 1)) != 0 {
+        if (ptr.addr() & (ALIGN - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         let _ = validate_raw_slice_bounds(ptr, len)?;
@@ -813,7 +813,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
         slot_idx: usize,
     ) -> LmnkResult<&mut [T; SLOT_LEN]> {
         let offset = validate_slot_offset::<T, ALIGN, SLOT_LEN>(
-            self.slice.as_ptr() as usize,
+            self.slice.as_ptr().addr(),
             self.slice.len(),
             slot_idx,
         )?;
@@ -1008,7 +1008,7 @@ impl<'a, T, const ALIGN_IN: usize, const ALIGN_OUT: usize>
             validate_raw_slice_bounds(ptr_out, len_out)?
         };
 
-        if raw_byte_ranges_overlap(ptr_in as usize, in_bytes, ptr_out as usize, out_bytes) {
+        if raw_byte_ranges_overlap(ptr_in.addr(), in_bytes, ptr_out.addr(), out_bytes) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Disjointness and slice bounds are verified above; `from_raw_parts[_mut]` verify non-nullness and alignment.
@@ -1123,7 +1123,7 @@ impl<'a, T, const ALIGN: usize> DisjointMutPair<'a, T, ALIGN> {
             validate_raw_slice_bounds(ptr_b, len_b)?
         };
 
-        if raw_byte_ranges_overlap(ptr_a as usize, bytes_a, ptr_b as usize, bytes_b) {
+        if raw_byte_ranges_overlap(ptr_a.addr(), bytes_a, ptr_b.addr(), bytes_b) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         // SAFETY: Pointers are verified non-overlapping and in-bounds above; `from_raw_parts_mut` checks non-null & alignment.
@@ -1260,9 +1260,9 @@ impl<'a, T, const ALIGN: usize> DisjointMutTriple<'a, T, ALIGN> {
             validate_raw_slice_bounds(ptr_c, len_c)?
         };
 
-        let addr_a = ptr_a as usize;
-        let addr_b = ptr_b as usize;
-        let addr_c = ptr_c as usize;
+        let addr_a = ptr_a.addr();
+        let addr_b = ptr_b.addr();
+        let addr_c = ptr_c.addr();
 
         if raw_byte_ranges_overlap(addr_a, bytes_a, addr_b, bytes_b)
             | raw_byte_ranges_overlap(addr_a, bytes_a, addr_c, bytes_c)
@@ -1514,7 +1514,7 @@ macro_rules! define_aligned_buffer {
                 slot_idx: usize,
             ) -> LmnkResult<&mut [T; SLOT_LEN]> {
                 let offset = validate_slot_offset::<T, $align, SLOT_LEN>(
-                    self.data.as_ptr() as usize,
+                    self.data.as_ptr().addr(),
                     N,
                     slot_idx,
                 )?;
@@ -1650,17 +1650,14 @@ pub type AlignedSliceMut512<'a, T> = AlignedSliceMut<'a, T, 512>;
 pub fn is_aligned_to<T>(slice: &[T], align: usize) -> bool {
     (align != 0)
         & align.is_power_of_two()
-        & (slice.is_empty() | (((slice.as_ptr() as usize) & (align - 1)) == 0))
+        & (slice.is_empty() | ((slice.as_ptr().addr() & (align - 1)) == 0))
 }
 
 /// Branchlessly checks raw pointer non-nullness and alignment for a runtime power-of-two byte boundary.
 #[inline(always)]
 #[must_use]
 pub fn is_ptr_aligned_to<T>(ptr: *const T, align: usize) -> bool {
-    (align != 0)
-        & align.is_power_of_two()
-        & (!ptr.is_null())
-        & (((ptr as usize) & (align - 1)) == 0)
+    (align != 0) & align.is_power_of_two() & (!ptr.is_null()) & ((ptr.addr() & (align - 1)) == 0)
 }
 
 const _: () = {

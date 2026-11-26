@@ -121,7 +121,7 @@ pub fn validate_raw_slice_bounds<T>(ptr: *const T, len: usize) -> LmnkResult<usi
     if byte_len > isize::MAX as usize {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-    if (ptr as usize).checked_add(byte_len).is_none() {
+    if ptr.addr().checked_add(byte_len).is_none() {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     Ok(byte_len)
@@ -235,7 +235,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds and alignment for `Self: Pod` are verified above.
@@ -257,7 +257,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_mut_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds, unique borrow, and alignment for `Self: Pod` are verified above.
@@ -289,7 +289,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset + byte_len <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds and alignment for `count` elements of `Self: Pod` are verified above.
@@ -325,7 +325,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset + byte_len <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_mut_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds, unique borrow, and alignment for `count` elements of `Self: Pod` verified above.
@@ -435,8 +435,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         if (target_size == 0) | !total_bytes.is_multiple_of(target_size) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let is_aligned =
-            slice.is_empty() | (((slice.as_ptr() as usize) & (align_of::<U>() - 1)) == 0);
+        let is_aligned = slice.is_empty() | ((slice.as_ptr().addr() & (align_of::<U>() - 1)) == 0);
         if !is_aligned {
             return Err(LMNK_ERR_ALIGNMENT);
         }
@@ -456,8 +455,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         if (target_size == 0) | !total_bytes.is_multiple_of(target_size) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let is_aligned =
-            slice.is_empty() | (((slice.as_ptr() as usize) & (align_of::<U>() - 1)) == 0);
+        let is_aligned = slice.is_empty() | ((slice.as_ptr().addr() & (align_of::<U>() - 1)) == 0);
         if !is_aligned {
             return Err(LMNK_ERR_ALIGNMENT);
         }

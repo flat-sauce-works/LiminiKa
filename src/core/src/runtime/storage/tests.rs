@@ -40,13 +40,15 @@ fn test_container_view_hardened_parsing_alignment_and_reserved_sections() {
     .unwrap();
     let mut aligned = AlignedBuffer128::<u8, 2048>::new([0u8; 2048]);
     let written = LmnkContainerView::write_standard_sections_to_bytes(
-        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-        &anchors,
-        &trails,
-        Some(&bloom),
-        Some(&ledger),
-        &reports,
-        1_774_900_000,
+        StandardSectionsInput {
+            container_flags: LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            anchors: &anchors,
+            trails: &trails,
+            bloom: Some(&bloom),
+            ledger: Some(&ledger),
+            provenance_reports: &reports,
+            timestamp_epoch_sec: 1_774_900_000,
+        },
         &mut aligned.data[..req_len],
     )
     .unwrap();

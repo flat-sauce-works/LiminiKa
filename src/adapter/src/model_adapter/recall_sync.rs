@@ -74,11 +74,11 @@ impl ModelSteeringAdapter {
         &mut self,
         recall: &R,
         query_words_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
-    ) -> (
+    ) -> LmnkResult<(
         EpistemicHorizonReading,
         OverlapDiscoveryReport,
         Option<StigmergicFragmentEnsembleReport>,
-    ) {
+    )> {
         let guard_margin = recall.guard_conflict_margin();
         let lacuna_state = recall.lacuna_state();
         let action_decision = recall.action_decision();
@@ -272,10 +272,7 @@ impl ModelSteeringAdapter {
             specs.push(spec);
         }
         let prev_was_sandbox = self.ctx.sandbox_workbench_lane().is_some();
-        // Non-fatal by design: `apply_preset_lanes` validates every spec before touching a lane, so an
-        // `Err` leaves the previous lanes untouched and the turn proceeds with them. The `LmnkResult`
-        // is dropped to keep the v0.3.0 signature; v0.4.0 propagates it as a `Result`.
-        let _ = self.ctx.substrate_mut().apply_preset_lanes(&specs);
+        self.ctx.substrate_mut().apply_preset_lanes(&specs)?;
         *self.ctx.sandbox_workbench_lane_mut() = None;
         let assim_drift = self.ctx.telemetry_bank().assimilation_drift();
         if prev_was_sandbox || is_known_unknown {
@@ -326,7 +323,7 @@ impl ModelSteeringAdapter {
             self.ctx.evaluate_ego_pframe_chain_mut(&mut p_frame);
         }
         self.active_workbench_preset = preset;
-        (horizon, overlap_report, ensemble_report)
+        Ok((horizon, overlap_report, ensemble_report))
     }
 
     /// Returns the anonymous workbench lane (`0..=7`) currently leased by cold-path escalation, if any.
@@ -547,15 +544,15 @@ impl ModelSteeringAdapter {
             RopeLayout::HalfSplit => 1,
         };
         self.ctx
-            .rebind_phase_and_substrate(
-                new_geometry.rotary_dim as u32,
-                new_geometry.num_q_heads as u32,
-                new_geometry.rotary_dim as u32,
-                layout_byte,
-                16,
-                calibrated,
-                next_probe.baseline_entropy,
-            )
+            .rebind_phase_and_substrate(liminika_core::ContextRebindParams {
+                head_dim: new_geometry.rotary_dim as u32,
+                num_heads: new_geometry.num_q_heads as u32,
+                rotary_dim: new_geometry.rotary_dim as u32,
+                rope_layout: layout_byte,
+                substrate_capacity: 16,
+                thresholds: calibrated,
+                baseline_entropy: next_probe.baseline_entropy,
+            })
             .map_err(|e| format!("rebind_phase_and_substrate failed: {e}"))?;
 
         let (active_slots, pinned_slots, reversible_slots) =

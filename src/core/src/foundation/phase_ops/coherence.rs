@@ -595,21 +595,11 @@ pub(crate) const fn coherence_from_uniform_words_x8(wa: u64, wb: u64) -> f32 {
 }
 
 /// Evaluates normalized 64-head phase coherence $\mathcal{C}_{\mathrm{phase}} \in [-1.0, 1.0]$
-/// directly from 8 SWAR Q7 circular difference words `(d0..=d7)`.
+/// directly from 8 SWAR Q7 circular difference words `diff_words`.
 #[inline(always)]
 #[must_use]
-// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-#[allow(clippy::too_many_arguments)]
-pub fn coherence_from_diff_words_64(
-    d0: u64,
-    d1: u64,
-    d2: u64,
-    d3: u64,
-    d4: u64,
-    d5: u64,
-    d6: u64,
-    d7: u64,
-) -> f32 {
+pub fn coherence_from_diff_words_64(diff_words: [u64; 8]) -> f32 {
+    let [d0, d1, d2, d3, d4, d5, d6, d7] = diff_words;
     if (((d0 ^ d1) | (d0 ^ d2)) | ((d0 ^ d3) | (d0 ^ d4)) | ((d0 ^ d5) | (d0 ^ d6)) | (d0 ^ d7))
         == 0
     {
@@ -663,7 +653,7 @@ pub fn coherence_from_word_arrays_with_both_uniform_flags_64(
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        coherence_from_diff_words_64(
+        coherence_from_diff_words_64([
             swar_q7_circular_diff_x8(a[0], b[0]),
             swar_q7_circular_diff_x8(a[1], b[1]),
             swar_q7_circular_diff_x8(a[2], b[2]),
@@ -672,7 +662,7 @@ pub fn coherence_from_word_arrays_with_both_uniform_flags_64(
             swar_q7_circular_diff_x8(a[5], b[5]),
             swar_q7_circular_diff_x8(a[6], b[6]),
             swar_q7_circular_diff_x8(a[7], b[7]),
-        )
+        ])
     }
 }
 

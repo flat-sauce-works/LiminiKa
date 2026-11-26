@@ -488,7 +488,18 @@ fn suite2_pointer_trail_and_ego_differential_cycle_defense() {
     sub.trails[0].linked_trail_id = 0;
     let mut trail_out = PointerTrail::default();
     let (_rep, hops_self, term_idx, _, _) = sub
-        .traverse_pointer_chain_and_orchestrate(0, 8, 0.3, &mut trail_out, None, None, None, None)
+        .traverse_pointer_chain_and_orchestrate(
+            liminika_core::stigmergy::ChainTraverseParams {
+                start_trail_idx: 0,
+                max_hops: 8,
+                entropy_h_tilde: 0.3,
+            },
+            &mut trail_out,
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("self loop bounded");
     assert_eq!(hops_self, 1);
     assert_eq!(term_idx, 0);
@@ -497,13 +508,35 @@ fn suite2_pointer_trail_and_ego_differential_cycle_defense() {
     sub.trails[0].linked_trail_id = 1;
     sub.trails[1].linked_trail_id = 0;
     let (_rep2, hops_cycle, _, _, _) = sub
-        .traverse_pointer_chain_and_orchestrate(0, 8, 0.3, &mut trail_out, None, None, None, None)
+        .traverse_pointer_chain_and_orchestrate(
+            liminika_core::stigmergy::ChainTraverseParams {
+                start_trail_idx: 0,
+                max_hops: 8,
+                entropy_h_tilde: 0.3,
+            },
+            &mut trail_out,
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("2-node cycle bounded");
     assert_eq!(hops_cycle, 2);
 
     sub.trails[2].linked_trail_id = u32::MAX;
     let (_rep_oob, hops_oob, _, _, _) = sub
-        .traverse_pointer_chain_and_orchestrate(2, 8, 0.3, &mut trail_out, None, None, None, None)
+        .traverse_pointer_chain_and_orchestrate(
+            liminika_core::stigmergy::ChainTraverseParams {
+                start_trail_idx: 2,
+                max_hops: 8,
+                entropy_h_tilde: 0.3,
+            },
+            &mut trail_out,
+            None,
+            None,
+            None,
+            None,
+        )
         .expect("oob hop terminates");
     assert_eq!(hops_oob, 1);
 
@@ -1651,13 +1684,15 @@ fn suite6_abi_major_minor_and_patch_compatibility_policy() {
 
     let mut container = vec![0u8; 4096];
     let written = LmnkContainerView::write_standard_sections_to_bytes(
-        LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-        &[anchor],
-        &[],
-        None,
-        None,
-        &[],
-        1_774_900_000,
+        liminika_core::runtime::StandardSectionsInput {
+            container_flags: LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+            anchors: &[anchor],
+            trails: &[],
+            bloom: None,
+            ledger: None,
+            provenance_reports: &[],
+            timestamp_epoch_sec: 1_774_900_000,
+        },
         &mut container,
     )
     .expect("write container");

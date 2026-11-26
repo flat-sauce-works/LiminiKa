@@ -10,8 +10,8 @@
 #![warn(clippy::missing_errors_doc)]
 
 use crate::foundation::{
-    ACTION_PRESET_REPULSION_ESCAPE, PAGED_BITMASK_BITS, PagedBitmask, Pod, SWAR_EVEN_BYTES_64,
-    SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, TaggedPtr, branchless_clamp_f32,
+    PAGED_BITMASK_BITS, PagedBitmask, Pod, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64,
+    SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, TaggedPtr, branchless_clamp_f32,
     branchless_popcount_rsqrt_u32, branchless_relu_f32, branchless_splitmix64, branchless_tanh_f32,
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
     swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8,
@@ -24,8 +24,8 @@ use crate::liminal::{
     branchless_select_u64,
 };
 use crate::stigmergy::{
-    ATTRACTOR_SLOT_REPULSION, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
-    FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN,
+    DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD, FAST_PATH_SHORTCUT_SLOTS,
+    LEDGER_HISTORY_LEN,
 };
 
 /// Dynamic Adaptive Extension Scratchpad (FastPathLedger) slot layout (64 bytes, 1 cache line, Section 5.4.F).
@@ -685,52 +685,6 @@ impl ContrastivePhaseBloomFilter {
             store_q7_words_64(candidate_phases, &words);
         }
         (density, active, words)
-    }
-
-    /// Applies Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) in-place across
-    /// all 64 attention heads in strictly constant time (`0` branches) using `branchless_select_u64`
-    /// and hoisted `bias_restore`.
-    #[inline(always)]
-    pub const fn apply_phase_conjugate_repulsion(
-        &self,
-        candidate_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-        density_threshold: u8,
-        repulsion_scale_u7: u8,
-    ) -> u8 {
-        self.apply_phase_conjugate_repulsion_to_words(
-            candidate_phases,
-            density_threshold,
-            repulsion_scale_u7,
-        )
-        .0
-    }
-
-    /// Evaluates `apply_phase_conjugate_repulsion` on `candidate_phases` and simultaneously evolves
-    /// `tagged_ptr` into [`ACTION_PRESET_REPULSION_ESCAPE`] targeting [`ATTRACTOR_SLOT_REPULSION`] (`lane 3`).
-    #[inline(always)]
-    pub fn apply_repulsion_and_evolve_ptr(
-        &self,
-        tagged_ptr: TaggedPtr,
-        candidate_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-        density_threshold: u8,
-        repulsion_scale_u7: u8,
-    ) -> (TaggedPtr, u8, bool) {
-        let density = self.apply_phase_conjugate_repulsion(
-            candidate_phases,
-            density_threshold,
-            repulsion_scale_u7,
-        );
-        let triggered = (density >= density_threshold) & (density > 0);
-        let rep_mode = tagged_ptr.action_mode_flags() | ACTION_PRESET_REPULSION_ESCAPE;
-        let rep_ptr = tagged_ptr
-            .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
-            .conjugate_phase();
-        let out_ptr = TaggedPtr(branchless_select_u64(
-            triggered,
-            rep_ptr.raw(),
-            tagged_ptr.raw(),
-        ));
-        (out_ptr, density, triggered)
     }
 
     /// Applies evaporative decay across all 64 counters in-place in strictly constant time (`0` branches).

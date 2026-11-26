@@ -581,14 +581,16 @@ impl<const N: usize, const P: usize> TurnKvCacheStepping for RamPhaseKvGopCache<
         epoch: u32,
     ) -> LmnkResult<RamPhaseKvStepOutcome> {
         self.step_with_gateway_and_override(
-            context_hash,
-            token_index,
-            frame,
+            liminika_core::runtime::KvGatewayStepInput {
+                context_hash,
+                token_index,
+                frame,
+                activation,
+                policy,
+                override_min_resonance_q7,
+                epoch,
+            },
             circuit,
-            activation,
-            policy,
-            override_min_resonance_q7,
-            epoch,
         )
     }
 }
@@ -668,8 +670,9 @@ impl TurnOrchestrator {
             adapter.clear_active_circuit();
         }
 
-        let (horizon, overlap_report, ensemble_report) =
-            adapter.sync_core_layers_from_recall(&recall, None);
+        let (horizon, overlap_report, ensemble_report) = adapter
+            .sync_core_layers_from_recall(&recall, None)
+            .map_err(|e| format!("sync_core_layers_from_recall error: {e}"))?;
 
         let is_guard_trap = recall.guard_conflict_margin > 0.05
             || matches!(

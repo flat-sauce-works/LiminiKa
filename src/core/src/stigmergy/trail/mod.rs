@@ -33,13 +33,17 @@ mod resonance;
 mod traits;
 
 pub(crate) use ops::select_rewire_bridge_and_modulate_with_preloaded_words_64;
+#[cfg(test)]
+pub(crate) use resonance::modulate_attention_scores_by_bayesian_trails_64;
 pub use resonance::{
-    bridge_and_filter_liminal_trail_chain, detect_and_record_obstruction_repulsion,
-    eval_stigmergic_block_degrees, evaluate_trail_chain_cohomology_and_joint_log_prob,
-    modulate_attention_scores_by_bayesian_trails_64, resolve_dyadic_qdpt_and_cascade_ptr,
+    QdptCascadeParams, bridge_and_filter_liminal_trail_chain,
+    detect_and_record_obstruction_repulsion, eval_stigmergic_block_degrees,
+    evaluate_trail_chain_cohomology_and_joint_log_prob, resolve_dyadic_qdpt_and_cascade_ptr,
 };
 pub(crate) use traits::validate_optional_qk_tensors;
-pub use traits::{PointerSubstrate, StigmergicSubstrateOps};
+pub use traits::{
+    PhaseStepSteerParams, PointerSubstrate, StigmergicSubstrateOps, TokenCascadeParams,
+};
 
 /// Stigmergic pointer trail structure aligned to 64 bytes (2 cache lines, 128 bytes total).
 #[repr(C, align(64))]

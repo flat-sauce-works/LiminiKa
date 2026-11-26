@@ -12,7 +12,7 @@ use crate::runtime::topology::CORE_TOPOLOGY;
 
 /// Executes one step of **Classical Online Toroidal $k$-Means / DP-Means Macro Clustering** on
 /// $SO(2)^{64}$ (`centroids_inout[0..num_centroids]`) for an incoming [`lmnk_gateway_frame_t`]
-/// (`frame`) via [`PhaseAnchorRecord::step_online_toroidal_kmeans_frame_64`].
+/// (`frame`) via `PhaseAnchorRecord::step_online_toroidal_kmeans_frame_64`.
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
@@ -82,7 +82,7 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans(
 
 /// Executes **Batched Online Toroidal $k$-Means / DP-Means Macro Clustering** ($\mathcal{O}(B \cdot K)$)
 /// on $SO(2)^{64}$ (`centroids_inout[0..num_centroids]`) across `num_frames` incoming
-/// [`lmnk_gateway_frame_t`]s via [`PhaseAnchorRecord::step_online_toroidal_kmeans_batch_frames_64`],
+/// [`lmnk_gateway_frame_t`]s via `PhaseAnchorRecord::step_online_toroidal_kmeans_batch_frames_64`,
 /// deferring IEEE 802.3 `checksum_crc32` restamping across modified centroids until batch completion.
 ///
 /// # Safety

@@ -251,13 +251,15 @@ fn test_zero_alloc_in_place_context_lifecycle() {
         struct AlignedContainerBacking([u8; 512]);
         let mut container_buf = AlignedContainerBacking([0u8; 512]);
         let written = liminika_core::LmnkContainerView::write_standard_sections_to_bytes(
-            liminika_core::LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-            &[anchor],
-            &[],
-            None,
-            None,
-            &[],
-            1_774_900_000,
+            liminika_core::runtime::StandardSectionsInput {
+                container_flags: liminika_core::LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+                anchors: &[anchor],
+                trails: &[],
+                bloom: None,
+                ledger: None,
+                provenance_reports: &[],
+                timestamp_epoch_sec: 1_774_900_000,
+            },
             &mut container_buf.0,
         )
         .expect("container write succeeds");

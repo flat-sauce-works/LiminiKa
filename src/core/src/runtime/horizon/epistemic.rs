@@ -482,20 +482,6 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
 
 /// Blanket-implemented epistemic & relative-coupling trait over any [`RelativeAttractorNode`].
 pub trait EpistemicManifoldOps: RelativeAttractorNode {
-    /// Evaluates [`EpistemicHorizonReading`] for a slice of `Self` relative to `query_words`.
-    #[inline(always)]
-    fn evaluate_slice_epistemic_horizon(
-        slice: &[Self],
-        query_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        coupling_row_q7: Option<&[i8]>,
-        horizon_floor: f32,
-    ) -> EpistemicHorizonReading
-    where
-        Self: Sized,
-    {
-        evaluate_epistemic_horizon_words_64(slice, query_words, coupling_row_q7, horizon_floor)
-    }
-
     /// Self-similarly folds a slice of `Self` on $SO(2)^{64}$ into `(phase_words, total_energy, dominant_anchor_id)`.
     #[inline(always)]
     fn fold_slice_as_fractal_node(slice: &[Self]) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32)

@@ -552,13 +552,15 @@ impl AnchorWorkingSetPager {
                 .map_err(|e| format!("required_standard_byte_len failed: {e}"))?;
         let mut out = vec![0_u8; req_len];
         let written = LmnkContainerView::write_standard_sections_to_bytes(
-            LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-            &records,
-            &[],
-            None,
-            None,
-            &[],
-            timestamp_epoch_sec,
+            liminika_core::StandardSectionsInput {
+                container_flags: LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+                anchors: &records,
+                trails: &[],
+                bloom: None,
+                ledger: None,
+                provenance_reports: &[],
+                timestamp_epoch_sec,
+            },
             &mut out,
         )
         .map_err(|e| format!("write_standard_sections_to_bytes failed: {e}"))?;

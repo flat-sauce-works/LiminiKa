@@ -20,14 +20,35 @@ use crate::liminal::{
     MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
-use crate::runtime::gateway::{CoreLayerEvalContext, GatewayFrame, ManifoldProbeBaseline};
+use crate::runtime::gateway::{
+    CoreLayerEvalContext, GatewayFrame, ManifoldProbeBaseline, SandboxLifecycleInput,
+};
 use crate::runtime::horizon::{EpistemicHorizonReading, HorizonDwellState};
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
     ContrastivePhaseBloomFilter, LedgerSlot, MAX_ATTRACTOR_PULL_FORCE, OverlapDiscoveryReport,
-    PhaseSteeringEngine, PointerTrail, SandboxLifecycleEvent, StigmergicActionDecision,
-    StigmergicSubstrate, StigmergicThresholds, trail_phase_words_ref,
+    PhaseSteeringEngine, PointerTrail, SandboxLifecycleEvent, StigmergicSubstrate,
+    StigmergicThresholds, trail_phase_words_ref,
 };
+
+/// Geometry and threshold parameters for [`RuntimeContext::rebind_phase_and_substrate`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContextRebindParams {
+    /// Attention head dimension (`d_head`).
+    pub head_dim: u32,
+    /// Number of attention heads (`<= 64`).
+    pub num_heads: u32,
+    /// Active rotary dimension (`<= head_dim`, even).
+    pub rotary_dim: u32,
+    /// RoPE layout code (`0` = Interleaved, `1` = HalfSplit).
+    pub rope_layout: u8,
+    /// Substrate trail capacity (`>= 1`).
+    pub substrate_capacity: u32,
+    /// Stigmergic threshold ladder for the rebound substrate.
+    pub thresholds: StigmergicThresholds,
+    /// Baseline entropy observation seeded into the rebound substrate.
+    pub baseline_entropy: f32,
+}
 
 impl RuntimeContext {
     /// Returns an immutable reference to the 128-byte 3-slot [`CoreStateStack`]
@@ -77,13 +98,6 @@ impl RuntimeContext {
     #[must_use]
     pub const fn phase_steering(&self) -> &PhaseSteeringEngine {
         &self.phase_steering
-    }
-
-    /// Returns a mutable reference to the embedded [`PhaseSteeringEngine`].
-    #[inline(always)]
-    #[must_use]
-    pub fn phase_steering_mut(&mut self) -> &mut PhaseSteeringEngine {
-        &mut self.phase_steering
     }
 
     /// Returns the physical workbench lane currently leased for an isolated sandbox hypothesis.
@@ -557,20 +571,17 @@ impl RuntimeContext {
     /// when host model geometry changes, avoiding a full 5 KB stack copy.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `head_dim`, `num_heads`, `substrate_capacity`, or
-    /// `thresholds` fail architectural invariant validation.
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn rebind_phase_and_substrate(
-        &mut self,
-        head_dim: u32,
-        num_heads: u32,
-        rotary_dim: u32,
-        rope_layout: u8,
-        substrate_capacity: u32,
-        thresholds: StigmergicThresholds,
-        baseline_entropy: f32,
-    ) -> Result<()> {
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `params` fail architectural invariant validation.
+    pub fn rebind_phase_and_substrate(&mut self, params: ContextRebindParams) -> Result<()> {
+        let ContextRebindParams {
+            head_dim,
+            num_heads,
+            rotary_dim,
+            rope_layout,
+            substrate_capacity,
+            thresholds,
+            baseline_entropy,
+        } = params;
         if substrate_capacity == 0
             || head_dim > u16::MAX as u32
             || num_heads > u16::MAX as u32
@@ -703,28 +714,14 @@ impl RuntimeContext {
     /// and updates `last_sandbox_event`.
     #[inline]
     #[must_use]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn step_sandbox_hypothesis_lifecycle(
         &mut self,
-        decision: StigmergicActionDecision,
-        ego_active: bool,
-        exterior_granule_mask: u8,
-        trail_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        frame_energy: f32,
-        nucleate_dwell: u16,
-        settle_dwell: u16,
+        input: SandboxLifecycleInput<'_>,
     ) -> SandboxLifecycleEvent {
         let ev = self.substrate.step_sandbox_hypothesis_lifecycle(
             &mut self.telemetry,
             &mut self.sandbox_workbench_lane,
-            decision,
-            ego_active,
-            exterior_granule_mask,
-            trail_words,
-            frame_energy,
-            nucleate_dwell,
-            settle_dwell,
+            input,
         );
         self.last_sandbox_event = ev;
         if matches!(ev, SandboxLifecycleEvent::Settled(_)) {

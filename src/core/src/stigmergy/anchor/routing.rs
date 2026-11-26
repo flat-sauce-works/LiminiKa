@@ -27,6 +27,23 @@ use crate::stigmergy::{
 
 use super::PhaseAnchorRecord;
 
+/// Routing and scoring parameters for [`PhaseAnchorRecord::route_coarse_to_fine_candidates_64`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoarseToFineParams {
+    /// Attention head dimension used for $1/\sqrt{d_{\mathrm{head}}}$ scaling.
+    pub head_dim: u32,
+    /// Gain weighting circular phase interference coherence.
+    pub phase_interference_gain: f32,
+    /// Gain weighting logarithmic stigmergic trail density prior.
+    pub stigmergic_prior_gain: f32,
+    /// Score bonus when a candidate matches the source trail's `linked_trail_id`.
+    pub pointer_link_bonus: f32,
+    /// Score bonus for candidates aligned with the winning macro cluster.
+    pub cluster_bonus_gain: f32,
+    /// Contradiction rejection threshold (`coh < -contradiction_threshold`).
+    pub contradiction_threshold: f32,
+}
+
 pub(crate) type Top2LiminalCentroidRoute = (
     usize,
     usize,
@@ -508,24 +525,25 @@ impl PhaseAnchorRecord {
     /// **Coarse-to-Fine Macro-to-Micro Routing ($\mathcal{O}(K) + \mathcal{O}(M_{\mathrm{local}})$)**:
     /// 1. Executes the $\mathcal{O}(K)$ Online Toroidal $k$-Means E-step to identify the winning
     ///    macro centroid `win_k` and stamps `src_trail.cluster_id = macro_anchor_id`.
-    /// 2. Evaluates `candidate_trails` with a macro-cluster affinity bonus (`cluster_bonus_gain`)
+    /// 2. Evaluates `candidate_trails` with a macro-cluster affinity bonus (`params.cluster_bonus_gain`)
     ///    for trails belonging to `macro_anchor_id` (or geometrically aligned with `centroids[win_k]`),
     ///    links the winning candidate into `src_trail.linked_trail_id`, and returns
     ///    `(winning_centroid_idx, winning_trail_id, best_score, best_coherence, found_valid)`.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn route_coarse_to_fine_candidates_64(
         centroids: &[Self],
         src_trail: &mut PointerTrail,
         candidate_trails: &[PointerTrail],
-        head_dim: u32,
-        phase_interference_gain: f32,
-        stigmergic_prior_gain: f32,
-        pointer_link_bonus: f32,
-        cluster_bonus_gain: f32,
-        contradiction_threshold: f32,
+        params: CoarseToFineParams,
     ) -> (usize, u32, f32, f32, bool) {
+        let CoarseToFineParams {
+            head_dim,
+            phase_interference_gain,
+            stigmergic_prior_gain,
+            pointer_link_bonus,
+            cluster_bonus_gain,
+            contradiction_threshold,
+        } = params;
         let self_w = *trail_phase_words_ref(src_trail);
         let (
             win_k,

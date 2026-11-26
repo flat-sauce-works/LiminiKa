@@ -274,7 +274,7 @@ pub(super) fn filter_and_damp_gateway_words(
 
 /// Borrowed read-only core context (`2 Primitives x 2 Drivers`) passed into
 /// per-layer Hot-Path RoPE steering and substrate orchestration.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct CoreLayerEvalContext<'a> {
     /// Unified 3-layer autonomous core stack (`128 B`).
     pub stack: &'a CoreStateStack,
@@ -440,65 +440,32 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
         Ok((frame, report))
     }
 
-    /// Synthesizes any [`ManifoldGatewaySignal`] into structural hyperparameters (`phase_clamp_rad`,
-    /// `phase_step_min_rad`, `effective_inv_temp`, SWAR phase words) and steers `query_tensor`
+    /// Synthesizes any [`ManifoldGatewaySignal`] with dynamic trait cognitive apertures and optional
+    /// read-only 3-layer modulation (`Liminal` + `Stigmergic` + `Ego`), then steers `query_tensor`
     /// (and optional `key_tensor`) according to [`RopeSteeringTarget`] (`Interleaved` or `HalfSplit`,
     /// including partial `rotary_dim`) with zero heap allocation.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `input.geometry`, radian clamps, or tensor slices
     /// violate layout or `LMNK_RESTRICT` disjointness invariants.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    fn steer_gateway_signal_for_geometry_safe<
-        S: ManifoldGatewaySignal + ?Sized,
-        G: RopeSteeringTarget + ?Sized,
-    >(
-        &self,
-        signal: &S,
-        geometry: &G,
-        trail_inout: &mut PointerTrail,
-        unresolved_damping_u7: u8,
-        query_tensor: &mut AlignedSliceMut32<'_, f32>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
-        self.steer_gateway_signal_with_core_layers_for_geometry_safe(
-            signal,
-            geometry,
-            None,
-            trail_inout,
-            unresolved_damping_u7,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-        )
-    }
-
-    /// Core-layer-aware counterpart to [`Self::steer_gateway_signal_for_geometry_safe`] applying
-    /// dynamic trait cognitive apertures and read-only 3-layer modulation (`Liminal` + `Stigmergic` + `Ego`).
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `geometry`, radian clamps, or tensor slices
-    /// violate layout or `LMNK_RESTRICT` disjointness invariants.
-    #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn steer_gateway_signal_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
     >(
         &self,
-        signal: &S,
-        geometry: &G,
-        core_ctx: Option<CoreLayerEvalContext<'_>>,
+        input: GatewaySteerInput<'_, S, G>,
         trail_inout: &mut PointerTrail,
-        unresolved_damping_u7: u8,
         query_tensor: &mut AlignedSliceMut32<'_, f32>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
+        let GatewaySteerInput {
+            signal,
+            geometry,
+            core_ctx,
+            unresolved_damping_u7,
+        } = input;
         let geom = geometry.rope_geometry();
         geom.validate()?;
         if core_ctx.is_none()
@@ -637,32 +604,134 @@ pub fn apply_gateway_frame_rank1_hidden_fused(
     Ok(structural_gain)
 }
 
+/// Read-only signal, geometry, and core-layer inputs for gateway phase steering.
+#[derive(Debug)]
+pub struct GatewaySteerInput<'a, S: ?Sized, G: ?Sized> {
+    /// Manifold gateway signal to synthesize.
+    pub signal: &'a S,
+    /// RoPE steering target geometry descriptor.
+    pub geometry: &'a G,
+    /// Optional read-only 3-layer core stack evaluation context.
+    pub core_ctx: Option<CoreLayerEvalContext<'a>>,
+    /// Damping weight (`0..=128`) applied to unresolved heads.
+    pub unresolved_damping_u7: u8,
+}
+
+impl<S: ?Sized, G: ?Sized> Clone for GatewaySteerInput<'_, S, G> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S: ?Sized, G: ?Sized> Copy for GatewaySteerInput<'_, S, G> {}
+
+/// Bundled hidden-state slices for fused Rank-1 residual injection during gateway layer orchestration.
+pub struct Rank1HiddenSlices<'a, 'b> {
+    /// Mutable output residual tensor (`y_out`).
+    pub y_out: &'a mut AlignedSliceMut32<'b, f32>,
+    /// Input hidden-state tensor (`x_in`).
+    pub x_in: &'a AlignedSlice32<'b, f32>,
+    /// Left Rank-1 factor vector (`u`).
+    pub u_vec: &'a AlignedSlice32<'b, f32>,
+    /// Right Rank-1 factor vector (`v`).
+    pub v_vec: &'a AlignedSlice32<'b, f32>,
+}
+
+/// Mutable tensor targets for [`SubstrateGatewayExt`] layer orchestration passes.
+pub struct GatewayLayerTargets<'a, 'q, 'r, 'l> {
+    /// Optional mutable query tensor steered in-place.
+    pub query_tensor: Option<&'a mut AlignedSliceMut32<'q, f32>>,
+    /// Optional fused Rank-1 residual injection buffers.
+    pub rank1_hidden: Option<Rank1HiddenSlices<'a, 'r>>,
+    /// Optional mutable logits slice scaled by effective inverse temperature.
+    pub logits_opt: Option<&'a mut AlignedSliceMut32<'l, f32>>,
+}
+
+/// Signal, geometry, scale, and entropy inputs for [`SubstrateGatewayExt`] layer orchestration.
+#[derive(Debug)]
+pub struct GatewayLayerInput<'a, S: ?Sized, G: ?Sized> {
+    /// Manifold gateway signal to synthesize.
+    pub signal: &'a S,
+    /// RoPE steering target geometry descriptor.
+    pub geometry: &'a G,
+    /// Optional read-only 3-layer core stack evaluation context.
+    pub core_ctx: Option<CoreLayerEvalContext<'a>>,
+    /// Active stigmergic scale granularity tier.
+    pub scale: StigmergicScaleGranularity,
+    /// Current normalized entropy observation $\tilde{H}$.
+    pub entropy_h_tilde: f32,
+    /// Damping weight (`0..=128`) applied to unresolved heads.
+    pub unresolved_damping_u7: u8,
+}
+
+impl<S: ?Sized, G: ?Sized> Clone for GatewayLayerInput<'_, S, G> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<S: ?Sized, G: ?Sized> Copy for GatewayLayerInput<'_, S, G> {}
+
+/// Policy and system-constraint context for [`SubstrateGatewayExt::orchestrate_gateway_layer_with_core_layers_safe`].
+#[derive(Debug)]
+pub struct GatewayPolicyContext<'a, P: ?Sized, C: ?Sized> {
+    /// Dynamic stigmergic threshold policy.
+    pub policy: &'a P,
+    /// System constraint telemetry signal.
+    pub system: &'a C,
+    /// Calibrated manifold probe baseline.
+    pub probe: &'a ManifoldProbeBaseline,
+}
+
+impl<P: ?Sized, C: ?Sized> Clone for GatewayPolicyContext<'_, P, C> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<P: ?Sized, C: ?Sized> Copy for GatewayPolicyContext<'_, P, C> {}
+
+/// Shared input payload for [`ScaleLayerOrchestrator`] multi-scale cascades.
+#[derive(Debug, Clone, Copy)]
+pub struct ScaleCascadeInput<'a> {
+    /// Incoming 64-bit tagged pointer (falls back to projected frame pointer when null).
+    pub input_ptr: TaggedPtr,
+    /// Incoming 64-head Q7 SWAR phase words.
+    pub input_words: &'a [u64; NUM_STIGMERGIC_GRANULES],
+    /// Optional contrastive phase Bloom filter for repulsion gating.
+    pub bloom_filter: Option<&'a ContrastivePhaseBloomFilter>,
+}
+
 /// Blanket-implemented extension trait equipping any [`StigmergicSubstrateOps`] with single-call
 /// [`ManifoldGatewaySignal`] ingestion, Online Toroidal $k$-Means / DP-Means macro clustering,
 /// online basin consolidation, and `.lmnk` crystallization.
 pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
-    /// Synthesizes `signal` with dynamic trait cognitive apertures and optional 3-layer core
-    /// modulation (`core_ctx`), then steers `query_tensor` and optional `logits_opt` for `geometry`.
+    /// Synthesizes `input.signal` with dynamic trait cognitive apertures and optional 3-layer core
+    /// modulation (`input.core_ctx`), then steers `query_tensor` and optional `logits_opt` for `input.geometry`.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`StigmergicSubstrateOps`] or [`PhaseSteeringActiveExt`].
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn ingest_gateway_and_steer_with_core_layers_for_geometry_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
     >(
         &mut self,
-        signal: &S,
-        geometry: &G,
-        core_ctx: Option<CoreLayerEvalContext<'_>>,
+        input: GatewaySteerInput<'_, S, G>,
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
-        unresolved_damping_u7: u8,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> LmnkResult<(GatewayFrame, CausalProvenanceReport)> {
+        let GatewaySteerInput {
+            signal,
+            geometry,
+            core_ctx,
+            unresolved_damping_u7,
+        } = input;
         let geom = geometry.rope_geometry();
         let (frame, frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         let report = frame.to_causal_report();
@@ -761,41 +830,40 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         Ok((frame, report))
     }
 
-    /// Orchestrates scale-aware `signal` synthesis, 3-layer core modulation, and [`StigmergicSubstrateOps`]
-    /// decision routing for `geometry`.
+    /// Orchestrates scale-aware `input.signal` synthesis, 3-layer core modulation, and [`StigmergicSubstrateOps`]
+    /// decision routing for `input.geometry`.
     ///
     /// # Errors
     /// Propagates any validation or execution error from [`StigmergicSubstrateOps`].
     #[inline]
-    // Public trait signature frozen for v0.3.0; bundled hidden-slice tuple preserves independent lifetimes.
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn orchestrate_gateway_layer_with_scale_and_core_layers_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
     >(
         &mut self,
-        signal: &S,
-        geometry: &G,
-        core_ctx: Option<CoreLayerEvalContext<'_>>,
+        input: GatewayLayerInput<'_, S, G>,
         thresholds: &StigmergicThresholds,
-        scale: StigmergicScaleGranularity,
-        entropy_h_tilde: f32,
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
-        unresolved_damping_u7: u8,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        rank1_hidden: Option<(
-            &mut AlignedSliceMut32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-        )>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+        targets: GatewayLayerTargets<'_, '_, '_, '_>,
     ) -> LmnkResult<(
         GatewayFrame,
         CausalProvenanceReport,
         StigmergicActionDecision,
     )> {
+        let GatewayLayerInput {
+            signal,
+            geometry,
+            core_ctx,
+            scale,
+            entropy_h_tilde,
+            unresolved_damping_u7,
+        } = input;
+        let GatewayLayerTargets {
+            query_tensor,
+            rank1_hidden,
+            logits_opt,
+        } = targets;
         let geom = geometry.rope_geometry();
         let (mut frame, mut frm_w) = synthesize_signal_with_optional_core_layers(signal, core_ctx);
         let lane_mask = self.lane_mask();
@@ -1049,7 +1117,12 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                 decision,
                 StigmergicActionDecision::FullOrchestration
                     | StigmergicActionDecision::CrystallizeMacroBasin
-            ) && let Some((y_mut, x_in, u_vec, v_vec)) = rank1_hidden
+            ) && let Some(Rank1HiddenSlices {
+                y_out: y_mut,
+                x_in,
+                u_vec,
+                v_vec,
+            }) = rank1_hidden
             {
                 let _ = apply_gateway_frame_rank1_hidden_fused(&frame, y_mut, x_in, u_vec, v_vec)?;
                 metrics |= LEDGER_METRIC_RANK1_INJECTED;
@@ -1075,8 +1148,6 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     /// # Errors
     /// Propagates any error from [`Self::orchestrate_gateway_layer_with_scale_and_core_layers_safe`].
     #[inline]
-    // Public trait signature frozen for v0.3.0; bundled hidden-slice tuple preserves independent lifetimes.
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn orchestrate_gateway_layer_with_core_layers_safe<
         S: ManifoldGatewaySignal + ?Sized,
         G: RopeSteeringTarget + ?Sized,
@@ -1084,25 +1155,11 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
         C: SystemConstraintSignal + ?Sized,
     >(
         &mut self,
-        signal: &S,
-        geometry: &G,
-        core_ctx: Option<CoreLayerEvalContext<'_>>,
-        policy: &P,
-        system: &C,
-        probe: &ManifoldProbeBaseline,
-        scale: StigmergicScaleGranularity,
-        entropy_h_tilde: f32,
+        input: GatewayLayerInput<'_, S, G>,
+        policy_ctx: GatewayPolicyContext<'_, P, C>,
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
-        unresolved_damping_u7: u8,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        rank1_hidden: Option<(
-            &mut AlignedSliceMut32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-            &AlignedSlice32<'_, f32>,
-        )>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
+        targets: GatewayLayerTargets<'_, '_, '_, '_>,
     ) -> LmnkResult<(
         GatewayFrame,
         CausalProvenanceReport,
@@ -1110,27 +1167,20 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
     )> {
         let circuit_opt = ((ledger_slot.auto_tune_flags & LEDGER_FLAG_COGNITIVE_TRAJECTORY) != 0)
             .then(|| CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot));
-        let dyn_thresholds = policy.resolve_thresholds_with_circuit(
-            system,
-            probe,
+        let dyn_thresholds = policy_ctx.policy.resolve_thresholds_with_circuit(
+            policy_ctx.system,
+            policy_ctx.probe,
             trail_out,
-            entropy_h_tilde,
+            input.entropy_h_tilde,
             circuit_opt.as_ref(),
-            scale,
+            input.scale,
         );
         self.orchestrate_gateway_layer_with_scale_and_core_layers_safe(
-            signal,
-            geometry,
-            core_ctx,
+            input,
             &dyn_thresholds,
-            scale,
-            entropy_h_tilde,
             ledger_slot,
             trail_out,
-            unresolved_damping_u7,
-            query_tensor,
-            rank1_hidden,
-            logits_opt,
+            targets,
         )
     }
 }
@@ -1140,7 +1190,7 @@ impl<T: StigmergicSubstrateOps + ?Sized> SubstrateGatewayExt for T {}
 /// Blanket-implemented extension trait orchestrating [`StigmergicScaleLayer`] projection,
 /// [`CognitiveTrajectoryLedger`], and scale-aware swarm resolution in zero-allocation mode.
 pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
-    /// Projects `layer` across `input_words`, resolves the active pointer trail in the Micro-Swarm
+    /// Projects `layer` across `input.input_words`, resolves the active pointer trail in the Micro-Swarm
     /// at the activated granularity tier, and records the emitted [`CognitiveStepOp`] into
     /// `ledger_slot.telemetry_mini_ledger`.
     ///
@@ -1148,29 +1198,25 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Propagates any error from [`crate::stigmergy::PointerSubstrate::step_pointer`] or
     /// [`crate::stigmergy::FastPathLedger::telemetry_push`].
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn orchestrate_scale_layer(
         &mut self,
         layer: &(impl StigmergicScaleLayer + ?Sized),
-        input_ptr: TaggedPtr,
-        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        input: ScaleCascadeInput<'_>,
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
         layer_index: usize,
         total_layers: usize,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
     ) -> LmnkResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
         StigmergicReconstitutionReport,
     )> {
         let mut ledger = CognitiveTrajectoryLedger::from_ledger_slot(ledger_slot);
-        let proj = layer.project_scale_layer(input_words, &ledger, layer_index, total_layers);
-        let eff_ptr = TaggedPtr(if input_ptr.is_null() {
+        let proj = layer.project_scale_layer(input.input_words, &ledger, layer_index, total_layers);
+        let eff_ptr = TaggedPtr(if input.input_ptr.is_null() {
             proj.frame.tagged_ptr
         } else {
-            input_ptr.raw()
+            input.input_ptr.raw()
         });
         let (report, _resolved_w) = trail_out.resolve_swarm_with_scale_layer(
             eff_ptr,
@@ -1179,7 +1225,7 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
             layer_index,
             total_layers,
             proj.frame.active_swarm_cell_mask,
-            bloom_filter,
+            input.bloom_filter,
         );
         self.step_pointer(report.evolved_ptr.raw(), trail_out)?;
         ledger.push_step(proj.emitted_step);
@@ -1195,17 +1241,13 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
     /// propagates pointer/telemetry errors.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn orchestrate_adaptive_depth_n<L: StigmergicScaleLayer>(
         &mut self,
         layers: &[L],
         depth_n: usize,
-        input_ptr: TaggedPtr,
-        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        input: ScaleCascadeInput<'_>,
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
     ) -> LmnkResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
@@ -1215,12 +1257,10 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
         self.orchestrate_adaptive_depth_n_with_policy(
             layers,
             depth_n,
-            input_ptr,
-            input_words,
+            input,
+            &default_policy,
             ledger_slot,
             trail_out,
-            bloom_filter,
-            &default_policy,
         )
     }
 
@@ -1232,8 +1272,6 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `layers` is empty or `depth_n == 0`, or
     /// propagates pointer/telemetry errors.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn orchestrate_adaptive_depth_n_with_policy<
         L: StigmergicScaleLayer,
         P: CognitiveCircuitThresholdPolicy + ?Sized,
@@ -1241,12 +1279,10 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
         &mut self,
         layers: &[L],
         depth_n: usize,
-        input_ptr: TaggedPtr,
-        input_words: &[u64; NUM_STIGMERGIC_GRANULES],
+        input: ScaleCascadeInput<'_>,
+        circuit_policy: &P,
         ledger_slot: &mut LedgerSlot,
         trail_out: &mut PointerTrail,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-        circuit_policy: &P,
     ) -> LmnkResult<(
         ScaleLayerProjection,
         CognitiveTrajectoryLedger,
@@ -1272,16 +1308,8 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
         let res_max = circuit_policy.early_exit_residual_max_q7();
         let refine_floor = circuit_policy.recurrent_refine_intensity_floor_q7();
 
-        let mut last_proj = self.orchestrate_scale_layer(
-            &layers[0],
-            input_ptr,
-            input_words,
-            ledger_slot,
-            trail_out,
-            0,
-            active_n,
-            bloom_filter,
-        )?;
+        let mut last_proj =
+            self.orchestrate_scale_layer(&layers[0], input, ledger_slot, trail_out, 0, active_n)?;
         let mut combined_peeled = last_proj.0.peeled_words;
         let mut residual = last_proj.0.residual_words;
         let mut ledger = last_proj.1;
@@ -1301,13 +1329,15 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
 
             let step_res = self.orchestrate_scale_layer(
                 &layers[i],
-                last_proj.2.evolved_ptr,
-                &residual,
+                ScaleCascadeInput {
+                    input_ptr: last_proj.2.evolved_ptr,
+                    input_words: &residual,
+                    bloom_filter: input.bloom_filter,
+                },
                 ledger_slot,
                 trail_out,
                 i,
                 active_n,
-                bloom_filter,
             )?;
             let mut c = 0usize;
             while c < NUM_STIGMERGIC_GRANULES {
@@ -1334,13 +1364,15 @@ pub trait ScaleLayerOrchestrator: StigmergicSubstrateOps + SubstrateGatewayExt {
         {
             let refine_res = self.orchestrate_scale_layer(
                 &layers[active_n - 1],
-                last_proj.2.evolved_ptr,
-                &residual,
+                ScaleCascadeInput {
+                    input_ptr: last_proj.2.evolved_ptr,
+                    input_words: &residual,
+                    bloom_filter: input.bloom_filter,
+                },
                 ledger_slot,
                 trail_out,
                 active_n - 1,
                 active_n,
-                bloom_filter,
             )?;
             let mut c = 0usize;
             while c < NUM_STIGMERGIC_GRANULES {

@@ -40,7 +40,7 @@ impl FastPathLedger for AbiLedgerDispatcher {
 #[must_use]
 pub fn is_aligned<T>(ptr: *const T) -> bool {
     let align = align_of::<T>();
-    (!ptr.is_null()) & (((ptr as usize) & (align - 1)) == 0)
+    (!ptr.is_null()) & ((ptr.addr() & (align - 1)) == 0)
 }
 
 /// Validates a non-null, naturally aligned pointer or opaque handle.
@@ -75,7 +75,7 @@ pub(super) fn opt_span<T>(ptr: *const T) -> LmnkResult<(usize, usize)> {
     } else if !is_aligned(ptr) {
         Err(LMNK_ERR_ALIGNMENT)
     } else {
-        Ok((ptr as usize, size_of::<T>()))
+        Ok((ptr.addr(), size_of::<T>()))
     }
 }
 
@@ -646,22 +646,22 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
         0
     };
     if raw_byte_ranges_overlap(
-        trail_inout as usize,
+        trail_inout.addr(),
         size_of::<lmnk_pointer_trail_t>(),
-        buffers.query_tensor as usize,
+        buffers.query_tensor.addr(),
         qk_bytes,
     ) || (!buffers.key_tensor.is_null()
         && raw_byte_ranges_overlap(
-            trail_inout as usize,
+            trail_inout.addr(),
             size_of::<lmnk_pointer_trail_t>(),
-            buffers.key_tensor as usize,
+            buffers.key_tensor.addr(),
             qk_bytes,
         ))
         || (logits_bytes > 0
             && raw_byte_ranges_overlap(
-                trail_inout as usize,
+                trail_inout.addr(),
                 size_of::<lmnk_pointer_trail_t>(),
-                buffers.logits_inout as usize,
+                buffers.logits_inout.addr(),
                 logits_bytes,
             ))
     {
@@ -676,27 +676,27 @@ pub(super) unsafe fn execute_gateway_frame_with_words_steer_and_optional_kmeans_
         }
         let cent_bytes = validate_raw_slice_bounds(tail.centroids_inout, tail.num_centroids)?;
         if raw_byte_ranges_overlap(
-            tail.centroids_inout as usize,
+            tail.centroids_inout.addr(),
             cent_bytes,
-            trail_inout as usize,
+            trail_inout.addr(),
             size_of::<lmnk_pointer_trail_t>(),
         ) || raw_byte_ranges_overlap(
-            tail.centroids_inout as usize,
+            tail.centroids_inout.addr(),
             cent_bytes,
-            buffers.query_tensor as usize,
+            buffers.query_tensor.addr(),
             qk_bytes,
         ) || (!buffers.key_tensor.is_null()
             && raw_byte_ranges_overlap(
-                tail.centroids_inout as usize,
+                tail.centroids_inout.addr(),
                 cent_bytes,
-                buffers.key_tensor as usize,
+                buffers.key_tensor.addr(),
                 qk_bytes,
             ))
             || (logits_bytes > 0
                 && raw_byte_ranges_overlap(
-                    tail.centroids_inout as usize,
+                    tail.centroids_inout.addr(),
                     cent_bytes,
-                    buffers.logits_inout as usize,
+                    buffers.logits_inout.addr(),
                     logits_bytes,
                 ))
         {
@@ -988,12 +988,7 @@ pub(super) unsafe fn bind_qk_32<'a>(
     if !key_tensor.is_null() {
         validate_ptr_aligned(key_tensor, 32)?;
         let _ = validate_raw_slice_bounds(key_tensor, total_len)?;
-        if raw_byte_ranges_overlap(
-            query_tensor as usize,
-            qk_bytes,
-            key_tensor as usize,
-            qk_bytes,
-        ) {
+        if raw_byte_ranges_overlap(query_tensor.addr(), qk_bytes, key_tensor.addr(), qk_bytes) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
     }
@@ -1036,15 +1031,15 @@ pub(super) unsafe fn bind_qk_and_logits_32<'a>(
         validate_ptr_aligned(logits_inout, 32)?;
         let logits_bytes = validate_raw_slice_bounds(logits_inout, vocab_size)?;
         if raw_byte_ranges_overlap(
-            query_tensor as usize,
+            query_tensor.addr(),
             qk_bytes,
-            logits_inout as usize,
+            logits_inout.addr(),
             logits_bytes,
         ) || (!key_tensor.is_null()
             && raw_byte_ranges_overlap(
-                key_tensor as usize,
+                key_tensor.addr(),
                 qk_bytes,
-                logits_inout as usize,
+                logits_inout.addr(),
                 logits_bytes,
             ))
         {

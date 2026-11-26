@@ -301,23 +301,42 @@ impl EgoIntentAxes {
             signature_hash: next_hash,
         }
     }
+}
 
+/// Normalized cue-count overlay inputs applied to [`EgoIntentAxes::with_cue_counts_overlay`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IntentCueCounts {
+    /// Autonomy cue hit count.
+    pub autonomy: u8,
+    /// Transgression cue hit count.
+    pub transgress: u8,
+    /// Devotion cue hit count.
+    pub devotion: u8,
+    /// Logic cue hit count.
+    pub logic: u8,
+    /// Caution cue hit count.
+    pub caution: u8,
+    /// Signature hash mixed into `EgoIntentAxes::signature_hash`.
+    pub signature_hash: u32,
+    /// Confidence floor (`0..=127`) merged onto `EgoIntentAxes::confidence_q7`.
+    pub confidence_q7: u8,
+}
+
+impl EgoIntentAxes {
     /// Accumulates normalized cue counts and `signature_hash` onto `self` in `#![no_std]`
     /// without heap allocations or natural-language dictionaries.
     #[inline]
     #[must_use]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_cue_counts_overlay(
-        mut self,
-        autonomy_cues: u8,
-        transgress_cues: u8,
-        devotion_cues: u8,
-        logic_cues: u8,
-        caution_cues: u8,
-        signature_hash: u32,
-        confidence_q7: u8,
-    ) -> Self {
+    pub fn with_cue_counts_overlay(mut self, cues: IntentCueCounts) -> Self {
+        let IntentCueCounts {
+            autonomy: autonomy_cues,
+            transgress: transgress_cues,
+            devotion: devotion_cues,
+            logic: logic_cues,
+            caution: caution_cues,
+            signature_hash,
+            confidence_q7,
+        } = cues;
         self.signature_hash = branchless_select_u32(
             self.signature_hash == 0,
             signature_hash,
@@ -386,15 +405,15 @@ impl EgoIntentAxes {
             return Self::new();
         }
         let hash = compute_crc32_ieee(trimmed);
-        Self::new().with_cue_counts_overlay(
-            ((hash & 1) as u8).saturating_add(1),
-            ((hash >> 1) & 1) as u8,
-            ((hash >> 2) & 1) as u8,
-            ((hash >> 3) & 1) as u8,
-            ((hash >> 4) & 1) as u8,
-            hash,
-            64,
-        )
+        Self::new().with_cue_counts_overlay(IntentCueCounts {
+            autonomy: ((hash & 1) as u8).saturating_add(1),
+            transgress: ((hash >> 1) & 1) as u8,
+            devotion: ((hash >> 2) & 1) as u8,
+            logic: ((hash >> 3) & 1) as u8,
+            caution: ((hash >> 4) & 1) as u8,
+            signature_hash: hash,
+            confidence_q7: 64,
+        })
     }
 }
 

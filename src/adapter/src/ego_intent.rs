@@ -148,15 +148,15 @@ pub fn overlay_ego_intent_axes(base: EgoIntentAxes, description: &str) -> EgoInt
             )
         };
 
-    base.with_cue_counts_overlay(
-        autonomy_cues,
-        transgress_cues,
-        devotion_cues,
-        logic_cues,
-        caution_cues,
-        hash,
+    base.with_cue_counts_overlay(liminika_core::IntentCueCounts {
+        autonomy: autonomy_cues,
+        transgress: transgress_cues,
+        devotion: devotion_cues,
+        logic: logic_cues,
+        caution: caution_cues,
+        signature_hash: hash,
         confidence_q7,
-    )
+    })
 }
 
 /// Derives a 64-byte [`LiminalEgoState`] deterministically from a natural-language description.

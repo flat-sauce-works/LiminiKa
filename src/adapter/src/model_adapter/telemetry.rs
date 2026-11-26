@@ -412,10 +412,8 @@ impl ModelSteeringAdapter {
         obs: TokenBypassObservation,
         dispatch: &mut ComputeDispatchMask,
     ) -> bool {
-        // Intentional discard: the veto bitmask is not needed by this wrapper, which reports
-        // `dispatch.whole_token_steering_bypass` as its boolean result instead.
-        let _ = self.evaluate_whole_token_bypass_with_spine(obs, dispatch);
-        dispatch.whole_token_steering_bypass != 0
+        let veto_mask = self.evaluate_whole_token_bypass_with_spine(obs, dispatch);
+        veto_mask == 0 && dispatch.whole_token_steering_bypass != 0
     }
 
     /// Exports active [`EgoDifferentialNet`] P-Frame nodes as model-agnostic

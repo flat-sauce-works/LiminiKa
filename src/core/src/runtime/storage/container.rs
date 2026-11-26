@@ -390,6 +390,25 @@ pub struct LmnkContainerView<'a> {
     sections: [LmnkSectionEntry; LMNK_MAX_CONTAINER_SECTIONS as usize],
 }
 
+/// Section payload inputs for [`LmnkContainerView::write_standard_sections_to_bytes`].
+#[derive(Debug, Clone, Copy)]
+pub struct StandardSectionsInput<'a> {
+    /// Container classification bitflags (`LMNK_CONTAINER_FLAG_*`).
+    pub container_flags: u32,
+    /// Crystallized phase anchor records to serialize.
+    pub anchors: &'a [PhaseAnchorRecord],
+    /// Pointer trails to serialize.
+    pub trails: &'a [PointerTrail],
+    /// Optional contrastive phase Bloom filter section.
+    pub bloom: Option<&'a ContrastivePhaseBloomFilter>,
+    /// Optional fast-path ledger slot section.
+    pub ledger: Option<&'a LedgerSlot>,
+    /// Causal provenance reports to serialize.
+    pub provenance_reports: &'a [CausalProvenanceReport],
+    /// Unix epoch timestamp in seconds stamped into the container header.
+    pub timestamp_epoch_sec: u64,
+}
+
 impl<'a> LmnkContainerView<'a> {
     /// Parses and validates an untrusted `.lmnk` container byte slice without panics or
     /// base-pointer alignment assumptions.
@@ -860,18 +879,19 @@ impl<'a> LmnkContainerView<'a> {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on size overflow or [`LMNK_ERR_BUFFER_TOO_SMALL`] if
     /// `dst_bytes` is smaller than [`Self::required_standard_byte_len`].
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn write_standard_sections_to_bytes(
-        container_flags: u32,
-        anchors: &[PhaseAnchorRecord],
-        trails: &[PointerTrail],
-        bloom_opt: Option<&ContrastivePhaseBloomFilter>,
-        ledger_opt: Option<&LedgerSlot>,
-        provenance_reports: &[CausalProvenanceReport],
-        timestamp_epoch_sec: u64,
+        input: StandardSectionsInput<'_>,
         dst_bytes: &mut [u8],
     ) -> LmnkResult<usize> {
+        let StandardSectionsInput {
+            container_flags,
+            anchors,
+            trails,
+            bloom: bloom_opt,
+            ledger: ledger_opt,
+            provenance_reports,
+            timestamp_epoch_sec,
+        } = input;
         let total_len = Self::required_standard_byte_len(
             anchors.len(),
             trails.len(),

@@ -1435,33 +1435,43 @@ pub fn dispatch_single_pass(
     Ok(())
 }
 
+/// Slot-binding and geometry parameters for sub-head attractor ensemble routing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SubheadSlotBinding {
+    /// Working slot index (`0..8`) supplying the `Fact` sub-head profile.
+    pub fact_slot_id: u8,
+    /// Working slot index (`0..8`) supplying the `Logic` sub-head profile.
+    pub logic_slot_id: u8,
+    /// Working slot index (`0..8`) supplying the `Explore` sub-head profile.
+    pub explore_slot_id: u8,
+    /// Maximum sub-head angular rotation clamp in radians (`> 0.0`).
+    pub max_rad: f32,
+    /// Q7 phase pulse added to the `Explore` sub-head partition.
+    pub explore_pulse_q7: PhaseQ7,
+    /// Per-head attention dimension (`head_dim`).
+    pub head_dim: usize,
+}
+
 /// Executes **Single-Pass $SO(2)$ Group-Closure Fused `PhaseClamp` + 8-Slot Ensemble Sub-Head
 /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
 /// the composite angle $\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$ in a single traversal.
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
-/// `head_dim` is invalid, `base_clamp_max_rad <= 0.0`, `subhead_max_rad <= 0.0`, or `tensor` is too small.
+/// `binding.head_dim` is invalid, `base_clamp_max_rad <= 0.0`, `binding.max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
-// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-#[allow(clippy::too_many_arguments)]
 pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     base_clamp_max_rad: f32,
     config: &SubheadConfig,
     slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
-    fact_slot_id: u8,
-    logic_slot_id: u8,
-    explore_slot_id: u8,
-    subhead_max_rad: f32,
-    explore_pulse_q7: PhaseQ7,
-    head_dim: usize,
+    binding: SubheadSlotBinding,
     fold_geodesic: bool,
 ) -> LmnkResult<()> {
-    let f_id = usize::from(fact_slot_id);
-    let l_id = usize::from(logic_slot_id);
-    let e_id = usize::from(explore_slot_id);
+    let f_id = usize::from(binding.fact_slot_id);
+    let l_id = usize::from(binding.logic_slot_id);
+    let e_id = usize::from(binding.explore_slot_id);
     if f_id >= MAX_ATTRACTOR_DOMAINS
         || l_id >= MAX_ATTRACTOR_DOMAINS
         || e_id >= MAX_ATTRACTOR_DOMAINS
@@ -1477,44 +1487,37 @@ pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
         &bank_2d[f_id],
         &bank_2d[l_id],
         &bank_2d[e_id],
-        subhead_max_rad,
-        explore_pulse_q7,
-        head_dim,
+        binding.max_rad,
+        binding.explore_pulse_q7,
+        binding.head_dim,
         fold_geodesic,
     )
 }
 
 /// Executes **Single-Pass Sub-Head Attractor Slot Ensemble Routing** (Section 2.4):
-/// simultaneously binds `Fact` heads to `fact_slot_id`, `Logic` heads to `logic_slot_id`,
-/// and `Explore` heads to `explore_slot_id` from a 512-byte `slot_phase_bank`.
+/// simultaneously binds `Fact` heads to `binding.fact_slot_id`, `Logic` heads to `binding.logic_slot_id`,
+/// and `Explore` heads to `binding.explore_slot_id` from a 512-byte `slot_phase_bank`.
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
-/// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
+/// `binding.head_dim` is invalid, `binding.max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
-// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-#[allow(clippy::too_many_arguments)]
 pub fn dispatch_subhead_slot_ensemble(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
     slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
-    fact_slot_id: u8,
-    logic_slot_id: u8,
-    explore_slot_id: u8,
-    max_rad: f32,
-    explore_pulse_q7: PhaseQ7,
-    head_dim: usize,
+    binding: SubheadSlotBinding,
 ) -> LmnkResult<()> {
     dispatch_subhead_slot_ensemble_core(
         tensor,
         config,
         slot_phase_bank,
-        fact_slot_id,
-        logic_slot_id,
-        explore_slot_id,
-        max_rad,
-        explore_pulse_q7,
-        head_dim,
+        binding.fact_slot_id,
+        binding.logic_slot_id,
+        binding.explore_slot_id,
+        binding.max_rad,
+        binding.explore_pulse_q7,
+        binding.head_dim,
         false,
     )
 }
@@ -1523,31 +1526,24 @@ pub fn dispatch_subhead_slot_ensemble(
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
-/// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
+/// `binding.head_dim` is invalid, `binding.max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
-// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-#[allow(clippy::too_many_arguments)]
 pub fn dispatch_subhead_slot_ensemble_geodesic(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
     slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
-    fact_slot_id: u8,
-    logic_slot_id: u8,
-    explore_slot_id: u8,
-    max_rad: f32,
-    explore_pulse_q7: PhaseQ7,
-    head_dim: usize,
+    binding: SubheadSlotBinding,
 ) -> LmnkResult<()> {
     dispatch_subhead_slot_ensemble_core(
         tensor,
         config,
         slot_phase_bank,
-        fact_slot_id,
-        logic_slot_id,
-        explore_slot_id,
-        max_rad,
-        explore_pulse_q7,
-        head_dim,
+        binding.fact_slot_id,
+        binding.logic_slot_id,
+        binding.explore_slot_id,
+        binding.max_rad,
+        binding.explore_pulse_q7,
+        binding.head_dim,
         true,
     )
 }

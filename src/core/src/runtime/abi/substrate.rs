@@ -137,7 +137,7 @@ pub unsafe extern "C" fn lmnk_substrate_evaluate_thresholds(
 }
 
 /// Executes a full **Stigmergic Threshold Action-Selecting Orchestration Step** across the C-ABI
-/// boundary via [`StigmergicSubstrate::orchestrate_next_action_step`] ($C_{\mathrm{alloc}} = 0$).
+/// boundary via [`StigmergicSubstrate`] ($C_{\mathrm{alloc}} = 0$).
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.

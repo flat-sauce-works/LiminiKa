@@ -3,9 +3,13 @@
 
 use super::*;
 
+const fn sample_gqa_partial_rope() -> RopeGeometry {
+    RopeGeometry::new(RopeLayout::HalfSplit, 128, 96, 24, 8, 32, 0xFFFF_FFFF)
+}
+
 #[test]
-fn phi4_mini_preset_validates_and_skips_nope_layers() {
-    let mut geom = RopeGeometry::phi4_mini();
+fn gqa_partial_rope_geometry_validates_and_skips_nope_layers() {
+    let mut geom = sample_gqa_partial_rope();
     assert!(geom.validate().is_ok());
     assert_eq!(geom.q_rot_len(), 24 * 96);
 
@@ -17,7 +21,7 @@ fn phi4_mini_preset_validates_and_skips_nope_layers() {
 #[test]
 fn adapter_bakes_and_steers_half_split_and_interleaved() {
     for layout in [RopeLayout::HalfSplit, RopeLayout::Interleaved] {
-        let mut geom = RopeGeometry::phi4_mini();
+        let mut geom = sample_gqa_partial_rope();
         geom.layout = layout;
         geom.layer_rope_mask &= !(1 << 1); // Layer 1 is NoPE
 
@@ -50,7 +54,7 @@ fn adapter_bakes_and_steers_half_split_and_interleaved() {
 
 #[test]
 fn adapter_steps_entropy_gate_and_applies_rank1_residual() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let mut logits = vec![4.0, 2.0, 1.0, 0.5];
     let state = adapter
         .step_entropy_logits(&mut logits)
@@ -73,7 +77,7 @@ fn adapter_steers_via_gateway_trait_composition() {
         SubjectivePersona,
     };
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let orig: Vec<f32> = (0..len).map(|i| ((i % 11) as f32) * 0.1 - 0.4).collect();
     let mut q_rot = orig.clone();
@@ -116,7 +120,7 @@ fn adapter_steers_via_gateway_trait_composition() {
 fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
     use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let mut q_rot: Vec<f32> = (0..len).map(|i| ((i % 9) as f32) * 0.1 - 0.3).collect();
     let mut trail = lmnk_pointer_trail_t::default();
@@ -147,7 +151,7 @@ fn adapter_resonates_arbitrary_slice_without_hardcoded_count() {
 fn adapter_steers_via_substrate_and_builds_stigmergic_density() {
     use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let mut q_rot: Vec<f32> = (0..len).map(|i| ((i % 7) as f32) * 0.1 - 0.25).collect();
     let orig = q_rot.clone();
@@ -174,7 +178,7 @@ fn adapter_steers_via_substrate_and_builds_stigmergic_density() {
 fn substrate_orchestrator_gates_rope_and_rank1_by_stigmergic_density() {
     use liminika_core::runtime::{ObjectiveFact, ResonantSignalSlice};
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let mut trail = lmnk_pointer_trail_t::default();
 
@@ -244,7 +248,7 @@ fn substrate_orchestrator_gates_rope_and_rank1_by_stigmergic_density() {
 
 #[test]
 fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
-    let geom = RopeGeometry::phi4_mini();
+    let geom = sample_gqa_partial_rope();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry valid");
     adapter.set_layer_rope_mask(0xFFFF_0000);
     let q_len = adapter.geometry().q_rot_len();
@@ -269,7 +273,7 @@ fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
     let high_load_rank1 = adapter.substrate().thresholds.rank1_inject_density_thresh;
     assert!(high_load_rank1 > low_load_rank1);
 
-    let mut alt_geom = RopeGeometry::phi4_mini();
+    let mut alt_geom = sample_gqa_partial_rope();
     alt_geom.num_q_heads = 32;
     alt_geom.head_dim = 128;
     alt_geom.rotary_dim = 128;
@@ -284,7 +288,7 @@ fn cold_path_probe_calibrates_thresholds_and_rebinds_geometry() {
 
 #[test]
 fn text_attractor_corpus_recalls_basin_and_detects_liminal_exterior_boundary() {
-    let geom = RopeGeometry::phi4_mini();
+    let geom = sample_gqa_partial_rope();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry valid");
     adapter.set_layer_rope_mask(0xFFFF_0000);
     let q_len = adapter.geometry().q_rot_len();
@@ -362,7 +366,7 @@ fn text_attractor_corpus_recalls_basin_and_detects_liminal_exterior_boundary() {
 
 #[test]
 fn dual_track_timeline_records_gop_seeks_zero_forward_and_roundtrips() {
-    let geom = RopeGeometry::phi4_mini();
+    let geom = sample_gqa_partial_rope();
     let adapter = ModelSteeringAdapter::new(geom).expect("phi4 geometry");
     let q_len = adapter.geometry().q_rot_len();
     let ref_vec = vec![0.0_f32; q_len];
@@ -549,7 +553,7 @@ fn dual_track_timeline_persists_composes_and_updates_persona_circuit() {
         CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicScaleGranularity,
     };
 
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("geometry");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("geometry");
     let policy = RecallPolicy::default();
     let detector = AdaptiveGopCutDetector::default();
     let mut corpus = TextAttractorCorpus::new();
@@ -672,7 +676,7 @@ fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
         }
     }
 
-    let src_adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("src init");
+    let src_adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("src init");
     let len = src_adapter.geometry().q_rot_len();
     let centroid = vec![0.0_f32; len];
     let refs: Vec<&[f32]> = vec![centroid.as_slice(); 32];
@@ -775,7 +779,7 @@ fn dual_track_timeline_fast_resumes_and_rebakes_across_models() {
     }
 
     // 2. Different model geometry -> Rebaked automatically from Subtitle Track.
-    let mut alt_geom = RopeGeometry::phi4_mini();
+    let mut alt_geom = sample_gqa_partial_rope();
     alt_geom.head_dim = 128;
     alt_geom.rotary_dim = 128;
     let alt_adapter = ModelSteeringAdapter::new(alt_geom).expect("alt init");
@@ -913,7 +917,7 @@ fn coherence_guard_gate_detects_sharp_winner_liminal_without_weakening_ood_limin
 
 #[test]
 fn perspective_hubness_damps_dense_hub_and_preserves_peripheral_attractor() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let centroid = vec![0.0_f32; len];
     let refs: Vec<&[f32]> = vec![centroid.as_slice(); 32];
@@ -998,7 +1002,7 @@ fn perspective_hubness_damps_dense_hub_and_preserves_peripheral_attractor() {
 
 #[test]
 fn layer_angle_perspective_separates_specialized_late_layer_attractor() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -1063,7 +1067,7 @@ fn layer_angle_perspective_separates_specialized_late_layer_attractor() {
 
 #[test]
 fn coalition_stratum_pipeline_supports_dynamic_add_remove_and_substrate_arbitration() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let centroid = vec![0.0_f32; len];
     let refs: Vec<&[f32]> = vec![centroid.as_slice(); 32];
@@ -1168,8 +1172,8 @@ fn coalition_stratum_pipeline_supports_dynamic_add_remove_and_substrate_arbitrat
 
 #[test]
 fn head_angle_worker_stratum_separates_specialized_head_attractor() {
-    // Use phi4_mini geometry where head 0 is shared noise and head 1 holds the specialized signal.
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    // Use sample GQA partial-RoPE geometry where head 0 is shared noise and head 1 holds the specialized signal.
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let rotary_dim = len / 24;
     let num_layers = adapter.geometry().num_layers;
@@ -1232,7 +1236,7 @@ fn head_angle_worker_stratum_separates_specialized_head_attractor() {
 
 #[test]
 fn persona_recall_survives_factual_liminal_exterior_and_routes_via_gateway_frame() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -1296,7 +1300,7 @@ fn persona_recall_survives_factual_liminal_exterior_and_routes_via_gateway_frame
 
 #[test]
 fn local_token_resonance_arbitrates_channel_disagreement_via_subhead_route() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -1405,7 +1409,7 @@ fn support_gated_perspective_prevents_phantom_boost_on_non_matching_outlier() {
 
 #[test]
 fn per_role_local_token_resonance_arbitrates_fact_despite_persona_hub() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -1496,7 +1500,7 @@ fn per_role_local_token_resonance_arbitrates_fact_despite_persona_hub() {
 
 #[test]
 fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_liminal_exterior() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -1667,7 +1671,7 @@ fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_
 
 #[test]
 fn residual_peeling_decomposer_chains_three_disjoint_specialists_beyond_top_k_two() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -1798,7 +1802,7 @@ fn residual_peeling_decomposer_chains_three_disjoint_specialists_beyond_top_k_tw
 
 #[test]
 fn split_premise_guard_coalition_triggers_repulsion_while_preserving_counter_fact() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -1919,7 +1923,7 @@ fn split_premise_guard_coalition_triggers_repulsion_while_preserving_counter_fac
 fn model_steering_adapter_adapts_liminal_aperture_and_renders_mermaid_topology() {
     use liminika_core::liminal::EpistemicRegime;
     use liminika_core::stigmergy::{CognitiveOpKind, CognitiveStepOp};
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("phi4 mini");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("phi4 mini");
 
     let mut peel_ledger = CognitiveTrajectoryLedger::default();
     for _ in 0..4 {
@@ -2010,7 +2014,7 @@ fn adapter_ego_intent_axes_stationary_shortcut_and_persistent_rank1() {
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
     use liminika_core::stigmergy::OverlapDiscoveryReport;
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let base_axes = EgoIntentAxes::new().with_autonomy_q7(32).with_logic_q7(80);
     adapter.configure_ego_from_intent_axes(&base_axes);
     assert!(adapter.ego_state().is_active());
@@ -2101,7 +2105,7 @@ fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
     use liminika_core::stigmergy::OverlapDiscoveryReport;
 
-    let geom = RopeGeometry::phi4_mini();
+    let geom = sample_gqa_partial_rope();
     let mut base_adapter = ModelSteeringAdapter::new(geom.clone()).expect("base init");
     let mut ego_adapter = ModelSteeringAdapter::new(geom.clone()).expect("ego init");
     ego_adapter.configure_ego_from_intent_axes(
@@ -2209,7 +2213,9 @@ fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
         is_known_unknown_exterior: false,
     };
     let epochs_before_sync = ego_adapter.threshold_state().adaptation_epochs;
-    let (_hor, _overlap, ens_opt) = ego_adapter.sync_core_layers_from_recall(&recall, None);
+    let (_hor, _overlap, ens_opt) = ego_adapter
+        .sync_core_layers_from_recall(&recall, None)
+        .expect("sync_core_layers_from_recall");
     let ens_rep = ens_opt.expect("2 recalled facts must trigger fragmented micro-ensemble");
     assert_eq!(ens_rep.active_fragment_count, 2);
     assert_ne!(ens_rep.quorum_agreed_granule_mask, 0);
@@ -2220,7 +2226,7 @@ fn adapter_rope_and_rank1_paths_actively_wire_core_layers_and_ego() {
 fn adapter_dynamic_horizon_guard_slot_and_corpus_escalation() {
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact, TelemetryVerbosityMode};
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let ref_q = vec![0.0_f32; q_len];
@@ -2380,7 +2386,7 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
     use liminika_core::stigmergy::DissipativeOverflowReport;
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
     let mut trail = lmnk_pointer_trail_t::default();
     let mut q_rot = vec![0.4_f32; q_len];
@@ -2467,7 +2473,7 @@ fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
     use liminika_core::drivers::{EGO_TRIGGER_LAYER_DISTORTION, LiminalEgoPreset};
     use liminika_core::runtime::{LayerDistortionKind, LayerDistortionReport};
 
-    let geom = RopeGeometry::phi4_mini();
+    let geom = sample_gqa_partial_rope();
     let mut adapter = ModelSteeringAdapter::new(geom).expect("valid adapter");
     adapter.configure_ego_from_preset(LiminalEgoPreset::Low);
     let base_thrust = adapter.ego_state().counter_basin_thrust_q7;
@@ -2522,7 +2528,7 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
     use liminika_core::runtime::{LayerDistortionKind, LayerDistortionReport};
     use liminika_core::stigmergy::StigmergicThresholds;
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).unwrap();
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).unwrap();
     let default_rank1 = StigmergicThresholds::default().rank1_inject_density_thresh;
     let mut trail = lmnk_pointer_trail_t {
         stigmergic_density: 1.80,
@@ -2594,7 +2600,7 @@ fn test_slow_loop_updates_threshold_policy_without_exponential_drift() {
 
 #[test]
 fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let ref_q = vec![0.0_f32; q_len];
@@ -2745,7 +2751,7 @@ fn test_workbench_preset_and_boundary_gated_escalation_granularity() {
 #[test]
 fn container_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
     let mut src_adapter =
-        ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("src adapter");
+        ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("src adapter");
     src_adapter.configure_ego_from_preset(LiminalEgoPreset::Medium);
     let topo = src_adapter.export_logical_pframe_topology();
     assert_eq!(topo.len(), 3);
@@ -2757,7 +2763,7 @@ fn container_v2_logical_pframe_topology_roundtrip_and_cross_model_rebake() {
     let decoded = LmnkTimeline::from_bytes(&encoded).expect("decode v2");
     assert_eq!(decoded.logical_pframe_topology(), topo.as_slice());
 
-    let mut alt_geom = RopeGeometry::phi4_mini();
+    let mut alt_geom = sample_gqa_partial_rope();
     alt_geom.head_dim = 128;
     alt_geom.rotary_dim = 128;
     let mut alt_adapter = ModelSteeringAdapter::new(alt_geom).expect("alt adapter");
@@ -2776,7 +2782,7 @@ fn hot_path_sandbox_settlement_increments_sandbox_settlements() {
     use liminika_core::runtime::{EpistemicHorizonReading, ObjectiveFact};
     use liminika_core::stigmergy::OverlapDiscoveryReport;
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     adapter.configure_ego_from_preset(LiminalEgoPreset::Low);
     adapter.adapt_core_layers(
         &EpistemicHorizonReading {
@@ -2888,7 +2894,7 @@ fn adapter_ego_intent_natural_language_and_word_boundary_matching() {
 fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
     use liminika_core::drivers::{SystemPressureReading, TokenBypassObservation};
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let expected_baseline_pins = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
     assert_eq!(
         adapter.system_spine().pinned_compute_mask,
@@ -2922,7 +2928,9 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
     };
 
     // Calm non-guard recall must preserve baseline head/tail pins without clearing to 0.
-    let _ = adapter.sync_core_layers_from_recall(&calm_recall, None);
+    let _ = adapter
+        .sync_core_layers_from_recall(&calm_recall, None)
+        .expect("sync calm recall");
     assert_eq!(
         adapter.system_spine().pinned_compute_mask,
         expected_baseline_pins
@@ -2967,7 +2975,9 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         action_decision: StigmergicActionDecision::RepulsionEscape,
         ..calm_recall.clone()
     };
-    let _ = adapter.sync_core_layers_from_recall(&guard_recall, None);
+    let _ = adapter
+        .sync_core_layers_from_recall(&guard_recall, None)
+        .expect("sync guard recall");
     assert_eq!(
         adapter.system_spine().pinned_compute_mask,
         adapter.compute_pool().active_mask
@@ -2975,14 +2985,16 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
     let mut d_guard = adapter.step_compute_dispatch(surge);
     assert!(!adapter.evaluate_whole_token_bypass(calm_obs, &mut d_guard));
 
-    let _ = adapter.sync_core_layers_from_recall(&calm_recall, None);
+    let _ = adapter
+        .sync_core_layers_from_recall(&calm_recall, None)
+        .expect("sync calm recall");
     assert_eq!(
         adapter.system_spine().pinned_compute_mask,
         expected_baseline_pins
     );
 
     // Rebind cold-path resets baseline pins to the new geometry's head/tail boundaries.
-    let mut small_geom = RopeGeometry::phi4_mini();
+    let mut small_geom = sample_gqa_partial_rope();
     small_geom.num_layers = 8;
     small_geom.layer_rope_mask = 0xFF;
     let _ = adapter
@@ -3000,7 +3012,7 @@ fn adapter_embeds_boxed_runtime_context_with_drop_and_spine_pin_floor() {
     assert!(!core::mem::needs_drop::<RuntimeContext>());
     assert!(core::mem::needs_drop::<ModelSteeringAdapter>());
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let baseline_pins = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
 
     // Embedded `RuntimeContext` must mirror adapter initialization parity and pin floor.
@@ -3032,7 +3044,7 @@ fn adapter_embeds_boxed_runtime_context_with_drop_and_spine_pin_floor() {
 
 #[test]
 fn liminal_boundary_flow_summary_is_zero_safe_and_reflects_live_counters() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
 
     // Zero-step safety: no NaN or division-by-zero on fresh adapter.
     let zero_summary: LiminalBoundaryFlowSummary = adapter.liminal_boundary_flow_summary();
@@ -3116,7 +3128,7 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
         SystemPressureReading, TokenBypassObservation,
     };
 
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let expected_baseline_pins = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
     assert_eq!(
         adapter.guard_hold_tokens(),
@@ -3151,7 +3163,9 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
 
     // Slide in CoherenceHorizonGuardSlot so static `guard_slot_slid_in && conflict_severity > 0.25`
     // is active alongside `turn_guard_active` without activating `RepulsionEscape` (verifies Trap-2 resolution).
-    let _ = adapter.sync_core_layers_from_recall(&guard_recall, None);
+    let _ = adapter
+        .sync_core_layers_from_recall(&guard_recall, None)
+        .expect("sync guard recall");
     let mut trail = lmnk_pointer_trail_t::default();
     let sig = ObjectiveFact::new([18i8; 64], 1.5, 0, 1);
     let mut q_rot = vec![0.25_f32; adapter.geometry().q_rot_len()];
@@ -3269,7 +3283,9 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
         guard_conflict_margin: 0.75,
         ..guard_recall
     };
-    let _ = adapter.sync_core_layers_from_recall(&repulse_recall, None);
+    let _ = adapter
+        .sync_core_layers_from_recall(&repulse_recall, None)
+        .expect("sync repulse recall");
     let _ = adapter
         .orchestrate_layer_rope_with_substrate(
             0,
@@ -3292,7 +3308,7 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
 
 #[test]
 fn snapshot_restore_under_active_transient_guard_does_not_leak_permanent_pins() {
-    let mut clean_adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let mut clean_adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
     let baseline = clean_adapter.system_spine().baseline_pinned_compute_mask;
     clean_adapter.begin_turn_spine_policy(false, false);
     assert_eq!(clean_adapter.system_spine().pinned_compute_mask, baseline);
@@ -3310,7 +3326,7 @@ fn snapshot_restore_under_active_transient_guard_does_not_leak_permanent_pins() 
 
     // Arm transient all-layer guard pin on live adapter, then restore clean unguarded snapshot.
     let mut guarded_adapter =
-        ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("guarded adapter");
+        ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("guarded adapter");
     guarded_adapter.begin_turn_spine_policy(true, false);
     assert_eq!(
         guarded_adapter.system_spine().pinned_compute_mask,
@@ -3335,7 +3351,7 @@ fn snapshot_restore_under_active_transient_guard_does_not_leak_permanent_pins() 
 
 #[test]
 fn adapter_begin_turn_and_step_decode_control_delegate_to_core_ctx() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
     adapter.set_guard_hold_tokens(2);
     adapter.set_max_observe_stride(4);
     assert_eq!(adapter.guard_hold_tokens(), 2);
@@ -3383,7 +3399,7 @@ fn load_from_path_recognizes_uppercase_lmnkp_extension() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
 
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
     let mut tl = LmnkTimeline::new(LmnkTimeline::geometry_fingerprint(adapter.geometry()));
     let cut = AdaptiveGopCutDetector::default();
     let policy = RecallPolicy::default();
@@ -3447,7 +3463,7 @@ fn load_from_path_recognizes_uppercase_lmnkp_extension() {
 
 #[test]
 fn guard_repulsion_boundary_writes_nonzero_antiphase_to_auto_repulsion_lane() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let head_rot = adapter.geometry().rotary_dim;
     let num_heads = adapter.geometry().num_q_heads;
@@ -3533,7 +3549,9 @@ fn guard_repulsion_boundary_writes_nonzero_antiphase_to_auto_repulsion_lane() {
     assert_eq!(recall.gateway_frame.phase_deltas, expected_antiphase);
     assert!(recall.gateway_frame.phase_deltas.iter().any(|&v| v != 0));
 
-    let _ = adapter.sync_core_layers_from_recall(&recall, None);
+    let _ = adapter
+        .sync_core_layers_from_recall(&recall, None)
+        .expect("sync recall");
     let rep_mask = adapter.substrate().repulsion_lane_mask();
     assert_ne!(
         rep_mask, 0,
@@ -3560,7 +3578,7 @@ fn corpus_recall_escalation_writes_antiphase_for_guard_and_stays_unobserved_with
     };
     use liminika_core::stigmergy::WORKBENCH_LANE_FLAG_REPULSION;
 
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
     let head_rot = adapter.geometry().rotary_dim;
     let half = head_rot / 2;
@@ -3644,7 +3662,7 @@ fn corpus_recall_escalation_writes_antiphase_for_guard_and_stays_unobserved_with
     assert_eq!(guard_esc.escalation_calls, 1);
 
     // 3. Single-layer i8::MIN Guard pole saturates to +127 without overflow wraparound.
-    let mut single_layer_geom = RopeGeometry::phi4_mini();
+    let mut single_layer_geom = sample_gqa_partial_rope();
     single_layer_geom.num_layers = 1;
     single_layer_geom.layer_rope_mask = 1;
     let sl_adapter = ModelSteeringAdapter::new(single_layer_geom).expect("single-layer adapter");
@@ -3684,7 +3702,7 @@ fn text_attractor_corpus_lazy_flat_cache_invalidation_clone_and_mock_provider() 
     assert_send_sync::<TextAttractorCorpus>();
     assert_send_sync::<CompiledTokenCorpus>();
 
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let q_len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; q_len];
@@ -4048,7 +4066,7 @@ fn turn_orchestrator_mock_source_separates_self_ref_and_exterior_and_syncs_circu
         CognitiveOpKind, CognitiveStepOp, StandardCognitiveBank, StigmergicScaleGranularity,
     };
 
-    let mut geom = RopeGeometry::phi4_mini();
+    let mut geom = sample_gqa_partial_rope();
     geom.num_layers = 4;
     geom.layer_rope_mask = 0xF;
     let mut adapter = ModelSteeringAdapter::new(geom).expect("init adapter");
@@ -4210,7 +4228,7 @@ fn turn_steering_plan_reflection_gate_input_respects_live_entropy_and_lacuna_reg
     use liminika_core::runtime::{AdaptiveThresholdPolicy, StandardPhaseKvGopCache};
     use liminika_core::stigmergy::StandardCognitiveBank;
 
-    let mut geom = RopeGeometry::phi4_mini();
+    let mut geom = sample_gqa_partial_rope();
     geom.num_layers = 2;
     geom.layer_rope_mask = 0x3;
     let mut adapter = ModelSteeringAdapter::new(geom).expect("init adapter");
@@ -4347,7 +4365,7 @@ fn turn_steering_plan_reflection_gate_input_respects_live_entropy_and_lacuna_reg
 
 #[test]
 fn input_distillation_boundary_encoders_alias_probe_and_contrastive_bank() {
-    let mut geom = RopeGeometry::phi4_mini();
+    let mut geom = sample_gqa_partial_rope();
     geom.num_layers = 2;
     geom.num_q_heads = 8;
     geom.num_kv_heads = 4;
@@ -4529,7 +4547,7 @@ fn input_distillation_boundary_encoders_alias_probe_and_contrastive_bank() {
 
 #[test]
 fn adapter_reanchor_compute_pressure_and_reset_turn_decode_state_preserve_guard_policy() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
     adapter.reanchor_compute_pressure(12_345);
     assert_eq!(adapter.compute_pool().baseline_pressure_q15, 12_345);
 
@@ -4546,7 +4564,7 @@ fn adapter_reanchor_compute_pressure_and_reset_turn_decode_state_preserve_guard_
 
 #[test]
 fn slow_loop_crystallized_anchors_are_captured_in_bounded_fifo_and_drainable() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
     adapter.configure_ego_from_preset(LiminalEgoPreset::High);
     adapter.set_ego_max_hops(3);
     assert!(adapter.crystallized_anchors().is_empty());
@@ -4578,18 +4596,18 @@ fn slow_loop_crystallized_anchors_are_captured_in_bounded_fifo_and_drainable() {
             adapter
                 .runtime_context_mut()
                 .telemetry_bank_mut()
-                .record_step(
-                    StigmergicActionDecision::FullOrchestration,
-                    &horizon,
-                    &delta,
-                    &overlap,
-                    &ego,
-                    0,
-                    0,
-                    0,
-                    false,
-                    false,
-                );
+                .record_step(liminika_core::runtime::StepTelemetryInput {
+                    decision: StigmergicActionDecision::FullOrchestration,
+                    horizon: &horizon,
+                    delta: &delta,
+                    overlap: &overlap,
+                    ego: &ego,
+                    entropy_gate_mode: 0,
+                    slid_in_bits: 0,
+                    slid_out_bits: 0,
+                    escalated: false,
+                    qos_throttled: false,
+                });
         }
         let adj = adapter.apply_slow_loop_telemetry_epoch(4);
         assert!(adj.applied, "epoch {i} should apply slow-loop maintenance");
@@ -4620,7 +4638,7 @@ fn slow_loop_crystallized_anchors_are_captured_in_bounded_fifo_and_drainable() {
 #[test]
 fn pure_guard_trap_fires_repulsion_escape_with_single_antiphase_rotation_and_no_double_negation() {
     use liminika_core::runtime::ResonantSignalSlice;
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
     let geom = adapter.geometry().clone();
     let q_len = geom.q_rot_len();
     let num_heads = geom.num_q_heads;
@@ -4718,7 +4736,7 @@ fn pure_guard_trap_fires_repulsion_escape_with_single_antiphase_rotation_and_no_
 
 #[test]
 fn guard_centroid_stays_uncontaminated_and_duplicate_repulsion_escalation_is_suppressed() {
-    let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("adapter");
+    let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
     let geom = adapter.geometry().clone();
     let num_layers = geom.num_layers;
     let q_len = geom.q_rot_len();
@@ -4882,7 +4900,7 @@ fn guard_centroid_stays_uncontaminated_and_duplicate_repulsion_escalation_is_sup
 
 #[test]
 fn short_query_finite_sample_shrinkage_attenuates_loo_contrast_and_two_axis_isolates_exterior() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
     let centroid = vec![0.0_f32; len];
@@ -5071,7 +5089,7 @@ fn short_query_finite_sample_shrinkage_attenuates_loo_contrast_and_two_axis_isol
 
 #[test]
 fn adapter_equilibrium_sync_restores_snapshot_preserves_host_spine_pin_floor_and_drains_fifo() {
-    let geom = RopeGeometry::phi4_mini();
+    let geom = sample_gqa_partial_rope();
     let mut session1 = ModelSteeringAdapter::new(geom.clone()).expect("session1");
     session1.configure_ego_from_preset(LiminalEgoPreset::Medium);
 
@@ -5097,18 +5115,18 @@ fn adapter_equilibrium_sync_restores_snapshot_preserves_host_spine_pin_floor_and
         session1
             .runtime_context_mut()
             .telemetry_bank_mut()
-            .record_step(
-                StigmergicActionDecision::FullOrchestration,
-                &horizon,
-                &delta,
-                &overlap,
-                &ego,
-                0,
-                0,
-                0,
-                false,
-                false,
-            );
+            .record_step(liminika_core::runtime::StepTelemetryInput {
+                decision: StigmergicActionDecision::FullOrchestration,
+                horizon: &horizon,
+                delta: &delta,
+                overlap: &overlap,
+                ego: &ego,
+                entropy_gate_mode: 0,
+                slid_in_bits: 0,
+                slid_out_bits: 0,
+                escalated: false,
+                qos_throttled: false,
+            });
     }
     let adj = session1.apply_slow_loop_telemetry_epoch(4);
     assert!(adj.applied);

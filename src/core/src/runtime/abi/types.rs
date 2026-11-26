@@ -61,7 +61,7 @@ pub use crate::runtime::context::CoreStateStack;
 pub use crate::runtime::gateway::{CausalProvenanceReport, GatewayFrame};
 pub use crate::runtime::horizon::{EpistemicHorizonReading, RamPhaseKvEntry};
 pub use crate::runtime::storage::{
-    DescriptorHeader, KvKeyframeHeader, KvKeyframePacket, LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+    KvKeyframeHeader, KvKeyframePacket, LMNK_CONTAINER_FLAG_COMPILED_CACHE,
     LMNK_CONTAINER_FLAG_PORTABLE_PACKAGE, LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
     LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_MAGIC, LMNK_MAX_CONTAINER_BYTES,
     LMNK_MAX_CONTAINER_SECTIONS, LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CAUSAL_PROVENANCE,
@@ -97,8 +97,6 @@ pub type lmnk_q7_t = PhaseQ7;
 pub type lmnk_tagged_ptr_t = TaggedPtr;
 /// 64-byte C-ABI runtime configuration descriptor (`RuntimeConfig`).
 pub type lmnk_config_t = RuntimeConfig;
-/// 8-byte C-ABI structure descriptor header (`DescriptorHeader`).
-pub type lmnk_descriptor_header_t = DescriptorHeader;
 /// 64-byte `.lmnk` unified container header (`LmnkContainerHeader`).
 pub type lmnk_container_header_t = LmnkContainerHeader;
 /// 16-byte `.lmnk` section directory entry (`LmnkSectionEntry`).
@@ -191,11 +189,6 @@ const _: () = {
     assert!(size_of::<lmnk_q7_t>() == 1);
     assert!(size_of::<lmnk_tagged_ptr_t>() == 8 && align_of::<lmnk_tagged_ptr_t>() == 8);
     assert!(size_of::<lmnk_attribution_tag_t>() == 1);
-    assert!(
-        size_of::<lmnk_descriptor_header_t>() == 8 && align_of::<lmnk_descriptor_header_t>() == 4
-    );
-    assert!(offset_of!(lmnk_descriptor_header_t, struct_size) == 0);
-    assert!(offset_of!(lmnk_descriptor_header_t, abi_version) == 4);
 
     assert!(size_of::<lmnk_paged_bitmask_t>() == 32 && align_of::<lmnk_paged_bitmask_t>() == 32);
     assert!(offset_of!(lmnk_paged_bitmask_t, bits) == 0);

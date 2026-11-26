@@ -203,11 +203,13 @@ impl ModelSteeringAdapter {
             this.ctx
                 .phase_steering()
                 .steer_gateway_signal_with_core_layers_for_geometry_safe(
-                    signal,
-                    &this.geometry,
-                    core_ctx,
+                    liminika_core::GatewaySteerInput {
+                        signal,
+                        geometry: &this.geometry,
+                        core_ctx,
+                        unresolved_damping_u7,
+                    },
                     trail_inout,
-                    unresolved_damping_u7,
                     q,
                     None,
                     logits,
@@ -240,12 +242,14 @@ impl ModelSteeringAdapter {
             let mut ledger_slot = substrate.ledger_slot;
             let res = substrate
                 .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
-                    signal,
-                    &this.geometry,
-                    core_ctx,
+                    liminika_core::GatewaySteerInput {
+                        signal,
+                        geometry: &this.geometry,
+                        core_ctx,
+                        unresolved_damping_u7,
+                    },
                     &mut ledger_slot,
                     trail_inout,
-                    unresolved_damping_u7,
                     Some(q),
                     logits,
                 )
@@ -402,20 +406,26 @@ impl ModelSteeringAdapter {
                 let mut ledger_slot = substrate.ledger_slot;
                 let res = substrate
                     .orchestrate_gateway_layer_with_core_layers_safe(
-                        signal,
-                        &this.geometry,
-                        core_ctx,
-                        &this.threshold_policy,
-                        &this.system_constraint,
-                        probe_baseline,
-                        scale,
-                        entropy_h_tilde,
+                        liminika_core::runtime::GatewayLayerInput {
+                            signal,
+                            geometry: &this.geometry,
+                            core_ctx,
+                            scale,
+                            entropy_h_tilde,
+                            unresolved_damping_u7,
+                        },
+                        liminika_core::runtime::GatewayPolicyContext {
+                            policy: &this.threshold_policy,
+                            system: &this.system_constraint,
+                            probe: probe_baseline,
+                        },
                         &mut ledger_slot,
                         trail_inout,
-                        unresolved_damping_u7,
-                        Some(q),
-                        None,
-                        logits,
+                        liminika_core::runtime::GatewayLayerTargets {
+                            query_tensor: Some(q),
+                            rank1_hidden: None,
+                            logits_opt: logits,
+                        },
                     )
                     .map_err(|e| {
                         format!("orchestrate_gateway_layer_with_core_layers_safe error: {e}")
@@ -466,18 +476,18 @@ impl ModelSteeringAdapter {
             {
                 let bank = this.ctx.telemetry_bank_mut();
                 bank.evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
-                bank.record_step(
+                bank.record_step(liminika_core::runtime::StepTelemetryInput {
                     decision,
-                    &last_horizon,
-                    &last_delta,
-                    &last_overlap,
-                    &ego_snapshot,
-                    trigger.entropy_gate_mode,
-                    slid_in,
-                    slid_out,
+                    horizon: &last_horizon,
+                    delta: &last_delta,
+                    overlap: &last_overlap,
+                    ego: &ego_snapshot,
+                    entropy_gate_mode: trigger.entropy_gate_mode,
+                    slid_in_bits: slid_in,
+                    slid_out_bits: slid_out,
                     escalated,
                     qos_throttled,
-                );
+                });
                 let _ = bank.update_assimilation_ema(
                     entropy_h_tilde,
                     frame.fact_persona_coherence,
@@ -492,13 +502,15 @@ impl ModelSteeringAdapter {
             )
             .outside;
             let sb_event = this.ctx.step_sandbox_hypothesis_lifecycle(
-                decision,
-                this.configured_ego.is_active(),
-                exterior_granule_mask,
-                liminika_core::stigmergy::trail_phase_words_ref(trail_inout),
-                frame.effective_energy,
-                3,
-                3,
+                liminika_core::runtime::SandboxLifecycleInput {
+                    decision,
+                    ego_active: this.configured_ego.is_active(),
+                    exterior_granule_mask,
+                    candidate_words: liminika_core::stigmergy::trail_phase_words_ref(trail_inout),
+                    candidate_weight: frame.effective_energy,
+                    drift_dwell_threshold: 3,
+                    settle_dwell_threshold: 3,
+                },
             );
             match sb_event {
                 SandboxLifecycleEvent::Settled(_) | SandboxLifecycleEvent::Released(_) => {
@@ -840,7 +852,18 @@ impl ModelSteeringAdapter {
         let _temp = self
             .ctx
             .entropy_controller_mut()
-            .eval_surrogate_and_step(p_max, p_2nd, 0.0, 0.0, 1.0, 0.1, 0.1, &mut state_out)
+            .eval_surrogate_and_step(
+                liminika_core::drivers::spine::entropy::SurrogateEntropyInput {
+                    p_max,
+                    p_2nd,
+                    cosine_dist: 0.0,
+                    mu_dist: 0.0,
+                    sigma_dist: 1.0,
+                    alpha_z: 0.1,
+                    gamma_mod: 0.1,
+                },
+                &mut state_out,
+            )
             .map_err(|e| format!("eval_surrogate_and_step error: {e}"))?;
         self.ctx.substrate_mut().last_entropy_h_tilde = state_out.moving_z_entropy;
         Ok(state_out)

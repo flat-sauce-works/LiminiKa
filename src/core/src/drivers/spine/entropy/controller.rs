@@ -581,35 +581,27 @@ impl EntropyController {
     /// $\mathcal{O}(1)$ [`TaggedPtr`] mode evolution.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if `token_z_score` or `lacuna_score` is non-finite.
+    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if `input.token_z_score` or `input.lacuna_score` is non-finite.
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn eval_stateful_with_lacuna_and_pointer(
         &mut self,
-        token_z_score: f32,
-        lacuna_score: f32,
-        alpha: f32,
-        beta: f32,
-        d0: f32,
-        input_ptr: TaggedPtr,
-        trail_density: f32,
-        dominant_attractor_slot: u8,
-        high_density_rank1_thresh: f32,
+        input: LacunaPointerInput,
     ) -> LmnkResult<(EntropyState, TaggedPtr)> {
-        if !branchless_is_finite_f32(token_z_score) || !branchless_is_finite_f32(lacuna_score) {
+        if !branchless_is_finite_f32(input.token_z_score)
+            || !branchless_is_finite_f32(input.lacuna_score)
+        {
             return Err(LMNK_ERR_ENTROPY_SINGULARITY);
         }
         Ok(self.eval_stateful_with_lacuna_and_pointer_finite(
-            token_z_score,
-            lacuna_score,
-            alpha,
-            beta,
-            d0,
-            input_ptr,
-            trail_density,
-            dominant_attractor_slot,
-            high_density_rank1_thresh,
+            input.token_z_score,
+            input.lacuna_score,
+            input.alpha,
+            input.beta,
+            input.d0,
+            input.input_ptr,
+            input.trail_density,
+            input.dominant_attractor_slot,
+            input.high_density_rank1_thresh,
         ))
     }
 
@@ -621,32 +613,66 @@ impl EntropyController {
     /// Never fails on valid finite/non-finite inputs because [`compute_sparse_surrogate_entropy`]
     /// and [`compute_moving_z_score_entropy`] sanitize non-finite inputs to `0.0`.
     #[inline(always)]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn eval_surrogate_and_step(
         &mut self,
-        p_max: f32,
-        p_2nd: f32,
-        cosine_dist: f32,
-        mu_dist: f32,
-        sigma_dist: f32,
-        alpha_z: f32,
-        gamma_mod: f32,
+        input: SurrogateEntropyInput,
         state_out: &mut EntropyState,
     ) -> LmnkResult<f32> {
         let eps = self.state.singularity_eps;
-        let h_surr = compute_sparse_surrogate_entropy(p_max, p_2nd, eps);
+        let h_surr = compute_sparse_surrogate_entropy(input.p_max, input.p_2nd, eps);
         let h_tilde = compute_moving_z_score_entropy(
             h_surr,
-            cosine_dist,
-            mu_dist,
-            sigma_dist,
+            input.cosine_dist,
+            input.mu_dist,
+            input.sigma_dist,
             eps,
-            alpha_z,
-            gamma_mod,
+            input.alpha_z,
+            input.gamma_mod,
         );
         Ok(self.eval_stateful_finite_into(h_tilde, state_out))
     }
+}
+
+/// Inputs for [`EntropyController::eval_stateful_with_lacuna_and_pointer`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LacunaPointerInput {
+    /// Current token Z-score entropy observation.
+    pub token_z_score: f32,
+    /// Current lacuna ambiguity score.
+    pub lacuna_score: f32,
+    /// Eyring-Kramers temperature scaling factor $\alpha$.
+    pub alpha: f32,
+    /// Eyring-Kramers damping exponent $\beta$.
+    pub beta: f32,
+    /// Baseline energy offset $d_0$.
+    pub d0: f32,
+    /// Incoming tagged pointer to evolve.
+    pub input_ptr: TaggedPtr,
+    /// Accumulated stigmergic trail density.
+    pub trail_density: f32,
+    /// Preferred attractor working slot (`0..=7`).
+    pub dominant_attractor_slot: u8,
+    /// High-density threshold activating Rank-1 residual injection.
+    pub high_density_rank1_thresh: f32,
+}
+
+/// Inputs for [`EntropyController::eval_surrogate_and_step`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurrogateEntropyInput {
+    /// Highest token probability $p_{\max}$.
+    pub p_max: f32,
+    /// Second-highest token probability $p_{\mathrm{2nd}}$.
+    pub p_2nd: f32,
+    /// Current inter-layer cosine distance.
+    pub cosine_dist: f32,
+    /// Running mean cosine distance $\mu$.
+    pub mu_dist: f32,
+    /// Running standard deviation $\sigma$.
+    pub sigma_dist: f32,
+    /// Mixing weight for surrogate entropy vs distance Z-score.
+    pub alpha_z: f32,
+    /// Modulation scaling factor $\gamma$.
+    pub gamma_mod: f32,
 }
 
 impl Default for EntropyController {
@@ -761,9 +787,8 @@ impl EntropyController {
     /// Branchlessly evaluates the next `EntropyController` branch mode (`0`, `1`, `2`).
     #[inline(always)]
     #[must_use]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
     #[allow(clippy::too_many_arguments)]
-    pub fn evaluate_branch_mode_transition(
+    pub(crate) fn evaluate_branch_mode_transition(
         &self,
         current_mode: u32,
         moving_z_entropy: f32,
@@ -785,32 +810,5 @@ impl EntropyController {
 
         let active_target = branchless_select_u32(lacuna_score >= bifurcation_threshold, 1, 2);
         branchless_select_u32(active_non_normal, active_target, 0)
-    }
-
-    /// Evaluates the energy-guided dynamic sampling temperature modifier (`sample_temperature`).
-    #[inline(always)]
-    #[must_use]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn eval_energy_guided_temperature(
-        &self,
-        base_temperature: f32,
-        moving_z_entropy: f32,
-        lacuna_score: f32,
-        tau_eff: f32,
-        alpha: f32,
-        beta: f32,
-        d0: f32,
-    ) -> f32 {
-        eval_temperature_for_mode(
-            self.state.active_branch_mode,
-            base_temperature,
-            moving_z_entropy,
-            lacuna_score,
-            tau_eff,
-            alpha,
-            beta,
-            d0,
-        )
     }
 }

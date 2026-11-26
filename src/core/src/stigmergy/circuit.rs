@@ -362,13 +362,6 @@ impl CognitiveTrajectoryLedger {
         }
     }
 
-    /// Returns the `age`-th newest recorded [`CognitiveStepOp`] (`0..8`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn step_at(&self, age: usize) -> CognitiveStepOp {
-        CognitiveStepOp(self.steps[age & 7])
-    }
-
     /// Returns a constant-time histogram of [`CognitiveOpKind`] counts (`[u8; 8]`) and active step count.
     #[inline(always)]
     #[must_use]

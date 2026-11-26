@@ -44,17 +44,25 @@ pub struct RopeGeometry {
 }
 
 impl RopeGeometry {
-    /// Returns the validated geometry preset for `microsoft/Phi-4-mini-instruct`.
+    /// Constructs an explicit per-model RoPE geometry descriptor.
     #[must_use]
-    pub const fn phi4_mini() -> Self {
+    pub const fn new(
+        layout: RopeLayout,
+        head_dim: usize,
+        rotary_dim: usize,
+        num_q_heads: usize,
+        num_kv_heads: usize,
+        num_layers: usize,
+        layer_rope_mask: u64,
+    ) -> Self {
         Self {
-            layout: RopeLayout::HalfSplit,
-            head_dim: 128,
-            rotary_dim: 96,
-            num_q_heads: 24,
-            num_kv_heads: 8,
-            num_layers: 32,
-            layer_rope_mask: 0xFFFF_FFFF,
+            layout,
+            head_dim,
+            rotary_dim,
+            num_q_heads,
+            num_kv_heads,
+            num_layers,
+            layer_rope_mask,
         }
     }
 

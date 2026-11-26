@@ -44,6 +44,8 @@ mod orchestration;
 mod snapshot;
 mod traits;
 
+pub use accessors::ContextRebindParams;
+
 pub use config::Config;
 
 /// Default number of tokens per PagedAttention KV cache block (`32`).
@@ -180,13 +182,6 @@ impl CoreStateStack {
             liminal: self.liminal,
             stigmergy: self.stigmergy,
         }
-    }
-
-    /// Replaces the `Liminal` + `Stigmergy` halves from `primitives`.
-    #[inline(always)]
-    pub const fn set_core_primitive_state(&mut self, primitives: CorePrimitiveState) {
-        self.liminal = primitives.liminal;
-        self.stigmergy = primitives.stigmergy;
     }
 
     /// Branchlessly co-adapts Slot 0 (`LiminalThresholdState`) and Slot 1 (`StigmergicGranuleState`)
@@ -396,7 +391,7 @@ pub(crate) unsafe fn zeroize_volatile<T>(dst: *mut T) {
     let mut ptr_u8 = dst.cast::<u8>();
     let mut rem = byte_len;
 
-    if ((ptr_u8 as usize) & (core::mem::align_of::<usize>() - 1)) == 0 {
+    if (ptr_u8.addr() & (core::mem::align_of::<usize>() - 1)) == 0 {
         let word_count = rem / word_bytes;
         let mut ptr_word = ptr_u8.cast::<usize>();
         let mut w = 0usize;

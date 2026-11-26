@@ -25,7 +25,7 @@ fn validate_non_null_aligned_ptr<T>(raw_ptr: *mut T, align_mask: usize) -> LmnkR
     if raw_ptr.is_null() {
         return Err(LMNK_ERR_NULL_POINTER);
     }
-    if ((raw_ptr as usize) & align_mask) != 0 {
+    if (raw_ptr.addr() & align_mask) != 0 {
         return Err(LMNK_ERR_ALIGNMENT);
     }
     // SAFETY: `raw_ptr` was verified non-null and aligned to `align_mask` immediately above.
@@ -338,9 +338,9 @@ impl<'a, T> FfiHandleMut<'a, T> {
     #[must_use]
     pub fn overlaps<U>(&self, other: &FfiHandleMut<'_, U>) -> bool {
         raw_regions_overlap_or_same_zst(
-            self.ptr.as_ptr() as usize,
+            self.ptr.as_ptr().addr(),
             size_of::<T>(),
-            other.ptr.as_ptr() as usize,
+            other.ptr.as_ptr().addr(),
             size_of::<U>(),
         )
     }
@@ -365,9 +365,9 @@ impl<'a, T> FfiHandleMut<'a, T> {
     #[inline(always)]
     pub fn ensure_disjoint_ref<U>(&self, other: &FfiHandleRef<'_, U>) -> LmnkResult<()> {
         if raw_regions_overlap_or_same_zst(
-            self.ptr.as_ptr() as usize,
+            self.ptr.as_ptr().addr(),
             size_of::<T>(),
-            other.as_ptr() as usize,
+            other.as_ptr().addr(),
             size_of::<U>(),
         ) {
             Err(LMNK_ERR_INVALID_ARGUMENT)

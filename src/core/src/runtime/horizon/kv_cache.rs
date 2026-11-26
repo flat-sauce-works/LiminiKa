@@ -197,17 +197,17 @@ impl RamPhaseKvEntry {
     #[inline(always)]
     #[must_use]
     pub const fn to_keyframe_packet(&self) -> KvKeyframePacket {
-        KvKeyframePacket::new(
-            self.token_index,
-            self.gop_length as u32,
-            self.composite_vector_length,
-            self.von_mises_kappa,
-            self.sparse_scalar_residual,
-            self.lineage_flags,
-            self.cluster_id as u32,
-            self.slot_id(),
-            self.anchor_phases,
-        )
+        KvKeyframePacket::new(crate::runtime::storage::KvKeyframeSpec {
+            token_index: self.token_index,
+            gop_length: self.gop_length as u32,
+            composite_vector_length: self.composite_vector_length,
+            von_mises_kappa: self.von_mises_kappa,
+            sparse_scalar_residual: self.sparse_scalar_residual,
+            lineage_flags: self.lineage_flags,
+            cluster_id: self.cluster_id as u32,
+            slot_id: self.slot_id(),
+            anchor_phases: self.anchor_phases,
+        })
     }
 
     /// Constructs a compact 128 B [`RamPhaseKvEntry`] from a verified [`KvKeyframePacket`].
@@ -342,6 +342,54 @@ impl ManifoldGatewaySignal for RamPhaseKvEntry {
     }
 }
 
+/// Inputs for [`RamPhaseKvCacheOps::store_context_keyframe`] and
+/// [`RamPhaseKvGopCache::store_keyframe_and_reset_gop`].
+#[derive(Debug, Clone, Copy)]
+pub struct KvKeyframeStoreInput<'a> {
+    /// Context fingerprint hash identifying the keyframe slot (`0` is skipped).
+    pub context_hash: u64,
+    /// Token index at which the keyframe is anchored.
+    pub token_index: u32,
+    /// Dominant anchor / cluster identifier.
+    pub anchor_id: u32,
+    /// 64-head Q7 anchor phase profile.
+    pub phases: &'a [PhaseQ7; MAX_ATTENTION_HEADS],
+    /// Cognitive trajectory ledger captured alongside the keyframe.
+    pub circuit: CognitiveTrajectoryLedger,
+    /// Most recent cognitive circuit activation metadata.
+    pub activation: CognitiveCircuitActivation,
+    /// Monotonic LRU epoch stamp.
+    pub epoch: u32,
+}
+
+/// Inputs for [`RamPhaseKvGopCache::step_with_gateway_and_override`].
+#[derive(Debug)]
+pub struct KvGatewayStepInput<'a, Pol: ?Sized> {
+    /// Context fingerprint hash for exact lookup or resonance fallback.
+    pub context_hash: u64,
+    /// Current token index along the conversation sequence.
+    pub token_index: u32,
+    /// Synthesized gateway frame for the current turn.
+    pub frame: &'a GatewayFrame,
+    /// Cognitive circuit activation metadata for this turn.
+    pub activation: CognitiveCircuitActivation,
+    /// Threshold policy deriving resonance floor, contradiction threshold, and blend ratio.
+    pub policy: &'a Pol,
+    /// Optional diagnostic override for the minimum resonance Q7 floor.
+    pub override_min_resonance_q7: Option<PhaseQ7>,
+    /// Monotonic LRU epoch stamp.
+    pub epoch: u32,
+}
+
+impl<Pol: ?Sized> Clone for KvGatewayStepInput<'_, Pol> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<Pol: ?Sized> Copy for KvGatewayStepInput<'_, Pol> {}
+
 /// Trait governing host-RAM-resident compressed KV-phase caching (`128 B` [`RamPhaseKvEntry`] +
 /// `CognitiveTrajectoryLedger`), allowing CPU/RAM capacity to absorb long-context memory
 /// without expanding GPU VRAM or triggering disk I/O.
@@ -355,18 +403,16 @@ pub trait RamPhaseKvCacheOps {
     /// Stores or updates a compressed 64-head KV-phase keyframe and its cognitive circuit in RAM,
     /// evicting the least-recently-used (`last_used_epoch`) slot when full.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    fn store_context_keyframe(
-        &mut self,
-        context_hash: u64,
-        token_index: u32,
-        anchor_id: u32,
-        phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
-        circuit: CognitiveTrajectoryLedger,
-        activation: CognitiveCircuitActivation,
-        epoch: u32,
-    ) {
+    fn store_context_keyframe(&mut self, input: KvKeyframeStoreInput<'_>) {
+        let KvKeyframeStoreInput {
+            context_hash,
+            token_index,
+            anchor_id,
+            phases,
+            circuit,
+            activation,
+            epoch,
+        } = input;
         if context_hash == 0 {
             return;
         }
@@ -762,36 +808,20 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     }
 
     /// Stores or updates a context I-Frame keyframe, resets that slot's P-Frame ring, and returns
-    /// the slot index when `context_hash != 0` and `N > 0`.
+    /// the slot index when `input.context_hash != 0` and `N > 0`.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn store_keyframe_and_reset_gop(
         &mut self,
-        context_hash: u64,
-        token_index: u32,
-        anchor_id: u32,
-        phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
-        circuit: CognitiveTrajectoryLedger,
-        activation: CognitiveCircuitActivation,
-        epoch: u32,
+        input: KvKeyframeStoreInput<'_>,
     ) -> Option<usize> {
-        if context_hash == 0 || N == 0 {
+        if input.context_hash == 0 || N == 0 {
             return None;
         }
-        self.base.store_context_keyframe(
-            context_hash,
-            token_index,
-            anchor_id,
-            phases,
-            circuit,
-            activation,
-            epoch,
-        );
+        self.base.store_context_keyframe(input);
         let mut idx = 0usize;
         while idx < N {
-            if self.base.slots[idx].context_hash == context_hash {
-                self.last_phases[idx] = *phases;
+            if self.base.slots[idx].context_hash == input.context_hash {
+                self.last_phases[idx] = *input.phases;
                 self.base.slots[idx].pframe_count = 0;
                 self.base.slots[idx].pframe_head = 0;
                 return Some(idx);
@@ -939,54 +969,26 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
 
     /// Executes one full autonomous GOP KV-cache step (liminal gate, $S^{H-1}$ resonance lookup,
     /// Zero-Forward Seek replay, cognitive circuit composition, and P-Frame/I-Frame update)
-    /// deriving all gating thresholds from `policy` and `frame` invariants.
+    /// with an optional diagnostic `input.override_min_resonance_q7` (when `None`, derives the
+    /// $2 / \sqrt{H}$ floor from `input.policy`).
     ///
     /// # Errors
     /// Propagates [`LMNK_ERR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn step_with_gateway_autonomous<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
+    pub fn step_with_gateway_and_override<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
         &mut self,
-        context_hash: u64,
-        token_index: u32,
-        frame: &GatewayFrame,
+        input: KvGatewayStepInput<'_, Pol>,
         circuit: &mut CognitiveTrajectoryLedger,
-        activation: CognitiveCircuitActivation,
-        policy: &Pol,
-        epoch: u32,
     ) -> LmnkResult<RamPhaseKvStepOutcome> {
-        self.step_with_gateway_and_override(
+        let KvGatewayStepInput {
             context_hash,
             token_index,
             frame,
-            circuit,
             activation,
             policy,
-            None,
+            override_min_resonance_q7,
             epoch,
-        )
-    }
-
-    /// Executes [`Self::step_with_gateway_autonomous`] with an optional diagnostic
-    /// `override_min_resonance_q7` (when `None`, derives the $2 / \sqrt{H}$ floor from `policy`).
-    ///
-    /// # Errors
-    /// Propagates [`LMNK_ERR_INVALID_ARGUMENT`] or keyframe CRC errors from slot seek/append.
-    #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn step_with_gateway_and_override<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
-        &mut self,
-        context_hash: u64,
-        token_index: u32,
-        frame: &GatewayFrame,
-        circuit: &mut CognitiveTrajectoryLedger,
-        activation: CognitiveCircuitActivation,
-        policy: &Pol,
-        override_min_resonance_q7: Option<PhaseQ7>,
-        epoch: u32,
-    ) -> LmnkResult<RamPhaseKvStepOutcome> {
+        } = input;
         let outside_horizon =
             context_hash == 0 && (frame.lineage_flags & CAUSAL_AXIS_OBJECTIVE_FACT) == 0;
         if outside_horizon {
@@ -1041,15 +1043,15 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
             );
             if matches!(directive, FrameDirective::ReAnchorKeyframe) {
                 let reanchor_hash = self.base.slots[slot_idx].context_hash;
-                let _ = self.store_keyframe_and_reset_gop(
-                    reanchor_hash,
+                let _ = self.store_keyframe_and_reset_gop(KvKeyframeStoreInput {
+                    context_hash: reanchor_hash,
                     token_index,
-                    frame.target_anchor_id,
-                    &frame.phase_deltas,
-                    *circuit,
+                    anchor_id: frame.target_anchor_id,
+                    phases: &frame.phase_deltas,
+                    circuit: *circuit,
                     activation,
                     epoch,
-                );
+                });
             } else {
                 self.append_context_pframe(slot_idx, &frame.phase_deltas, min_step_q7, epoch)?;
             }
@@ -1066,15 +1068,15 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
             });
         }
         if context_hash != 0
-            && let Some(slot_idx) = self.store_keyframe_and_reset_gop(
+            && let Some(slot_idx) = self.store_keyframe_and_reset_gop(KvKeyframeStoreInput {
                 context_hash,
                 token_index,
-                frame.target_anchor_id,
-                &frame.phase_deltas,
-                *circuit,
+                anchor_id: frame.target_anchor_id,
+                phases: &frame.phase_deltas,
+                circuit: *circuit,
                 activation,
                 epoch,
-            )
+            })
         {
             return Ok(RamPhaseKvStepOutcome::StoredKeyframe {
                 slot_idx,
@@ -1085,7 +1087,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
     }
 }
 
-/// Outcome returned by [`RamPhaseKvGopCache::step_with_gateway_autonomous`].
+/// Outcome returned by [`RamPhaseKvGopCache::step_with_gateway_and_override`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RamPhaseKvStepOutcome {
     /// Query carried neither a context fingerprint nor factual grounding (`Liminal`).
@@ -1262,15 +1264,15 @@ impl<const N: usize> ResidualSpilloverHorizonSlot<N> {
             if key == 0 {
                 return (false, 0);
             }
-            self.cache.store_context_keyframe(
-                key,
-                self.epoch,
-                0,
-                residual_phases,
-                CognitiveTrajectoryLedger::new(),
-                CognitiveCircuitActivation::default(),
-                self.epoch,
-            );
+            self.cache.store_context_keyframe(KvKeyframeStoreInput {
+                context_hash: key,
+                token_index: self.epoch,
+                anchor_id: 0,
+                phases: residual_phases,
+                circuit: CognitiveTrajectoryLedger::new(),
+                activation: CognitiveCircuitActivation::default(),
+                epoch: self.epoch,
+            });
             if let Some((idx, _, _)) = self.cache.lookup_context_or_resonate(
                 key,
                 &load_q7_words_64(residual_phases),

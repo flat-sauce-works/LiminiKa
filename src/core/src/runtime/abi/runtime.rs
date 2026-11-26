@@ -794,13 +794,15 @@ pub unsafe extern "C" fn lmnk_container_write_with_reports_zero_copy(
         };
 
         let written = LmnkContainerView::write_standard_sections_to_bytes(
-            container_flags,
-            anchors_slice,
-            trails_slice,
-            bloom_ref.as_deref(),
-            ledger_ref.as_deref(),
-            reports_slice,
-            timestamp_epoch_sec,
+            crate::runtime::storage::StandardSectionsInput {
+                container_flags,
+                anchors: anchors_slice,
+                trails: trails_slice,
+                bloom: bloom_ref.as_deref(),
+                ledger: ledger_ref.as_deref(),
+                provenance_reports: reports_slice,
+                timestamp_epoch_sec,
+            },
             dst_slice,
         )?;
         *size_io = written;

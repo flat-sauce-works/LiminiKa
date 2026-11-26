@@ -111,26 +111,38 @@ pub fn project_lora(
     Ok(())
 }
 
+/// Matrix shape dimensions for LoRA projection kernels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoraDimensions {
+    /// Low-rank inner dimension $r$.
+    pub rank: usize,
+    /// Input hidden dimension $d_{\mathrm{in}}$.
+    pub dim_in: usize,
+    /// Output hidden dimension $d_{\mathrm{out}}$ (even).
+    pub dim_out: usize,
+}
+
 /// Projects fine-tuned LoRA matrices into a Rank-1 residual descriptor, a Q7 rotational phase
 /// profile, and an **Isotropic Block-Diagonal Scaling** vector $\mathbf{D}$ (Theorem 1.1 & Section 5.2).
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `rank == 0`, `dim_in == 0`, `dim_out == 0`,
-/// `dim_out` is odd, matrix slices are too small, `phase_profile_out` is empty, or
-/// `block_scales_out.len() < dim_out / 2`.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `dims.rank == 0`, `dims.dim_in == 0`, `dims.dim_out == 0`,
+/// `dims.dim_out` is odd, matrix slices are too small, `phase_profile_out` is empty, or
+/// `block_scales_out.len() < dims.dim_out / 2`.
 #[inline]
-// v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-#[allow(clippy::too_many_arguments)]
 pub fn project_lora_with_block_scales(
     lora_a: &AlignedSlice32<'_, f32>,
     lora_b: &AlignedSlice32<'_, f32>,
-    rank: usize,
-    dim_in: usize,
-    dim_out: usize,
+    dims: LoraDimensions,
     rank1_out: &mut Rank1Descriptor,
     phase_profile_out: &mut AlignedSliceMut16<'_, PhaseQ7>,
     block_scales_out: &mut AlignedSliceMut32<'_, f32>,
 ) -> LmnkResult<()> {
+    let LoraDimensions {
+        rank,
+        dim_in,
+        dim_out,
+    } = dims;
     let num_pairs = dim_out / 2;
     if num_pairs == 0 || block_scales_out.len() < num_pairs {
         return Err(LMNK_ERR_INVALID_ARGUMENT);

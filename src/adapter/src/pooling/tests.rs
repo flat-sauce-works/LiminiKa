@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::*;
-use crate::{LacunaBoundaryState, RopeGeometry, TextAttractorEntry};
+use crate::{LacunaBoundaryState, RopeGeometry, RopeLayout, TextAttractorEntry};
+
+const fn sample_gqa_partial_rope() -> RopeGeometry {
+    RopeGeometry::new(RopeLayout::HalfSplit, 128, 96, 24, 8, 32, 0xFFFF_FFFF)
+}
 
 #[test]
 fn novelty_sif_pooling_resists_attention_sink_norm_spike_and_boilerplate() {
@@ -65,7 +69,7 @@ fn novelty_sif_pooling_is_token_order_invariant() {
 
 #[test]
 fn compiled_token_corpus_recovers_diluted_entity_while_rejecting_ood() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let num_layers = adapter.geometry().num_layers;
     let dim = adapter.geometry().q_rot_len();
 
@@ -203,7 +207,7 @@ fn stratum_signal_maps_to_core_gateway_blanket_frame() {
 
 #[test]
 fn compiled_token_corpus_assigns_lower_specificity_to_shared_tokens() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let geom = adapter.geometry();
     let dim = geom.q_rot_len();
     let num_layers = geom.num_layers;
@@ -269,7 +273,7 @@ fn compiled_token_corpus_assigns_lower_specificity_to_shared_tokens() {
 
 #[test]
 fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let geom = adapter.geometry();
     let dim = geom.q_rot_len();
     let num_layers = geom.num_layers;
@@ -353,7 +357,7 @@ fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
 
 #[test]
 fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_prior() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let geom = adapter.geometry();
     let dim = geom.q_rot_len();
     let num_layers = geom.num_layers;
@@ -475,7 +479,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
 
 #[test]
 fn append_entry_token_observations_preserves_pooled_sigs_matches_sequential_and_is_atomic() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let num_layers = adapter.geometry().num_layers;
     let dim = adapter.geometry().q_rot_len();
     let make_seq = |toks: &[(usize, f32)]| -> Vec<Vec<f32>> {
@@ -590,7 +594,7 @@ fn append_entry_token_observations_preserves_pooled_sigs_matches_sequential_and_
 
 #[test]
 fn same_role_token_specificity_ignores_contrastive_guard_echoes() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let num_layers = adapter.geometry().num_layers;
     let dim = adapter.geometry().q_rot_len();
     let make_seq = |toks: &[(usize, f32)]| -> Vec<Vec<f32>> {
@@ -826,7 +830,7 @@ fn adaptive_token_calibrator_scales_deterministically_above_exact_limit() {
 
 #[test]
 fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mode() {
-    let adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
+    let adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let geom = adapter.geometry();
     let dim = geom.q_rot_len();
     let num_layers = geom.num_layers;

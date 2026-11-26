@@ -675,13 +675,15 @@ impl LmnkTimeline {
         .map_err(|e| format!("required_standard_byte_len error: {e}"))?;
         let mut out = vec![0_u8; req_len];
         let written = LmnkContainerView::write_standard_sections_to_bytes(
-            LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-            &anchors,
-            &trails,
-            None,
-            ledger_slot.as_ref(),
-            &[],
-            timestamp_epoch_sec,
+            liminika_core::runtime::StandardSectionsInput {
+                container_flags: LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+                anchors: &anchors,
+                trails: &trails,
+                bloom: None,
+                ledger: ledger_slot.as_ref(),
+                provenance_reports: &[],
+                timestamp_epoch_sec,
+            },
             &mut out,
         )
         .map_err(|e| format!("write_standard_sections_to_bytes error: {e}"))?;

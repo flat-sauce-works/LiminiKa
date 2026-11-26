@@ -105,7 +105,7 @@ fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
     };
 
     let report = substrate
-        .orchestrate_next_action_step(
+        .orchestrate_next_action_step_core(
             ptr0,
             0.35,
             ATTRACTOR_SLOT_PERSONA,
@@ -114,6 +114,10 @@ fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
             Some(&mut q_buf.as_aligned_slice_mut()),
             Some(&mut k_buf.as_aligned_slice_mut()),
             Some(&mut logits.as_aligned_slice_mut()),
+            true,
+            None,
+            crate::foundation::DEFAULT_PHASE_STEP_MIN_RAD,
+            crate::foundation::DEFAULT_PHASE_CLAMP_MAX_RAD,
         )
         .unwrap();
 
@@ -147,9 +151,11 @@ fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
     let mut chain_trail = PointerTrail::default();
     let (chain_rep, hops, term_idx, term_aid, chain_coh) = substrate
         .traverse_pointer_chain_and_orchestrate(
-            0,
-            8,
-            0.25,
+            ChainTraverseParams {
+                start_trail_idx: 0,
+                max_hops: 8,
+                entropy_h_tilde: 0.25,
+            },
             &mut chain_trail,
             None,
             Some(&mut q_buf.as_aligned_slice_mut()),

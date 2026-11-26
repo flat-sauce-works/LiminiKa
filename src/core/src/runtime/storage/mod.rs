@@ -15,10 +15,7 @@ use core::mem::{offset_of, size_of};
 
 pub use crate::foundation::KvMotionDeltaPacket;
 use crate::foundation::{Pod, compute_crc32_ieee};
-use crate::liminal::{
-    LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_VERSION_MISMATCH, LmnkResult,
-    is_compatible_abi_version,
-};
+use crate::liminal::{LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL, LmnkResult};
 use crate::runtime::topology::CORE_TOPOLOGY;
 
 mod container;
@@ -131,19 +128,6 @@ impl LmnkSectionKind {
     }
 }
 
-/// Descriptor header for structure byte size and ABI version validation (8 bytes, 4-byte aligned).
-#[repr(C, align(4))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DescriptorHeader {
-    /// Size of the enclosing descriptor structure in bytes.
-    pub struct_size: u32,
-    /// ABI version bitmask matching [`LMNK_ABI_VERSION_HEX`].
-    pub abi_version: u32,
-}
-
-// SAFETY: `DescriptorHeader` is `#[repr(C, align(4))]` of exact size 8 bytes with zero padding.
-unsafe impl Pod for DescriptorHeader {}
-
 /// Unified `.lmnk` binary container header (64 bytes, `#[repr(C, align(64))]`, Canonical Little-Endian).
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -241,7 +225,6 @@ pub struct KvKeyframeHeader {
 unsafe impl Pod for KvKeyframeHeader {}
 
 const _: () = {
-    assert!(size_of::<DescriptorHeader>() == 8 && align_of::<DescriptorHeader>() == 4);
     assert!(size_of::<LmnkContainerHeader>() == 64 && align_of::<LmnkContainerHeader>() == 64);
     assert!(offset_of!(LmnkContainerHeader, magic) == 0);
     assert!(offset_of!(LmnkContainerHeader, version) == 4);
@@ -438,32 +421,6 @@ impl LmnkSectionEntry {
             length: u32::from_le_bytes(read_le_bytes_exact(src, 8)?),
             payload_crc32: u32::from_le_bytes(read_le_bytes_exact(src, 12)?),
         })
-    }
-}
-
-/// Constructs a canonical `DescriptorHeader` for type `T` stamped with [`LMNK_ABI_VERSION_HEX`].
-#[inline(always)]
-#[must_use]
-pub const fn init_descriptor_header<T>() -> DescriptorHeader {
-    DescriptorHeader {
-        struct_size: size_of::<T>() as u32,
-        abi_version: LMNK_ABI_VERSION_HEX,
-    }
-}
-
-/// Validates a `DescriptorHeader` against expected structure byte size and ABI compatibility
-/// ([`is_compatible_abi_version`] against [`LMNK_ABI_VERSION_HEX`]).
-///
-/// # Errors
-/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `struct_size` or `abi_version` is incompatible.
-#[inline(always)]
-pub const fn validate_descriptor_header<T>(header: &DescriptorHeader) -> LmnkResult<()> {
-    let valid = (header.struct_size as usize == size_of::<T>())
-        & is_compatible_abi_version(header.abi_version, LMNK_ABI_VERSION_HEX);
-    if valid {
-        Ok(())
-    } else {
-        Err(LMNK_ERR_VERSION_MISMATCH)
     }
 }
 

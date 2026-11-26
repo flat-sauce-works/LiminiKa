@@ -285,12 +285,15 @@ pub unsafe extern "C" fn lmnk_phase_steering_steer_with_gateway_and_config_safe(
             SubjectivePersona::new(persona_arr, persona_energy, 0, 2),
         );
 
-        GatewayPhaseSteeringExt::steer_gateway_signal_for_geometry_safe(
+        GatewayPhaseSteeringExt::steer_gateway_signal_with_core_layers_for_geometry_safe(
             &engine,
-            &composite,
-            &geom,
+            crate::runtime::gateway::GatewaySteerInput {
+                signal: &composite,
+                geometry: &geom,
+                core_ctx: None,
+                unresolved_damping_u7: 128,
+            },
             &mut trail,
-            128,
             &mut q_aligned,
             None,
             None,

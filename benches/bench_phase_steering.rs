@@ -488,12 +488,14 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 &mut q_slice,
                 &subhead_cfg,
                 &bank_slice,
-                ATTRACTOR_SLOT_SYSTEM_BASELINE,
-                ATTRACTOR_SLOT_KNOWLEDGE,
-                ATTRACTOR_SLOT_PERSONA,
-                DEFAULT_PHASE_CLAMP_MAX_RAD,
-                8i8,
-                head_dim as usize,
+                liminika_core::foundation::SubheadSlotBinding {
+                    fact_slot_id: ATTRACTOR_SLOT_SYSTEM_BASELINE,
+                    logic_slot_id: ATTRACTOR_SLOT_KNOWLEDGE,
+                    explore_slot_id: ATTRACTOR_SLOT_PERSONA,
+                    max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+                    explore_pulse_q7: 8i8,
+                    head_dim: head_dim as usize,
+                },
             )
             .unwrap();
         }
@@ -503,12 +505,14 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 black_box(&mut q_slice),
                 black_box(&subhead_cfg),
                 black_box(&bank_slice),
-                black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
-                black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                black_box(ATTRACTOR_SLOT_PERSONA),
-                black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
-                black_box(8i8),
-                black_box(head_dim as usize),
+                liminika_core::foundation::SubheadSlotBinding {
+                    fact_slot_id: black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
+                    logic_slot_id: black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                    explore_slot_id: black_box(ATTRACTOR_SLOT_PERSONA),
+                    max_rad: black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
+                    explore_pulse_q7: black_box(8i8),
+                    head_dim: black_box(head_dim as usize),
+                },
             )
             .unwrap();
             black_box(q_slice.as_slice()[0]);
@@ -543,12 +547,14 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 &mut q_slice,
                 &subhead_cfg,
                 &bank_slice,
-                ATTRACTOR_SLOT_SYSTEM_BASELINE,
-                ATTRACTOR_SLOT_KNOWLEDGE,
-                ATTRACTOR_SLOT_PERSONA,
-                DEFAULT_PHASE_CLAMP_MAX_RAD,
-                8i8,
-                head_dim as usize,
+                liminika_core::foundation::SubheadSlotBinding {
+                    fact_slot_id: ATTRACTOR_SLOT_SYSTEM_BASELINE,
+                    logic_slot_id: ATTRACTOR_SLOT_KNOWLEDGE,
+                    explore_slot_id: ATTRACTOR_SLOT_PERSONA,
+                    max_rad: DEFAULT_PHASE_CLAMP_MAX_RAD,
+                    explore_pulse_q7: 8i8,
+                    head_dim: head_dim as usize,
+                },
             )
             .unwrap();
         }
@@ -558,12 +564,14 @@ fn bench_phase_steering_swarm_subhead_and_visual_cowatching(c: &mut Criterion) {
                 black_box(&mut q_slice),
                 black_box(&subhead_cfg),
                 black_box(&bank_slice),
-                black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
-                black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                black_box(ATTRACTOR_SLOT_PERSONA),
-                black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
-                black_box(8i8),
-                black_box(head_dim as usize),
+                liminika_core::foundation::SubheadSlotBinding {
+                    fact_slot_id: black_box(ATTRACTOR_SLOT_SYSTEM_BASELINE),
+                    logic_slot_id: black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                    explore_slot_id: black_box(ATTRACTOR_SLOT_PERSONA),
+                    max_rad: black_box(DEFAULT_PHASE_CLAMP_MAX_RAD),
+                    explore_pulse_q7: black_box(8i8),
+                    head_dim: black_box(head_dim as usize),
+                },
             )
             .unwrap();
             black_box(q_slice.as_slice()[0]);

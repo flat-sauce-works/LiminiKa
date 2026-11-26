@@ -793,18 +793,19 @@ impl RuntimeContext {
             &self.distortion_tension,
             pframe_hops,
         );
-        self.telemetry.record_step(
-            step_decision,
-            &self.last_horizon,
-            &self.last_boundary_delta,
-            &self.last_overlap_report,
-            &self.core_layers.ego,
-            entropy_st.active_branch_mode,
-            slid_in,
-            slid_out,
-            escalated,
-            qos_throttled,
-        );
+        self.telemetry
+            .record_step(crate::runtime::telemetry::StepTelemetryInput {
+                decision: step_decision,
+                horizon: &self.last_horizon,
+                delta: &self.last_boundary_delta,
+                overlap: &self.last_overlap_report,
+                ego: &self.core_layers.ego,
+                entropy_gate_mode: entropy_st.active_branch_mode,
+                slid_in_bits: slid_in,
+                slid_out_bits: slid_out,
+                escalated,
+                qos_throttled,
+            });
         let _ = self.telemetry.update_assimilation_ema(
             entropy_st.moving_z_entropy,
             frame.fact_persona_coherence,
@@ -821,13 +822,15 @@ impl RuntimeContext {
         let sb_event = self.substrate.step_sandbox_hypothesis_lifecycle(
             &mut self.telemetry,
             &mut self.sandbox_workbench_lane,
-            step_decision,
-            self.core_layers.ego.is_active(),
-            exterior_granule_mask,
-            trail_phase_words_ref(trail_out),
-            frame.effective_energy,
-            3,
-            3,
+            crate::runtime::gateway::SandboxLifecycleInput {
+                decision: step_decision,
+                ego_active: self.core_layers.ego.is_active(),
+                exterior_granule_mask,
+                candidate_words: trail_phase_words_ref(trail_out),
+                candidate_weight: frame.effective_energy,
+                drift_dwell_threshold: 3,
+                settle_dwell_threshold: 3,
+            },
         );
         self.last_sandbox_event = sb_event;
         if matches!(sb_event, SandboxLifecycleEvent::Settled(_)) {

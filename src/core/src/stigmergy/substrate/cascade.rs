@@ -35,6 +35,17 @@ use crate::stigmergy::{
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
 };
 
+/// Traversal parameters for [`StigmergicSubstrate::traverse_pointer_chain_and_orchestrate`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChainTraverseParams {
+    /// Starting inline trail slot index (`0..SUBSTRATE_INLINE_TRAILS`).
+    pub start_trail_idx: usize,
+    /// Maximum number of pointer-chain hops to traverse (`>= 1`).
+    pub max_hops: usize,
+    /// Current normalized entropy observation $\tilde{H}$.
+    pub entropy_h_tilde: f32,
+}
+
 impl StigmergicSubstrate {
     /// Applies per-step pheromone evaporation ($\rho_j \gets \rho_j \cdot \lambda_{\mathrm{retain}}$)
     /// across all active inline trails in `self.trails`, deposits pheromone reinforcement
@@ -172,43 +183,6 @@ impl StigmergicSubstrate {
     /// 5. Applies global pheromone evaporation & reinforcement (`evaporate_and_deposit_pheromone`).
     /// 6. Evaluates `self.thresholds.select_action_decision` to choose the next
     ///    [`StigmergicActionDecision`] (`PassiveSidecar`, `InertialLayerSkip`, `ExpressPhaseSteer`,
-    ///    `SubHeadRoute`, `FullOrchestration`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
-    /// 7. Executes the selected action on `query_tensor` / `key_tensor` / `logits_opt` and logs
-    ///    telemetry into `self.ledger_slot`.
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias or have
-    /// fewer than `head_dim * num_heads` elements.
-    #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
-    pub fn orchestrate_next_action_step(
-        &mut self,
-        input_ptr: TaggedPtr,
-        entropy_h_tilde: f32,
-        dominant_slot: u8,
-        trail_inout: &mut PointerTrail,
-        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> LmnkResult<SubstrateStepReport> {
-        self.orchestrate_next_action_step_core(
-            input_ptr,
-            entropy_h_tilde,
-            dominant_slot,
-            trail_inout,
-            attention_scores,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-            true,
-            None,
-            DEFAULT_PHASE_STEP_MIN_RAD,
-            DEFAULT_PHASE_CLAMP_MAX_RAD,
-        )
-    }
-
     #[inline]
     // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
     #[allow(clippy::too_many_arguments)]
@@ -477,19 +451,20 @@ impl StigmergicSubstrate {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `start_trail_idx >= self.inline_active_len()` or
     /// `max_hops == 0`.
     #[inline]
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn traverse_pointer_chain_and_orchestrate(
         &mut self,
-        start_trail_idx: usize,
-        max_hops: usize,
-        entropy_h_tilde: f32,
+        params: ChainTraverseParams,
         trail_inout: &mut PointerTrail,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> LmnkResult<(SubstrateStepReport, u32, usize, u32, f32)> {
+        let ChainTraverseParams {
+            start_trail_idx,
+            max_hops,
+            entropy_h_tilde,
+        } = params;
         let active_len = self.inline_active_len();
         if start_trail_idx >= active_len || max_hops == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
