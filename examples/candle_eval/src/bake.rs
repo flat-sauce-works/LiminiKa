@@ -17,22 +17,28 @@ use liminika_adapter::{
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
 
-use crate::model::{KvCacheMode, LogitsFetchMode, Phi3Config, Phi3Model};
+use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, ModelConfig};
 
 pub(crate) type BakedModelProfile = ContrastiveAnchorBank;
 
-pub(crate) struct Phi3TokenEncoder<'a> {
-    model: &'a mut Phi3Model,
+pub(crate) struct LmTokenEncoder<'a> {
+    model: &'a mut CausalLmModel,
     tokenizer: &'a Tokenizer,
+    chat: &'a ChatTemplate,
     format_as_chat_prompt: bool,
     capture_final_hidden: bool,
 }
 
-impl<'a> Phi3TokenEncoder<'a> {
-    pub(crate) fn new(model: &'a mut Phi3Model, tokenizer: &'a Tokenizer) -> Self {
+impl<'a> LmTokenEncoder<'a> {
+    pub(crate) fn new(
+        model: &'a mut CausalLmModel,
+        tokenizer: &'a Tokenizer,
+        chat: &'a ChatTemplate,
+    ) -> Self {
         Self {
             model,
             tokenizer,
+            chat,
             format_as_chat_prompt: false,
             capture_final_hidden: false,
         }
@@ -49,11 +55,11 @@ impl<'a> Phi3TokenEncoder<'a> {
     }
 }
 
-impl TokenSequenceEncoder for Phi3TokenEncoder<'_> {
+impl TokenSequenceEncoder for LmTokenEncoder<'_> {
     fn encode_token_sequence(&mut self, text: &str) -> Result<CapturedTokenSequence, String> {
         let owned_prompt;
         let input_text = if self.format_as_chat_prompt {
-            owned_prompt = format_phi4_prompt(text);
+            owned_prompt = self.chat.format_single_turn(text);
             owned_prompt.as_str()
         } else {
             text
@@ -85,7 +91,7 @@ impl TokenSequenceEncoder for Phi3TokenEncoder<'_> {
     }
 }
 
-impl PrefixAliasProbe for Phi3TokenEncoder<'_> {
+impl PrefixAliasProbe for LmTokenEncoder<'_> {
     fn probe_leading_alias(
         &mut self,
         word: &str,
@@ -234,10 +240,6 @@ pub(crate) fn argmax(logits: &[f32]) -> u32 {
         .map_or(0, |(idx, _)| idx as u32)
 }
 
-pub(crate) fn format_phi4_prompt(user_prompt: &str) -> String {
-    format!("<|user|>{user_prompt}<|end|><|assistant|>")
-}
-
 pub(crate) fn detect_simd_label() -> &'static str {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -275,8 +277,8 @@ pub(crate) fn query_nvidia_smi_vram() -> Option<String> {
     }
 }
 
-pub(crate) fn estimate_phi3_footprint(
-    cfg: &Phi3Config,
+pub(crate) fn estimate_model_footprint(
+    cfg: &ModelConfig,
     dtype: DType,
     quant: Option<GgmlDType>,
 ) -> (u64, f64, f64) {
@@ -284,9 +286,10 @@ pub(crate) fn estimate_phi3_footprint(
     let i = cfg.intermediate_size as u64;
     let n_q = cfg.num_attention_heads as u64;
     let n_kv = cfg.num_key_value_heads as u64;
-    let d_head = h / n_q.max(1);
+    let d_head = cfg.head_dim() as u64;
+    let q_dim = n_q * d_head;
     let qkv_out = (n_q + 2 * n_kv) * d_head;
-    let per_layer_params = h * qkv_out + h * h + h * (2 * i) + i * h + 2 * h;
+    let per_layer_params = h * qkv_out + q_dim * h + h * (2 * i) + i * h + 2 * h;
     let embed_params = (cfg.vocab_size as u64) * h;
     let lm_head_params = if cfg.tie_word_embeddings {
         0
@@ -316,7 +319,7 @@ pub(crate) fn estimate_phi3_footprint(
 }
 
 pub(crate) fn print_runtime_profile(
-    cfg: &Phi3Config,
+    cfg: &ModelConfig,
     adapter: &ModelSteeringAdapter,
     device: &Device,
     dtype: DType,
@@ -325,7 +328,7 @@ pub(crate) fn print_runtime_profile(
     vram_before: Option<&str>,
 ) {
     let geom = adapter.geometry();
-    let (params, weights_mb, kv_2048_mb) = estimate_phi3_footprint(cfg, dtype, quant);
+    let (params, weights_mb, kv_2048_mb) = estimate_model_footprint(cfg, dtype, quant);
     let hub_bytes = std::mem::size_of::<StigmergicSubstrate>();
     println!(
         "[System] os={} arch={} simd={} device={:?} dtype={:?} quant={:?} load={:.2?}",
@@ -366,13 +369,14 @@ pub(crate) fn print_runtime_profile(
 }
 
 pub(crate) fn sample_startup_base_prior(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
     adapter: &ModelSteeringAdapter,
 ) -> Result<ModelBaseAttractorProfile, Box<dyn std::error::Error>> {
     // Generation-free 1-pass IsolatedProbe capture across neutral startup prompts matching the
     // raw query tokenization frame used by `CompiledTokenCorpus` and `TurnOrchestrator`.
-    let mut encoder = Phi3TokenEncoder::new(model, tokenizer);
+    let mut encoder = LmTokenEncoder::new(model, tokenizer, chat);
     let mut base_entries = Vec::with_capacity(DEFAULT_STARTUP_PRIOR_PROBES.len());
     for prompt in DEFAULT_STARTUP_PRIOR_PROBES {
         let captured = encoder.encode_token_sequence(prompt)?;
@@ -399,18 +403,21 @@ pub(crate) struct SharedFixtureArtifacts {
 /// Captures the fixture entries in a single model forward pass and builds both the optional
 /// [`ContrastiveAnchorBank`] (when `!recall_only`) and the shared [`CompiledTokenCorpus`],
 /// dropping raw token activation buffers immediately after compilation to keep peak RAM low.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn capture_and_build_shared_corpus(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
     suite: &FixtureSuite,
+    layer_mask: u64,
     recall_only: bool,
     use_base_prior: bool,
 ) -> Result<SharedFixtureArtifacts, Box<dyn std::error::Error>> {
-    adapter.set_layer_rope_mask(0xFFFF_0000);
+    adapter.set_layer_rope_mask(layer_mask);
     let (base_prior, prior_ms) = if use_base_prior {
         let t_prior = Instant::now();
-        let profile = sample_startup_base_prior(model, tokenizer, adapter)?;
+        let profile = sample_startup_base_prior(model, tokenizer, chat, adapter)?;
         let elapsed_ms = t_prior.elapsed().as_secs_f64() * 1000.0;
         println!(
             "[BasePrior] 1-pass IsolatedProbe samples={} sub_attractors={} pooled_basis={} token_basis={} elapsed={:.1}ms",
@@ -430,7 +437,8 @@ pub(crate) fn capture_and_build_shared_corpus(
     let mut contrastive_entries: Vec<ContrastiveAnchorEntry> = Vec::with_capacity(total);
     let mut entry_meta: Vec<(&str, f32)> = Vec::with_capacity(total);
     {
-        let mut encoder = Phi3TokenEncoder::new(model, tokenizer).with_final_hidden(!recall_only);
+        let mut encoder =
+            LmTokenEncoder::new(model, tokenizer, chat).with_final_hidden(!recall_only);
         for (role, texts, energy) in [
             (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
             (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
@@ -471,7 +479,7 @@ pub(crate) fn capture_and_build_shared_corpus(
         base_prior.as_ref(),
     )?;
     {
-        let mut alias_encoder = Phi3TokenEncoder::new(model, tokenizer);
+        let mut alias_encoder = LmTokenEncoder::new(model, tokenizer, chat);
         compiled.append_leading_alias_observations(adapter, &staged_entries, &mut alias_encoder)?;
     }
     drop(staged_entries);

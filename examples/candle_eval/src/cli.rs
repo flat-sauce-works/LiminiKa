@@ -7,20 +7,28 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::eval::{
-    parse_bench_trials, parse_circuit_mode, parse_ego_max_hops, parse_ego_mode,
-    parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens, parse_horizon_mode,
-    parse_kv_min_res, parse_layer_mask, parse_logits_observe_stride, parse_long_doc_bench_path,
-    parse_max_tokens, parse_phase_clamp_rad, parse_prefill_chunk_size, parse_pressure_sim_mode,
-    parse_probe_frame, parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature,
-    CircuitProfileMode, EgoProfileMode, FairBenchCondition, HorizonAblationMode, PressureSimMode,
-    ReflectMode,
+    parse_bench_trials, parse_chat_template, parse_circuit_mode, parse_ego_max_hops,
+    parse_ego_mode, parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens,
+    parse_horizon_mode, parse_kv_min_res, parse_layer_mask_spec, parse_logits_observe_stride,
+    parse_long_doc_bench_path, parse_max_tokens, parse_model_arch, parse_model_path,
+    parse_phase_clamp_rad, parse_prefill_chunk_size, parse_pressure_sim_mode, parse_probe_frame,
+    parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature, parse_tokenizer_path,
+    CircuitProfileMode, EgoProfileMode, FairBenchCondition, HorizonAblationMode, LayerMaskSpec,
+    PressureSimMode, ReflectMode, DEFAULT_LAYER_STEER_MASK,
 };
-use crate::model::ProbeCoordinateFrame;
+use crate::model::{
+    clip_layer_mask, ChatTemplate, ChatTemplateArg, ModelArchArg, ModelConfig, ProbeCoordinateFrame,
+};
 use candle_core::quantized::GgmlDType;
 use liminika_core::abi::lmnk_q7_t;
 use liminika_core::drivers::LiminalEgoPreset;
 
 pub(crate) struct EvalCliConfig {
+    pub(crate) model_path: Option<PathBuf>,
+    pub(crate) model_arch: ModelArchArg,
+    pub(crate) tokenizer_path: Option<PathBuf>,
+    pub(crate) chat_template: ChatTemplateArg,
+    pub(crate) smoke_test: bool,
     pub(crate) recall_only: bool,
     pub(crate) use_base_prior: bool,
     pub(crate) no_reflect: bool,
@@ -37,7 +45,7 @@ pub(crate) struct EvalCliConfig {
     pub(crate) multi_turn: bool,
     pub(crate) quant_mode: Option<GgmlDType>,
     pub(crate) probe_frame: ProbeCoordinateFrame,
-    pub(crate) layer_steer_mask_override: Option<u64>,
+    pub(crate) layer_mask_spec: Option<LayerMaskSpec>,
     pub(crate) phase_clamp_rad: Option<f32>,
     pub(crate) random_push_control: bool,
     pub(crate) max_tokens: usize,
@@ -58,6 +66,19 @@ pub(crate) struct EvalCliConfig {
     pub(crate) persona_lmnk_out: Option<PathBuf>,
 }
 
+impl EvalCliConfig {
+    pub(crate) fn resolve_layer_mask(&self, num_layers: usize) -> u64 {
+        match self.layer_mask_spec {
+            Some(spec) => spec.resolve(num_layers),
+            None => clip_layer_mask(DEFAULT_LAYER_STEER_MASK, num_layers),
+        }
+    }
+
+    pub(crate) fn resolve_layer_mask_override(&self, num_layers: usize) -> Option<u64> {
+        self.layer_mask_spec.map(|spec| spec.resolve(num_layers))
+    }
+}
+
 pub(crate) fn wants_help<'a>(args: impl IntoIterator<Item = &'a str>) -> bool {
     args.into_iter().any(|a| a == "--help" || a == "-h")
 }
@@ -67,6 +88,17 @@ pub(crate) fn print_help() {
     println!("Usage: candle_eval [OPTIONS]");
     println!("Options:");
     println!("  -h, --help                         Print this help message and exit");
+    println!("  --model=<path>                     Override model directory (default: models/Phi-4-mini-instruct)");
+    println!(
+        "  --model-arch=<auto|phi4|mistral3>  Override model architecture loader (default: auto)"
+    );
+    println!("  --tokenizer=<path>                 Override tokenizer.json path (default: <model>/tokenizer.json)");
+    println!(
+        "  --chat-template=<auto|phi4|mistral3> Override chat template formatting (default: auto)"
+    );
+    println!(
+        "  --smoke-test                       Run Steer-OFF greedy generation smoke test and exit"
+    );
     println!("  --fixture=<path>                   Override evaluation fixture file (default: tests/fixtures/gcso_eval_samples.txt)");
     println!("  --bench-trials=<N>                 Run N independent benchmark trials after warmup and report median/spread (default: 1)");
     println!("  --step2-only                       Skip Step 1 sweeps and run Step 2 (+ Step 3) directly");
@@ -86,7 +118,7 @@ pub(crate) fn print_help() {
         "  --probe-frame=<pre-rope|post-rope> Procrustes probe coordinate frame (default: pre-rope)"
     );
     println!(
-        "  --layer-mask=<preset|0xHEX>        RoPE steering layer window: top16, mid12, mid16, upper-mid12, all, or 0xHEX (default: top16)"
+        "  --layer-mask=<preset|0xHEX>        RoPE steering layer window: top16, top-half, mid12, mid16, upper-mid12, all, or 0xHEX (default: top16)"
     );
     println!(
         "  --phase-clamp-rad=<f32>            Override eval-harness PhaseClamp arc in (0, pi/2] rad (default: core GatewayFrame default)"
@@ -140,6 +172,7 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
     const BOOL_FLAGS: &[&str] = &[
         "--help",
         "-h",
+        "--smoke-test",
         "--recall-only",
         "--base-prior",
         "--no-base-prior",
@@ -156,6 +189,10 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--physics-eval",
     ];
     const PREFIX_FLAGS: &[&str] = &[
+        "--model=",
+        "--model-arch=",
+        "--tokenizer=",
+        "--chat-template=",
         "--reflect-mode=",
         "--ego-max-hops=",
         "--temp=",
@@ -190,6 +227,11 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
 
 impl EvalCliConfig {
     pub(crate) fn parse_from_args(cli_args: &[String]) -> Self {
+        let model_path = parse_model_path(cli_args.iter().map(String::as_str));
+        let model_arch = parse_model_arch(cli_args.iter().map(String::as_str));
+        let tokenizer_path = parse_tokenizer_path(cli_args.iter().map(String::as_str));
+        let chat_template = parse_chat_template(cli_args.iter().map(String::as_str));
+        let smoke_test = cli_args.iter().any(|a| a == "--smoke-test");
         let recall_only = cli_args.iter().any(|a| a == "--recall-only");
         let mut use_base_prior = true;
         for arg in cli_args {
@@ -214,7 +256,7 @@ impl EvalCliConfig {
         let multi_turn = cli_args.iter().any(|a| a == "--multi-turn");
         let quant_mode = parse_quant_mode(cli_args.iter().map(String::as_str));
         let probe_frame = parse_probe_frame(cli_args.iter().map(String::as_str));
-        let layer_steer_mask_override = parse_layer_mask(cli_args.iter().map(String::as_str));
+        let layer_mask_spec = parse_layer_mask_spec(cli_args.iter().map(String::as_str));
         let phase_clamp_rad = parse_phase_clamp_rad(cli_args.iter().map(String::as_str));
         let random_push_control = cli_args.iter().any(|a| a == "--random-push-control");
         let max_tokens = parse_max_tokens(cli_args.iter().map(String::as_str));
@@ -246,6 +288,11 @@ impl EvalCliConfig {
             .or_else(|| persona_lmnk_in.clone());
 
         Self {
+            model_path,
+            model_arch,
+            tokenizer_path,
+            chat_template,
+            smoke_test,
             recall_only,
             use_base_prior,
             no_reflect,
@@ -262,7 +309,7 @@ impl EvalCliConfig {
             multi_turn,
             quant_mode,
             probe_frame,
-            layer_steer_mask_override,
+            layer_mask_spec,
             phase_clamp_rad,
             random_push_control,
             max_tokens,
@@ -875,14 +922,17 @@ pub(crate) fn build_step2_run_specs(cli: &EvalCliConfig) -> Vec<Step2RunSpec> {
 }
 
 use crate::bake::BakedModelProfile;
-use crate::model::Phi3Model;
+use crate::model::CausalLmModel;
 use liminika_adapter::{CompiledTokenCorpus, ModelSteeringAdapter};
 use liminika_core::stigmergy::StandardCognitiveBank;
 use tokenizers::Tokenizer;
 
 pub(crate) struct EvalRuntime<'a> {
+    pub(crate) cfg: &'a ModelConfig,
+    pub(crate) chat: &'a ChatTemplate,
+    pub(crate) active_layer_mask: u64,
     pub(crate) tokenizer: &'a Tokenizer,
-    pub(crate) model: &'a mut Phi3Model,
+    pub(crate) model: &'a mut CausalLmModel,
     pub(crate) adapter: &'a mut ModelSteeringAdapter,
     pub(crate) baked_opt: Option<&'a BakedModelProfile>,
     pub(crate) compiled: &'a CompiledTokenCorpus,
@@ -919,7 +969,7 @@ mod tests {
         let parsed = EvalCliConfig::parse_from_args(&args);
         assert_eq!(parsed.bench_trials, 1);
         assert_eq!(parsed.probe_frame, ProbeCoordinateFrame::PostRope);
-        assert_eq!(parsed.layer_steer_mask_override, Some(0x03FF_FC00));
+        assert_eq!(parsed.resolve_layer_mask(32), 0x03FF_FC00);
         assert_eq!(parsed.phase_clamp_rad, Some(0.24));
         assert!(parsed.random_push_control);
         assert_eq!(parsed.max_tokens, 128);
@@ -934,13 +984,32 @@ mod tests {
             Some(PathBuf::from("tests/fixtures/custom.txt"))
         );
 
+        let args_m = vec![
+            "candle_eval".to_string(),
+            "--model=models/Ministral-3-3B-Instruct-2512-BF16".to_string(),
+            "--model-arch=mistral3".to_string(),
+            "--tokenizer=models/Ministral-3-3B-Instruct-2512-BF16/tokenizer.json".to_string(),
+            "--chat-template=mistral3".to_string(),
+            "--layer-mask=top-half".to_string(),
+            "--smoke-test".to_string(),
+        ];
+        assert!(find_unrecognized_args(args_m.iter().skip(1).map(String::as_str)).is_empty());
+        let parsed_m = EvalCliConfig::parse_from_args(&args_m);
+        assert_eq!(parsed_m.model_arch, ModelArchArg::Mistral3);
+        assert_eq!(parsed_m.chat_template, ChatTemplateArg::Mistral3);
+        assert!(parsed_m.smoke_test);
+        assert_eq!(parsed_m.resolve_layer_mask(32), 0xFFFF_0000);
+        assert_eq!(parsed_m.resolve_layer_mask(26), 0x03FF_E000);
+
         let args_3 = vec!["candle_eval".to_string(), "--bench-trials=3".to_string()];
         assert_eq!(EvalCliConfig::parse_from_args(&args_3).bench_trials, 3);
         let defaults = EvalCliConfig::parse_from_args(&["candle_eval".to_string()]);
         assert_eq!(defaults.bench_trials, 1);
         assert!(defaults.use_base_prior);
         assert_eq!(defaults.probe_frame, ProbeCoordinateFrame::PreRope);
-        assert_eq!(defaults.layer_steer_mask_override, None);
+        assert_eq!(defaults.layer_mask_spec, None);
+        assert_eq!(defaults.resolve_layer_mask(32), 0xFFFF_0000);
+        assert_eq!(defaults.resolve_layer_mask(26), 0x03FF_0000);
         assert_eq!(defaults.phase_clamp_rad, None);
         assert!(!defaults.random_push_control);
         assert_eq!(defaults.max_tokens, 64);

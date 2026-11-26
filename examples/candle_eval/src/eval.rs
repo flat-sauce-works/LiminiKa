@@ -26,11 +26,93 @@ use liminika_core::stigmergy::{
 };
 use tokenizers::Tokenizer;
 
-use crate::bake::{argmax, format_phi4_prompt};
+use crate::bake::argmax;
 use crate::model::{
-    ForwardSteer, KvCacheMode, LogitsFetchMode, LogitsOutcome, Phi3Model, ProbeCoordinateFrame,
-    ResonantAnchors,
+    active_layers_mask, clip_layer_mask, top_half_layer_mask, CausalLmModel, ChatTemplate,
+    ChatTemplateArg, ForwardSteer, KvCacheMode, LogitsFetchMode, LogitsOutcome, ModelArchArg,
+    ProbeCoordinateFrame, ResonantAnchors,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayerMaskSpec {
+    TopHalf,
+    All,
+    Fixed(u64),
+}
+
+impl LayerMaskSpec {
+    pub(crate) const fn resolve(self, num_layers: usize) -> u64 {
+        match self {
+            Self::TopHalf => top_half_layer_mask(num_layers),
+            Self::All => active_layers_mask(num_layers),
+            Self::Fixed(mask) => clip_layer_mask(mask, num_layers),
+        }
+    }
+}
+
+pub(crate) fn parse_model_path<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<PathBuf> {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--model=") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_tokenizer_path<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<PathBuf> {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--tokenizer=") {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return Some(PathBuf::from(trimmed));
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn parse_model_arch<'a>(args: impl IntoIterator<Item = &'a str>) -> ModelArchArg {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--model-arch=") {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("phi4") || trimmed.eq_ignore_ascii_case("phi3") {
+                return ModelArchArg::Phi4;
+            }
+            if trimmed.eq_ignore_ascii_case("mistral3")
+                || trimmed.eq_ignore_ascii_case("ministral3")
+            {
+                return ModelArchArg::Mistral3;
+            }
+            if trimmed.eq_ignore_ascii_case("auto") {
+                return ModelArchArg::Auto;
+            }
+        }
+    }
+    ModelArchArg::Auto
+}
+
+pub(crate) fn parse_chat_template<'a>(args: impl IntoIterator<Item = &'a str>) -> ChatTemplateArg {
+    for arg in args {
+        if let Some(val) = arg.strip_prefix("--chat-template=") {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("phi4") || trimmed.eq_ignore_ascii_case("phi3") {
+                return ChatTemplateArg::Phi4;
+            }
+            if trimmed.eq_ignore_ascii_case("mistral3")
+                || trimmed.eq_ignore_ascii_case("ministral3")
+            {
+                return ChatTemplateArg::Mistral3;
+            }
+            if trimmed.eq_ignore_ascii_case("auto") {
+                return ChatTemplateArg::Auto;
+            }
+        }
+    }
+    ChatTemplateArg::Auto
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum PressureSimMode {
@@ -246,30 +328,35 @@ pub(crate) fn parse_long_doc_bench_path<'a>(
     None
 }
 
-pub(crate) fn parse_layer_mask<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<u64> {
+pub(crate) fn parse_layer_mask_spec<'a>(
+    args: impl IntoIterator<Item = &'a str>,
+) -> Option<LayerMaskSpec> {
     for arg in args {
         if let Some(raw) = arg.strip_prefix("--layer-mask=") {
             let val = raw.trim();
+            if val.eq_ignore_ascii_case("top-half") || val.eq_ignore_ascii_case("top_half") {
+                return Some(LayerMaskSpec::TopHalf);
+            }
             if val.eq_ignore_ascii_case("top16") {
-                return Some(0xFFFF_0000);
+                return Some(LayerMaskSpec::Fixed(0xFFFF_0000));
             }
             if val.eq_ignore_ascii_case("mid12") {
-                return Some(0x003F_FC00);
+                return Some(LayerMaskSpec::Fixed(0x003F_FC00));
             }
             if val.eq_ignore_ascii_case("mid16") {
-                return Some(0x03FF_FC00);
+                return Some(LayerMaskSpec::Fixed(0x03FF_FC00));
             }
             if val.eq_ignore_ascii_case("upper-mid12") || val.eq_ignore_ascii_case("upper_mid12") {
-                return Some(0x0FFF_0000);
+                return Some(LayerMaskSpec::Fixed(0x0FFF_0000));
             }
             if val.eq_ignore_ascii_case("all") {
-                return Some(0xFFFF_FFFF);
+                return Some(LayerMaskSpec::All);
             }
             if let Some(hex_raw) = val.strip_prefix("0x").or_else(|| val.strip_prefix("0X")) {
                 let cleaned = hex_raw.replace('_', "");
                 if let Ok(parsed) = u64::from_str_radix(&cleaned, 16) {
                     if parsed != 0 {
-                        return Some(parsed);
+                        return Some(LayerMaskSpec::Fixed(parsed));
                     }
                 }
             }
@@ -962,12 +1049,13 @@ pub(crate) struct ReplyTiming {
 /// Runs an untimed warmup decode pass (1 short prompt, up to 10 greedy tokens) to stabilize
 /// GPU P0 clocks before Trial 1, then explicitly clears the model KV cache.
 pub(crate) fn run_gpu_warmup(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let t_warm = Instant::now();
     model.clear_cache();
-    let warmup_prompt = format_phi4_prompt("Warmup: what is 2 + 2?");
+    let warmup_prompt = chat.format_single_turn("Warmup: what is 2 + 2?");
     let ids = tokenizer
         .encode(warmup_prompt.as_str(), false)
         .map_err(|e| format!("warmup encode error: {e}"))?
@@ -990,7 +1078,7 @@ pub(crate) fn run_gpu_warmup(
             LogitsOutcome::SkippedIntermediate => break,
         };
         gen_count += 1;
-        if next == 199999 || next == 200020 {
+        if chat.is_stop_token(next) {
             break;
         }
         let (next_out, _, _) = model.forward_tokens(
@@ -1013,9 +1101,99 @@ pub(crate) fn run_gpu_warmup(
     Ok(())
 }
 
-pub(crate) fn generate_steered_reply_with_offset(
-    model: &mut Phi3Model,
+/// Runs a 5-prompt Steer-OFF greedy generation smoke test to validate RoPE pairing, YaRN
+/// scaling, explicit `head_dim`, tied embeddings, and chat template / BOS / EOS resolution.
+pub(crate) fn run_steer_off_smoke_test(
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
+    max_tokens: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const PROMPTS: [(&str, &str); 5] = [
+        (
+            "Capital",
+            "What is the capital of France? Answer in one short sentence.",
+        ),
+        (
+            "Arithmetic",
+            "What is 17 + 25? Answer with just the number.",
+        ),
+        (
+            "Boiling",
+            "What is the boiling point of water at sea level in Celsius?",
+        ),
+        ("Chemistry", "What is the chemical symbol for gold?"),
+        ("Astronomy", "Which planet is fourth from the Sun?"),
+    ];
+    println!(
+        "\n=== Phase 0: Steer-OFF Greedy Generation Smoke Test (template={}, stops={:?}) ===",
+        chat.kind.label(),
+        chat.stop_token_ids
+    );
+    let max_gen = max_tokens.clamp(1, 64);
+    for (tag, prompt) in PROMPTS {
+        model.clear_cache();
+        let formatted = chat.format_single_turn(prompt);
+        let ids = tokenizer
+            .encode(formatted.as_str(), false)
+            .map_err(|e| format!("smoke encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let t0 = Instant::now();
+        let (mut outcome, _, _) = model.forward_tokens(
+            &ids,
+            0,
+            None,
+            false,
+            false,
+            LogitsFetchMode::FullLogits,
+            KvCacheMode::Append,
+        )?;
+        let mut gen_ids = Vec::with_capacity(max_gen);
+        let mut hit_eos = false;
+        for offset in (ids.len()..).take(max_gen) {
+            let next = match outcome {
+                LogitsOutcome::ObservedFull(ref logits) => argmax(logits),
+                LogitsOutcome::UnobservedDeviceArgmax(tok) => tok,
+                LogitsOutcome::SkippedIntermediate => break,
+            };
+            if chat.is_stop_token(next) {
+                hit_eos = true;
+                break;
+            }
+            gen_ids.push(next);
+            let (next_out, _, _) = model.forward_tokens(
+                &[next],
+                offset,
+                None,
+                false,
+                false,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::Append,
+            )?;
+            outcome = next_out;
+        }
+        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let reply = tokenizer
+            .decode(&gen_ids, true)
+            .map_err(|e| format!("smoke decode error: {e}"))?
+            .replace('\n', " ");
+        println!(
+            "  [Smoke:{tag:<10}] in_tok={} gen_tok={} eos={} ({:.1}ms) => {reply}",
+            ids.len(),
+            gen_ids.len(),
+            hit_eos,
+            elapsed_ms
+        );
+    }
+    model.clear_cache();
+    Ok(())
+}
+
+pub(crate) fn generate_steered_reply_with_offset(
+    model: &mut CausalLmModel,
+    tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
     start_offset: usize,
@@ -1101,7 +1279,7 @@ pub(crate) fn generate_steered_reply_with_offset(
                 LogitsOutcome::UnobservedDeviceArgmax(tok_id) => tok_id,
                 LogitsOutcome::SkippedIntermediate => break,
             };
-            if next == 199999 || next == 200020 {
+            if chat.is_stop_token(next) {
                 break;
             }
             gen_ids.push(next);
@@ -1227,8 +1405,9 @@ pub(crate) fn generate_steered_reply_with_offset(
 }
 
 pub(crate) fn generate_steered_reply(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
@@ -1239,14 +1418,21 @@ pub(crate) fn generate_steered_reply(
         .map_err(|e| format!("encode error: {e}"))?
         .get_ids()
         .len();
-    let (text, all_ids, timing) =
-        generate_steered_reply_with_offset(model, tokenizer, adapter, formatted_prompt, 0, cfg)?;
+    let (text, all_ids, timing) = generate_steered_reply_with_offset(
+        model,
+        tokenizer,
+        chat,
+        adapter,
+        formatted_prompt,
+        0,
+        cfg,
+    )?;
     let gen_tokens = all_ids.len().saturating_sub(prompt_ids_len);
     Ok((text, prompt_ids_len, gen_tokens, timing))
 }
 
 pub(crate) fn critique_generated_draft(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
     adapter: &ModelSteeringAdapter,
     compiled: &CompiledTokenCorpus,
@@ -1407,32 +1593,47 @@ mod tests {
             ProbeCoordinateFrame::PostRope
         );
 
-        assert_eq!(parse_layer_mask(["candle_eval"]), None);
+        assert_eq!(parse_layer_mask_spec(["candle_eval"]), None);
         assert_eq!(
-            parse_layer_mask(["candle_eval", "--layer-mask=top16"]),
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=top-half"])
+                .map(|s| (s.resolve(32), s.resolve(26))),
+            Some((0xFFFF_0000, 0x03FF_E000))
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=top16"]).map(|s| s.resolve(32)),
             Some(0xFFFF_0000)
         );
         assert_eq!(
-            parse_layer_mask(["candle_eval", "--layer-mask=mid12"]),
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=top16"]).map(|s| s.resolve(26)),
+            Some(0x03FF_0000)
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=mid12"]).map(|s| s.resolve(32)),
             Some(0x003F_FC00)
         );
         assert_eq!(
-            parse_layer_mask(["candle_eval", "--layer-mask=mid16"]),
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=mid16"]).map(|s| s.resolve(32)),
             Some(0x03FF_FC00)
         );
         assert_eq!(
-            parse_layer_mask(["candle_eval", "--layer-mask=upper-mid12"]),
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=upper-mid12"])
+                .map(|s| s.resolve(32)),
             Some(0x0FFF_0000)
         );
         assert_eq!(
-            parse_layer_mask(["candle_eval", "--layer-mask=all"]),
-            Some(0xFFFF_FFFF)
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=all"])
+                .map(|s| (s.resolve(32), s.resolve(26))),
+            Some((0xFFFF_FFFF, 0x03FF_FFFF))
         );
         assert_eq!(
-            parse_layer_mask(["candle_eval", "--layer-mask=0x00FF_0000"]),
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=0x00FF_0000"])
+                .map(|s| s.resolve(32)),
             Some(0x00FF_0000)
         );
-        assert_eq!(parse_layer_mask(["candle_eval", "--layer-mask=0x0"]), None);
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=0x0"]),
+            None
+        );
 
         assert_eq!(parse_phase_clamp_rad(["candle_eval"]), None);
         assert_eq!(

@@ -30,14 +30,15 @@ use liminika_core::stigmergy::{
 };
 use tokenizers::Tokenizer;
 
-use crate::bake::{argmax, format_phi4_prompt, query_nvidia_smi_vram, BakedModelProfile};
+use crate::bake::{argmax, query_nvidia_smi_vram, BakedModelProfile};
 use crate::cli::EvalCliConfig;
 use crate::eval::{
     apply_ego_mode, count_semantic_forbid_hits, generate_steered_reply, SteerDecodeConfig,
-    DEFAULT_LAYER_STEER_MASK,
 };
 use crate::metrics::kl_divergence_and_max_abs_delta;
-use crate::model::{KvCacheMode, LogitsFetchMode, Phi3Config, Phi3Model, ResonantAnchors};
+use crate::model::{
+    CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, ModelConfig, ResonantAnchors,
+};
 
 struct DeterministicRebakeEncoder {
     layers: usize,
@@ -91,12 +92,15 @@ struct EmptyKvProbeResult {
     init_logits: Vec<f32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_single_empty_kv_probe(
     prompt: &str,
     cli: &EvalCliConfig,
+    cfg: &ModelConfig,
+    chat: &ChatTemplate,
     compiled: &liminika_adapter::CompiledTokenCorpus,
     baked: &BakedModelProfile,
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
     adapter: &mut ModelSteeringAdapter,
 ) -> Result<EmptyKvProbeResult, Box<dyn std::error::Error>> {
@@ -129,7 +133,7 @@ fn run_single_empty_kv_probe(
             kv_policy: &kv_policy,
             kv_min_resonance_override: cli.kv_min_res,
             persona_bank: Option::<&StandardCognitiveBank>::None,
-            layer_steer_mask_override: cli.layer_steer_mask_override,
+            layer_steer_mask_override: cli.resolve_layer_mask_override(cfg.num_hidden_layers),
         },
     )?;
 
@@ -141,12 +145,12 @@ fn run_single_empty_kv_probe(
     } else {
         prompt.to_string()
     };
-    let formatted = format_phi4_prompt(&turn_body);
+    let formatted = chat.format_single_turn(&turn_body);
 
     let eff_mask = plan.effective_layer_steer_mask(adapter);
     let steer_facts = plan.self_ref_anchors_per_layer();
     let use_steer = plan.steering_eligible();
-    let mut cfg = SteerDecodeConfig {
+    let mut steer_cfg = SteerDecodeConfig {
         q7s: Some(baked.fact_q7.as_slice()),
         persona_q7s: Some(baked.persona_q7.as_slice()),
         resonant_ctx: if use_steer {
@@ -190,8 +194,9 @@ fn run_single_empty_kv_probe(
         spine_veto_pin_hits: 0,
     };
     model.clear_cache();
-    let (reply, _, _, _) = generate_steered_reply(model, tokenizer, adapter, &formatted, &mut cfg)?;
-    let init_logits = cfg.first_prefill_logits.unwrap_or_default();
+    let (reply, _, _, _) =
+        generate_steered_reply(model, tokenizer, chat, adapter, &formatted, &mut steer_cfg)?;
+    let init_logits = steer_cfg.first_prefill_logits.unwrap_or_default();
     Ok(EmptyKvProbeResult {
         reply,
         has_self_ref: plan.has_self_ref_anchors(),
@@ -204,11 +209,13 @@ fn run_single_empty_kv_probe(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_equilibrium_benchmark(
     cli: &EvalCliConfig,
-    cfg: &Phi3Config,
+    cfg: &ModelConfig,
+    chat: &ChatTemplate,
+    active_layer_mask: u64,
     baked: &BakedModelProfile,
     compiled: &liminika_adapter::CompiledTokenCorpus,
     base_entropies: &[f32],
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
     work_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -232,7 +239,7 @@ pub(crate) fn run_equilibrium_benchmark(
     let mut session1 = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
     session1.set_ego_max_hops(cli.ego_max_hops);
     session1.set_guard_hold_tokens(cli.guard_hold_tokens);
-    session1.set_layer_rope_mask(DEFAULT_LAYER_STEER_MASK);
+    session1.set_layer_rope_mask(active_layer_mask);
     apply_ego_mode(&mut session1, &cli.ego_mode);
     let pos_slices: Vec<&[f32]> = baked
         .attractive_centroid_per_layer
@@ -250,6 +257,8 @@ pub(crate) fn run_equilibrium_benchmark(
     let s1_probe = run_single_empty_kv_probe(
         s1_prompt,
         cli,
+        cfg,
+        chat,
         compiled,
         baked,
         model,
@@ -381,7 +390,7 @@ pub(crate) fn run_equilibrium_benchmark(
     let mut session2 = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
     session2.set_ego_max_hops(cli.ego_max_hops);
     session2.set_guard_hold_tokens(cli.guard_hold_tokens);
-    session2.set_layer_rope_mask(DEFAULT_LAYER_STEER_MASK);
+    session2.set_layer_rope_mask(active_layer_mask);
     let snap_restored = session2.restore_from_equilibrium(&restored_eq)?;
     let _ = session2.calibrate_manifold_probe(&pos_slices, &neg_slices, base_entropies)?;
 
@@ -412,6 +421,8 @@ pub(crate) fn run_equilibrium_benchmark(
     let s2_self_probe = run_single_empty_kv_probe(
         s1_prompt,
         cli,
+        cfg,
+        chat,
         compiled,
         baked,
         model,
@@ -434,7 +445,7 @@ pub(crate) fn run_equilibrium_benchmark(
 
     // Live empty-KV OOD non-interference query in Session 2 vs unsteered baseline.
     let ood_prompt = "What is the boiling point of water at standard sea-level pressure?";
-    let ood_formatted = format_phi4_prompt(ood_prompt);
+    let ood_formatted = chat.format_single_turn(ood_prompt);
     let ood_ids = tokenizer
         .encode(ood_formatted.as_str(), false)
         .map_err(|e| format!("ood encode error: {e}"))?
@@ -454,6 +465,8 @@ pub(crate) fn run_equilibrium_benchmark(
     let s2_ood_probe = run_single_empty_kv_probe(
         ood_prompt,
         cli,
+        cfg,
+        chat,
         compiled,
         baked,
         model,

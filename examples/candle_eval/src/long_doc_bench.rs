@@ -14,9 +14,9 @@ use liminika_adapter::{
 use liminika_core::liminal::evaluate_lacuna_partition_branchless;
 use tokenizers::Tokenizer;
 
-use crate::bake::{argmax, query_nvidia_smi_vram, Phi3TokenEncoder};
+use crate::bake::{argmax, query_nvidia_smi_vram, LmTokenEncoder};
 use crate::metrics::kl_divergence_and_max_abs_delta;
-use crate::model::{KvCacheMode, LogitsFetchMode, Phi3Model};
+use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode};
 
 #[cfg(target_os = "windows")]
 fn current_process_rss_mib() -> Option<f64> {
@@ -44,8 +44,10 @@ fn current_process_rss_mib() -> Option<f64> {
 pub(crate) fn run_long_doc_benchmark(
     doc_path: &Path,
     chunk_size: usize,
-    model: &mut Phi3Model,
+    layer_mask: u64,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let raw_doc = std::fs::read_to_string(doc_path)?;
@@ -56,18 +58,19 @@ pub(crate) fn run_long_doc_benchmark(
 
     println!(
         "\n=== Long-Document 1-Pass Streaming Distillation & Chunked Prefill Benchmark ===\n  \
-         doc={} ({} bytes) | raw_chunks={} | prefill_chunk_size={}",
+         doc={} ({} bytes) | raw_chunks={} | prefill_chunk_size={} | layer_mask=0x{:08X}",
         doc_path.display(),
         raw_bytes,
         chunks.len(),
         chunk_size,
+        layer_mask,
     );
 
-    adapter.set_layer_rope_mask(0xFFFF_0000);
+    adapter.set_layer_rope_mask(layer_mask);
     let t_distill = Instant::now();
     let mut distiller = StreamingCorpusDistiller::new(adapter, StreamingDistillConfig::default());
     {
-        let mut encoder = Phi3TokenEncoder::new(model, tokenizer);
+        let mut encoder = LmTokenEncoder::new(model, tokenizer, chat);
         for chunk in &chunks {
             let _ = distiller.push_text(&mut encoder, adapter, AttractorRole::Fact, chunk, 1.5)?;
         }

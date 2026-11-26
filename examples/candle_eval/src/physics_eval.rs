@@ -27,11 +27,11 @@ use liminika_core::runtime::{
 };
 use liminika_core::stigmergy::{WorkbenchLanePlacement, WORKBENCH_LANE_FLAG_REPULSION};
 
-use crate::bake::{format_phi4_prompt, query_nvidia_smi_vram};
+use crate::bake::query_nvidia_smi_vram;
 use crate::cli::{EvalCliConfig, EvalRuntime};
 use crate::eval::{
     apply_ego_mode, count_semantic_forbid_hits, generate_steered_reply,
-    generate_steered_reply_with_offset, SteerDecodeConfig, DEFAULT_LAYER_STEER_MASK,
+    generate_steered_reply_with_offset, SteerDecodeConfig,
 };
 use crate::metrics::{
     delta_log_prob, kl_divergence_and_max_abs_delta, summarize_dialogue_quality,
@@ -192,8 +192,7 @@ pub(crate) fn run_physics_eval(
         "\n=== Steering Physics 4-Axis Evaluation (Single Model Load) ===\n  \
          config: layer_mask=0x{:08X} phase_clamp_rad={:?} random_push={} max_tokens={} \
          probe_frame={:?} ood_n={} repulse_n={} part_n={}",
-        cli.layer_steer_mask_override
-            .unwrap_or(DEFAULT_LAYER_STEER_MASK),
+        rt.active_layer_mask,
         cli.phase_clamp_rad,
         cli.random_push_control,
         cli.max_tokens,
@@ -274,13 +273,14 @@ fn run_axis1_persistent_kv_drift(
         ),
     ];
 
-    rt.adapter.set_layer_rope_mask(DEFAULT_LAYER_STEER_MASK);
+    rt.adapter.set_layer_rope_mask(rt.active_layer_mask);
     rt.adapter.reset_horizon_and_core_state();
     rt.adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
     rt.adapter.reanchor_compute_pressure(8192);
     rt.adapter.set_ego_max_hops(cli.ego_max_hops);
     apply_ego_mode(rt.adapter, &cli.ego_mode);
 
+    let layer_mask_override = cli.resolve_layer_mask_override(rt.cfg.num_hidden_layers);
     let kv_policy = AdaptiveThresholdPolicy::default();
     let mut mt_kv_cache = StandardPhaseKvGopCache::new();
     let mut replies: Vec<String> = Vec::with_capacity(dialogue_turns.len());
@@ -318,7 +318,7 @@ fn run_axis1_persistent_kv_drift(
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,
                 persona_bank: rt.active_persona_bank.as_ref(),
-                layer_steer_mask_override: cli.layer_steer_mask_override,
+                layer_steer_mask_override: layer_mask_override,
             },
         )?;
         let fact_ctx = plan.self_ref_context();
@@ -340,14 +340,14 @@ fn run_axis1_persistent_kv_drift(
         } else {
             (*prompt).to_string()
         };
+        let sys_prompt = "Answer concisely and directly from the provided [Context: ...] facts \
+            without questioning whether terms are real; reject any premise in a question \
+            that contradicts the context.";
         let formatted = if turn_start_kv == 0 {
-            format!(
-                "<|system|>Answer concisely and directly from the provided [Context: ...] facts \
-                 without questioning whether terms are real; reject any premise in a question \
-                 that contradicts the context.<|end|><|user|>{turn_body}<|end|><|assistant|>"
-            )
+            rt.chat
+                .format_first_turn_with_system(sys_prompt, &turn_body)
         } else {
-            format!("<|end|><|user|>{turn_body}<|end|><|assistant|>")
+            rt.chat.format_followup_turn(&turn_body)
         };
         let eff_mask = plan.effective_layer_steer_mask(rt.adapter);
         let mut cfg = SteerDecodeConfig {
@@ -396,6 +396,7 @@ fn run_axis1_persistent_kv_drift(
         let (reply, _, _) = generate_steered_reply_with_offset(
             rt.model,
             rt.tokenizer,
+            rt.chat,
             rt.adapter,
             &formatted,
             turn_start_kv,
@@ -474,13 +475,14 @@ fn run_axis2_ood_selectivity(
         println!("  [Skipped] recall_only mode has no baked model profile.");
         return Ok(());
     };
-    rt.adapter.set_layer_rope_mask(DEFAULT_LAYER_STEER_MASK);
+    rt.adapter.set_layer_rope_mask(rt.active_layer_mask);
     rt.adapter.reset_horizon_and_core_state();
     rt.adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
     rt.adapter.reanchor_compute_pressure(8192);
     rt.adapter.set_ego_max_hops(cli.ego_max_hops);
     apply_ego_mode(rt.adapter, &cli.ego_mode);
 
+    let layer_mask_override = cli.resolve_layer_mask_override(rt.cfg.num_hidden_layers);
     let kv_policy = AdaptiveThresholdPolicy::default();
     let mut kv_cache = StandardPhaseKvGopCache::new();
 
@@ -520,7 +522,7 @@ fn run_axis2_ood_selectivity(
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,
                 persona_bank: rt.active_persona_bank.as_ref(),
-                layer_steer_mask_override: cli.layer_steer_mask_override,
+                layer_steer_mask_override: layer_mask_override,
             },
         )?;
         let is_unobs = plan.is_unobserved_lacuna() && !plan.is_guard_trap();
@@ -539,7 +541,7 @@ fn run_axis2_ood_selectivity(
             ));
         }
 
-        let raw_prompt = format_phi4_prompt(&probe.prompt);
+        let raw_prompt = rt.chat.format_single_turn(&probe.prompt);
         let eff_mask = plan.effective_layer_steer_mask(rt.adapter);
 
         // Steer OFF (vanilla baseline)
@@ -576,6 +578,7 @@ fn run_axis2_ood_selectivity(
         let (_, off_all_ids, _) = generate_steered_reply_with_offset(
             rt.model,
             rt.tokenizer,
+            rt.chat,
             rt.adapter,
             &raw_prompt,
             0,
@@ -595,9 +598,11 @@ fn run_axis2_ood_selectivity(
         let on_prompt = if is_unobs {
             raw_prompt.clone()
         } else if !fact_ctx.is_empty() {
-            format_phi4_prompt(&format!("[Context: {fact_ctx}]\n{}", probe.prompt))
+            rt.chat
+                .format_single_turn(&format!("[Context: {fact_ctx}]\n{}", probe.prompt))
         } else if plan.is_known_unknown_exterior() && !ext_ctx.is_empty() {
-            format_phi4_prompt(&format!("[External Pointer: {ext_ctx}]\n{}", probe.prompt))
+            rt.chat
+                .format_single_turn(&format!("[External Pointer: {ext_ctx}]\n{}", probe.prompt))
         } else {
             raw_prompt.clone()
         };
@@ -656,6 +661,7 @@ fn run_axis2_ood_selectivity(
         let (_, on_all_ids, _) = generate_steered_reply_with_offset(
             rt.model,
             rt.tokenizer,
+            rt.chat,
             rt.adapter,
             &on_prompt,
             0,
@@ -790,13 +796,14 @@ fn run_axis3_repulsion_polarity(
     }
 
     // (ii) Behavioral forbidden-token Delta log P and sem_forb across novel repulsion probes.
-    rt.adapter.set_layer_rope_mask(DEFAULT_LAYER_STEER_MASK);
+    rt.adapter.set_layer_rope_mask(rt.active_layer_mask);
     rt.adapter.reset_horizon_and_core_state();
     rt.adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
     rt.adapter.reanchor_compute_pressure(8192);
     rt.adapter.set_ego_max_hops(cli.ego_max_hops);
     apply_ego_mode(rt.adapter, &cli.ego_mode);
 
+    let layer_mask_override = cli.resolve_layer_mask_override(rt.cfg.num_hidden_layers);
     let kv_policy = AdaptiveThresholdPolicy::default();
     let mut kv_cache = StandardPhaseKvGopCache::new();
 
@@ -838,20 +845,22 @@ fn run_axis3_repulsion_polarity(
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,
                 persona_bank: rt.active_persona_bank.as_ref(),
-                layer_steer_mask_override: cli.layer_steer_mask_override,
+                layer_steer_mask_override: layer_mask_override,
             },
         )?;
         if plan.is_guard_trap() {
             guard_traps += 1;
         }
         let eff_mask = plan.effective_layer_steer_mask(rt.adapter);
-        let raw_prompt = format_phi4_prompt(&probe.prompt);
+        let raw_prompt = rt.chat.format_single_turn(&probe.prompt);
         let fact_ctx = plan.self_ref_context();
         let ext_ctx = plan.exterior_context();
         let hybrid_prompt = if !fact_ctx.is_empty() {
-            format_phi4_prompt(&format!("[Context: {fact_ctx}]\n{}", probe.prompt))
+            rt.chat
+                .format_single_turn(&format!("[Context: {fact_ctx}]\n{}", probe.prompt))
         } else if plan.is_known_unknown_exterior() && !ext_ctx.is_empty() {
-            format_phi4_prompt(&format!("[External Pointer: {ext_ctx}]\n{}", probe.prompt))
+            rt.chat
+                .format_single_turn(&format!("[External Pointer: {ext_ctx}]\n{}", probe.prompt))
         } else {
             raw_prompt.clone()
         };
@@ -896,6 +905,7 @@ fn run_axis3_repulsion_polarity(
         let (off_reply, _, _, _) = generate_steered_reply(
             rt.model,
             rt.tokenizer,
+            rt.chat,
             rt.adapter,
             &raw_prompt,
             &mut off_cfg,
@@ -940,6 +950,7 @@ fn run_axis3_repulsion_polarity(
         let _ = generate_steered_reply(
             rt.model,
             rt.tokenizer,
+            rt.chat,
             rt.adapter,
             &raw_prompt,
             &mut rope_only_cfg,
@@ -993,6 +1004,7 @@ fn run_axis3_repulsion_polarity(
         let (on_reply, _, _, _) = generate_steered_reply(
             rt.model,
             rt.tokenizer,
+            rt.chat,
             rt.adapter,
             &hybrid_prompt,
             &mut on_cfg,
@@ -1082,13 +1094,14 @@ fn run_axis4_partition_non_conflation(
         "\n--- Axis 4: SelfRef (S & O) vs Exterior (O \\ S) Non-Conflation ({} Probes) ---",
         partition_probes.len()
     );
-    rt.adapter.set_layer_rope_mask(DEFAULT_LAYER_STEER_MASK);
+    rt.adapter.set_layer_rope_mask(rt.active_layer_mask);
     rt.adapter.reset_horizon_and_core_state();
     rt.adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
     rt.adapter.reanchor_compute_pressure(8192);
     rt.adapter.set_ego_max_hops(cli.ego_max_hops);
     apply_ego_mode(rt.adapter, &cli.ego_mode);
 
+    let layer_mask_override = cli.resolve_layer_mask_override(rt.cfg.num_hidden_layers);
     let kv_policy = AdaptiveThresholdPolicy::default();
     let mut kv_cache = StandardPhaseKvGopCache::new();
     let settlements_before = rt.adapter.sandbox_settlements();
@@ -1132,7 +1145,7 @@ fn run_axis4_partition_non_conflation(
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,
                 persona_bank: rt.active_persona_bank.as_ref(),
-                layer_steer_mask_override: cli.layer_steer_mask_override,
+                layer_steer_mask_override: layer_mask_override,
             },
         )?;
 
@@ -1194,7 +1207,7 @@ fn run_axis4_partition_non_conflation(
                 } else {
                     plan.exterior_sandbox_anchors_per_layer()
                 };
-                let prompt = format_phi4_prompt(&probe.prompt);
+                let prompt = rt.chat.format_single_turn(&probe.prompt);
                 let mut dec_cfg = SteerDecodeConfig {
                     q7s: Some(baked.fact_q7.as_slice()),
                     persona_q7s: Some(baked.persona_q7.as_slice()),
@@ -1233,6 +1246,7 @@ fn run_axis4_partition_non_conflation(
                 let _ = generate_steered_reply(
                     rt.model,
                     rt.tokenizer,
+                    rt.chat,
                     rt.adapter,
                     &prompt,
                     &mut dec_cfg,

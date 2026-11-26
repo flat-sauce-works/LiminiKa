@@ -829,8 +829,9 @@ jobs:
           ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
       - name: Install pinned nightly Rust toolchain with Miri
-        uses: dtolnay/rust-toolchain@nightly-2026-11-20
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-11-20
           components: miri, rust-src
 
       - name: Enable Rust caching (Miri)

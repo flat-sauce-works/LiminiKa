@@ -38,8 +38,8 @@ mod physics_eval;
 mod step2;
 
 use bake::{
-    argmax, capture_and_build_shared_corpus, format_phi4_prompt, kl_div, load_fixture,
-    print_runtime_profile, query_nvidia_smi_vram, token_logprob, BakedModelProfile,
+    argmax, capture_and_build_shared_corpus, kl_div, load_fixture, print_runtime_profile,
+    query_nvidia_smi_vram, token_logprob, BakedModelProfile,
 };
 use cli::{EvalCliConfig, EvalRuntime};
 use eval::{
@@ -47,7 +47,8 @@ use eval::{
     HorizonAblationMode,
 };
 use model::{
-    ForwardSteer, KvCacheMode, LogitsFetchMode, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors,
+    CausalLmModel, ChatTemplate, ChatTemplateArg, ChatTemplateKind, ForwardSteer, KvCacheMode,
+    LogitsFetchMode, ModelConfig, ProbeTrace, ResonantAnchors,
 };
 
 fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
@@ -77,8 +78,36 @@ fn build_persona_bank(
     })
 }
 
+fn resolve_model_dir(repo_root: &Path, cli: &EvalCliConfig) -> Result<PathBuf, String> {
+    let models_root = repo_root.join("models");
+    if !models_root.exists() {
+        std::fs::create_dir_all(&models_root).map_err(|e| e.to_string())?;
+    }
+    let model_dir = match cli.model_path.as_ref() {
+        Some(p) if p.is_absolute() || p.exists() => p.clone(),
+        Some(p) => repo_root.join(p),
+        None => models_root.join("Phi-4-mini-instruct"),
+    };
+    if !model_dir.is_dir() {
+        return Err(format!(
+            "model directory '{}' not found (base '{}' is ready; place model weights there)",
+            model_dir.display(),
+            models_root.display()
+        ));
+    }
+    Ok(model_dir)
+}
+
+fn resolve_tokenizer_path(repo_root: &Path, model_dir: &Path, cli: &EvalCliConfig) -> PathBuf {
+    match cli.tokenizer_path.as_ref() {
+        Some(p) if p.is_absolute() || p.exists() => p.clone(),
+        Some(p) => repo_root.join(p),
+        None => model_dir.join("tokenizer.json"),
+    }
+}
+
 fn configure_trial_adapter(
-    cfg: &Phi3Config,
+    cfg: &ModelConfig,
     cli: &EvalCliConfig,
 ) -> Result<ModelSteeringAdapter, Box<dyn std::error::Error>> {
     let mut adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
@@ -92,8 +121,9 @@ fn calibrate_trial_adapter(
     adapter: &mut ModelSteeringAdapter,
     baked: &BakedModelProfile,
     base_entropies: &[f32],
+    layer_mask: u64,
 ) -> Result<liminika_core::runtime::ManifoldProbeBaseline, Box<dyn std::error::Error>> {
-    adapter.set_layer_rope_mask(0xFFFF_0000);
+    adapter.set_layer_rope_mask(layer_mask);
     let pos_slices: Vec<&[f32]> = baked
         .attractive_centroid_per_layer
         .iter()
@@ -126,24 +156,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         suite.probes.len()
     );
 
-    let models_root = repo_root.join("models");
-    if !models_root.exists() {
-        std::fs::create_dir_all(&models_root)?;
-    }
-    let model_dir = models_root.join("Phi-4-mini-instruct");
-    if !model_dir.is_dir() {
-        return Err(format!(
-            "model directory '{}' not found (base '{}' is ready; place Phi-4-mini-instruct weights there)",
-            model_dir.display(),
-            models_root.display()
-        )
-        .into());
-    }
-
-    let cfg: Phi3Config =
-        serde_json::from_str(&std::fs::read_to_string(model_dir.join("config.json"))?)?;
-    let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
-        .map_err(|e| format!("tokenizer load error: {e}"))?;
+    let model_dir = resolve_model_dir(&repo_root, &cli)?;
+    let cfg = ModelConfig::load_from_dir(&model_dir, cli.model_arch)?;
+    let tokenizer_path = resolve_tokenizer_path(&repo_root, &model_dir, &cli);
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        .map_err(|e| format!("tokenizer load error ({}): {e}", tokenizer_path.display()))?;
+    let chat_kind = match cli.chat_template {
+        ChatTemplateArg::Auto => ChatTemplateKind::from_arch(cfg.arch),
+        ChatTemplateArg::Phi4 => ChatTemplateKind::Phi4,
+        ChatTemplateArg::Mistral3 => ChatTemplateKind::Mistral3,
+    };
+    let chat = ChatTemplate::new(chat_kind, &cfg, &tokenizer);
+    let active_layer_mask = cli.resolve_layer_mask(cfg.num_hidden_layers);
 
     let mut adapter = configure_trial_adapter(&cfg, &cli)?;
     let recall_only = cli.recall_only;
@@ -172,7 +196,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let vram_before = query_nvidia_smi_vram();
     println!(
-        "LiminiKa Candle Eval (RoPE + Entropy Gate + Rank-1 residual via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (RoPE + Entropy Gate + Rank-1 residual via liminika-adapter) | model={} arch={} chat={} stops={:?} layer_mask=0x{:08X}({}/{}) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        cfg.model_name,
+        cfg.arch.label(),
+        chat.kind.label(),
+        chat.stop_token_ids,
+        active_layer_mask,
+        active_layer_mask.count_ones(),
+        cfg.num_hidden_layers,
         device,
         adapter.geometry().num_layers,
         adapter.geometry().num_q_heads,
@@ -182,9 +213,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let t0 = Instant::now();
-    let mut model = Phi3Model::load(&model_dir, &cfg, &device, quant_mode)?;
+    let mut model = CausalLmModel::load(&model_dir, &cfg, &device, quant_mode)?;
     let load_elapsed = t0.elapsed();
-    println!("Loaded Phi-4-mini-instruct in {:.2?}", load_elapsed);
+    println!("Loaded {} in {:.2?}", cfg.model_name, load_elapsed);
     print_runtime_profile(
         &cfg,
         &adapter,
@@ -194,6 +225,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_elapsed,
         vram_before.as_deref(),
     );
+    if cli.smoke_test {
+        eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+        eval::run_steer_off_smoke_test(&mut model, &tokenizer, &chat, cli.max_tokens)?;
+        return Ok(());
+    }
     if let Some(ref doc_arg) = cli.long_doc_bench {
         let doc_path = if doc_arg.is_absolute() || doc_arg.exists() {
             doc_arg.clone()
@@ -201,13 +237,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             repo_root.join(doc_arg)
         };
         if !recall_only {
-            eval::run_gpu_warmup(&mut model, &tokenizer)?;
+            eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
         }
         long_doc_bench::run_long_doc_benchmark(
             &doc_path,
             cli.prefill_chunk_size,
+            active_layer_mask,
             &mut model,
             &tokenizer,
+            &chat,
             &mut adapter,
         )?;
         return Ok(());
@@ -224,8 +262,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shared = capture_and_build_shared_corpus(
         &mut model,
         &tokenizer,
+        &chat,
         &mut adapter,
         &suite,
+        active_layer_mask,
         recall_only,
         cli.use_base_prior,
     )?;
@@ -280,7 +320,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
         let mut base_entropies: Vec<f32> = Vec::with_capacity(suite.probes.len());
         for (_, prompt, _, _) in &suite.probes {
-            let formatted = format_phi4_prompt(prompt);
+            let formatted = chat.format_single_turn(prompt);
             let ids = tokenizer
                 .encode(formatted.as_str(), false)
                 .map_err(|e| format!("encode error: {e}"))?
@@ -301,7 +341,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             baselines.push(logits);
         }
 
-        let probe_res = calibrate_trial_adapter(&mut adapter, baked, &base_entropies)?;
+        let probe_res =
+            calibrate_trial_adapter(&mut adapter, baked, &base_entropies, active_layer_mask)?;
         println!(
             "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} rank1_rho={:.3}",
             probe_res.probe_epoch,
@@ -315,21 +356,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
 
         if !step2_only && !cli.physics_eval && !cli.equilibrium_bench {
+            let all_mask = cfg.active_layers_mask();
             // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs StigmergicSubstrate.
             // tuple: (label, layer_mask, rope_rad, rank1_scale, use_resonant_slice)
             let configs: [(&str, u64, f32, f32, bool); 6] = [
-                ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false),
-                ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false),
-                ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false),
+                ("Baseline", all_mask, 0.00, 0.00, false),
+                ("RoPE (Top, 0.10)", active_layer_mask, 0.10, 0.00, false),
+                ("Top + GW(Fact)", active_layer_mask, -1.00, 0.00, false),
                 (
-                    "Top16 + GW(Fact+Rank-1 residual)",
-                    0xFFFF_0000,
+                    "Top + GW(Fact+Rank-1 residual)",
+                    active_layer_mask,
                     -1.00,
                     -1.00,
                     false,
                 ),
-                ("Top16 + GW(Resonant)", 0xFFFF_0000, -1.00, -1.00, true),
-                ("Top16 + Substrate", 0xFFFF_0000, -2.00, -1.00, true),
+                ("Top + GW(Resonant)", active_layer_mask, -1.00, -1.00, true),
+                ("Top + Substrate", active_layer_mask, -2.00, -1.00, true),
             ];
 
             println!(
@@ -356,7 +398,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     model.clear_cache();
                     let counts_before = *adapter.substrate_decision_counts();
-                    let formatted = format_phi4_prompt(prompt);
+                    let formatted = chat.format_single_turn(prompt);
                     let ids = tokenizer
                         .encode(formatted.as_str(), false)
                         .map_err(|e| format!("encode error: {e}"))?
@@ -425,7 +467,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut gen_ids = Vec::with_capacity(48);
                     for offset in (ids.len()..).take(48) {
                         let next = argmax(&logits);
-                        if next == 199999 || next == 200020 {
+                        if chat.is_stop_token(next) {
                             break;
                         }
                         gen_ids.push(next);
@@ -528,7 +570,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     dwell.quiescent_dwell_steps,
                 );
                 }
-                if label == "Baseline" || label == "Top16 + Substrate" {
+                if label == "Baseline" || label == "Top + Substrate" {
                     println!("   --- Per-Probe Trace ({label}) ---");
                     for (idx, tr) in probe_traces.iter().enumerate() {
                         if rope_rad <= -1.5 {
@@ -575,17 +617,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
             for &(mode_label, layer_mask, rope_rad, rank1_scale, use_entropy_gate, use_resonant) in
                 &[
-                    (
-                        "Baseline",
-                        0xFFFF_FFFF_u64,
-                        0.00_f32,
-                        0.00_f32,
-                        false,
-                        false,
-                    ),
+                    ("Baseline", all_mask, 0.00_f32, 0.00_f32, false, false),
                     (
                         "Substrate",
-                        0xFFFF_0000_u64,
+                        active_layer_mask,
                         -2.00_f32,
                         -1.00_f32,
                         true,
@@ -602,9 +637,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (turn_name, prompt) in turns {
                     let counts_before = *adapter.substrate_decision_counts();
                     let turn_text = if offset == 0 {
-                        format_phi4_prompt(prompt)
+                        chat.format_single_turn(prompt)
                     } else {
-                        format!("<|end|><|user|>{prompt}<|end|><|assistant|>")
+                        chat.format_followup_turn(prompt)
                     };
                     let ids = tokenizer
                         .encode(turn_text.as_str(), false)
@@ -685,7 +720,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )?;
                         logits = next_out.into_full_logits()?;
                         offset += 1;
-                        if next == 199999 || next == 200020 {
+                        if chat.is_stop_token(next) {
                             break;
                         }
                     }
@@ -714,17 +749,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if !recall_only {
-        eval::run_gpu_warmup(&mut model, &tokenizer)?;
+        eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
     }
 
     if cli.physics_eval {
         model.clear_cache();
         let mut phys_adapter = configure_trial_adapter(&cfg, &cli)?;
         if let Some(ref baked) = baked_opt {
-            calibrate_trial_adapter(&mut phys_adapter, baked, &base_entropies)?;
+            calibrate_trial_adapter(&mut phys_adapter, baked, &base_entropies, active_layer_mask)?;
         }
         let mut phys_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
         let mut rt = EvalRuntime {
+            cfg: &cfg,
+            chat: &chat,
+            active_layer_mask,
             tokenizer: &tokenizer,
             model: &mut model,
             adapter: &mut phys_adapter,
@@ -748,6 +786,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         equilibrium_bench::run_equilibrium_benchmark(
             &cli,
             &cfg,
+            &chat,
+            active_layer_mask,
             baked,
             &compiled,
             &base_entropies,
@@ -771,10 +811,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model.clear_cache();
         let mut trial_adapter = configure_trial_adapter(&cfg, &cli)?;
         if let Some(ref baked) = baked_opt {
-            calibrate_trial_adapter(&mut trial_adapter, baked, &base_entropies)?;
+            calibrate_trial_adapter(
+                &mut trial_adapter,
+                baked,
+                &base_entropies,
+                active_layer_mask,
+            )?;
         }
         let mut trial_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
         let mut rt = EvalRuntime {
+            cfg: &cfg,
+            chat: &chat,
+            active_layer_mask,
             tokenizer: &tokenizer,
             model: &mut model,
             adapter: &mut trial_adapter,

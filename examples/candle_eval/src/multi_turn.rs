@@ -10,14 +10,14 @@ use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
     CompiledTokenCorpus, FrameTransitionMetrics, LacunaBoundaryState, LmnkTimeline,
     ManifoldReflectionEvaluator, ModelSteeringAdapter, PooledSubtitleEncoder, RebakeContext,
-    ReflectionPolicy, ReflectionSelection, RopeGeometry, SourceTextRecord, TimelineResumeOutcome,
+    ReflectionPolicy, ReflectionSelection, SourceTextRecord, TimelineResumeOutcome,
     TimelineStepContext, TurnOrchestrator, TurnPrepareInput,
 };
 use liminika_core::drivers::LiminalEgoPreset;
 use liminika_core::runtime::{AdaptiveThresholdPolicy, StandardPhaseKvGopCache};
 use liminika_core::stigmergy::CognitiveCircuitBankOps;
 
-use crate::bake::{query_nvidia_smi_vram, Phi3TokenEncoder};
+use crate::bake::{query_nvidia_smi_vram, LmTokenEncoder};
 use crate::cli::{EvalCliConfig, EvalRuntime, TrialPassMetrics};
 use crate::eval::{
     apply_ego_mode, count_semantic_forbid_hits, critique_generated_draft,
@@ -35,6 +35,9 @@ pub(crate) fn run_multi_turn_and_step3(
     run_step3: bool,
 ) -> Result<Option<TrialPassMetrics>, Box<dyn std::error::Error>> {
     let tokenizer = rt.tokenizer;
+    let chat = rt.chat;
+    let model_arch_label = rt.cfg.arch.label();
+    let layer_mask_override = cli.resolve_layer_mask_override(rt.cfg.num_hidden_layers);
     let model = &mut *rt.model;
     let adapter = &mut *rt.adapter;
     let baked_opt = rt.baked_opt;
@@ -173,7 +176,7 @@ pub(crate) fn run_multi_turn_and_step3(
                         kv_policy,
                         kv_min_resonance_override: kv_min_res,
                         persona_bank: active_persona_bank.as_ref(),
-                        layer_steer_mask_override: cli.layer_steer_mask_override,
+                        layer_steer_mask_override: layer_mask_override,
                     },
                 )?;
                 let mt_kv_note = mt_kv_stats.record_outcome(
@@ -238,12 +241,11 @@ pub(crate) fn run_multi_turn_and_step3(
                     } else {
                         (*turn_prompt).to_string()
                     };
+                    const MT_SYSTEM_PROMPT: &str = "Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.";
                     let formatted_turn = if turn_start_kv == 0 {
-                        format!(
-                            "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{turn_body}<|end|><|assistant|>"
-                        )
+                        chat.format_first_turn_with_system(MT_SYSTEM_PROMPT, &turn_body)
                     } else {
-                        format!("<|end|><|user|>{turn_body}<|end|><|assistant|>")
+                        chat.format_followup_turn(&turn_body)
                     };
                     let effective_layer_mask = plan.effective_layer_steer_mask(adapter);
                     let mut turn_cfg = SteerDecodeConfig {
@@ -283,6 +285,7 @@ pub(crate) fn run_multi_turn_and_step3(
                         generate_steered_reply_with_offset(
                             model,
                             tokenizer,
+                            chat,
                             adapter,
                             &formatted_turn,
                             turn_start_kv,
@@ -346,11 +349,12 @@ pub(crate) fn run_multi_turn_and_step3(
                                     format!("[Context: {mt_retry_ctx}]\n{cue}\n{turn_prompt}")
                                 };
                                 let retry_prompt = if turn_start_kv == 0 {
-                                    format!(
-                                        "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{retry_body}<|end|><|assistant|>"
+                                    chat.format_first_turn_with_system(
+                                        MT_SYSTEM_PROMPT,
+                                        &retry_body,
                                     )
                                 } else {
-                                    format!("<|end|><|user|>{retry_body}<|end|><|assistant|>")
+                                    chat.format_followup_turn(&retry_body)
                                 };
                                 model.truncate_cache(turn_start_kv)?;
                                 debug_assert_eq!(model.kv_len(), turn_start_kv);
@@ -412,6 +416,7 @@ pub(crate) fn run_multi_turn_and_step3(
                                     generate_steered_reply_with_offset(
                                         model,
                                         tokenizer,
+                                        chat,
                                         adapter,
                                         &retry_prompt,
                                         turn_start_kv,
@@ -661,7 +666,7 @@ pub(crate) fn run_multi_turn_and_step3(
             .join("..")
             .join("..")
             .join("containers");
-        let container_path = containers_dir.join("phi4_session.lmnkc");
+        let container_path = containers_dir.join(format!("{model_arch_label}_session.lmnkc"));
         let mut exported_topo = adapter.export_logical_pframe_topology();
         if exported_topo.is_empty() {
             let mut tmp_ego = ModelSteeringAdapter::new(adapter.geometry().clone())?;
@@ -686,7 +691,7 @@ pub(crate) fn run_multi_turn_and_step3(
         );
 
         let mut same_projector = PooledSubtitleEncoder::new(
-            Phi3TokenEncoder::new(model, tokenizer).with_chat_prompt(true),
+            LmTokenEncoder::new(model, tokenizer, chat).with_chat_prompt(true),
             adapter.geometry().q_rot_len(),
             adapter.geometry().q_rot_len(),
         );
@@ -709,13 +714,17 @@ pub(crate) fn run_multi_turn_and_step3(
             );
         }
 
-        let mut alt_geom = RopeGeometry::phi4_mini();
-        alt_geom.head_dim = 128;
-        alt_geom.rotary_dim = 128;
+        let mut alt_geom = adapter.geometry().clone();
+        if alt_geom.rotary_dim == 128 {
+            alt_geom.rotary_dim = 96;
+        } else {
+            alt_geom.head_dim = 128;
+            alt_geom.rotary_dim = 128;
+        }
         let mut alt_adapter = ModelSteeringAdapter::new(alt_geom)?;
         alt_adapter.set_ego_max_hops(ego_max_hops);
         let mut alt_projector = PooledSubtitleEncoder::new(
-            Phi3TokenEncoder::new(model, tokenizer).with_chat_prompt(true),
+            LmTokenEncoder::new(model, tokenizer, chat).with_chat_prompt(true),
             adapter.geometry().q_rot_len(),
             alt_adapter.geometry().q_rot_len(),
         );
@@ -736,7 +745,7 @@ pub(crate) fn run_multi_turn_and_step3(
         } = reloaded.resume_or_rebake(&alt_ctx, &mut alt_projector, 2)?
         {
             alt_adapter.bake_logical_pframe_topology(rebaked_tl.logical_pframe_topology());
-            let rebaked_path = containers_dir.join("phi4_rebaked_alt.lmnkc");
+            let rebaked_path = containers_dir.join(format!("{model_arch_label}_rebaked_alt.lmnkc"));
             let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
             println!(
                 "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | pframe_nodes=0x{:02X} (hops={}) | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
