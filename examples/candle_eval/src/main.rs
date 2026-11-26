@@ -30,6 +30,7 @@ mod bake;
 mod cli;
 mod equilibrium_bench;
 mod eval;
+mod extended_eval;
 mod long_doc_bench;
 mod metrics;
 mod model;
@@ -51,7 +52,7 @@ use model::{
     LogitsFetchMode, ModelConfig, ProbeTrace, ResonantAnchors,
 };
 
-fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
+pub(crate) fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
     match cli.fixture_path.as_ref() {
         Some(p) if p.is_absolute() || p.exists() => p.clone(),
         Some(p) => repo_root.join(p),
@@ -59,7 +60,7 @@ fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
     }
 }
 
-fn build_persona_bank(
+pub(crate) fn build_persona_bank(
     circuit_mode: CircuitProfileMode,
     active_persona_circuit: Option<CognitiveTrajectoryLedger>,
 ) -> Option<StandardCognitiveBank> {
@@ -106,7 +107,7 @@ fn resolve_tokenizer_path(repo_root: &Path, model_dir: &Path, cli: &EvalCliConfi
     }
 }
 
-fn configure_trial_adapter(
+pub(crate) fn configure_trial_adapter(
     cfg: &ModelConfig,
     cli: &EvalCliConfig,
 ) -> Result<ModelSteeringAdapter, Box<dyn std::error::Error>> {
@@ -117,7 +118,7 @@ fn configure_trial_adapter(
     Ok(adapter)
 }
 
-fn calibrate_trial_adapter(
+pub(crate) fn calibrate_trial_adapter(
     adapter: &mut ModelSteeringAdapter,
     baked: &BakedModelProfile,
     base_entropies: &[f32],
@@ -251,6 +252,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let active_persona_circuit = resolve_persona_circuit(circuit_mode, persona_lmnk_in.as_deref());
+    if cli.extended_eval || cli.ja_eval {
+        if !recall_only {
+            eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+        }
+        extended_eval::run_extended_suites(
+            &cli,
+            &repo_root,
+            &cfg,
+            &chat,
+            active_layer_mask,
+            &mut model,
+            &tokenizer,
+            active_persona_circuit,
+            circuit_mode,
+        )?;
+        return Ok(());
+    }
     let init_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
     if let Some(ref bank) = init_persona_bank {
         let cons = bank.to_consolidated_ledger();

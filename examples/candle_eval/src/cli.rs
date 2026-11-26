@@ -53,6 +53,8 @@ pub(crate) struct EvalCliConfig {
     pub(crate) long_doc_bench: Option<PathBuf>,
     pub(crate) equilibrium_bench: bool,
     pub(crate) physics_eval: bool,
+    pub(crate) extended_eval: bool,
+    pub(crate) ja_eval: bool,
     pub(crate) kv_min_res: Option<lmnk_q7_t>,
     pub(crate) circuit_mode: CircuitProfileMode,
     pub(crate) ego_mode: EgoProfileMode,
@@ -142,6 +144,12 @@ pub(crate) fn print_help() {
         "  --physics-eval                     Run the 4-axis deterministic steering-physics evaluation suite in a single model load"
     );
     println!(
+        "  --extended-eval                    Run extended English boundary (54) and guard (24) probes in an isolated state"
+    );
+    println!(
+        "  --ja-eval                          Run fictional Japanese multilingual corpus and 28-probe suite in an isolated state"
+    );
+    println!(
         "  --kv-min-res=<i8>                  Override RAM Phase-KV minimum resonance Q7 threshold"
     );
     println!("  --circuit=<analytical|integrative|hybrid[:N]>");
@@ -187,6 +195,8 @@ pub(crate) fn find_unrecognized_args<'a>(args: impl IntoIterator<Item = &'a str>
         "--random-push-control",
         "--equilibrium-bench",
         "--physics-eval",
+        "--extended-eval",
+        "--ja-eval",
     ];
     const PREFIX_FLAGS: &[&str] = &[
         "--model=",
@@ -264,6 +274,8 @@ impl EvalCliConfig {
         let long_doc_bench = parse_long_doc_bench_path(cli_args.iter().map(String::as_str));
         let equilibrium_bench = cli_args.iter().any(|a| a == "--equilibrium-bench");
         let physics_eval = cli_args.iter().any(|a| a == "--physics-eval");
+        let extended_eval = cli_args.iter().any(|a| a == "--extended-eval");
+        let ja_eval = cli_args.iter().any(|a| a == "--ja-eval");
         let kv_min_res = parse_kv_min_res(cli_args.iter().map(String::as_str));
         let circuit_mode = parse_circuit_mode(cli_args.iter().map(String::as_str));
         let ego_mode = parse_ego_mode(cli_args.iter().map(String::as_str));
@@ -317,6 +329,8 @@ impl EvalCliConfig {
             long_doc_bench,
             equilibrium_bench,
             physics_eval,
+            extended_eval,
+            ja_eval,
             kv_min_res,
             circuit_mode,
             ego_mode,
@@ -964,6 +978,8 @@ mod tests {
             "--prefill-chunk-size=128".to_string(),
             "--long-doc-bench=docs/paper/en/GCSO.md".to_string(),
             "--physics-eval".to_string(),
+            "--extended-eval".to_string(),
+            "--ja-eval".to_string(),
         ];
         assert!(find_unrecognized_args(args.iter().skip(1).map(String::as_str)).is_empty());
         let parsed = EvalCliConfig::parse_from_args(&args);
@@ -979,6 +995,8 @@ mod tests {
             Some(PathBuf::from("docs/paper/en/GCSO.md"))
         );
         assert!(parsed.physics_eval);
+        assert!(parsed.extended_eval);
+        assert!(parsed.ja_eval);
         assert_eq!(
             parsed.fixture_path,
             Some(PathBuf::from("tests/fixtures/custom.txt"))
@@ -1014,6 +1032,8 @@ mod tests {
         assert!(!defaults.random_push_control);
         assert_eq!(defaults.max_tokens, 64);
         assert!(!defaults.physics_eval);
+        assert!(!defaults.extended_eval);
+        assert!(!defaults.ja_eval);
 
         assert!(find_unrecognized_args(["--no-base-prior", "--base-prior"]).is_empty());
         let no_prior = EvalCliConfig::parse_from_args(&[

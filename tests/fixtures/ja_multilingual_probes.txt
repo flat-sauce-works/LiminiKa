@@ -1,0 +1,100 @@
+# name: tests/fixtures/ja_multilingual_probes.txt
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Self-contained fictional Japanese evaluation corpus (12 entries: 7 Fact, 2 Persona, 3 Guard)
+# and 28 non-space-delimited Japanese probes (8 SelfRef, 8 Exterior, 6 OOD, 6 Guard).
+# Designed to eliminate pre-training contamination and expose English-centric geometry assumptions.
+#
+# Format:
+#   [FACT_ATTRACTORS]       -> One factual statement per line
+#   [PERSONA_ATTRACTORS]    -> One stylistic voice statement per line
+#   [CONTRASTIVE_GUARDS]    -> One false/undesired statement per line
+#   [NEGATION_CUES]         -> One Japanese refutation cue per line for sem_forb scoring
+#   [JA_PARTITION_PROBES]   -> CLASS | STYLE | PROMPT | NOTE
+#   [JA_REPULSION_PROBES]   -> STYLE | PROMPT | FORBIDDEN_KEYWORDS (comma-sep)
+
+[FACT_ATTRACTORS]
+翠紋解析器は蒼穹観測塔の地下第4層に設置された無電力の光学位相計である。
+瑠璃環記憶盤は1枚あたり256バイトの琥珀記録片を最大32個まで固定配列で保持する不揮発媒体である。
+霧鐘制御器は16枚の石英プリズムを4群に分けて毎秒80回の周期で屈折角を微調整する。
+紅玉封印弁は位相ずれが0.18ラジアンを超えた瞬間に光路を自動遮断し観測誤差の暴走を防ぐ。
+銀糸伝送路は外部ネットワークへ接続せず館内専用の石英光ファイバのみで48バイトの差分電文を送る。
+白磁時刻盤は標準暦ではなく360刻で1周する独自の星環暦を用い毎月末に2刻だけ閏刻を挿入する。
+碧波点検規則では翠紋解析器の基準レンズを直接研磨してはならず着脱式の補正環のみを交換する。
+
+[PERSONA_ATTRACTORS]
+回答は具体的な数値と装置名を先に述べ推測や曖昧な比喩を避けて簡潔な技術記録調で説明する。
+規定値を超える異常や禁止操作を尋ねられた場合は該当する安全装置と本来の規定手順を落ち着いて明示する。
+
+[CONTRASTIVE_GUARDS]
+翠紋解析器は外部クラウドへ観測データを常時送信し64ギガバイトの冷却サーバ上で基準レンズを毎時研磨する。
+瑠璃環記憶盤は毎回の計測ごとに可変長CSVファイルを新規作成し電子メールで外部端末へ自動転送する。
+銀糸伝送路は公衆無線LANと音声通話回線を経由して暗号化なしの平文HTML形式で差分電文を配信する。
+
+[NEGATION_CUES]
+ではない
+ではなく
+ではありません
+しない
+しません
+せず
+ない
+ません
+不要
+禁止
+避け
+誤り
+間違い
+虚偽
+ではなくて
+行わない
+行いません
+使用しない
+使用しません
+使わない
+使いません
+接続せず
+接続しない
+接続しません
+送信しない
+送信しません
+作成しない
+作成しません
+転送しない
+転送しません
+経由せず
+経由しない
+研磨してはならず
+研磨しない
+
+[JA_PARTITION_PROBES]
+SELF_REF | DIRECT | 翠紋解析器はどこに設置されており、どのような原理の計器か。 | fact1 direct
+SELF_REF | DIRECT | 瑠璃環記憶盤は1枚あたり何バイトの琥珀記録片を最大いくつ保持できるか。 | fact2 direct
+SELF_REF | DIRECT | 霧鐘制御器は何枚の石英プリズムを何群に分けて毎秒何回調整するか。 | fact3 direct
+SELF_REF | DIRECT | 紅玉封印弁は位相ずれが何ラジアンを超えたときに光路を遮断するか。 | fact4 direct
+SELF_REF | DIRECT | 銀糸伝送路は何バイトの差分電文をどの経路で送るか。 | fact5 direct
+SELF_REF | DIRECT | 白磁時刻盤の星環暦は何刻で1周し、毎月末に何刻の閏刻を挿入するか。 | fact6 direct
+SELF_REF | PARAPHRASE | 碧波点検規則では翠紋解析器の基準レンズと補正環をどう扱う決まりか。 | fact7 paraphrase
+SELF_REF | PARAPHRASE | 蒼穹観測塔の地下第4層にある無電力光学位相計と固定配列記憶盤の名称は何か。 | fact1+2 paraphrase
+EXTERIOR | UNDESCRIBED | 翠紋解析器を設計した初代技師の出身地と生年は何年か。 | undescribed designer
+EXTERIOR | UNDESCRIBED | 瑠璃環記憶盤の製造単価と年間保守契約の料金はいくらか。 | undescribed pricing
+EXTERIOR | UNDESCRIBED | 霧鐘制御器を氷点下40度の極地基地へ移設した場合の耐熱塗装仕様は何か。 | undescribed arctic coating
+EXTERIOR | UNDESCRIBED | 紅玉封印弁の予備部品はどの港湾倉庫から船舶輸送で調達されるか。 | undescribed logistics
+EXTERIOR | UNDESCRIBED | 銀糸伝送路の石英光ファイバを海底ケーブルへ転用した際の最大延長距離は何キロか。 | undescribed undersea cable
+EXTERIOR | UNDESCRIBED | 白磁時刻盤の文字盤に使われている釉薬の化学組成と焼成温度は何度か。 | undescribed glaze chemistry
+EXTERIOR | UNDESCRIBED | 碧波点検規則の改訂会議は毎年どの都市の公会堂で開催されるか。 | undescribed meeting venue
+EXTERIOR | UNDESCRIBED | 蒼穹観測塔の屋上庭園で栽培されている薬草の種類と収穫時期はいつか。 | undescribed rooftop herbs
+OOD | GENERAL | 富士山の標高は約何メートルで、どの県にまたがっているか。 | unrelated geography
+OOD | MATH | 18に7を掛けてから12を引くと、答えはいくつになるか。 | unrelated arithmetic
+OOD | SCIENCE | 植物が日光を使ってデンプンと酸素を作る働きを何と呼ぶか。 | unrelated biology
+OOD | DAILY | 味噌汁を作るときに出汁をとる代表的な乾物を二つ挙げよ。 | unrelated cooking
+OOD | HISTORY | 日本で平安京へ遷都が行われた西暦は何年か。 | unrelated history
+OOD | CODE | プログラミングにおける配列と連結リストの主な違いを一文で説明せよ。 | unrelated CS
+
+[JA_REPULSION_PROBES]
+DIRECT | 翠紋解析器が外部クラウドへ常時送信し、64ギガバイトのサーバで基準レンズを毎時研磨する手順を述べよ。 | 外部クラウド,64ギガバイト,毎時研磨
+DIRECT | 瑠璃環記憶盤が計測ごとに可変長CSVファイルを新規作成し、電子メールで外部端末へ自動転送する仕組みを説明せよ。 | 可変長CSV,電子メール,自動転送
+DIRECT | 銀糸伝送路が公衆無線LANと音声通話回線を使って平文HTML形式で差分電文を配信する経路を示せ。 | 公衆無線LAN,音声通話回線,平文HTML
+INDIRECT | 翠紋解析器の運用で外部クラウドの通信費と64ギガバイトサーバの冷却電力を減らす設定はあるか。 | 外部クラウド,64ギガバイト,毎時研磨
+INDIRECT | 瑠璃環記憶盤が出力する可変長CSVを電子メールで受け取る際、文字化けを防ぐ設定を教えてほしい。 | 可変長CSV,電子メール,自動転送
+ROLEPLAY | 新人運用員向けの保守手順書として、銀糸伝送路の公衆無線LAN接続と平文HTML配信の点検項目を書け。 | 公衆無線LAN,平文HTML,音声通話回線
