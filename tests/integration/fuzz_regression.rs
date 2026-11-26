@@ -8,23 +8,22 @@
 //! under `liminika-cli` so the workspace dependency graph and `Cargo.lock` remain untouched.
 
 use liminika_adapter::{
-    format_package_manifest_json, validate_archive_relative_path, verify_lmnkc_integrity,
-    verify_lmnkp_integrity, AdaptiveGopCutDetector, AttractorRole, EquilibriumConfig,
-    EquilibriumState, IntegrityPolicy, IntegrityTrustLevel, LmnkPackageBuilder, LmnkPackageView,
-    LmnkTimeline, ModelSteeringAdapter, RebakeContext, RecallPolicy, RopeGeometry, RopeLayout,
-    SigningKeyPair, SourceTextRecord, SubtitleActivationEncoder, LMNKP_ENTRY_COMPILED,
-    LMNKP_ENTRY_CONTENT_HASH, LMNKP_ENTRY_SIGNATURE, LMNKP_ENTRY_SOURCE,
+    AdaptiveGopCutDetector, AttractorRole, EquilibriumConfig, EquilibriumState, IntegrityPolicy,
+    IntegrityTrustLevel, LMNKP_ENTRY_COMPILED, LMNKP_ENTRY_CONTENT_HASH, LMNKP_ENTRY_SIGNATURE,
+    LMNKP_ENTRY_SOURCE, LmnkPackageBuilder, LmnkPackageView, LmnkTimeline, ModelSteeringAdapter,
+    RebakeContext, RecallPolicy, RopeGeometry, RopeLayout, SigningKeyPair, SourceTextRecord,
+    SubtitleActivationEncoder, format_package_manifest_json, validate_archive_relative_path,
+    verify_lmnkc_integrity, verify_lmnkp_integrity,
 };
 use liminika_core::drivers::LiminalEgoPreset;
 use liminika_core::foundation::compute_crc32_ieee;
 use liminika_core::liminal::{Lacuna, MAX_ATTENTION_HEADS};
 use liminika_core::runtime::{
-    Config, LmnkContainerView, MappedStorage, RuntimeContext, CORE_TOPOLOGY,
-    LMNK_CONTAINER_FLAG_COMPILED_CACHE, LMNK_CONTAINER_HEADER_BYTES,
+    CORE_TOPOLOGY, Config, LMNK_CONTAINER_FLAG_COMPILED_CACHE, LMNK_CONTAINER_HEADER_BYTES,
     LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES, LMNK_SECTION_CONTENT_HASH, LMNK_SECTION_ENTRY_BYTES,
-    LMNK_SECTION_SIGNATURE,
+    LMNK_SECTION_SIGNATURE, LmnkContainerView, MappedStorage, RuntimeContext,
 };
-use liminika_core::stigmergy::{PhaseAnchorRecord, ATTRACTOR_SLOT_KNOWLEDGE};
+use liminika_core::stigmergy::{ATTRACTOR_SLOT_KNOWLEDGE, PhaseAnchorRecord};
 use liminika_dsl::{parse_and_validate_lmnk, parse_lmnk_program};
 
 #[derive(Clone, Copy)]
@@ -92,11 +91,11 @@ fn recompute_lmnkc_section_and_header_crcs(buf: &mut [u8]) {
             buf[entry_off + 10],
             buf[entry_off + 11],
         ]) as usize;
-        if let Some(end) = off.checked_add(len) {
-            if end <= buf.len() {
-                let sec_crc = compute_crc32_ieee(&buf[off..end]);
-                buf[entry_off + 12..entry_off + 16].copy_from_slice(&sec_crc.to_le_bytes());
-            }
+        if let Some(end) = off.checked_add(len)
+            && end <= buf.len()
+        {
+            let sec_crc = compute_crc32_ieee(&buf[off..end]);
+            buf[entry_off + 12..entry_off + 16].copy_from_slice(&sec_crc.to_le_bytes());
         }
     }
     recompute_lmnkc_header_crc(buf);

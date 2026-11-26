@@ -12,15 +12,15 @@ use core::arch::x86_64::{
 
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
 use crate::foundation::pod::{
-    raw_byte_ranges_overlap, validate_raw_slice_bounds, Rank1Descriptor, TaggedPtr,
-    ACTION_MODE_RANK1_INJECT,
+    ACTION_MODE_RANK1_INJECT, Rank1Descriptor, TaggedPtr, raw_byte_ranges_overlap,
+    validate_raw_slice_bounds,
 };
 use crate::foundation::rope::kernels::ptr_has_action_mode;
 use crate::foundation::scalar_math::{branchless_flush_subnormal_f32, branchless_is_finite_f32};
 use crate::foundation::simd_stats::dot_f32_unrolled4;
 use crate::liminal::{
-    LmnkResult, LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
-    LMNK_ERR_NULL_POINTER,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
+    LMNK_ERR_NULL_POINTER, LmnkResult,
 };
 
 // ===================================================================
@@ -342,10 +342,10 @@ pub fn eval_rank1_slices(
     {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-    if let Some(g) = gain_vec {
-        if g.len() < d_out {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+    if let Some(g) = gain_vec
+        && g.len() < d_out
+    {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let dot_vx = dot_f32_unrolled4(v_vec.as_slice(), x_in.as_slice(), d_in);
@@ -387,10 +387,10 @@ pub fn eval_rank1_slices_fused(
     {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-    if let Some(g) = gain_vec {
-        if g.len() < d_out {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
+    if let Some(g) = gain_vec
+        && g.len() < d_out
+    {
+        return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
 
     let dot_vx = dot_f32_unrolled4(v_vec.as_slice(), x_in.as_slice(), d_in);

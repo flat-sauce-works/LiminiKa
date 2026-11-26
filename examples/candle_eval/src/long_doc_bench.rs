@@ -8,13 +8,13 @@ use std::path::Path;
 use std::time::Instant;
 
 use liminika_adapter::{
-    split_raw_document_chunks, AnchorPagerConfig, AttractorRole, ModelSteeringAdapter,
-    PagerStepQuery, StreamingCorpusDistiller, StreamingDistillConfig,
+    AnchorPagerConfig, AttractorRole, ModelSteeringAdapter, PagerStepQuery,
+    StreamingCorpusDistiller, StreamingDistillConfig, split_raw_document_chunks,
 };
 use liminika_core::liminal::evaluate_lacuna_partition_branchless;
 use tokenizers::Tokenizer;
 
-use crate::bake::{argmax, query_nvidia_smi_vram, LmTokenEncoder};
+use crate::bake::{LmTokenEncoder, argmax, query_nvidia_smi_vram};
 use crate::metrics::kl_divergence_and_max_abs_delta;
 use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode};
 

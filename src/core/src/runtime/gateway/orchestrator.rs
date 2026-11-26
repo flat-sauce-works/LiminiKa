@@ -7,38 +7,37 @@
 use super::*;
 use crate::drivers::{DistortionTension, EgoDifferentialNet, SystemSpineState};
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_max_f32, branchless_min_f32, branchless_relu_f32,
-    dispatch_fused_phase_clamp_and_subhead_words_core,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE,
+    ATTRACTOR_SLOT_ID_MASK, AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, PhaseSteering, RawPhaseProjectable, RopePairLayout,
+    RopeSteeringTarget, SWAR_SPLAT_BYTE_64, TaggedPtr, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_relu_f32, dispatch_fused_phase_clamp_and_subhead_words_core,
     rotate_fused_self_phase_clamp_and_subhead_default_words,
     rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words, scale_f32_slice_unrolled8,
     steer_from_swar_words_core_safe, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
     swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_phase_step_filter_words_64, swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64,
-    AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32, PhaseSteering,
-    RawPhaseProjectable, RopePairLayout, RopeSteeringTarget, TaggedPtr, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, SWAR_SPLAT_BYTE_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, LacunaPartition8, LmnkResult, PhaseQ7, Scoped,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, LmnkResult, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES, PhaseQ7, Scoped, branchless_select_u8, branchless_select_u32,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
-    swar_mean_u8_le128_x8, trail_phase_words_mut, trail_phase_words_ref,
-    validate_optional_qk_tensors, CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp,
-    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LedgerSlot, OverlapDiscoveryReport,
-    PhaseAnchorRecord, PhaseDeltaSlice, PhaseSteeringActiveExt, PointerTrail,
-    ResidualAdapterEngine, ResidualScale, StigmergicActionDecision, StigmergicReconstitutionReport,
-    StigmergicScaleGranularity, StigmergicSubstrateOps, StigmergicThresholds,
-    LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
+    CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
+    ContrastivePhaseBloomFilter, LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_METRIC_FAST_PATH_HIT,
     LEDGER_METRIC_LAYER_SKIP_COMPENSATED, LEDGER_METRIC_PHASE_STEERED,
     LEDGER_METRIC_RANK1_INJECTED, LEDGER_METRIC_REPULSION_APPLIED,
-    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
-    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHEROMONE_RISING, TRAIL_FLAG_REPULSION_ACTIVE,
+    LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LedgerSlot, MAX_ATTRACTOR_PULL_FORCE,
+    MAX_STIGMERGIC_DENSITY, OverlapDiscoveryReport, PhaseAnchorRecord, PhaseDeltaSlice,
+    PhaseSteeringActiveExt, PointerTrail, ResidualAdapterEngine, ResidualScale,
+    StigmergicActionDecision, StigmergicReconstitutionReport, StigmergicScaleGranularity,
+    StigmergicSubstrateOps, StigmergicThresholds, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
+    TRAIL_FLAG_PHEROMONE_RISING, TRAIL_FLAG_REPULSION_ACTIVE, swar_mean_u8_le128_x8,
+    trail_phase_words_mut, trail_phase_words_ref, validate_optional_qk_tensors,
 };
 
 /// Shape and damping parameters for [`accumulate_trail_and_steer_gateway_words_core`].
@@ -231,10 +230,10 @@ pub(crate) fn accumulate_trail_and_steer_gateway_words_core(
         }
     }
 
-    if let Some(logits) = logits_opt {
-        if !logits.is_empty() {
-            scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
-        }
+    if let Some(logits) = logits_opt
+        && !logits.is_empty()
+    {
+        scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
     }
 
     Ok((layer_skipped, steered, subhead_routed))
@@ -302,54 +301,54 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
     signal: &S,
     core_ctx: Option<CoreLayerEvalContext<'_>>,
 ) -> (GatewayFrame, [u64; NUM_STIGMERGIC_GRANULES]) {
-    if let Some(ctx) = core_ctx {
-        if ctx.stack.liminal.adaptation_epochs > 0 || ctx.stack.ego.is_active() {
-            let mut frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
-            if ctx.stack.ego.is_active() {
-                // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoState` and
-                // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
-                // pre-Ego state.
-                let mut sys_baseline = frame;
-                ctx.stack.modulate_gateway_frame_branchless(
-                    &mut sys_baseline,
-                    ctx.horizon,
-                    ctx.overlap,
-                );
-                ctx.stack.modulate_gateway_frame_with_ego_readonly(
-                    ctx.delta,
-                    ctx.horizon,
-                    ctx.overlap,
+    if let Some(ctx) = core_ctx
+        && (ctx.stack.liminal.adaptation_epochs > 0 || ctx.stack.ego.is_active())
+    {
+        let mut frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
+        if ctx.stack.ego.is_active() {
+            // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoState` and
+            // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
+            // pre-Ego state.
+            let mut sys_baseline = frame;
+            ctx.stack.modulate_gateway_frame_branchless(
+                &mut sys_baseline,
+                ctx.horizon,
+                ctx.overlap,
+            );
+            ctx.stack.modulate_gateway_frame_with_ego_readonly(
+                ctx.delta,
+                ctx.horizon,
+                ctx.overlap,
+                &mut frame,
+            );
+            if let (Some(spine), Some(vp), Some(net), Some(tension)) =
+                (ctx.spine, ctx.lacuna_partition, ctx.ego_net, ctx.tension)
+            {
+                let _ = net.evaluate_pframe_chain_branchless(
+                    &ctx.stack.ego,
+                    spine,
+                    vp,
+                    &ctx.stack.stigmergy,
+                    tension,
                     &mut frame,
                 );
-                if let (Some(spine), Some(vp), Some(net), Some(tension)) =
-                    (ctx.spine, ctx.lacuna_partition, ctx.ego_net, ctx.tension)
-                {
-                    let _ = net.evaluate_pframe_chain_branchless(
-                        &ctx.stack.ego,
-                        spine,
-                        vp,
-                        &ctx.stack.stigmergy,
-                        tension,
-                        &mut frame,
-                    );
-                    spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
-                    let w = *frame.phase_words_ref();
-                    return (frame, w);
-                }
-                if let Some(spine) = ctx.spine {
-                    spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
-                    let w = *frame.phase_words_ref();
-                    return (frame, w);
-                }
-            } else {
-                // Non-Ego fast path: modulate in-place without cloning `sys_baseline` or
-                // enforcing pinned isolation when `ego` is inactive.
-                ctx.stack
-                    .modulate_gateway_frame_branchless(&mut frame, ctx.horizon, ctx.overlap);
+                spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+                let w = *frame.phase_words_ref();
+                return (frame, w);
             }
-            let w = *frame.phase_words_ref();
-            return (frame, w);
+            if let Some(spine) = ctx.spine {
+                spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+                let w = *frame.phase_words_ref();
+                return (frame, w);
+            }
+        } else {
+            // Non-Ego fast path: modulate in-place without cloning `sys_baseline` or
+            // enforcing pinned isolation when `ego` is inactive.
+            ctx.stack
+                .modulate_gateway_frame_branchless(&mut frame, ctx.horizon, ctx.overlap);
         }
+        let w = *frame.phase_words_ref();
+        return (frame, w);
     }
     signal.synthesize_gateway_frame_with_words()
 }
@@ -578,10 +577,10 @@ pub trait GatewayPhaseSteeringExt: PhaseSteering {
             }
         }
 
-        if let Some(logits) = logits_opt {
-            if !logits.is_empty() {
-                scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
-            }
+        if let Some(logits) = logits_opt
+            && !logits.is_empty()
+        {
+            scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
         }
         Ok((frame, report))
     }
@@ -751,10 +750,11 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
             }
         }
 
-        if let Some(logits) = logits_opt {
-            if !logits.is_empty() && frame.effective_inv_temp > 0.0 {
-                scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
-            }
+        if let Some(logits) = logits_opt
+            && !logits.is_empty()
+            && frame.effective_inv_temp > 0.0
+        {
+            scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
         }
 
         let _ = self.telemetry_push(ledger_slot, metrics);
@@ -831,28 +831,24 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                         sandbox_granule_mask,
                         standard_granule_mask,
                     );
-                    if granule_mask != 0 {
-                        if let Some((slot_w, weight)) = self.lane_words_and_weight(lane) {
-                            if weight > 0.0 {
-                                let s = branchless_clamp_f32(weight * 64.0, 0.0, 64.0) as u64;
-                                if s != 0 {
-                                    let bias_restore =
-                                        (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
-                                    let mut scaled_w = [0u64; NUM_STIGMERGIC_GRANULES];
-                                    let mut g = 0usize;
-                                    while g < NUM_STIGMERGIC_GRANULES {
-                                        let g_active =
-                                            (((granule_mask >> g) & 1) as u64).wrapping_neg();
-                                        scaled_w[g] = swar_q7_scale_le128_with_bias_x8(
-                                            slot_w[g],
-                                            s,
-                                            bias_restore,
-                                        ) & g_active;
-                                        g += 1;
-                                    }
-                                    swar_or_avx2_q7_add_sat_words_64(&mut frm_w, &scaled_w);
-                                }
+                    if granule_mask != 0
+                        && let Some((slot_w, weight)) = self.lane_words_and_weight(lane)
+                        && weight > 0.0
+                    {
+                        let s = branchless_clamp_f32(weight * 64.0, 0.0, 64.0) as u64;
+                        if s != 0 {
+                            let bias_restore =
+                                (128u64.wrapping_sub(s)).wrapping_mul(SWAR_SPLAT_BYTE_64);
+                            let mut scaled_w = [0u64; NUM_STIGMERGIC_GRANULES];
+                            let mut g = 0usize;
+                            while g < NUM_STIGMERGIC_GRANULES {
+                                let g_active = (((granule_mask >> g) & 1) as u64).wrapping_neg();
+                                scaled_w[g] =
+                                    swar_q7_scale_le128_with_bias_x8(slot_w[g], s, bias_restore)
+                                        & g_active;
+                                g += 1;
                             }
+                            swar_or_avx2_q7_add_sat_words_64(&mut frm_w, &scaled_w);
                         }
                     }
                 }
@@ -1053,18 +1049,17 @@ pub trait SubstrateGatewayExt: StigmergicSubstrateOps {
                 decision,
                 StigmergicActionDecision::FullOrchestration
                     | StigmergicActionDecision::CrystallizeMacroBasin
-            ) {
-                if let Some((y_mut, x_in, u_vec, v_vec)) = rank1_hidden {
-                    let _ =
-                        apply_gateway_frame_rank1_hidden_fused(&frame, y_mut, x_in, u_vec, v_vec)?;
-                    metrics |= LEDGER_METRIC_RANK1_INJECTED;
-                }
+            ) && let Some((y_mut, x_in, u_vec, v_vec)) = rank1_hidden
+            {
+                let _ = apply_gateway_frame_rank1_hidden_fused(&frame, y_mut, x_in, u_vec, v_vec)?;
+                metrics |= LEDGER_METRIC_RANK1_INJECTED;
             }
 
-            if let Some(logits) = logits_opt {
-                if !logits.is_empty() && frame.effective_inv_temp > 0.0 {
-                    scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
-                }
+            if let Some(logits) = logits_opt
+                && !logits.is_empty()
+                && frame.effective_inv_temp > 0.0
+            {
+                scale_f32_slice_unrolled8(logits.as_mut_slice(), frame.effective_inv_temp);
             }
         }
 
@@ -1671,19 +1666,15 @@ impl<T: StigmergicScaleLayer + ?Sized> StigmergicScaleLayer for &T {
 }
 
 impl<
-        A: StigmergicScaleLayer + ObjectiveFactSignal,
-        B: StigmergicScaleLayer + SubjectivePersonaSignal,
-    > StigmergicScaleLayer for (A, B)
+    A: StigmergicScaleLayer + ObjectiveFactSignal,
+    B: StigmergicScaleLayer + SubjectivePersonaSignal,
+> StigmergicScaleLayer for (A, B)
 {
     #[inline(always)]
     fn scale_granularity(&self) -> StigmergicScaleGranularity {
         let ga = self.0.scale_granularity();
         let gb = self.1.scale_granularity();
-        if gb > ga {
-            gb
-        } else {
-            ga
-        }
+        if gb > ga { gb } else { ga }
     }
 
     #[inline(always)]

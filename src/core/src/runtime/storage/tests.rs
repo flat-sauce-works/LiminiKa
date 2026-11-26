@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::*;
-use crate::foundation::{compute_crc32_ieee, AlignedBuffer128, AlignedBuffer64, TaggedPtr};
+use crate::foundation::{AlignedBuffer64, AlignedBuffer128, TaggedPtr, compute_crc32_ieee};
 use crate::liminal::{
     LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
     LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_ERR_VERSION_MISMATCH, MAX_ATTENTION_HEADS,
 };
-use crate::runtime::gateway::{CausalProvenanceReport, CAUSAL_AXIS_SUBJECTIVE_PERSONA};
+use crate::runtime::gateway::{CAUSAL_AXIS_SUBJECTIVE_PERSONA, CausalProvenanceReport};
 use crate::runtime::topology::CORE_TOPOLOGY;
 use crate::stigmergy::{
-    ContrastivePhaseBloomFilter, LedgerSlot, PhaseAnchorRecord, PointerTrail,
-    ATTRACTOR_SLOT_PERSONA,
+    ATTRACTOR_SLOT_PERSONA, ContrastivePhaseBloomFilter, LedgerSlot, PhaseAnchorRecord,
+    PointerTrail,
 };
 
 fn restamp_container_header_crc(buf: &mut [u8]) {

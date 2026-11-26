@@ -5,13 +5,12 @@
 
 use super::PointerTrail;
 use crate::foundation::{
-    branchless_is_finite_f32, branchless_rad_to_phase_step_u8, steer_from_swar_words_core_safe,
-    swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, AlignedSliceMut32, TaggedPtr,
+    AlignedSliceMut32, TaggedPtr, branchless_is_finite_f32, branchless_rad_to_phase_step_u8,
+    steer_from_swar_words_core_safe, swar_q7_phase_step_filter_words_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, BitCut32, LmnkResult, PhaseQ7,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
-    THRESHOLD_STIGMERGY_WIDE,
+    BitCut32, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, THRESHOLD_STIGMERGY_WIDE, branchless_select_u8, branchless_select_u32,
 };
 use crate::stigmergy::ledger::{ContrastivePhaseBloomFilter, FastPathLedger, LedgerSlot};
 use crate::stigmergy::{

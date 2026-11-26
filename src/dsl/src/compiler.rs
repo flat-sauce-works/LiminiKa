@@ -141,13 +141,13 @@ pub fn compile_lmnk_declarations(decls: &[Declaration]) -> Result<CompiledDslPro
                 s.name, s.persona_ref
             ));
         }
-        if let Some(ref target_name) = s.target_ref {
-            if !targets.iter().any(|t| &t.name == target_name) {
-                return Err(format!(
-                    "session '{}' references undeclared target '{}'",
-                    s.name, target_name
-                ));
-            }
+        if let Some(ref target_name) = s.target_ref
+            && !targets.iter().any(|t| &t.name == target_name)
+        {
+            return Err(format!(
+                "session '{}' references undeclared target '{}'",
+                s.name, target_name
+            ));
         }
     }
 

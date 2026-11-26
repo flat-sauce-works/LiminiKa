@@ -23,44 +23,44 @@ use core::ptr;
 use core::slice;
 
 use crate::drivers::{
-    eval_barrier_pitchfork, EgoDifferentialNet, LiminalEgoPreset, MAX_DISTORTION_CHAIN_HOPS,
-    MAX_EGO_PFRAME_NODES,
+    EgoDifferentialNet, LiminalEgoPreset, MAX_DISTORTION_CHAIN_HOPS, MAX_EGO_PFRAME_NODES,
+    eval_barrier_pitchfork,
 };
 use crate::foundation::{
-    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_min_f32, branchless_project_f32_slice_to_q7_64,
-    branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
-    branchless_sqrt_f32, dispatch_single_pass, eval_rank1, eval_rank1_fused, is_ptr_aligned_to,
-    load_q7_words_64, pack_action_slot_tag, project_bytes_swar_to_words_64,
-    project_f32_slice_to_q7_64, project_f32_slice_to_words_64, project_lora,
-    raw_byte_ranges_overlap, steer_from_swar_words_core_safe, store_q7_words_64, sum_sq_f32_simd8,
-    swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, validate_raw_slice_bounds, AlignedSlice16, AlignedSlice32,
-    AlignedSliceMut16, AlignedSliceMut32, DisjointMutPair, DisjointRefMut, PhaseSteering,
-    PhaseSteeringGeometryExt, RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    PAGED_BITMASK_BITS,
+    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, AlignedSlice16, AlignedSlice32,
+    AlignedSliceMut16, AlignedSliceMut32, DEFAULT_PHASE_CLAMP_MAX_RAD, DisjointMutPair,
+    DisjointRefMut, PAGED_BITMASK_BITS, PhaseSteering, PhaseSteeringGeometryExt,
+    RawPhaseProjectable, RopeGeometryDescriptor, RopePairLayout, branchless_atan2_to_q7_fast,
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_min_f32, branchless_project_f32_slice_to_q7_64, branchless_rad_to_phase_step_u8,
+    branchless_relu_f32, branchless_splitmix64, branchless_sqrt_f32, dispatch_single_pass,
+    eval_rank1, eval_rank1_fused, is_ptr_aligned_to, load_q7_words_64, pack_action_slot_tag,
+    project_bytes_swar_to_words_64, project_f32_slice_to_q7_64, project_f32_slice_to_words_64,
+    project_lora, raw_byte_ranges_overlap, steer_from_swar_words_core_safe, store_q7_words_64,
+    sum_sq_f32_simd8, swar_q7_phase_step_filter_words_64, swar_words_nonzero_64,
+    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, validate_raw_slice_bounds,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8,
-    evaluate_lacuna_partition_branchless, LmnkResult, MAX_ATTENTION_HEADS,
+    LmnkResult, MAX_ATTENTION_HEADS, branchless_select_f32, branchless_select_u8,
+    branchless_select_u32, evaluate_lacuna_partition_branchless,
 };
 use crate::runtime::context::{
-    init_default_config, query_capability, validate_config_invariants, Config, RuntimeContext,
-    CTX_ALLOC_HEAP_BOXED, CTX_ALLOC_IN_PLACE,
+    CTX_ALLOC_HEAP_BOXED, CTX_ALLOC_IN_PLACE, Config, RuntimeContext, init_default_config,
+    query_capability, validate_config_invariants,
 };
 use crate::runtime::gateway::{
-    accumulate_trail_and_steer_gateway_words_core,
-    synthesize_multi_origin_gateway_frame_with_words, CausalProvenanceSignal,
-    CognitiveGroundingSignal, ContradictionGuard, ContradictionGuardSignal, ObjectiveFact,
-    SubjectivePersona, SystemConstraint, CAUSAL_AXIS_CONTRADICTION_GUARD,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CausalProvenanceSignal, CognitiveGroundingSignal,
+    ContradictionGuard, ContradictionGuardSignal, ObjectiveFact, SubjectivePersona,
+    SystemConstraint, accumulate_trail_and_steer_gateway_words_core,
+    synthesize_multi_origin_gateway_frame_with_words,
 };
 use crate::runtime::horizon::evaluate_epistemic_horizon_words_64;
 use crate::stigmergy::{
-    evaluate_stigmergic_overlap_and_discovery_words_64, trail_phase_words_mut, FastPathLedger,
-    PhaseSteeringEngine, StigmergicSubstrate, ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE,
-    NUM_STIGMERGIC_GRANULES, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
+    ATTRACTOR_SLOT_REPULSION, FastPathLedger, MAX_ATTRACTOR_PULL_FORCE, NUM_STIGMERGIC_GRANULES,
+    PhaseSteeringEngine, StigmergicSubstrate, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
+    TRAIL_FLAG_SYNERGY_RESONANCE, evaluate_stigmergic_overlap_and_discovery_words_64,
+    trail_phase_words_mut,
 };
 
 /// Helper macro to catch unwinding panics and safely bridge execution into C-ABI status codes.
@@ -116,19 +116,19 @@ mod tests {
     use super::*;
     use crate::foundation::pod::Pod;
     use crate::foundation::{
-        AlignedBuffer128, AlignedBuffer16, AlignedBuffer32, ACTION_PRESET_EXPRESS_PHASE,
-        ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
-        ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE,
+        ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
+        ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, AlignedBuffer16,
+        AlignedBuffer32, AlignedBuffer128,
     };
     use crate::runtime::context::LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES;
     use crate::runtime::storage::{
-        init_container_header, init_descriptor_header, validate_descriptor_header,
-        write_container_sections_to_bytes, LmnkContainerView,
+        LmnkContainerView, init_container_header, init_descriptor_header,
+        validate_descriptor_header, write_container_sections_to_bytes,
     };
     use crate::stigmergy::{
-        StigmergicActionDecision, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-        ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD,
-        DEFAULT_STIGMERGIC_TOLERANCE_Q7, DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE,
+        ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_REPULSION,
+        DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
+        DEFAULT_TOROIDAL_DP_MEANS_SPLIT_COHERENCE, StigmergicActionDecision,
     };
     use core::ffi::CStr;
 
@@ -802,9 +802,11 @@ mod tests {
                 .as_mut_ptr()
                 .cast::<LmnkContextOpaque>();
             assert_eq!(lmnk_context_deinit_in_place(inplace_ctx), LMNK_OK);
-            assert!(inplace_storage.data[..needed_ctx_bytes]
-                .iter()
-                .all(|&b| b == 0));
+            assert!(
+                inplace_storage.data[..needed_ctx_bytes]
+                    .iter()
+                    .all(|&b| b == 0)
+            );
             assert_eq!(
                 lmnk_context_deinit_in_place(inplace_ctx),
                 LMNK_ERR_INVALID_STATE
@@ -1030,7 +1032,7 @@ mod tests {
         let sz = lmnk_context_size();
         let al = lmnk_context_align();
         assert_eq!(al, 64);
-        assert!(sz > 0 && sz <= 8192 && (sz % 64) == 0);
+        assert!(sz > 0 && sz <= 8192 && sz.is_multiple_of(64));
 
         let mut cfg = lmnk_config_t::default();
         let mut backing = AlignedCtxBuf([0u8; 8192]);

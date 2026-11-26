@@ -6,17 +6,17 @@
 use core::f32::consts::{FRAC_PI_2, LN_2, PI};
 
 use crate::foundation::lut_crc32::{
-    sincos_phase_clamp_poly, tanh_lut_eval_nonneg, AlignedLut257, AlignedLut2x257,
-    DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_GRAVITY_EPS, INV_LN2_F32, INV_TWO_PI_F64, LN2_HI_F32,
-    LN2_LO_F32, POPCOUNT_RSQRT_LUT_257_REF, Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF, Q7_FULL_COS_REF,
-    Q7_FULL_SIN_REF, Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF, Q7_SINCOS_LUT_256_REF,
-    TANH_LUT_MAX_X, TWO_PI_F64, VON_MISES_KAPPA_HI_SCALE, VON_MISES_KAPPA_HI_STEP,
-    VON_MISES_KAPPA_LO_SCALE, VON_MISES_KAPPA_LO_STEP, VON_MISES_KAPPA_MAX_R,
-    VON_MISES_KAPPA_SPLIT_R,
+    AlignedLut2x257, AlignedLut257, DEFAULT_MAX_VALID_Z_SCORE, DEFAULT_PHASE_GRAVITY_EPS,
+    INV_LN2_F32, INV_TWO_PI_F64, LN2_HI_F32, LN2_LO_F32, POPCOUNT_RSQRT_LUT_257_REF,
+    Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF, Q7_FULL_COS_REF, Q7_FULL_SIN_REF,
+    Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF, Q7_SINCOS_LUT_256_REF, TANH_LUT_MAX_X, TWO_PI_F64,
+    VON_MISES_KAPPA_HI_SCALE, VON_MISES_KAPPA_HI_STEP, VON_MISES_KAPPA_LO_SCALE,
+    VON_MISES_KAPPA_LO_STEP, VON_MISES_KAPPA_MAX_R, VON_MISES_KAPPA_SPLIT_R,
+    sincos_phase_clamp_poly, tanh_lut_eval_nonneg,
 };
 use crate::liminal::{
+    DEFAULT_ENTROPY_EPS, PhaseQ7, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD,
     branchless_select_f32, branchless_select_i32, branchless_select_u8, branchless_select_usize,
-    PhaseQ7, DEFAULT_ENTROPY_EPS, Q7_MAX, Q7_MIN, Q7_PHASE_INV_SCALE_RAD, Q7_PHASE_SCALE_RAD,
 };
 
 /// Default soft-bounded phase clamp limit in radians ($5^\circ \approx 0.08726646\text{ rad}$).
@@ -169,11 +169,7 @@ pub const fn branchless_signum_f32(x: f32) -> f32 {
 /// in a single XMM `vmaxss` comparison (`0` XMM-to-GPR round-trips).
 #[inline(always)]
 pub const fn branchless_relu_f32(x: f32) -> f32 {
-    if x > 0.0 {
-        x
-    } else {
-        0.0
-    }
+    if x > 0.0 { x } else { 0.0 }
 }
 
 /// Branchless `NaN`-resilient IEEE-754 maximum ($\max(a, b)$).

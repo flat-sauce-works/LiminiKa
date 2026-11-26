@@ -9,31 +9,31 @@ use core::mem::{align_of, offset_of, size_of};
 use super::slots::{HorizonEscalationProvider, HorizonEscalationRequest, LatentHorizonSlot};
 use super::*;
 use crate::drivers::{
-    FrameDirective, SpineFrameTransitionInput, SystemSpineState,
-    SPINE_TRANSITION_FLAG_GUARD_REPULSION,
+    FrameDirective, SPINE_TRANSITION_FLAG_GUARD_REPULSION, SpineFrameTransitionInput,
+    SystemSpineState,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_splitmix64, circular_resultant_from_words_64,
-    encode_pframe_motion_delta_64, load_q7_words_64, seek_pframe_chain_words_64, store_q7_words_64,
-    swar_q7_abs_u8_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
-    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, words_to_q7_array_64,
-    KvMotionDeltaPacket, RawPhaseProjectable, ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE,
-    ATTRACTOR_SLOT_ID_MASK,
+    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
+    KvMotionDeltaPacket, RawPhaseProjectable, branchless_clamp_f32, branchless_splitmix64,
+    circular_resultant_from_words_64, encode_pframe_motion_delta_64, load_q7_words_64,
+    seek_pframe_chain_words_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_add_x8,
+    swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64,
+    words_to_q7_array_64,
 };
 use crate::liminal::{
-    branchless_select_f32, BitCut32, Lacuna, LmnkResult, PhaseQ7, LMNK_ERR_CONTAINER_CORRUPTED,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    BitCut32, LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, Lacuna, LmnkResult,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
 };
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::gateway::{
-    tangent_cosine_active_heads_64, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy,
+    CAUSAL_AXIS_OBJECTIVE_FACT, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy,
     CognitiveGroundingSignal, GatewayFrame, ManifoldGatewaySignal, ObjectiveFactSignal,
-    CAUSAL_AXIS_OBJECTIVE_FACT,
+    tangent_cosine_active_heads_64,
 };
 use crate::runtime::storage::KvKeyframePacket;
 use crate::stigmergy::{
-    swar_mean_u8_le128_x8, CognitiveCircuitActivation, CognitiveTrajectoryLedger,
-    DissipativeOverflowReport, PheromoneDensityOps, ATTRACTOR_SLOT_KNOWLEDGE,
+    ATTRACTOR_SLOT_KNOWLEDGE, CognitiveCircuitActivation, CognitiveTrajectoryLedger,
+    DissipativeOverflowReport, PheromoneDensityOps, swar_mean_u8_le128_x8,
 };
 
 /// 128-byte (2 cache lines, `#[repr(C, align(64))]`, zero implicit padding) host-RAM entry
@@ -1065,8 +1065,8 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
                 seek_executed,
             });
         }
-        if context_hash != 0 {
-            if let Some(slot_idx) = self.store_keyframe_and_reset_gop(
+        if context_hash != 0
+            && let Some(slot_idx) = self.store_keyframe_and_reset_gop(
                 context_hash,
                 token_index,
                 frame.target_anchor_id,
@@ -1074,12 +1074,12 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
                 *circuit,
                 activation,
                 epoch,
-            ) {
-                return Ok(RamPhaseKvStepOutcome::StoredKeyframe {
-                    slot_idx,
-                    min_resonance_q7,
-                });
-            }
+            )
+        {
+            return Ok(RamPhaseKvStepOutcome::StoredKeyframe {
+                slot_idx,
+                min_resonance_q7,
+            });
         }
         Ok(RamPhaseKvStepOutcome::Unbacked)
     }
@@ -1289,20 +1289,18 @@ impl<const N: usize> ResidualSpilloverHorizonSlot<N> {
             self.cache_stores = self.cache_stores.saturating_add(1);
             return (true, 0);
         }
-        if !resolved {
-            if let Some(hit_idx) = self.last_hit_slot.take() {
-                let (_, evicted) = self.cache.step_slot_pheromone(
-                    hit_idx,
-                    self.retain_factor,
-                    self.reinforcement_gain,
-                    0.0,
-                    true,
-                    self.evict_pheromone_floor,
-                );
-                if evicted {
-                    self.cache_evictions = self.cache_evictions.saturating_add(1);
-                    return (false, 1);
-                }
+        if !resolved && let Some(hit_idx) = self.last_hit_slot.take() {
+            let (_, evicted) = self.cache.step_slot_pheromone(
+                hit_idx,
+                self.retain_factor,
+                self.reinforcement_gain,
+                0.0,
+                true,
+                self.evict_pheromone_floor,
+            );
+            if evicted {
+                self.cache_evictions = self.cache_evictions.saturating_add(1);
+                return (false, 1);
             }
         }
         (false, 0)
@@ -1319,11 +1317,7 @@ impl<const N: usize> ResidualSpilloverHorizonSlot<N> {
                 ^ 0x9E37_79B9_7F4A_7C15
         };
         h = branchless_splitmix64(h);
-        if h == 0 {
-            1
-        } else {
-            h
-        }
+        if h == 0 { 1 } else { h }
     }
 }
 

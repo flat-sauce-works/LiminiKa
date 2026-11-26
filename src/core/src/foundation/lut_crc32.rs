@@ -4,14 +4,14 @@
 //! Static 64B-aligned lookup tables (Q7, TANH, Slice-by-16 CRC32) and branchless IEEE 802.3 CRC32 updaters.
 
 use crate::foundation::scalar_math::{
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, VON_MISES_KAPPA_AT_MAX_R,
     branchless_flush_subnormal_f32, branchless_max_f32, branchless_q7_abs_u8,
     branchless_q7_fold_s1_geodesic, branchless_relu_f32, branchless_rsqrt_f32,
-    fast_inv_pos_normal_f32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE,
-    VON_MISES_KAPPA_AT_MAX_R,
+    fast_inv_pos_normal_f32,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u8, branchless_select_usize, PhaseQ7,
-    Q7_PHASE_SCALE_RAD,
+    PhaseQ7, Q7_PHASE_SCALE_RAD, branchless_select_f32, branchless_select_u8,
+    branchless_select_usize,
 };
 
 // ===================================================================

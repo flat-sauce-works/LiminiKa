@@ -5,12 +5,12 @@
 //! (`Phi-4-mini`) and separate (`Ministral 3 3B`) projection layouts.
 
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
-use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor, D};
-use candle_nn::{linear_no_bias, rms_norm, Linear, RmsNorm, VarBuilder};
+use candle_core::{D, DType, Device, IndexOp, Module, Result as CResult, Tensor};
+use candle_nn::{Linear, RmsNorm, VarBuilder, linear_no_bias, rms_norm};
 
+use crate::model::KvCacheMode;
 use crate::model::config::ModelConfig;
 use crate::model::rope::{LayerSteer, RotaryCache};
-use crate::model::KvCacheMode;
 
 pub(crate) enum LinearLayer {
     Dense(Linear),
@@ -141,10 +141,10 @@ impl TransformerAttention {
                 "truncate_cache target_len {target_len} exceeds current kv_len {cur}"
             )));
         }
-        if target_len < cur {
-            if let Some((ref k, ref v)) = self.kv_cache {
-                self.kv_cache = Some((k.narrow(2, 0, target_len)?, v.narrow(2, 0, target_len)?));
-            }
+        if target_len < cur
+            && let Some((ref k, ref v)) = self.kv_cache
+        {
+            self.kv_cache = Some((k.narrow(2, 0, target_len)?, v.narrow(2, 0, target_len)?));
         }
         Ok(())
     }

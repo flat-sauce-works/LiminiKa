@@ -10,12 +10,12 @@ use std::collections::HashMap;
 
 use liminika_core::drivers::DistortionTension;
 use liminika_core::liminal::{
-    BitCut64, Lacuna, LacunaPartition8, LMNK_ERR_TOPOLOGY_MISMATCH, MAX_ATTENTION_HEADS,
+    BitCut64, LMNK_ERR_TOPOLOGY_MISMATCH, Lacuna, LacunaPartition8, MAX_ATTENTION_HEADS,
 };
 use liminika_core::runtime::{
-    LmnkContainerView, CORE_TOPOLOGY, LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+    CORE_TOPOLOGY, LMNK_CONTAINER_FLAG_COMPILED_CACHE, LmnkContainerView,
 };
-use liminika_core::stigmergy::{PhaseAnchorRecord, MAX_PHASE_ANCHORS};
+use liminika_core::stigmergy::{MAX_PHASE_ANCHORS, PhaseAnchorRecord};
 
 /// Default resident working-set ceiling aligned with [`MAX_PHASE_ANCHORS`] (`64`).
 pub const DEFAULT_WORKING_SET_CAPACITY: usize = MAX_PHASE_ANCHORS;

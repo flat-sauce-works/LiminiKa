@@ -10,19 +10,19 @@ use core::arch::x86_64::*;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::lut_crc32::Q14_BIAS_X64_I32;
 use crate::foundation::lut_crc32::{
-    INV_64_Q14_F32, INV_8_Q14_F32, Q14_BIAS_X8_I32, Q7_FULL_COS_I16_REF, Q7_FULL_COS_REF,
-    Q7_FULL_SINCOS_BIASED_U64_REF,
+    INV_8_Q14_F32, INV_64_Q14_F32, Q7_FULL_COS_I16_REF, Q7_FULL_COS_REF,
+    Q7_FULL_SINCOS_BIASED_U64_REF, Q14_BIAS_X8_I32,
 };
 use crate::foundation::scalar_math::{
-    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_relu_f32, branchless_sincos_q7, branchless_von_mises_kappa, fast_sqrt_unit_f32,
-    VON_MISES_KAPPA_AT_MAX_R,
+    VON_MISES_KAPPA_AT_MAX_R, branchless_atan2_to_q7_fast, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_relu_f32, branchless_sincos_q7,
+    branchless_von_mises_kappa, fast_sqrt_unit_f32,
 };
 use crate::foundation::swar_simd::{
     is_word_array_uniform_64, load_q7_words_64, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_scale_le128_with_bias_x8,
 };
-use crate::liminal::{branchless_select_i8, PhaseQ7, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
+use crate::liminal::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, PhaseQ7, branchless_select_i8};
 
 /// Unchecked 8-lane SWAR shortest-arc $S^1$ geodesic interpolation for `1 <= s <= 127` and
 /// precomputed `bias_restore = (128 - s) * 0x0101_0101_0101_0101` (`0` branches).
@@ -68,7 +68,7 @@ pub(crate) unsafe fn avx2_u64x8_to_vec64(
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_castsi128_si256, _mm256_inserti128_si256, _mm_cvtsi64_si128, _mm_insert_epi64,
+            _mm_cvtsi64_si128, _mm_insert_epi64, _mm256_castsi128_si256, _mm256_inserti128_si256,
         };
         let lo0 = _mm_insert_epi64(_mm_cvtsi64_si128(w0 as i64), w1 as i64, 1);
         let hi0 = _mm_insert_epi64(_mm_cvtsi64_si128(w2 as i64), w3 as i64, 1);
@@ -104,7 +104,7 @@ pub(crate) unsafe fn avx2_words64_to_vec64_with_uniform(
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_broadcastq_epi64, _mm256_setzero_si256, _mm_cvtsi64_si128,
+            _mm_cvtsi64_si128, _mm256_broadcastq_epi64, _mm256_setzero_si256,
         };
         if w_is_uniform {
             let w0 = w[0];
@@ -131,7 +131,7 @@ pub(crate) unsafe fn avx2_vec64_to_words64(
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_castsi256_si128, _mm256_extracti128_si256, _mm_cvtsi128_si64, _mm_extract_epi64,
+            _mm_cvtsi128_si64, _mm_extract_epi64, _mm256_castsi256_si128, _mm256_extracti128_si256,
         };
         let lo0 = _mm256_castsi256_si128(v0);
         let hi0 = _mm256_extracti128_si256(v0, 1);
@@ -357,10 +357,10 @@ pub(crate) unsafe fn avx2_coherence_from_diff_vec64_with_floor(
     // cutting per-pair rejection work in `merge_and_prune_centroids_64` and $k$-Means E-steps in half.
     unsafe {
         use core::arch::x86_64::{
+            _mm_add_epi64, _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_unpackhi_epi64,
             _mm256_abs_epi8, _mm256_add_epi64, _mm256_broadcastb_epi8, _mm256_broadcastq_epi64,
             _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_or_si256, _mm256_sad_epu8,
-            _mm256_setzero_si256, _mm256_testz_si256, _mm256_xor_si256, _mm_add_epi64,
-            _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_unpackhi_epi64,
+            _mm256_setzero_si256, _mm256_testz_si256, _mm256_xor_si256,
         };
         let raw_abs0 = _mm256_abs_epi8(vd0);
         let raw_abs1 = _mm256_abs_epi8(vd1);
@@ -426,9 +426,9 @@ pub(crate) unsafe fn avx2_coherence_from_diff_vec64(
     // `vpbroadcastq + vptest` before running the 16-knot trigonometric pipeline.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_abs_epi8, _mm256_broadcastb_epi8, _mm256_broadcastq_epi64,
-            _mm256_castsi256_si128, _mm256_or_si256, _mm256_testz_si256, _mm256_xor_si256,
-            _mm_cvtsi128_si32, _mm_cvtsi128_si64,
+            _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm256_abs_epi8, _mm256_broadcastb_epi8,
+            _mm256_broadcastq_epi64, _mm256_castsi256_si128, _mm256_or_si256, _mm256_testz_si256,
+            _mm256_xor_si256,
         };
         let lo128 = _mm256_castsi256_si128(vd0);
         let splat_b0 = _mm256_broadcastb_epi8(lo128);
@@ -467,12 +467,12 @@ unsafe fn avx2_coherence_from_raw_abs_vec64(
     // via 16-knot `vpshufb` + `vpsadbw` + saturation-free `vpmaddubsw` trigonometric angle-addition.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_add_epi16, _mm256_add_epi32, _mm256_add_epi64, _mm256_and_si256,
-            _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_madd_epi16,
-            _mm256_maddubs_epi16, _mm256_min_epu8, _mm256_sad_epu8, _mm256_set1_epi16,
-            _mm256_set1_epi8, _mm256_setr_epi8, _mm256_setzero_si256, _mm256_shuffle_epi8,
-            _mm256_slli_epi64, _mm256_srli_epi16, _mm_add_epi32, _mm_add_epi64, _mm_cvtsi128_si32,
-            _mm_cvtsi128_si64, _mm_shuffle_epi32, _mm_unpackhi_epi64,
+            _mm_add_epi32, _mm_add_epi64, _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_shuffle_epi32,
+            _mm_unpackhi_epi64, _mm256_add_epi16, _mm256_add_epi32, _mm256_add_epi64,
+            _mm256_and_si256, _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_madd_epi16,
+            _mm256_maddubs_epi16, _mm256_min_epu8, _mm256_sad_epu8, _mm256_set1_epi8,
+            _mm256_set1_epi16, _mm256_setr_epi8, _mm256_setzero_si256, _mm256_shuffle_epi8,
+            _mm256_slli_epi64, _mm256_srli_epi16,
         };
         let max_127 = _mm256_set1_epi8(127);
         let abs0 = _mm256_min_epu8(raw_abs0, max_127);
@@ -884,13 +884,13 @@ pub(super) unsafe fn avx2_mean_sincos_from_vec64(
     // registers via 16-nibble `vpshufb` + `vpsadbw` + `vpmaddubsw` with packed horizontal reduction.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_add_epi16, _mm256_add_epi32, _mm256_add_epi64, _mm256_and_si256,
-            _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_madd_epi16,
-            _mm256_maddubs_epi16, _mm256_or_si256, _mm256_sad_epu8, _mm256_set1_epi16,
-            _mm256_set1_epi8, _mm256_setr_epi8, _mm256_setzero_si256, _mm256_shuffle_epi8,
-            _mm256_slli_epi64, _mm256_srli_epi16, _mm256_sub_epi16, _mm_add_epi32, _mm_add_epi64,
-            _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_extract_epi32, _mm_shuffle_epi32,
-            _mm_unpackhi_epi64, _mm_unpacklo_epi64,
+            _mm_add_epi32, _mm_add_epi64, _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_extract_epi32,
+            _mm_shuffle_epi32, _mm_unpackhi_epi64, _mm_unpacklo_epi64, _mm256_add_epi16,
+            _mm256_add_epi32, _mm256_add_epi64, _mm256_and_si256, _mm256_castsi256_si128,
+            _mm256_extracti128_si256, _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256,
+            _mm256_sad_epu8, _mm256_set1_epi8, _mm256_set1_epi16, _mm256_setr_epi8,
+            _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_slli_epi64, _mm256_srli_epi16,
+            _mm256_sub_epi16,
         };
 
         let mask_15 = _mm256_set1_epi8(0x0F);

@@ -10,18 +10,18 @@
 #![warn(clippy::missing_errors_doc)]
 
 use crate::foundation::{
-    branchless_clamp_f32, branchless_popcount_rsqrt_u32, branchless_relu_f32,
-    branchless_splitmix64, branchless_tanh_f32, is_word_array_uniform_64, load_q7_words_64,
-    store_q7_words_64, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8,
-    swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8,
-    swar_u8_nonzero_msb_mask, swar_u8_sub_sat_x8, swar_words_nonzero_64, PagedBitmask, Pod,
-    TaggedPtr, ACTION_PRESET_REPULSION_ESCAPE, PAGED_BITMASK_BITS, SWAR_EVEN_BYTES_64,
-    SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
+    ACTION_PRESET_REPULSION_ESCAPE, PAGED_BITMASK_BITS, PagedBitmask, Pod, SWAR_EVEN_BYTES_64,
+    SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, TaggedPtr, branchless_clamp_f32,
+    branchless_popcount_rsqrt_u32, branchless_relu_f32, branchless_splitmix64, branchless_tanh_f32,
+    is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
+    swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8,
+    swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask,
+    swar_u8_sub_sat_x8, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u64, branchless_select_u8, LmnkResult, PhaseQ7,
-    RuntimeConfig, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, LmnkResult, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64,
 };
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,

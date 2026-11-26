@@ -858,15 +858,21 @@ fn test_ram_phase_kv_gop_cache_pframe_ring_and_zero_forward_seek() {
     orth_cache
         .store_keyframe_and_reset_gop(0x1111, 1, 1, &topic_a, circuit, act, 1)
         .unwrap();
-    assert!(orth_cache
-        .lookup_context_or_resonate(0x2222, &load_q7_words_64(&topic_b), 16, 2)
-        .is_none());
-    assert!(orth_cache
-        .lookup_context_or_resonate(0x3333, &load_q7_words_64(&topic_neg), 16, 3)
-        .is_none());
-    assert!(orth_cache
-        .lookup_context_or_resonate(0x4444, &[0u64; NUM_STIGMERGIC_GRANULES], 16, 4)
-        .is_none());
+    assert!(
+        orth_cache
+            .lookup_context_or_resonate(0x2222, &load_q7_words_64(&topic_b), 16, 2)
+            .is_none()
+    );
+    assert!(
+        orth_cache
+            .lookup_context_or_resonate(0x3333, &load_q7_words_64(&topic_neg), 16, 3)
+            .is_none()
+    );
+    assert!(
+        orth_cache
+            .lookup_context_or_resonate(0x4444, &[0u64; NUM_STIGMERGIC_GRANULES], 16, 4)
+            .is_none()
+    );
 
     // Autonomous S^(H-1) concentration-of-measure resonance floor scales inversely with sqrt(H)
     // and steps RamPhaseKvGopCache through SkippedLiminal -> StoredKeyframe -> ResonatedSeeked.
@@ -2157,7 +2163,7 @@ fn test_phase_steering_closed_loop_gateway_signal() {
     let fact = ObjectiveFact::new([40i8; 64], 2.5, 0x0010_0000, 42);
     let persona = SubjectivePersona::new([0i8; 64], 0.0, 0, 0);
     let mut q_data = [0.0f32; 64];
-    for pair in q_data.chunks_exact_mut(2) {
+    for pair in q_data.as_chunks_mut::<2>().0 {
         pair[0] = 1.0;
     }
     let mut q_gw = AlignedBuffer32::new(q_data);
@@ -2870,8 +2876,8 @@ fn test_stationary_skip_and_spine_bypass_do_not_misdiagnose_passive_saturation()
     use crate::drivers::LiminalEgoState;
     use crate::runtime::{EpistemicHorizonReading, LayerDistortionKind, LiminalBoundaryDelta};
     use crate::stigmergy::{
-        OverlapDiscoveryReport, StigmergicActionDecision, StigmergicThresholds,
-        DEFAULT_DERIVATIVE_ALPHA_Q7,
+        DEFAULT_DERIVATIVE_ALPHA_Q7, OverlapDiscoveryReport, StigmergicActionDecision,
+        StigmergicThresholds,
     };
 
     let mut bank = CoreTelemetryBank::default();
@@ -3161,9 +3167,11 @@ fn test_simultaneous_attractive_and_repulsive_poles_preserve_orthogonal_attracti
     let guard_slice_obs = ResonantSignalSlice::from_q7_probe(&guards_active_obs, &repel_arr);
     let slice_obs_frame = (sys, attract, attract_pair, guard_slice_obs).synthesize_gateway_frame();
     assert!(slice_obs_frame.is_repulsed());
-    assert!(slice_obs_frame.phase_deltas[32..63]
-        .iter()
-        .all(|&d| d == -40));
+    assert!(
+        slice_obs_frame.phase_deltas[32..63]
+            .iter()
+            .all(|&d| d == -40)
+    );
     assert_eq!(slice_obs_frame.phase_deltas[63], 127);
 
     // 4. Phase-less candidate detectors (`ContradictionGuard<()>`) keep candidate-phase negation.

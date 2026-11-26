@@ -11,21 +11,22 @@
 #![warn(clippy::missing_errors_doc)]
 
 use crate::foundation::{
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_ID_MASK, Pod, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TaggedPtr,
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_min_f32, branchless_relu_f32, is_word_array_uniform_64, load_q7_words_64,
     swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8, swar_q7_circular_add_x8,
     swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_mean_round_x8,
-    swar_words_nonzero_64, Pod, TaggedPtr, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER,
-    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_u8, branchless_select_u32, branchless_select_u64,
 };
 use crate::stigmergy::circuit::StigmergicScaleGranularity;
 use crate::stigmergy::ledger::ContrastivePhaseBloomFilter;
-use crate::stigmergy::trail::{trail_phase_words_mut, trail_phase_words_ref, PointerTrail};
+use crate::stigmergy::trail::{PointerTrail, trail_phase_words_mut, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
@@ -188,13 +189,13 @@ unsafe fn avx2_subswarm_resolve_words_64(
     unsafe {
         use core::arch::x86_64::_mm256_testz_si256;
         use core::arch::x86_64::{
-            __m256i, _mm256_abs_epi8, _mm256_add_epi64, _mm256_add_epi8, _mm256_adds_epi8,
-            _mm256_and_si256, _mm256_castsi256_pd, _mm256_castsi256_si128, _mm256_cmpeq_epi8,
-            _mm256_cmpgt_epi64, _mm256_extracti128_si256, _mm256_max_epu8, _mm256_movemask_pd,
-            _mm256_mulhi_epi16, _mm256_or_si256, _mm256_sad_epu8, _mm256_set1_epi16,
-            _mm256_set1_epi64x, _mm256_set1_epi8, _mm256_setzero_si256, _mm256_slli_epi16,
-            _mm256_srli_epi64, _mm256_sub_epi8, _mm_add_epi64, _mm_cvtsi128_si64,
-            _mm_unpackhi_epi64,
+            __m256i, _mm_add_epi64, _mm_cvtsi128_si64, _mm_unpackhi_epi64, _mm256_abs_epi8,
+            _mm256_add_epi8, _mm256_add_epi64, _mm256_adds_epi8, _mm256_and_si256,
+            _mm256_castsi256_pd, _mm256_castsi256_si128, _mm256_cmpeq_epi8, _mm256_cmpgt_epi64,
+            _mm256_extracti128_si256, _mm256_max_epu8, _mm256_movemask_pd, _mm256_mulhi_epi16,
+            _mm256_or_si256, _mm256_sad_epu8, _mm256_set1_epi8, _mm256_set1_epi16,
+            _mm256_set1_epi64x, _mm256_setzero_si256, _mm256_slli_epi16, _mm256_srli_epi64,
+            _mm256_sub_epi8,
         };
         let _ = core::mem::size_of::<__m256i>();
         let (vc0, vc1) =

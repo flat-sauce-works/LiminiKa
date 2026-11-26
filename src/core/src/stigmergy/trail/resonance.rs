@@ -4,42 +4,41 @@
 //! Anchor resonance, cross-slot synergy, liminal bridging, and trail chain cohomology.
 
 use super::{
-    precompute_bayesian_trail_scales, trail_phase_words_mut, trail_phase_words_ref, PointerTrail,
+    PointerTrail, precompute_bayesian_trail_scales, trail_phase_words_mut, trail_phase_words_ref,
 };
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::Q7_FULL_COS_REF;
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::{
-    avx2_coherence_from_diff_vec64, avx2_words64_to_vec64_with_uniform, Q7_FULL_COS_REF,
-};
-use crate::foundation::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_fast_transition_log_prob,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
-    branchless_min_f32, branchless_popcount_rsqrt_u32, branchless_q7_conjugate_64,
-    branchless_q7_inhibit_words_64, branchless_q7_synergy_fuse_words_64,
-    branchless_q7_transition_log_prob_words_64,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_ID_MASK, AlignedSlice32, AlignedSliceMut32, MAX_BAYESIAN_STIGMERGIC_DENSITY,
+    POPCOUNT_RSQRT_LUT_257_REF, PagedBitmask, SWAR_SPLAT_BYTE_64, TaggedPtr, branchless_abs_f32,
+    branchless_clamp_f32, branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
+    branchless_popcount_rsqrt_u32, branchless_q7_conjugate_64, branchless_q7_inhibit_words_64,
+    branchless_q7_synergy_fuse_words_64, branchless_q7_transition_log_prob_words_64,
     branchless_q7_unified_manifold_fold_words_with_flags_64, branchless_relu_f32,
     branchless_rsqrt_f32, coherence_from_uniform_diff_word_x8, coherence_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, evaluate_cohomological_obstruction,
     fast_inv_len_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
     swar_or_avx2_q7_add_sat_words_64, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8, swar_slerp_words_with_uniform_flag_64,
-    unpack_action_mode_from_tag, AlignedSlice32, AlignedSliceMut32, PagedBitmask, TaggedPtr,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_PRESET_REPULSION_ESCAPE,
-    ATTRACTOR_SLOT_ID_MASK, MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257_REF,
-    SWAR_SPLAT_BYTE_64,
+    unpack_action_mode_from_tag,
+};
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::foundation::{
+    Q7_FULL_COS_REF, avx2_coherence_from_diff_vec64, avx2_words64_to_vec64_with_uniform,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    BitCut8, LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    BitCut8, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_u8, branchless_select_u32, branchless_select_u64,
 };
-use crate::stigmergy::ledger::{eval_bitmask_dyadic_ultrametric, ContrastivePhaseBloomFilter};
+use crate::stigmergy::ledger::{ContrastivePhaseBloomFilter, eval_bitmask_dyadic_ultrametric};
 use crate::stigmergy::{
-    coupled_slot_row_mask, is_slot_pair_coupled, ATTRACTOR_SLOT_REPULSION,
-    MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE,
-    TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
-    TRAIL_FLAG_SYNERGY_RESONANCE,
+    ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY,
+    TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE, coupled_slot_row_mask,
+    is_slot_pair_coupled,
 };
 
 impl PointerTrail {

@@ -11,7 +11,7 @@ use crate::foundation::scalar_math::{
 use crate::foundation::simd_stats::{
     atan2_interleaved_pairs_to_q7_word_x8_simd, atan2_to_q7_word_x8_simd, sum_sq_f32_simd8,
 };
-use crate::liminal::{branchless_select_f32, LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT};
+use crate::liminal::{LMNK_ERR_INVALID_ARGUMENT, LmnkResult, PhaseQ7, branchless_select_f32};
 
 // ===================================================================
 // Training-Free LoRA-to-Phase SVD Projection (LoRA-to-Phase SVD)

@@ -6,7 +6,7 @@
 
 use crate::foundation::Pod;
 use crate::liminal::{
-    branchless_select_u8, BitCut8, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS,
+    BitCut8, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS, branchless_select_u8,
 };
 
 /// Threshold for leaky integrate-and-fire phase transition pulse on [`LiminalBoundaryDelta`].

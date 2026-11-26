@@ -11,7 +11,7 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
-use crate::foundation::{compute_crc32_ieee, Pod};
+use crate::foundation::{Pod, compute_crc32_ieee};
 use crate::liminal::{BitCut8, LMNK_ABI_COMPAT_VERSION_HEX};
 
 /// Binary magic constant for [`LiminalTopologyMatrix`] (`0x504F_544C` = ASCII `"LTOP"`).

@@ -8,7 +8,7 @@ use core::arch::x86_64::*;
 
 use crate::foundation::lut_crc32::{F32_MIN_POSITIVE_NORMAL, SUBNORMAL_SQ_RISK_FLOOR};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use crate::foundation::phase_ops::{avx2_hsum2_ps, avx2_hsum_ps};
+use crate::foundation::phase_ops::{avx2_hsum_ps, avx2_hsum2_ps};
 use crate::foundation::scalar_math::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
     branchless_is_finite_f32, branchless_max_f32, branchless_relu_f32, branchless_sqrt_f32,
@@ -130,8 +130,8 @@ pub fn sum_abs_and_sq_f32_simd8(slice: &[f32]) -> (f32, f32) {
     {
         let mut acc_abs = [0.0_f32; 4];
         let mut acc_sq = [0.0_f32; 4];
-        let mut chunks = slice.chunks_exact(4);
-        for c in chunks.by_ref() {
+        let (chunks, rem) = slice.as_chunks::<4>();
+        for c in chunks {
             for lane in 0..4 {
                 let v = branchless_abs_f32(c[lane]);
                 acc_abs[lane] += v;
@@ -140,7 +140,7 @@ pub fn sum_abs_and_sq_f32_simd8(slice: &[f32]) -> (f32, f32) {
         }
         let mut sum_abs = (acc_abs[0] + acc_abs[1]) + (acc_abs[2] + acc_abs[3]);
         let mut sum_sq = (acc_sq[0] + acc_sq[1]) + (acc_sq[2] + acc_sq[3]);
-        for &v in chunks.remainder() {
+        for &v in rem {
             let a = branchless_abs_f32(v);
             sum_abs += a;
             sum_sq += a * a;
@@ -478,8 +478,8 @@ pub(crate) fn sum_sq_scaled_f32_simd8(slice: &[f32], scale: f32) -> f32 {
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
         let mut acc_sq = [0.0_f32; 4];
-        let mut chunks = slice.chunks_exact(4);
-        for c in chunks.by_ref() {
+        let (chunks, rem) = slice.as_chunks::<4>();
+        for c in chunks {
             for lane in 0..4 {
                 let clean_x = branchless_flush_subnormal_f32(c[lane]);
                 let v = clean_x * scale;
@@ -487,7 +487,7 @@ pub(crate) fn sum_sq_scaled_f32_simd8(slice: &[f32], scale: f32) -> f32 {
             }
         }
         let mut sum_sq = (acc_sq[0] + acc_sq[1]) + (acc_sq[2] + acc_sq[3]);
-        for &x in chunks.remainder() {
+        for &x in rem {
             let v = branchless_flush_subnormal_f32(x) * scale;
             sum_sq += v * v;
         }
@@ -549,8 +549,8 @@ pub(crate) fn max_pos_f32_unrolled4(slice: &[f32]) -> f32 {
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
         let mut m = [0.0_f32; 4];
-        let mut chunks = slice.chunks_exact(4);
-        for c in chunks.by_ref() {
+        let (chunks, rem) = slice.as_chunks::<4>();
+        for c in chunks {
             m[0] = branchless_max_f32(m[0], branchless_relu_f32(c[0]));
             m[1] = branchless_max_f32(m[1], branchless_relu_f32(c[1]));
             m[2] = branchless_max_f32(m[2], branchless_relu_f32(c[2]));
@@ -560,7 +560,7 @@ pub(crate) fn max_pos_f32_unrolled4(slice: &[f32]) -> f32 {
             branchless_max_f32(m[0], m[1]),
             branchless_max_f32(m[2], m[3]),
         );
-        for &v in chunks.remainder() {
+        for &v in rem {
             max_val = branchless_max_f32(max_val, branchless_relu_f32(v));
         }
         max_val

@@ -5,33 +5,32 @@
 //! relative perspective Gateway synthesis, and dynamic threshold/granule horizon bridges.
 
 use crate::foundation::{
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TaggedPtr,
     branchless_clamp_f32, branchless_inv_pos_f32, branchless_max_f32, branchless_min_f32,
     branchless_q7_inhibit_words_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     branchless_sincos_q7, coherence_from_word_arrays_with_both_uniform_flags_64,
     fast_mean_q7_tag_from_words_64, is_word_array_uniform_64, pack_action_slot_tag,
-    swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_STEP_MIN_RAD,
-    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, BitCut32, EpistemicRegime, LiminalThresholdState, DEFAULT_ENTROPY_EPS,
-    MAX_ATTENTION_HEADS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
-    THRESHOLD_STIGMERGY_WIDE,
+    BitCut32, DEFAULT_ENTROPY_EPS, EpistemicRegime, LiminalThresholdState, MAX_ATTENTION_HEADS,
+    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, THRESHOLD_STIGMERGY_WIDE,
+    branchless_select_f32, branchless_select_i8, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64,
 };
 use crate::runtime::gateway::{
-    CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, ROOT_CAUSE_COHOMOLOGY_REPULSION,
-    ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal,
+    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
 };
 use crate::stigmergy::{
-    evaluate_stigmergic_overlap_and_discovery_words_64, fold_fractal_nodes_words_64,
-    fold_sincos64_to_words, CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, CognitiveOpKind, CognitiveTrajectoryLedger,
+    DEFAULT_FACT_PHASE_CLAMP_RAD, DissipativeOverflowReport, MAX_ATTRACTOR_PULL_FORCE,
     OverlapDiscoveryReport, RelativeAttractorNode, StigmergicGranuleState,
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, DEFAULT_FACT_PHASE_CLAMP_RAD,
-    MAX_ATTRACTOR_PULL_FORCE,
+    evaluate_stigmergic_overlap_and_discovery_words_64, fold_fractal_nodes_words_64,
+    fold_sincos64_to_words,
 };
 
 /// Branchless epistemic horizon measurement over a finite local memory manifold (`16`-byte aligned).

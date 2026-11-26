@@ -4,19 +4,18 @@
 //! Toroidal centroid merging and evaporative pruning for [`PhaseAnchorRecord`].
 
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_maturity_scale_u32,
-    branchless_max_f32, branchless_min_f32,
-    branchless_toroidal_centroid_step_words_with_coh_and_uni_64,
+    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_maturity_scale_u32, branchless_max_f32,
+    branchless_min_f32, branchless_toroidal_centroid_step_words_with_coh_and_uni_64,
     coherence_above_floor_from_word_arrays_64, is_word_array_uniform_64,
-    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
 };
 use crate::liminal::{DEFAULT_ENTROPY_EPS, NUM_STIGMERGIC_GRANULES};
 use crate::stigmergy::MAX_ATTRACTOR_PULL_FORCE;
 
 use super::crc32_delta::crc32_update_anchor_energy_and_mass_delta;
 use super::{
-    PhaseAnchorRecord, ANCHOR_LINEAGE_MATURE_BIT, LMNK_PHASE_ANCHOR_MAGIC,
-    LMNK_PHASE_ANCHOR_VERSION,
+    ANCHOR_LINEAGE_MATURE_BIT, LMNK_PHASE_ANCHOR_MAGIC, LMNK_PHASE_ANCHOR_VERSION,
+    PhaseAnchorRecord,
 };
 
 #[derive(Clone, Copy)]

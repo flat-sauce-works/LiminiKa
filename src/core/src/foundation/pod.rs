@@ -22,9 +22,9 @@ use core::slice;
 
 use crate::foundation::scalar_math::{branchless_q7_add_sat, branchless_q7_neg_sat};
 use crate::liminal::{
-    AttributionTag, LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus, PhaseQ7,
-    RuntimeConfig, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    AttributionTag, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_INVALID_ARGUMENT,
+    LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, PhaseQ7, RuntimeConfig,
 };
 
 /// Number of 64-bit words in a 256-bit [`PagedBitmask`] (`4`).
@@ -432,7 +432,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     fn try_cast_slice<U: Pod>(slice: &[Self]) -> LmnkResult<&[U]> {
         let total_bytes = size_of_val(slice);
         let target_size = size_of::<U>();
-        if (target_size == 0) | ((total_bytes % target_size) != 0) {
+        if (target_size == 0) | !total_bytes.is_multiple_of(target_size) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let is_aligned =
@@ -453,7 +453,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     fn try_cast_slice_mut<U: Pod>(slice: &mut [Self]) -> LmnkResult<&mut [U]> {
         let total_bytes = size_of_val(slice);
         let target_size = size_of::<U>();
-        if (target_size == 0) | ((total_bytes % target_size) != 0) {
+        if (target_size == 0) | !total_bytes.is_multiple_of(target_size) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         let is_aligned =

@@ -17,11 +17,7 @@ pub const fn sensitivity_4p1mp_q7(p_q7: u8) -> u8 {
     let p = if p_q7 > 127 { 127 } else { p_q7 };
     let prod = (p as u32) * ((127 - p) as u32);
     let scaled = prod >> 5;
-    if scaled > 127 {
-        127
-    } else {
-        scaled as u8
-    }
+    if scaled > 127 { 127 } else { scaled as u8 }
 }
 
 /// Evaluates the normalized scalar boundary sensitivity $4p(1-p)$ clamped to $[0.0, 1.0]$.

@@ -69,8 +69,8 @@ fn adapter_steps_entropy_gate_and_applies_rank1_residual() {
 #[test]
 fn adapter_steers_via_gateway_trait_composition() {
     use liminika_core::runtime::{
-        ObjectiveFact, SubjectivePersona, CAUSAL_AXIS_OBJECTIVE_FACT,
-        CAUSAL_AXIS_SUBJECTIVE_PERSONA,
+        CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_AXIS_SUBJECTIVE_PERSONA, ObjectiveFact,
+        SubjectivePersona,
     };
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
@@ -205,10 +205,12 @@ fn substrate_orchestrator_gates_rope_and_rank1_by_stigmergic_density() {
         .expect("active");
     assert_eq!(d1, StigmergicActionDecision::ExpressPhaseSteer);
     assert_ne!(q_rot1, orig1);
-    assert!(adapter
-        .orchestrate_layer_rank1_with_substrate(&resonant, &mut hidden, &u, &v)
-        .expect("rank-1 gate")
-        .is_none());
+    assert!(
+        adapter
+            .orchestrate_layer_rank1_with_substrate(&resonant, &mut hidden, &u, &v)
+            .expect("rank-1 gate")
+            .is_none()
+    );
 
     // Repeated resonant steps accumulate density above rank1_inject_density_thresh (1.50).
     let mut final_decision = d1;
@@ -2462,7 +2464,7 @@ fn adapter_residual_spillover_dimension_elevation_and_verified_cache() {
 
 #[test]
 fn adapter_distortion_feedback_wakes_and_cools_ego_and_renders_mermaid() {
-    use liminika_core::drivers::{LiminalEgoPreset, EGO_TRIGGER_LAYER_DISTORTION};
+    use liminika_core::drivers::{EGO_TRIGGER_LAYER_DISTORTION, LiminalEgoPreset};
     use liminika_core::runtime::{LayerDistortionKind, LayerDistortionReport};
 
     let geom = RopeGeometry::phi4_mini();
@@ -3110,8 +3112,8 @@ fn liminal_boundary_flow_summary_is_zero_safe_and_reflects_live_counters() {
 #[test]
 fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
     use liminika_core::drivers::{
-        SystemPressureReading, TokenBypassObservation, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
-        SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_NONE,
+        HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_NONE,
+        SystemPressureReading, TokenBypassObservation,
     };
 
     let mut adapter = ModelSteeringAdapter::new(RopeGeometry::phi4_mini()).expect("init");
@@ -3368,9 +3370,11 @@ fn adapter_begin_turn_and_step_decode_control_delegate_to_core_ctx() {
     let flow = adapter.liminal_boundary_flow_summary();
     assert_eq!(flow.concrete_token_count, 2);
     assert_eq!(flow.abstract_token_count, 0);
-    assert!(adapter
-        .render_liminal_flow_mermaid()
-        .contains("Decode Spine Control"));
+    assert!(
+        adapter
+            .render_liminal_flow_mermaid()
+            .contains("Decode Spine Control")
+    );
 }
 
 #[test]
@@ -5260,12 +5264,12 @@ fn lmnkp_immutable_source_discipline_survives_multi_gen_equilibrium_and_topology
         .expect("build_equilibrium_state");
     eq.update_runtime_snapshot_from_container(&snap_a)
         .expect("attach snap");
-    for gen in 1..=10_u64 {
+    for generation in 1..=10_u64 {
         let pulse = imported_tl.build_equilibrium_state(eq_cfg).expect("pulse");
         let rep = eq.join(&pulse).expect("eq join");
-        assert_eq!(rep.generation, gen);
+        assert_eq!(rep.generation, generation);
         let _ = eq
-            .save_lmnkc_to_path(&lmnkc_path, 1_774_900_000 + gen)
+            .save_lmnkc_to_path(&lmnkc_path, 1_774_900_000 + generation)
             .expect("save .lmnkc");
         eq = EquilibriumState::load_lmnkc_from_path(&lmnkc_path, eq_cfg).expect("load .lmnkc");
     }

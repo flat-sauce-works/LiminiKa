@@ -531,162 +531,157 @@ impl StreamingCorpusDistiller {
         // Non-leaking 2-fold cross-fitted OOD null calibration over compact streamed entries.
         let mut null_calibration: Option<NullCalibrationEnvelope> = None;
         let mut token_explain_threshold = 0.40_f32;
-        if let (Some(prior), Some(pre_prior_corpus)) = (base_prior, corpus_pre_prior) {
-            if prior.calibration_samples.len() >= 4 {
-                let mut ood_null_peaks: Vec<f32> =
-                    Vec::with_capacity(prior.calibration_samples.len());
-                let mut ood_ortho_ratios: Vec<f32> =
-                    Vec::with_capacity(prior.calibration_samples.len());
-                let mut ood_tok_max_cos: Vec<f32> = Vec::new();
-                for fold in 0..2_usize {
-                    let fit_samples: Vec<TokenSequenceEntry> = prior
-                        .calibration_samples
-                        .iter()
-                        .enumerate()
-                        .filter(|(idx, _)| idx % 2 != fold)
-                        .map(|(_, s)| s.clone())
-                        .collect();
-                    let eval_samples: Vec<&TokenSequenceEntry> = prior
-                        .calibration_samples
-                        .iter()
-                        .enumerate()
-                        .filter(|(idx, _)| idx % 2 == fold)
-                        .map(|(_, s)| s)
-                        .collect();
-                    if fit_samples.is_empty() || eval_samples.is_empty() {
-                        continue;
-                    }
-                    let Ok(fold_prior) = ModelBaseAttractorProfile::extract(
+        if let (Some(prior), Some(pre_prior_corpus)) = (base_prior, corpus_pre_prior)
+            && prior.calibration_samples.len() >= 4
+        {
+            let mut ood_null_peaks: Vec<f32> = Vec::with_capacity(prior.calibration_samples.len());
+            let mut ood_ortho_ratios: Vec<f32> =
+                Vec::with_capacity(prior.calibration_samples.len());
+            let mut ood_tok_max_cos: Vec<f32> = Vec::new();
+            for fold in 0..2_usize {
+                let fit_samples: Vec<TokenSequenceEntry> = prior
+                    .calibration_samples
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| idx % 2 != fold)
+                    .map(|(_, s)| s.clone())
+                    .collect();
+                let eval_samples: Vec<&TokenSequenceEntry> = prior
+                    .calibration_samples
+                    .iter()
+                    .enumerate()
+                    .filter(|(idx, _)| idx % 2 == fold)
+                    .map(|(_, s)| s)
+                    .collect();
+                if fit_samples.is_empty() || eval_samples.is_empty() {
+                    continue;
+                }
+                let Ok(fold_prior) = ModelBaseAttractorProfile::extract(
+                    adapter,
+                    &fit_samples,
+                    self.config.pooler,
+                    0.55,
+                ) else {
+                    continue;
+                };
+                let mut fold_corpus = pre_prior_corpus.clone();
+                fold_corpus.extend_common_mode_basis(&fold_prior.pooled_common_mode_basis, 3);
+                let fold_tok_basis = CompiledTokenCorpus::merge_orthonormal_basis(
+                    &corpus_tok_basis,
+                    &fold_prior.token_common_mode_basis,
+                    12,
+                );
+                let fold_entry_toks = project_compact_entries(&self.entries, &fold_tok_basis);
+                let fold_stats = AdaptiveTokenSpecificityCalibrator::default()
+                    .calibrate_token_stats(&fold_entry_toks, fold_corpus.entries());
+                let fold_compiled = CompiledTokenCorpus {
+                    corpus: fold_corpus,
+                    novelty_reference_per_layer: novelty_reference_per_layer.clone(),
+                    corpus_centroid_per_layer: corpus_centroid_per_layer.clone(),
+                    token_common_mode_basis: fold_tok_basis.clone(),
+                    entry_token_sigs: fold_entry_toks,
+                    entry_token_weights: fold_stats.entry_token_weights,
+                    entry_token_hub_bias: fold_stats.entry_token_hub_bias,
+                    global_token_hub_mean: fold_stats.global_token_hub_mean,
+                    probe_baseline: ManifoldProbeBaseline::default(),
+                    recall_policy,
+                    null_calibration: None,
+                    token_explain_threshold: 0.40,
+                    pooler: self.config.pooler,
+                };
+                for sample in eval_samples {
+                    if let Ok(rec) = fold_compiled.recall_token_sequence(
                         adapter,
-                        &fit_samples,
-                        self.config.pooler,
-                        0.55,
-                    ) else {
-                        continue;
-                    };
-                    let mut fold_corpus = pre_prior_corpus.clone();
-                    fold_corpus.extend_common_mode_basis(&fold_prior.pooled_common_mode_basis, 3);
-                    let fold_tok_basis = CompiledTokenCorpus::merge_orthonormal_basis(
-                        &corpus_tok_basis,
-                        &fold_prior.token_common_mode_basis,
-                        12,
-                    );
-                    let fold_entry_toks = project_compact_entries(&self.entries, &fold_tok_basis);
-                    let fold_stats = AdaptiveTokenSpecificityCalibrator::default()
-                        .calibrate_token_stats(&fold_entry_toks, fold_corpus.entries());
-                    let fold_compiled = CompiledTokenCorpus {
-                        corpus: fold_corpus,
-                        novelty_reference_per_layer: novelty_reference_per_layer.clone(),
-                        corpus_centroid_per_layer: corpus_centroid_per_layer.clone(),
-                        token_common_mode_basis: fold_tok_basis.clone(),
-                        entry_token_sigs: fold_entry_toks,
-                        entry_token_weights: fold_stats.entry_token_weights,
-                        entry_token_hub_bias: fold_stats.entry_token_hub_bias,
-                        global_token_hub_mean: fold_stats.global_token_hub_mean,
-                        probe_baseline: ManifoldProbeBaseline::default(),
-                        recall_policy,
-                        null_calibration: None,
-                        token_explain_threshold: 0.40,
-                        pooler: self.config.pooler,
-                    };
-                    for sample in eval_samples {
-                        if let Ok(rec) = fold_compiled.recall_token_sequence(
-                            adapter,
-                            &sample.per_layer_token_qs,
-                            sample.seq_len,
-                        ) {
-                            let peak = rec.top1_fact_score;
-                            if peak.is_finite() {
-                                ood_null_peaks.push(peak);
-                            }
-                            if rec.telemetry.query_ortho_ratio.is_finite() {
-                                ood_ortho_ratios.push(rec.telemetry.query_ortho_ratio);
-                            }
+                        &sample.per_layer_token_qs,
+                        sample.seq_len,
+                    ) {
+                        let peak = rec.top1_fact_score;
+                        if peak.is_finite() {
+                            ood_null_peaks.push(peak);
                         }
-                        if let Ok(q_salient) =
-                            CompiledTokenCorpus::extract_salient_token_sigs_indexed(
-                                adapter,
-                                &sample.per_layer_token_qs,
-                                sample.seq_len,
-                                &novelty_reference_per_layer,
-                                &fold_tok_basis,
-                                16,
-                                self.config.pooler,
-                            )
-                        {
-                            for (_, q_tok, _) in &q_salient {
-                                let mut best_fact_c = 0.0_f32;
-                                for (idx, d_toks) in
-                                    fold_compiled.entry_token_sigs.iter().enumerate()
+                        if rec.telemetry.query_ortho_ratio.is_finite() {
+                            ood_ortho_ratios.push(rec.telemetry.query_ortho_ratio);
+                        }
+                    }
+                    if let Ok(q_salient) = CompiledTokenCorpus::extract_salient_token_sigs_indexed(
+                        adapter,
+                        &sample.per_layer_token_qs,
+                        sample.seq_len,
+                        &novelty_reference_per_layer,
+                        &fold_tok_basis,
+                        16,
+                        self.config.pooler,
+                    ) {
+                        for (_, q_tok, _) in &q_salient {
+                            let mut best_fact_c = 0.0_f32;
+                            for (idx, d_toks) in fold_compiled.entry_token_sigs.iter().enumerate() {
+                                if fold_compiled
+                                    .corpus
+                                    .entries()
+                                    .get(idx)
+                                    .is_none_or(|e| e.role != AttractorRole::Fact)
                                 {
-                                    if fold_compiled
-                                        .corpus
-                                        .entries()
-                                        .get(idx)
-                                        .is_none_or(|e| e.role != AttractorRole::Fact)
-                                    {
-                                        continue;
-                                    }
-                                    for d_tok in d_toks {
-                                        let c = TextAttractorCorpus::cosine_f32(q_tok, d_tok);
-                                        if c > best_fact_c {
-                                            best_fact_c = c;
-                                        }
+                                    continue;
+                                }
+                                for d_tok in d_toks {
+                                    let c = TextAttractorCorpus::cosine_f32(q_tok, d_tok);
+                                    if c > best_fact_c {
+                                        best_fact_c = c;
                                     }
                                 }
-                                ood_tok_max_cos.push(best_fact_c);
                             }
+                            ood_tok_max_cos.push(best_fact_c);
                         }
                     }
                 }
-                if !ood_null_peaks.is_empty() {
-                    let m = ood_null_peaks.len() as f64;
-                    let ood_null_mean =
-                        (ood_null_peaks.iter().map(|&v| f64::from(v)).sum::<f64>() / m) as f32;
-                    let var = ood_null_peaks
-                        .iter()
-                        .map(|&v| {
-                            let d = f64::from(v - ood_null_mean);
-                            d * d
-                        })
-                        .sum::<f64>()
-                        / m;
-                    let ood_null_std = var.sqrt() as f32;
-                    ood_null_peaks.sort_by(f32::total_cmp);
-                    let ood_null_max = *ood_null_peaks.last().unwrap_or(&0.0);
-                    let p90_idx = ((ood_null_peaks.len().saturating_sub(1) * 9).div_ceil(10))
-                        .min(ood_null_peaks.len() - 1);
-                    let ood_null_p90 = ood_null_peaks[p90_idx];
-                    let ood_null_high = (ood_null_mean + 1.50 * ood_null_std)
-                        .max(ood_null_p90 + 0.015)
-                        .clamp(0.15, 0.36);
-                    let calibrated_min_coherence = corpus_offdiag_floor.max(ood_null_high);
-                    recall_policy.min_coherence = calibrated_min_coherence;
+            }
+            if !ood_null_peaks.is_empty() {
+                let m = ood_null_peaks.len() as f64;
+                let ood_null_mean =
+                    (ood_null_peaks.iter().map(|&v| f64::from(v)).sum::<f64>() / m) as f32;
+                let var = ood_null_peaks
+                    .iter()
+                    .map(|&v| {
+                        let d = f64::from(v - ood_null_mean);
+                        d * d
+                    })
+                    .sum::<f64>()
+                    / m;
+                let ood_null_std = var.sqrt() as f32;
+                ood_null_peaks.sort_by(f32::total_cmp);
+                let ood_null_max = *ood_null_peaks.last().unwrap_or(&0.0);
+                let p90_idx = ((ood_null_peaks.len().saturating_sub(1) * 9).div_ceil(10))
+                    .min(ood_null_peaks.len() - 1);
+                let ood_null_p90 = ood_null_peaks[p90_idx];
+                let ood_null_high = (ood_null_mean + 1.50 * ood_null_std)
+                    .max(ood_null_p90 + 0.015)
+                    .clamp(0.15, 0.36);
+                let calibrated_min_coherence = corpus_offdiag_floor.max(ood_null_high);
+                recall_policy.min_coherence = calibrated_min_coherence;
 
-                    let ood_null_median_ortho_ratio = if ood_ortho_ratios.is_empty() {
-                        1.0
-                    } else {
-                        ood_ortho_ratios.sort_by(f32::total_cmp);
-                        ood_ortho_ratios[ood_ortho_ratios.len() / 2]
-                    };
-                    if !ood_tok_max_cos.is_empty() {
-                        ood_tok_max_cos.sort_by(f32::total_cmp);
-                        let p85_idx = (ood_tok_max_cos.len() * 85) / 100;
-                        let p85 = ood_tok_max_cos[p85_idx.min(ood_tok_max_cos.len() - 1)];
-                        token_explain_threshold = (p85 + 0.05).clamp(0.35, 0.56);
-                    }
-                    null_calibration = Some(NullCalibrationEnvelope {
-                        sample_count: ood_null_peaks.len(),
-                        corpus_offdiag_floor,
-                        ood_null_mean,
-                        ood_null_std,
-                        ood_null_max,
-                        ood_null_high,
-                        calibrated_min_coherence,
-                        ood_null_median_ortho_ratio,
-                        token_explain_threshold,
-                    });
+                let ood_null_median_ortho_ratio = if ood_ortho_ratios.is_empty() {
+                    1.0
+                } else {
+                    ood_ortho_ratios.sort_by(f32::total_cmp);
+                    ood_ortho_ratios[ood_ortho_ratios.len() / 2]
+                };
+                if !ood_tok_max_cos.is_empty() {
+                    ood_tok_max_cos.sort_by(f32::total_cmp);
+                    let p85_idx = (ood_tok_max_cos.len() * 85) / 100;
+                    let p85 = ood_tok_max_cos[p85_idx.min(ood_tok_max_cos.len() - 1)];
+                    token_explain_threshold = (p85 + 0.05).clamp(0.35, 0.56);
                 }
+                null_calibration = Some(NullCalibrationEnvelope {
+                    sample_count: ood_null_peaks.len(),
+                    corpus_offdiag_floor,
+                    ood_null_mean,
+                    ood_null_std,
+                    ood_null_max,
+                    ood_null_high,
+                    calibrated_min_coherence,
+                    ood_null_median_ortho_ratio,
+                    token_explain_threshold,
+                });
             }
         }
 

@@ -4,11 +4,13 @@
 [package]
 name = "liminika-candle-eval"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.100.0"
 license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace]
+resolver = "3"
 
 [features]
 default = []
@@ -22,3 +24,14 @@ liminika-core = { path = "../../src/core" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[lints.clippy]
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+inline_always = "allow"
+undocumented_unsafe_blocks = "warn"

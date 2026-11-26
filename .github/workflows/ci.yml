@@ -78,6 +78,8 @@ jobs:
             rust:
               - 'include/**'
               - 'src/**'
+              - 'xtask/**'
+              - '.cargo/**'
               - 'examples/**'
               - 'fuzz/**'
               - 'tests/**'
@@ -109,6 +111,8 @@ jobs:
               - 'deny.toml'
               - 'LICENSE*'
               - 'src/**'
+              - 'xtask/**'
+              - '.cargo/**'
               - 'include/**'
               - 'scripts/**'
               - 'tests/**'
@@ -196,7 +200,7 @@ jobs:
             cargo fmt --manifest-path examples/candle_eval/Cargo.toml
           fi
           if [ -d "fuzz/fuzz_targets" ]; then
-            rustfmt --edition 2021 fuzz/fuzz_targets/*.rs
+            rustfmt --edition 2024 fuzz/fuzz_targets/*.rs
           fi
           if [ -f "Cargo.toml" ]; then
             cargo update --workspace --offline 2>/dev/null || true
@@ -276,6 +280,11 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable Rust caching (xtask)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: xtask-linux
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@cargo-deny
@@ -440,7 +449,7 @@ jobs:
           PY
 
       - name: Verify 5-Layer Unidirectional DAG, Driver Isolation & Axiom Orthogonality
-        run: python3 scripts/verify_architecture.py --check
+        run: cargo xtask --check
 
   # =========================================================================
   # 4. C/C++ FFI & CTEST BUILD MATRIX
@@ -734,7 +743,7 @@ jobs:
             cargo fmt --manifest-path examples/candle_eval/Cargo.toml -- --check
           fi
           if [ -d "fuzz/fuzz_targets" ]; then
-            rustfmt --edition 2021 --check fuzz/fuzz_targets/*.rs
+            rustfmt --edition 2024 --check fuzz/fuzz_targets/*.rs
           fi
 
       - name: Run cargo check/clippy (no_std core, default, and all-features) (Unix)
@@ -863,10 +872,10 @@ jobs:
           cargo miri test --locked -p liminika-adapter --lib -- host::path_guard
 
   # =========================================================================
-  # 5C. MSRV VERIFICATION (RUST 1.83.0)
+  # 5C. MSRV VERIFICATION (RUST 1.100.0)
   # =========================================================================
   msrv-check:
-    name: MSRV 1.83.0 Verification (liminika-core & dsl)
+    name: MSRV 1.100.0 Verification (Workspace & no_std core)
     needs: [changes, auto-format]
     if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
@@ -880,26 +889,21 @@ jobs:
         with:
           ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
 
-      - name: Install MSRV Rust toolchain (1.83.0)
+      - name: Install MSRV Rust toolchain (1.100.0)
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.83.0"
+          toolchain: "1.100.0"
 
-      - name: Enable Rust caching (MSRV 1.83.0)
+      - name: Enable Rust caching (MSRV 1.100.0)
         uses: Swatinem/rust-cache@v2
         with:
-          key: msrv-1.83.0-linux
+          key: msrv-1.100.0-linux
 
-      - name: Verify MSRV 1.83.0 on zero-dependency crates (core & dsl)
-        # `liminika-adapter` and `liminika-cli` (and dev-dep `criterion`) pull locked
-        # transitive crates requiring Rust >= 1.85 / edition2024 (`base64ct`, `zeroize`,
-        # `wasip2`, `wit-bindgen`, `criterion`/`clap`), so this job pins the passing
-        # zero-dependency library targets (`liminika-core` and `liminika-dsl`).
+      - name: Verify MSRV 1.100.0 across no_std core and full workspace
         run: |
-          cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
-          cargo check --locked -p liminika-core --lib
-          cargo check --locked -p liminika-core --lib --all-features
-          cargo check --locked -p liminika-dsl --lib
+          cargo rustc -j 1 --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
+          cargo check -j 1 --locked --workspace --all-targets
+          cargo check -j 1 --locked --workspace --all-targets --all-features
 
   # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION
@@ -978,9 +982,6 @@ jobs:
           if [ -f "scripts/run_benchmarks.py" ]; then
             python scripts/run_benchmarks.py --help >/dev/null
             python scripts/run_benchmarks.py --dry-run >/dev/null
-          fi
-          if [ -f "scripts/verify_architecture.py" ]; then
-            python scripts/verify_architecture.py --help >/dev/null
           fi
 
           if [ -d "tests" ]; then

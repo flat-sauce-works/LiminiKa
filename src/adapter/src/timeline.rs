@@ -108,8 +108,8 @@ impl Default for AdaptiveGopCutDetector {
 impl TimelineCutDetector for AdaptiveGopCutDetector {
     fn should_emit_keyframe(&self, metrics: &FrameTransitionMetrics) -> bool {
         use liminika_core::drivers::{
-            FrameDirective, SpineFrameTransitionInput, SystemSpineState,
-            SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED,
+            FrameDirective, SPINE_TRANSITION_FLAG_NEW_BASIN_SPAWNED, SpineFrameTransitionInput,
+            SystemSpineState,
         };
         use liminika_core::liminal::Lacuna;
 
@@ -690,10 +690,10 @@ impl LmnkTimeline {
     }
 
     fn latest_phase_q7(&self) -> [lmnk_q7_t; MAX_ATTENTION_HEADS] {
-        if let Some(last) = self.frames.last() {
-            if let Ok(state) = self.seek_zero_forward(last.frame_index) {
-                return state.active_phase_q7;
-            }
+        if let Some(last) = self.frames.last()
+            && let Ok(state) = self.seek_zero_forward(last.frame_index)
+        {
+            return state.active_phase_q7;
         }
         [0_i8; MAX_ATTENTION_HEADS]
     }
@@ -800,7 +800,7 @@ impl LmnkTimeline {
                 r => {
                     return Err(LmnkTimelineError::Corrupted(format!(
                         "unknown AttractorRole byte: {r}"
-                    )))
+                    )));
                 }
             };
             let energy = cur.read_f32_le()?;
@@ -871,7 +871,7 @@ impl LmnkTimeline {
                 other => {
                     return Err(LmnkTimelineError::Corrupted(format!(
                         "unknown GopFrameKind tag: {other}"
-                    )))
+                    )));
                 }
             };
             frames.push(GopTimelineFrame {
@@ -1020,30 +1020,29 @@ impl LmnkTimeline {
             if let GopFrameKind::KeyframeI {
                 container_bytes, ..
             } = &frame.kind
+                && let Ok(view) = LmnkContainerView::parse(container_bytes)
             {
-                if let Ok(view) = LmnkContainerView::parse(container_bytes) {
-                    anchor_sec = view
-                        .section_bytes(LMNK_SECTION_PHASE_ANCHORS)
-                        .filter(|s| !s.is_empty())
-                        .map(<[u8]>::to_vec);
-                    trail_sec = view
-                        .section_bytes(LMNK_SECTION_POINTER_TRAILS)
-                        .filter(|s| !s.is_empty())
-                        .map(<[u8]>::to_vec);
-                    bloom_sec = view
-                        .section_bytes(LMNK_SECTION_BLOOM_FILTER)
-                        .filter(|s| !s.is_empty())
-                        .map(<[u8]>::to_vec);
-                    ledger_sec = view
-                        .section_bytes(LMNK_SECTION_LEDGER_SLOT)
-                        .filter(|s| !s.is_empty())
-                        .map(<[u8]>::to_vec);
-                    prov_sec = view
-                        .section_bytes(LMNK_SECTION_CAUSAL_PROVENANCE)
-                        .filter(|s| !s.is_empty())
-                        .map(<[u8]>::to_vec);
-                    break;
-                }
+                anchor_sec = view
+                    .section_bytes(LMNK_SECTION_PHASE_ANCHORS)
+                    .filter(|s| !s.is_empty())
+                    .map(<[u8]>::to_vec);
+                trail_sec = view
+                    .section_bytes(LMNK_SECTION_POINTER_TRAILS)
+                    .filter(|s| !s.is_empty())
+                    .map(<[u8]>::to_vec);
+                bloom_sec = view
+                    .section_bytes(LMNK_SECTION_BLOOM_FILTER)
+                    .filter(|s| !s.is_empty())
+                    .map(<[u8]>::to_vec);
+                ledger_sec = view
+                    .section_bytes(LMNK_SECTION_LEDGER_SLOT)
+                    .filter(|s| !s.is_empty())
+                    .map(<[u8]>::to_vec);
+                prov_sec = view
+                    .section_bytes(LMNK_SECTION_CAUSAL_PROVENANCE)
+                    .filter(|s| !s.is_empty())
+                    .map(<[u8]>::to_vec);
+                break;
             }
         }
         if let Some(ref circuit) = self.persona_circuit {
@@ -1612,7 +1611,7 @@ impl AttractorContainerCodec for LmnkTimeline {
                 recall_policy,
             } => (container_bytes, *recall_policy),
             GopFrameKind::DeltaP { .. } => {
-                return Err("corrupt seek index pointing to DeltaP".to_string())
+                return Err("corrupt seek index pointing to DeltaP".to_string());
             }
         };
 
@@ -1825,9 +1824,11 @@ mod tests {
             .to_container_bytes(LMNK_CONTAINER_FLAG_COMPILED_CACHE)
             .expect("min container");
         let min_view = LmnkContainerView::parse(&min_bytes).expect("min parse");
-        assert!(min_view
-            .section_bytes(LMNK_SECTION_LOGICAL_PFRAMES)
-            .is_none());
+        assert!(
+            min_view
+                .section_bytes(LMNK_SECTION_LOGICAL_PFRAMES)
+                .is_none()
+        );
         assert_eq!(LmnkTimeline::from_bytes(&min_bytes).unwrap(), tl_min);
 
         // 3. .lmnkp 64B-aligned Store ZIP roundtrip.
@@ -1894,11 +1895,10 @@ mod tests {
         let raw_c = tl
             .to_container_bytes(LMNK_CONTAINER_FLAG_COMPILED_CACHE)
             .expect("raw_c");
-        assert!(LmnkTimeline::from_bytes_with_policy(
-            &raw_c,
-            &IntegrityPolicy::RequireSignature(pk)
-        )
-        .is_err());
+        assert!(
+            LmnkTimeline::from_bytes_with_policy(&raw_c, &IntegrityPolicy::RequireSignature(pk))
+                .is_err()
+        );
         let signed_c = sign_lmnkc_container(&raw_c, &kp).expect("sign lmnkc");
         let verified_tl =
             LmnkTimeline::from_bytes_with_policy(&signed_c, &IntegrityPolicy::RequireSignature(pk))

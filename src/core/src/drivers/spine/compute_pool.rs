@@ -21,10 +21,10 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
-use crate::drivers::spine::state::{SystemSpineState, SPINE_BYPASS_VETO_NONE};
-use crate::foundation::{branchless_argmin_u8_x8_masked, Pod};
+use crate::drivers::spine::state::{SPINE_BYPASS_VETO_NONE, SystemSpineState};
+use crate::foundation::{Pod, branchless_argmin_u8_x8_masked};
 use crate::liminal::{
-    branchless_select_u16, branchless_select_u64, branchless_select_u8, BitCut64, BitCut8,
+    BitCut8, BitCut64, branchless_select_u8, branchless_select_u16, branchless_select_u64,
 };
 
 /// Maximum number of anonymous compute slots tracked via `u64` bitmasks.
@@ -413,11 +413,7 @@ impl AnonymousComputePool {
         } else {
             reading.l3_load_pressure_q15
         };
-        if raw > 32767 {
-            32767
-        } else {
-            raw
-        }
+        if raw > 32767 { 32767 } else { raw }
     }
 
     /// Advances the Gauge-Zero pressure EMA + asymmetric hysteresis state machine and emits a

@@ -41,7 +41,7 @@ Running checks locally before opening a PR is completely optional—CI handles v
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo deny check
-python scripts/verify_architecture.py --check
+cargo xtask --check
 ```
 
 ### Native C11 / C++20 C-ABI Checks

@@ -12,7 +12,7 @@ use crate::foundation::simd_stats::{
 };
 use crate::foundation::swar_simd::{branchless_splitmix64, load_q7_words_64, words_to_q7_array_64};
 use crate::liminal::{
-    branchless_select_usize, PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_usize,
 };
 
 #[inline(always)]

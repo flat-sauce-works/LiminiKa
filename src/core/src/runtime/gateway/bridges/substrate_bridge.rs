@@ -6,20 +6,20 @@
 use super::super::*;
 use super::StigmergicReceptor;
 use crate::foundation::{
+    AlignedSliceMut32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, Pod, TaggedPtr,
     branchless_clamp_f32, branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
     branchless_rad_to_phase_step_u8, branchless_relu_f32, store_q7_words_64, swar_words_nonzero_64,
-    AlignedSliceMut32, Pod, TaggedPtr, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_u8, branchless_select_u32,
 };
 use crate::runtime::telemetry::{CoreTelemetryBank, LayerDistortionKind};
 use crate::stigmergy::{
-    trail_phase_words_mut, trail_phase_words_ref, PhaseAnchorRecord, PointerTrail,
-    SandboxLifecycleEvent, StigmergicActionDecision, StigmergicSubstrate, StigmergicSubstrateOps,
-    SubstrateStepReport, WorkbenchSlotSpec, ATTRACTOR_SLOT_REPULSION,
-    DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, MAX_ATTRACTOR_PULL_FORCE, SUBSTRATE_INLINE_TRAILS,
+    ATTRACTOR_SLOT_REPULSION, DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE, MAX_ATTRACTOR_PULL_FORCE,
+    PhaseAnchorRecord, PointerTrail, SUBSTRATE_INLINE_TRAILS, SandboxLifecycleEvent,
+    StigmergicActionDecision, StigmergicSubstrate, StigmergicSubstrateOps, SubstrateStepReport,
+    WorkbenchSlotSpec, trail_phase_words_mut, trail_phase_words_ref,
 };
 
 // ===================================================================

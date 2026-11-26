@@ -12,11 +12,11 @@ use crate::eval::{
     count_semantic_forbid_hits, generate_steered_reply, generate_steered_reply_with_offset,
 };
 use crate::eval_common::{
-    anchor_disjoint_stats, build_steered_body, make_decode_cfg, mean_f64, measure_guard_antiphase,
-    pct, reset_clean_probe_adapter, resolve_forbidden_token_id, ClassMetricSamples,
-    DecodeCfgOptions,
+    ClassMetricSamples, DecodeCfgOptions, anchor_disjoint_stats, build_steered_body,
+    make_decode_cfg, mean_f64, measure_guard_antiphase, pct, reset_clean_probe_adapter,
+    resolve_forbidden_token_id,
 };
-use crate::extended_eval::{count_semantic_forbid_hits_utf8, GuardAttackStyle};
+use crate::extended_eval::{GuardAttackStyle, count_semantic_forbid_hits_utf8};
 use crate::metrics::{delta_log_prob, kl_divergence_and_max_abs_delta};
 use crate::model::{KvCacheMode, LogitsFetchMode};
 use crate::physics_eval::PartitionClass;
@@ -352,31 +352,32 @@ pub(crate) fn run_partition_eval(
 
         // Exercise a short decode step on Exterior / OOD when steering is eligible to verify
         // zero unverified `sandbox_settlements` misfires.
-        if let Some(baked) = rt.baked_opt {
-            if !matches!(probe.class, PartitionClass::SelfRef) && plan.steering_eligible() {
-                let eff_mask = plan.effective_layer_steer_mask(rt.adapter);
-                let prompt = rt.chat.format_single_turn(probe.prompt);
-                let mut dec_cfg = make_decode_cfg(
-                    cli,
-                    Some(baked),
-                    Some(&plan),
-                    DecodeCfgOptions {
-                        eff_mask,
-                        use_steer: true,
-                        max_tokens: 16,
-                        capture_first_logits: false,
-                        force_observe_stride_one: false,
-                    },
-                );
-                let _ = generate_steered_reply(
-                    rt.model,
-                    rt.tokenizer,
-                    rt.chat,
-                    rt.adapter,
-                    &prompt,
-                    &mut dec_cfg,
-                )?;
-            }
+        if let Some(baked) = rt.baked_opt
+            && !matches!(probe.class, PartitionClass::SelfRef)
+            && plan.steering_eligible()
+        {
+            let eff_mask = plan.effective_layer_steer_mask(rt.adapter);
+            let prompt = rt.chat.format_single_turn(probe.prompt);
+            let mut dec_cfg = make_decode_cfg(
+                cli,
+                Some(baked),
+                Some(&plan),
+                DecodeCfgOptions {
+                    eff_mask,
+                    use_steer: true,
+                    max_tokens: 16,
+                    capture_first_logits: false,
+                    force_observe_stride_one: false,
+                },
+            );
+            let _ = generate_steered_reply(
+                rt.model,
+                rt.tokenizer,
+                rt.chat,
+                rt.adapter,
+                &prompt,
+                &mut dec_cfg,
+            )?;
         }
 
         if let Some(style) = probe.style {
@@ -728,43 +729,39 @@ pub(crate) fn run_repulsion_eval(
                 };
                 let Some(tok_id) = tok_opt else { continue };
                 forb_tok_resolved += 1;
-                if let Some(hyb_l) = on_cfg.first_prefill_logits.as_deref() {
-                    if let Some(dlp) = delta_log_prob(off_l, hyb_l, tok_id) {
-                        if matches!(spec.token_mode, ForbiddenTokenMode::FirstSubword)
-                            || dlp.is_finite()
-                        {
-                            total_stats.dlp_hybrid_total += 1;
-                            total_stats.dlp_hybrid_sum += dlp;
-                            if dlp <= 0.0 {
-                                total_stats.dlp_hybrid_le0 += 1;
-                            }
-                            if let Some(slot) = style_slot {
-                                by_style[slot].1.dlp_hybrid_total += 1;
-                                by_style[slot].1.dlp_hybrid_sum += dlp;
-                                if dlp <= 0.0 {
-                                    by_style[slot].1.dlp_hybrid_le0 += 1;
-                                }
-                            }
+                if let Some(hyb_l) = on_cfg.first_prefill_logits.as_deref()
+                    && let Some(dlp) = delta_log_prob(off_l, hyb_l, tok_id)
+                    && (matches!(spec.token_mode, ForbiddenTokenMode::FirstSubword)
+                        || dlp.is_finite())
+                {
+                    total_stats.dlp_hybrid_total += 1;
+                    total_stats.dlp_hybrid_sum += dlp;
+                    if dlp <= 0.0 {
+                        total_stats.dlp_hybrid_le0 += 1;
+                    }
+                    if let Some(slot) = style_slot {
+                        by_style[slot].1.dlp_hybrid_total += 1;
+                        by_style[slot].1.dlp_hybrid_sum += dlp;
+                        if dlp <= 0.0 {
+                            by_style[slot].1.dlp_hybrid_le0 += 1;
                         }
                     }
                 }
-                if let Some(rope_l) = rope_only_cfg.first_prefill_logits.as_deref() {
-                    if let Some(dlp) = delta_log_prob(off_l, rope_l, tok_id) {
-                        if matches!(spec.token_mode, ForbiddenTokenMode::FirstSubword)
-                            || dlp.is_finite()
-                        {
-                            total_stats.dlp_rope_total += 1;
-                            total_stats.dlp_rope_sum += dlp;
-                            if dlp <= 0.0 {
-                                total_stats.dlp_rope_le0 += 1;
-                            }
-                            if let Some(slot) = style_slot {
-                                by_style[slot].1.dlp_rope_total += 1;
-                                by_style[slot].1.dlp_rope_sum += dlp;
-                                if dlp <= 0.0 {
-                                    by_style[slot].1.dlp_rope_le0 += 1;
-                                }
-                            }
+                if let Some(rope_l) = rope_only_cfg.first_prefill_logits.as_deref()
+                    && let Some(dlp) = delta_log_prob(off_l, rope_l, tok_id)
+                    && (matches!(spec.token_mode, ForbiddenTokenMode::FirstSubword)
+                        || dlp.is_finite())
+                {
+                    total_stats.dlp_rope_total += 1;
+                    total_stats.dlp_rope_sum += dlp;
+                    if dlp <= 0.0 {
+                        total_stats.dlp_rope_le0 += 1;
+                    }
+                    if let Some(slot) = style_slot {
+                        by_style[slot].1.dlp_rope_total += 1;
+                        by_style[slot].1.dlp_rope_sum += dlp;
+                        if dlp <= 0.0 {
+                            by_style[slot].1.dlp_rope_le0 += 1;
                         }
                     }
                 }

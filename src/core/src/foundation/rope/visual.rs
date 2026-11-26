@@ -9,7 +9,7 @@ use core::arch::x86_64::*;
 use crate::foundation::aligned::{AlignedSlice32, AlignedSliceMut32};
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::phase_ops::avx2_hsum_ps;
-use crate::foundation::pod::{PagedBitmask, PAGED_BITMASK_BITS};
+use crate::foundation::pod::{PAGED_BITMASK_BITS, PagedBitmask};
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::scalar_math::branchless_rotate_so2_pair;
 use crate::foundation::scalar_math::{
@@ -17,7 +17,7 @@ use crate::foundation::scalar_math::{
 };
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::simd_stats::avx2_rotate_so2_block32;
-use crate::liminal::{LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT};
+use crate::liminal::{LMNK_ERR_INVALID_ARGUMENT, LmnkResult, PhaseQ7};
 
 // ===================================================================
 // 1. AVX2 / Scalar SIMD Kernels for 2D/3D Visual RoPE
@@ -121,7 +121,7 @@ pub(crate) fn rotate_so2_2d_xy_slice_simd(
     sin_y: f32,
     cos_y: f32,
 ) {
-    for quad in buf.chunks_exact_mut(4) {
+    for quad in buf.as_chunks_mut::<4>().0 {
         (quad[0], quad[1]) = branchless_rotate_so2_pair(quad[0], quad[1], sin_x, cos_x);
         (quad[2], quad[3]) = branchless_rotate_so2_pair(quad[2], quad[3], sin_y, cos_y);
     }
@@ -230,7 +230,7 @@ pub(crate) fn rotate_so2_3d_txy_slice_simd(
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        for hex in buf.chunks_exact_mut(6) {
+        for hex in buf.as_chunks_mut::<6>().0 {
             (hex[0], hex[1]) = branchless_rotate_so2_pair(hex[0], hex[1], sin_t, cos_t);
             (hex[2], hex[3]) = branchless_rotate_so2_pair(hex[2], hex[3], sin_x, cos_x);
             (hex[4], hex[5]) = branchless_rotate_so2_pair(hex[4], hex[5], sin_y, cos_y);
@@ -336,7 +336,7 @@ where
     if num_patches == 0
         || num_patches > (PAGED_BITMASK_BITS as usize)
         || patch_stride_elems == 0
-        || (patch_stride_elems % min_dim_multiple) != 0
+        || !patch_stride_elems.is_multiple_of(min_dim_multiple)
     {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }

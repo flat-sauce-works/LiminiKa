@@ -5,39 +5,39 @@
 //! context lifecycle, and unified `.lmnk` zero-copy container FFI.
 
 use super::*;
-use crate::runtime::storage::{LmnkContainerView, LMNK_CONTAINER_FLAG_COMPILED_CACHE};
+use crate::runtime::storage::{LMNK_CONTAINER_FLAG_COMPILED_CACHE, LmnkContainerView};
 
 // ===================================================================
 // 0. Tagged Pointer Bit-Packing & Mode Evolution C-ABI
 // ===================================================================
 
 /// Packs a 48-bit virtual address, 8-bit tag, and Q7 phase offset into a 64-bit tagged pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_pack(raw_addr: u64, tag: u8, phase: lmnk_q7_t) -> u64 {
     lmnk_tagged_ptr_t::pack(raw_addr, tag, phase).raw()
 }
 
 /// Unpacks the canonical 48-bit address from a 64-bit tagged pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_unpack_addr(ptr: u64) -> u64 {
     TaggedPtr(ptr).unpack_addr()
 }
 
 /// Unpacks the 8-bit micro-orchestration tag from a 64-bit tagged pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_unpack_tag(ptr: u64) -> u8 {
     TaggedPtr(ptr).unpack_tag()
 }
 
 /// Unpacks the 8-bit Q7 phase state from a 64-bit tagged pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_unpack_phase(ptr: u64) -> lmnk_q7_t {
     TaggedPtr(ptr).unpack_phase()
 }
 
 /// Packs a 48-bit address, 3-bit target working lane ID (`0..=7`), 5-bit Action Mode mask,
 /// and Q7 phase offset into a 64-bit tagged pointer (`0` branches).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_pack_action(
     raw_addr: u64,
     attractor_slot: u8,
@@ -53,13 +53,13 @@ pub extern "C" fn lmnk_tagged_ptr_pack_action(
 }
 
 /// Extracts the 5-bit Action Mode execution mask (`bits 0..=4` of the tag) from a 64-bit tagged pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_unpack_action_mode(ptr: u64) -> u8 {
     unpack_action_mode_from_tag(TaggedPtr(ptr).unpack_tag())
 }
 
 /// Extracts the 3-bit target working lane ID (`0..=7`, `bits 5..=7` of the tag) from a 64-bit tagged pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_unpack_attractor_slot(ptr: u64) -> u8 {
     unpack_attractor_slot_from_tag(TaggedPtr(ptr).unpack_tag())
 }
@@ -67,7 +67,7 @@ pub extern "C" fn lmnk_tagged_ptr_unpack_attractor_slot(ptr: u64) -> u8 {
 /// Evolves a 64-bit tagged pointer's Action Mode flags and target working lane ID bottom-up
 /// in $\mathcal{O}(1)$ from stigmergic trail density $\rho$, entropy $\tilde{H}$, and Bloom
 /// filter repulsion status (`0` branches).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_tagged_ptr_evolve_mode(
     ptr: u64,
     stigmergic_density: f32,
@@ -94,25 +94,25 @@ pub extern "C" fn lmnk_tagged_ptr_evolve_mode(
 // ===================================================================
 
 /// Returns the C-ABI major version number ([`LMNK_ABI_VERSION_MAJOR`]).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_abi_version_major() -> u32 {
     LMNK_ABI_VERSION_MAJOR
 }
 
 /// Returns the C-ABI minor version number ([`LMNK_ABI_VERSION_MINOR`]).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_abi_version_minor() -> u32 {
     LMNK_ABI_VERSION_MINOR
 }
 
 /// Returns the C-ABI patch version number ([`LMNK_ABI_VERSION_PATCH`]).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_abi_version_patch() -> u32 {
     LMNK_ABI_VERSION_PATCH
 }
 
 /// Returns the packed hexadecimal C-ABI version identifier (`0x0000_0300`).
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_abi_version_hex() -> u32 {
     LMNK_ABI_VERSION_HEX
 }
@@ -121,7 +121,7 @@ pub extern "C" fn lmnk_abi_version_hex() -> u32 {
 ///
 /// # Safety
 /// Returned pointer is static and read-only; callers must not free it.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_abi_version_string() -> *const c_char {
     LMNK_ABI_VERSION_CSTR.as_ptr()
 }
@@ -130,7 +130,7 @@ pub unsafe extern "C" fn lmnk_abi_version_string() -> *const c_char {
 ///
 /// # Safety
 /// Returned pointer is static and read-only; callers must not free it.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_status_to_string(status: LmnkStatus) -> *const c_char {
     status.as_c_bytes().as_ptr().cast::<c_char>()
 }
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn lmnk_status_to_string(status: LmnkStatus) -> *const c_c
 ///
 /// # Safety
 /// `flags_out` must be a non-null, naturally aligned writable `u64` pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_abi_query_capability(flags_out: *mut u64) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
@@ -160,7 +160,7 @@ pub unsafe extern "C" fn lmnk_abi_query_capability(flags_out: *mut u64) -> LmnkS
 ///
 /// # Safety
 /// `config` must be a non-null, 64-byte aligned writable [`lmnk_config_t`] pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_config_init_default(config: *mut lmnk_config_t) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn lmnk_config_init_default(config: *mut lmnk_config_t) ->
 ///
 /// # Safety
 /// `config` must be a non-null, 64-byte aligned readable [`lmnk_config_t`] pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_config_validate(config: *const lmnk_config_t) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment.
@@ -189,13 +189,13 @@ pub unsafe extern "C" fn lmnk_config_validate(config: *const lmnk_config_t) -> L
 // ===================================================================
 
 /// Returns the exact byte size of `RuntimeContext` required for `lmnk_context_init_in_place`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_context_size() -> usize {
     size_of::<RuntimeContext>()
 }
 
 /// Returns the required byte alignment (`64`) of `RuntimeContext` for `lmnk_context_init_in_place`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn lmnk_context_align() -> usize {
     align_of::<RuntimeContext>()
 }
@@ -206,7 +206,7 @@ pub extern "C" fn lmnk_context_align() -> usize {
 /// `config` must be valid and 64-byte aligned. `mem_out` must be non-null, aligned to
 /// [`lmnk_context_align`], writable for at least [`lmnk_context_size`] (`mem_bytes`) bytes,
 /// and disjoint from `config`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_init_in_place(
     config: *const lmnk_config_t,
     mem_out: *mut u8,
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn lmnk_context_init_in_place(
 ///
 /// # Safety
 /// `context` must be `NULL` or a handle previously initialized via `lmnk_context_init_in_place`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_deinit_in_place(context: LmnkContextHandle) -> LmnkStatus {
     if context.is_null() {
         return LMNK_OK;
@@ -276,7 +276,7 @@ pub unsafe extern "C" fn lmnk_context_deinit_in_place(context: LmnkContextHandle
 ///
 /// # Safety
 /// `config` (64B aligned) and `context_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_create(
     config: *const lmnk_config_t,
     context_out: *mut LmnkContextHandle,
@@ -312,7 +312,7 @@ pub unsafe extern "C" fn lmnk_context_create(
 /// # Safety
 /// `context` must be `NULL` or a handle returned by [`lmnk_context_create`] or
 /// [`lmnk_context_deserialize`]. `NULL` safely returns [`LMNK_OK`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_destroy(context: LmnkContextHandle) -> LmnkStatus {
     if context.is_null() {
         return LMNK_OK;
@@ -340,7 +340,7 @@ pub unsafe extern "C" fn lmnk_context_destroy(context: LmnkContextHandle) -> Lmn
 ///
 /// # Safety
 /// `context` must be `NULL` or a valid aligned [`LmnkContextHandle`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_reset(context: LmnkContextHandle) -> LmnkStatus {
     if context.is_null() {
         return LMNK_OK;
@@ -357,7 +357,7 @@ pub unsafe extern "C" fn lmnk_context_reset(context: LmnkContextHandle) -> LmnkS
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_step_token(
     context: LmnkContextHandle,
     token_id: u32,
@@ -430,7 +430,7 @@ pub unsafe extern "C" fn lmnk_context_step_token(
 ///
 /// # Safety
 /// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_configure_spine(
     context: LmnkContextHandle,
     baseline_pinned_compute_mask: u64,
@@ -465,7 +465,7 @@ pub unsafe extern "C" fn lmnk_context_configure_spine(
 ///
 /// # Safety
 /// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_configure_compute_pool(
     context: LmnkContextHandle,
     active_mask: u64,
@@ -492,7 +492,7 @@ pub unsafe extern "C" fn lmnk_context_configure_compute_pool(
 ///
 /// # Safety
 /// `context` (`64 B` aligned) and `state_out` (`64 B` aligned) must be non-null and non-overlapping.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_get_spine_state(
     context: LmnkContextHandle,
     state_out: *mut lmnk_spine_state_t,
@@ -521,7 +521,7 @@ pub unsafe extern "C" fn lmnk_context_get_spine_state(
 ///
 /// # Safety
 /// `context` must be a valid, non-null, 64-byte-aligned [`RuntimeContext`] handle.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_begin_turn_spine_policy(
     context: LmnkContextHandle,
     guard_turn: u8,
@@ -542,7 +542,7 @@ pub unsafe extern "C" fn lmnk_context_begin_turn_spine_policy(
 ///
 /// # Safety
 /// All pointers must be non-null, naturally aligned, and pairwise disjoint in memory.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_step_decode_control(
     context: LmnkContextHandle,
     input: *const lmnk_spine_decode_input_t,
@@ -579,7 +579,7 @@ pub unsafe extern "C" fn lmnk_context_step_decode_control(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, and bounds invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_serialize(
     context: LmnkContextHandle,
     buffer: *mut u8,
@@ -648,7 +648,7 @@ pub unsafe extern "C" fn lmnk_context_serialize(
 ///
 /// # Safety
 /// `buffer` and `context_out` must be non-null and valid for `buffer_size` bytes.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_context_deserialize(
     buffer: *const u8,
     buffer_size: usize,
@@ -693,7 +693,7 @@ pub unsafe extern "C" fn lmnk_context_deserialize(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_container_write_with_reports_zero_copy(
     container_flags: u32,
     anchors: *const lmnk_phase_anchor_record_t,
@@ -812,7 +812,7 @@ pub unsafe extern "C" fn lmnk_container_write_with_reports_zero_copy(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_container_write_zero_copy(
     anchors: *const lmnk_phase_anchor_record_t,
     num_anchors: usize,
@@ -848,7 +848,7 @@ pub unsafe extern "C" fn lmnk_container_write_zero_copy(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_container_verify_with_reports_zero_copy(
     container_bytes: *const u8,
     byte_len: usize,
@@ -943,7 +943,7 @@ pub unsafe extern "C" fn lmnk_container_verify_with_reports_zero_copy(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_container_verify_zero_copy(
     container_bytes: *const u8,
     byte_len: usize,
@@ -976,7 +976,7 @@ pub unsafe extern "C" fn lmnk_container_verify_zero_copy(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_container_map_and_steer_zero_copy_safe(
     container_bytes: *const u8,
     byte_len: usize,

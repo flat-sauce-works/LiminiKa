@@ -872,20 +872,20 @@ pub(super) fn steer_crystallized_records_with_optional_bloom_safe(
     trail_inout.attractor_pull_force = branchless_min_f32(tot_pull, MAX_ATTRACTOR_PULL_FORCE);
     trail_inout.flags |= TRAIL_FLAG_CRYSTALLIZED_CANDIDATE | TRAIL_FLAG_SYNERGY_RESONANCE;
 
-    if let Some(bloom_ref) = bloom_opt {
-        if !bloom_ref.is_empty() {
-            let (_density, rep_active) =
-                bloom_ref.apply_phase_conjugate_repulsion_words(&mut folded_w, 4, 128);
-            if rep_active {
-                *trail_phase_words_mut(trail_inout) = folded_w;
-                let cur_ptr = TaggedPtr(trail_inout.current_ptr);
-                let rep_mode = cur_ptr.action_mode_flags() | ACTION_PRESET_REPULSION_ESCAPE;
-                trail_inout.current_ptr = cur_ptr
-                    .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
-                    .conjugate_phase()
-                    .raw();
-                trail_inout.flags |= TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
-            }
+    if let Some(bloom_ref) = bloom_opt
+        && !bloom_ref.is_empty()
+    {
+        let (_density, rep_active) =
+            bloom_ref.apply_phase_conjugate_repulsion_words(&mut folded_w, 4, 128);
+        if rep_active {
+            *trail_phase_words_mut(trail_inout) = folded_w;
+            let cur_ptr = TaggedPtr(trail_inout.current_ptr);
+            let rep_mode = cur_ptr.action_mode_flags() | ACTION_PRESET_REPULSION_ESCAPE;
+            trail_inout.current_ptr = cur_ptr
+                .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
+                .conjugate_phase()
+                .raw();
+            trail_inout.flags |= TRAIL_FLAG_REPULSION_ACTIVE | TRAIL_FLAG_LIMINAL_BEAT_ACTIVE;
         }
     }
     trail_inout.sync_flags_with_current_ptr();
@@ -1071,7 +1071,7 @@ pub(super) const fn resolve_flat_tensor_heads(dim: usize) -> LmnkResult<(u32, u3
     if dim == 0 || (dim & 1) != 0 || dim > (u32::MAX as usize) {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-    if dim >= 128 && (dim % 128 == 0) {
+    if dim >= 128 && dim.is_multiple_of(128) {
         let heads = dim / 128;
         if heads <= MAX_ATTENTION_HEADS {
             return Ok((128, heads as u32));

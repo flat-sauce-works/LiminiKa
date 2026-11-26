@@ -5,26 +5,26 @@
 
 use super::{Result, RuntimeContext};
 use crate::foundation::{
-    branchless_clamp_f32, branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
-    branchless_q7_add_sat, branchless_q7_conjugate_64, branchless_rad_to_phase_step_u8,
-    branchless_relu_f32, is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64,
-    swar_or_avx2_q7_add_sat_words_64, AlignedSlice16, PhaseSteering, TaggedPtr,
-    ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_ID_MASK, AlignedSlice16, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    PhaseSteering, TaggedPtr, branchless_clamp_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
+    branchless_rad_to_phase_step_u8, branchless_relu_f32, is_phase_profile_nonzero_64,
+    load_q7_words_64, store_q7_words_64, swar_or_avx2_q7_add_sat_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, PhaseQ7, RuntimeConfig,
     LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, RuntimeConfig, branchless_select_f32, branchless_select_u32,
 };
 use crate::runtime::gateway::{
     CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal, SystemConstraintSignal,
 };
 use crate::runtime::storage::{
-    KvKeyframeCache, KvKeyframeHeader, MappedStorage, LMNK_CONTAINER_HEADER_BYTES,
+    KvKeyframeCache, KvKeyframeHeader, LMNK_CONTAINER_HEADER_BYTES, MappedStorage,
 };
 use crate::stigmergy::{
-    FastPathLedger, LedgerSlot, PagedBitmask, PointerSubstrate, PointerTrail, StigmergicSubstrate,
-    WorkbenchSlotSpec, ATTRACTOR_SLOT_PERSONA, LEDGER_HISTORY_LEN, MAX_ATTRACTOR_PULL_FORCE,
-    SUBSTRATE_INLINE_TRAILS,
+    ATTRACTOR_SLOT_PERSONA, FastPathLedger, LEDGER_HISTORY_LEN, LedgerSlot,
+    MAX_ATTRACTOR_PULL_FORCE, PagedBitmask, PointerSubstrate, PointerTrail,
+    SUBSTRATE_INLINE_TRAILS, StigmergicSubstrate, WorkbenchSlotSpec,
 };
 
 // ===================================================================

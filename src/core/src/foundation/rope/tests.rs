@@ -28,7 +28,7 @@ fn test_phase_steering_procrustes_damping_and_autonomous_aperture() {
         num_heads: 8,
     };
     let mut src_t = AlignedBuffer32::new([0.0_f32; 64]);
-    for pair in src_t.data.chunks_exact_mut(2) {
+    for pair in src_t.data.as_chunks_mut::<2>().0 {
         pair[0] = 1.0;
         pair[1] = 0.0;
     }

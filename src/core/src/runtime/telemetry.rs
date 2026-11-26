@@ -10,10 +10,11 @@
 #![warn(clippy::missing_errors_doc)]
 
 use crate::drivers::{
-    DistortionTension, LiminalEgoState, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
+    DistortionTension, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
     EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LIMINAL_EXTERIOR,
+    LiminalEgoState,
 };
-use crate::foundation::{branchless_clamp_f32, branchless_is_finite_f32, Pod};
+use crate::foundation::{Pod, branchless_clamp_f32, branchless_is_finite_f32};
 use crate::liminal::{
     EpistemicRegime, LacunaPartition8, LiminalThresholdState, NUM_LIMINAL_THRESHOLD_CHANNELS,
     NUM_STIGMERGIC_GRANULES, THRESHOLD_COGNITIVE_CIRCUIT, THRESHOLD_CONTRADICTION_GUARD,

@@ -10,9 +10,9 @@ use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device};
 use liminika_adapter::{
     AttractorRole, CapturedTokenSequence, CompiledTokenCorpus, ContrastiveAnchorBank,
-    ContrastiveAnchorEntry, ModelBaseAttractorProfile, ModelSteeringAdapter, PrefixAliasProbe,
-    SequenceActivationPooler, TokenSequenceEncoder, TokenSequenceEntry,
-    DEFAULT_STARTUP_PRIOR_PROBES,
+    ContrastiveAnchorEntry, DEFAULT_STARTUP_PRIOR_PROBES, ModelBaseAttractorProfile,
+    ModelSteeringAdapter, PrefixAliasProbe, SequenceActivationPooler, TokenSequenceEncoder,
+    TokenSequenceEntry,
 };
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
@@ -270,11 +270,7 @@ pub(crate) fn query_nvidia_smi_vram() -> Option<String> {
         .next()?
         .trim()
         .to_string();
-    if line.is_empty() {
-        None
-    } else {
-        Some(line)
-    }
+    if line.is_empty() { None } else { Some(line) }
 }
 
 pub(crate) fn estimate_model_footprint(

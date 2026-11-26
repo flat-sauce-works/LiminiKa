@@ -6,12 +6,12 @@
 
 use std::path::Path;
 
-use candle_core::{DType, Device, Module, Result as CResult, Tensor, D};
-use candle_nn::{linear_no_bias, Linear, RmsNorm, VarBuilder};
+use candle_core::{D, DType, Device, Module, Result as CResult, Tensor};
+use candle_nn::{Linear, RmsNorm, VarBuilder, linear_no_bias};
 use serde::Deserialize;
 use tokenizers::Tokenizer;
 
-use crate::model::{load_rms_norm_on_device, resolve_safetensors_files, CausalLmModel};
+use crate::model::{CausalLmModel, load_rms_norm_on_device, resolve_safetensors_files};
 
 const DEFAULT_IMAGE_MEAN: [f32; 3] = [0.481_454_66, 0.457_827_5, 0.408_210_73];
 const DEFAULT_IMAGE_STD: [f32; 3] = [0.268_629_54, 0.261_302_6, 0.275_777_1];

@@ -4,7 +4,7 @@
 use core::f32::consts::PI;
 
 use super::*;
-use crate::foundation::lut_crc32::{crc32_step_block64_words, CRC32_UNIFORM56_PAD8_ZERO_SEED_REF};
+use crate::foundation::lut_crc32::{CRC32_UNIFORM56_PAD8_ZERO_SEED_REF, crc32_step_block64_words};
 use crate::foundation::rope::visual::rotate_so2_3d_txy_slice_simd;
 use crate::foundation::simd_stats::{
     norm_l2_underflow_resilient_f32, rotate_so2_slice_unrolled16, scale_f32_slice_unrolled8,
@@ -14,7 +14,7 @@ use crate::foundation::swar_simd::{
     eval_fused_phase_clamp_subhead_sincos_q7_fast, eval_phase_clamp_sincos_q7_fast,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
+    MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD, branchless_select_f32, branchless_select_u32,
 };
 
 #[test]
@@ -169,7 +169,7 @@ fn test_avx2_sincos_x8_3d_txy_lockstep_qkv_and_subnormal_norm_rescue() {
     let (sx, cx) = branchless_sincos_q7(32);
     let (sy, cy) = branchless_sincos_q7(-16);
     rotate_so2_3d_txy_slice_simd(&mut grid_3d, st, ct, sx, cx, sy, cy);
-    for hex in grid_3d.chunks_exact(6) {
+    for hex in grid_3d.as_chunks::<6>().0 {
         assert!(((hex[0] * hex[0] + hex[1] * hex[1]) - 2.0).abs() < 1.0e-5);
         assert!(((hex[2] * hex[2] + hex[3] * hex[3]) - 2.0).abs() < 1.0e-5);
         assert!(((hex[4] * hex[4] + hex[5] * hex[5]) - 2.0).abs() < 1.0e-5);
@@ -347,7 +347,7 @@ fn test_branchless_argmin_u8_x8_masked() {
 
 #[test]
 fn test_branchless_q7_weighted_ensemble_words_64() {
-    use crate::liminal::{PhaseQ7, NUM_STIGMERGIC_GRANULES};
+    use crate::liminal::{NUM_STIGMERGIC_GRANULES, PhaseQ7};
     let base_zero = [0u64; NUM_STIGMERGIC_GRANULES];
     let p0 = [64i8; MAX_ATTENTION_HEADS];
     let p1 = [-64i8; MAX_ATTENTION_HEADS];

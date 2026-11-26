@@ -16,9 +16,9 @@ use core::mem::{align_of, size_of};
 use core::ops::{Deref, DerefMut, Index, IndexMut, Range};
 use core::slice::{self, SliceIndex};
 
-use crate::foundation::pod::{raw_byte_ranges_overlap, validate_raw_slice_bounds, Pod};
+use crate::foundation::pod::{Pod, raw_byte_ranges_overlap, validate_raw_slice_bounds};
 use crate::liminal::{
-    LmnkResult, LmnkStatus, LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER, LmnkResult, LmnkStatus,
 };
 
 /// Compile-time helper verifying that `ALIGN` is a non-zero power of two and at least `align_of::<T>()`.
@@ -330,7 +330,7 @@ impl<'a, T, const ALIGN: usize> AlignedSlice<'a, T, ALIGN> {
     #[inline(always)]
     #[must_use]
     pub const fn byte_len(&self) -> usize {
-        self.slice.len() * size_of::<T>()
+        core::mem::size_of_val(self.slice)
     }
 
     /// Returns the first element of the slice, or `None` if empty.
@@ -740,7 +740,7 @@ impl<'a, T, const ALIGN: usize> AlignedSliceMut<'a, T, ALIGN> {
     #[inline(always)]
     #[must_use]
     pub const fn byte_len(&self) -> usize {
-        self.slice.len() * size_of::<T>()
+        core::mem::size_of_val(self.slice)
     }
 
     /// Returns the first element of the slice, or `None` if empty.
@@ -1679,7 +1679,7 @@ const _: () = {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::liminal::{PhaseQ7, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS};
+    use crate::liminal::{MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7};
 
     #[test]
     fn test_infallible_aligned_buffers_range_indexing_and_upgrade() {

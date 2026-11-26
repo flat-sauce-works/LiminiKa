@@ -1,0 +1,16 @@
+# name: xtask/Cargo.toml
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+liminika-core = { path = "../src/core" }
+
+[lints]
+workspace = true

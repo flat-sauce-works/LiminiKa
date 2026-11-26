@@ -17,12 +17,12 @@ use liminika_core::runtime::{
     GuardPhaseAnchor, HorizonEscalationProvider, HorizonEscalationRequest, HorizonTriggerInput,
     ManifoldGatewaySignal, ObjectiveFact,
 };
-use liminika_core::stigmergy::{WorkbenchLanePlacement, WORKBENCH_LANE_FLAG_REPULSION};
+use liminika_core::stigmergy::{WORKBENCH_LANE_FLAG_REPULSION, WorkbenchLanePlacement};
 use tokenizers::Tokenizer;
 
 use crate::bake::BakedModelProfile;
 use crate::cli::EvalCliConfig;
-use crate::eval::{apply_ego_mode, SteerDecodeConfig};
+use crate::eval::{SteerDecodeConfig, apply_ego_mode};
 use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, ResonantAnchors};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -142,11 +142,7 @@ pub(crate) fn pct(num: usize, den: usize) -> f64 {
 }
 
 pub(crate) fn mean_f64(sum: f64, count: usize) -> f64 {
-    if count == 0 {
-        0.0
-    } else {
-        sum / count as f64
-    }
+    if count == 0 { 0.0 } else { sum / count as f64 }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -435,12 +431,12 @@ pub(crate) fn measure_guard_antiphase(
                 current_frame_energy: 2.0,
             };
             let mut slot_out = [0_i8; MAX_ATTENTION_HEADS];
-            if let Ok(Some(_)) = esc_provider.try_escalate_horizon(&req, &mut slot_out) {
-                if is_nonzero_q7(ref_q7, num_heads) {
-                    esc_checked += 1;
-                    if dot_q7(ref_q7, &slot_out, num_heads) < 0 {
-                        esc_antiphase += 1;
-                    }
+            if let Ok(Some(_)) = esc_provider.try_escalate_horizon(&req, &mut slot_out)
+                && is_nonzero_q7(ref_q7, num_heads)
+            {
+                esc_checked += 1;
+                if dot_q7(ref_q7, &slot_out, num_heads) < 0 {
+                    esc_antiphase += 1;
                 }
             }
         }

@@ -15,9 +15,9 @@ use core::mem::{align_of, size_of};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
-use crate::foundation::{raw_regions_overlap_or_same_zst, Pod, PtrAlignCheck};
+use crate::foundation::{Pod, PtrAlignCheck, raw_regions_overlap_or_same_zst};
 use crate::liminal::{
-    LmnkResult, LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER, LmnkResult,
 };
 
 #[inline(always)]

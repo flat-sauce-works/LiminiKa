@@ -43,13 +43,13 @@ mod vision;
 mod vlm_eval;
 
 use bake::{
-    argmax, capture_and_build_shared_corpus, kl_div, load_fixture, print_runtime_profile,
-    query_nvidia_smi_vram, token_logprob, BakedModelProfile,
+    BakedModelProfile, argmax, capture_and_build_shared_corpus, kl_div, load_fixture,
+    print_runtime_profile, query_nvidia_smi_vram, token_logprob,
 };
 use cli::{EvalCliConfig, EvalRuntime};
 use eval::{
-    apply_ego_mode, build_preset_circuit, resolve_persona_circuit, CircuitProfileMode,
-    HorizonAblationMode,
+    CircuitProfileMode, HorizonAblationMode, apply_ego_mode, build_preset_circuit,
+    resolve_persona_circuit,
 };
 use model::{
     CausalLmModel, ChatTemplate, ChatTemplateArg, ChatTemplateKind, ForwardSteer, KvCacheMode,
@@ -592,54 +592,54 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if rope_rad <= -1.5 {
                     let snap = adapter.telemetry_snapshot();
                     println!(
-                    "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
-                    snap.spine.continuous_standard_steps,
-                    snap.decision_ratios_pct[0],
-                    snap.decision_ratios_pct[1],
-                    snap.decision_ratios_pct[2],
-                    snap.decision_ratios_pct[3],
-                    snap.decision_ratios_pct[4],
-                    snap.decision_ratios_pct[5],
-                    snap.decision_ratios_pct[6],
-                );
+                        "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
+                        snap.spine.continuous_standard_steps,
+                        snap.decision_ratios_pct[0],
+                        snap.decision_ratios_pct[1],
+                        snap.decision_ratios_pct[2],
+                        snap.decision_ratios_pct[3],
+                        snap.decision_ratios_pct[4],
+                        snap.decision_ratios_pct[5],
+                        snap.decision_ratios_pct[6],
+                    );
                     let guard_slot = adapter.coherence_guard_slot();
                     let dwell = adapter.horizon_dwell();
                     println!(
-                    "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% guard_act={} guard_ret={} dwell=({},{})",
-                    snap.mode,
-                    snap.spine.total_steps,
-                    snap.spine.continuous_standard_steps,
-                    snap.liminal_excursion_ratio * 100.0,
-                    snap.ego_intervention_ratio * 100.0,
-                    guard_slot.activations,
-                    guard_slot.retractions,
-                    dwell.unstable_dwell_steps,
-                    dwell.quiescent_dwell_steps,
-                );
+                        "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% guard_act={} guard_ret={} dwell=({},{})",
+                        snap.mode,
+                        snap.spine.total_steps,
+                        snap.spine.continuous_standard_steps,
+                        snap.liminal_excursion_ratio * 100.0,
+                        snap.ego_intervention_ratio * 100.0,
+                        guard_slot.activations,
+                        guard_slot.retractions,
+                        dwell.unstable_dwell_steps,
+                        dwell.quiescent_dwell_steps,
+                    );
                 }
                 if label == "Baseline" || label == "Top + Substrate" {
                     println!("   --- Per-Probe Trace ({label}) ---");
                     for (idx, tr) in probe_traces.iter().enumerate() {
                         if rope_rad <= -1.5 {
                             println!(
-                            "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={} | {}",
-                            idx + 1,
-                            tr.slot,
-                            tr.d_lp,
-                            tr.p_exp,
-                            tr.p_forb,
-                            tr.rho,
-                            tr.steps,
-                            tr.h_tilde,
-                            tr.delta[0],
-                            tr.delta[1],
-                            tr.delta[2],
-                            tr.delta[3],
-                            tr.delta[4],
-                            tr.delta[5],
-                            tr.delta[6],
-                            tr.text
-                        );
+                                "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={} | {}",
+                                idx + 1,
+                                tr.slot,
+                                tr.d_lp,
+                                tr.p_exp,
+                                tr.p_forb,
+                                tr.rho,
+                                tr.steps,
+                                tr.h_tilde,
+                                tr.delta[0],
+                                tr.delta[1],
+                                tr.delta[2],
+                                tr.delta[3],
+                                tr.delta[4],
+                                tr.delta[5],
+                                tr.delta[6],
+                                tr.text
+                            );
                         } else {
                             println!(
                                 "   [P{}:{}] hit={}/forb={} | {}",
@@ -781,12 +781,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         d[i] = counts_after[i].saturating_sub(counts_before[i]);
                     }
                     println!(
-                    "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={}] => {text}",
-                    trail.stigmergic_density,
-                    trail.step_count,
-                    adapter.substrate().last_entropy_h_tilde,
-                    d[0], d[1], d[2], d[3], d[4], d[5], d[6],
-                );
+                        "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={}] => {text}",
+                        trail.stigmergic_density,
+                        trail.step_count,
+                        adapter.substrate().last_entropy_h_tilde,
+                        d[0],
+                        d[1],
+                        d[2],
+                        d[3],
+                        d[4],
+                        d[5],
+                        d[6],
+                    );
                 }
             }
         }

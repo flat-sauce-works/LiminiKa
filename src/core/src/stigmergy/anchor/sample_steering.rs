@@ -5,21 +5,20 @@
 
 use super::PhaseAnchorRecord;
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
-    branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
-    branchless_von_mises_kappa, circular_r_bar_from_words_64, is_phase_profile_nonzero_64,
-    is_word_array_uniform_64, load_q7_words_64, store_q7_word_at, store_q7_words_64,
-    swar_q7_phase_step_filter_words_64, swar_q7_phase_step_filter_x8,
-    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice,
-    AlignedSliceMut32, PhaseSteering, Pod, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64,
-    SWAR_SPLAT_BYTE_64,
+    AlignedBuffer16, AlignedSlice, AlignedSliceMut32, PhaseSteering, Pod, SWAR_LOW7_MASK_64,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    branchless_splitmix64, branchless_von_mises_kappa, circular_r_bar_from_words_64,
+    is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64, store_q7_word_at,
+    store_q7_words_64, swar_q7_phase_step_filter_words_64, swar_q7_phase_step_filter_x8,
+    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, LmnkResult, PhaseQ7, Scoped,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7,
+    Scoped, branchless_select_f32, branchless_select_i32,
 };
 use crate::stigmergy::gate::{PhaseDeltaSlice, PhaseSteeringActiveExt};
-use crate::stigmergy::trail::{trail_phase_words_ref, PointerTrail, TaggedPtr};
+use crate::stigmergy::trail::{PointerTrail, TaggedPtr, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_REPULSION_ACTIVE,
@@ -605,9 +604,9 @@ impl<T: EpisodicPhaseSample + ?Sized> EpisodicSampleSteering for T {}
 mod tests {
     use super::*;
     use crate::foundation::{
-        is_phase_profile_nonzero_64, AlignedBuffer32, PhaseSteering, DEFAULT_PHASE_CLAMP_MAX_RAD,
+        AlignedBuffer32, DEFAULT_PHASE_CLAMP_MAX_RAD, PhaseSteering, is_phase_profile_nonzero_64,
     };
-    use crate::liminal::{PhaseQ7, MAX_ATTENTION_HEADS};
+    use crate::liminal::{MAX_ATTENTION_HEADS, PhaseQ7};
 
     struct DummyPhaseSteerer;
     impl PhaseSteering for DummyPhaseSteerer {

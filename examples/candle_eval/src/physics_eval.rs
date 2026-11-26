@@ -21,15 +21,16 @@ use liminika_core::runtime::{AdaptiveThresholdPolicy, StandardPhaseKvGopCache};
 use crate::bake::query_nvidia_smi_vram;
 use crate::cli::{EvalCliConfig, EvalRuntime};
 use crate::eval::{
-    apply_ego_mode, count_semantic_forbid_hits, generate_steered_reply_with_offset,
-    SteerDecodeConfig,
+    SteerDecodeConfig, apply_ego_mode, count_semantic_forbid_hits,
+    generate_steered_reply_with_offset,
 };
 use crate::eval_common::pct;
 use crate::eval_suites::{
-    run_ood_selectivity_eval, run_partition_eval, run_repulsion_eval, ForbiddenTokenMode,
-    OodSelectivitySpec, PartitionEvalSpec, PartitionProbeRef, RepulsionEvalSpec, RepulsionProbeRef,
+    ForbiddenTokenMode, OodSelectivitySpec, PartitionEvalSpec, PartitionProbeRef,
+    RepulsionEvalSpec, RepulsionProbeRef, run_ood_selectivity_eval, run_partition_eval,
+    run_repulsion_eval,
 };
-use crate::metrics::{summarize_dialogue_quality, ReplyQualityMetrics};
+use crate::metrics::{ReplyQualityMetrics, summarize_dialogue_quality};
 use crate::model::{KvCacheMode, LogitsFetchMode, ResonantAnchors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

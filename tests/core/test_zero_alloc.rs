@@ -8,11 +8,11 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use liminika_core::abi::{
-    lmnk_config_init_default, lmnk_config_t, lmnk_context_align, lmnk_context_create,
-    lmnk_context_deinit_in_place, lmnk_context_destroy, lmnk_context_init_in_place,
-    lmnk_context_reset, lmnk_context_size, lmnk_context_step_token,
+    LMNK_OK, LmnkContextHandle, lmnk_config_init_default, lmnk_config_t, lmnk_context_align,
+    lmnk_context_create, lmnk_context_deinit_in_place, lmnk_context_destroy,
+    lmnk_context_init_in_place, lmnk_context_reset, lmnk_context_size, lmnk_context_step_token,
     lmnk_phase_steering_apply_fused_safe, lmnk_pointer_trail_t,
-    lmnk_substrate_resolve_trail_in_swarm, LmnkContextHandle, LMNK_OK,
+    lmnk_substrate_resolve_trail_in_swarm,
 };
 use liminika_core::foundation::{
     AlignedBuffer16, AlignedBuffer32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,

@@ -5,9 +5,9 @@
 
 use super::*;
 use crate::foundation::{
-    compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
-    eval_gershgorin_lambda_max, evaluate_hodge_obstruction_and_dual_pairing, load_q7_words_64,
-    AlignedBuffer32, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_EXPRESS_PHASE, AlignedBuffer32, compute_tikhonov_chebyshev_coeffs_deg3,
+    eval_chebyshev_spectral_filter_deg3, eval_gershgorin_lambda_max,
+    evaluate_hodge_obstruction_and_dual_pairing, load_q7_words_64,
 };
 use crate::liminal::{LmnkResult, RuntimeConfig};
 

@@ -14,17 +14,17 @@ use core::mem::{align_of, offset_of, size_of};
 
 use crate::drivers::ego::intent::{EgoIntentAxes, LiminalEgoState};
 use crate::foundation::{
-    branchless_q7_weighted_ensemble_contiguous_words_64, load_q7_words_64, swar_q7_circular_add_x8,
-    swar_q7_scale_le128_with_bias_x8, Pod, SWAR_SPLAT_BYTE_64,
+    Pod, SWAR_SPLAT_BYTE_64, branchless_q7_weighted_ensemble_contiguous_words_64, load_q7_words_64,
+    swar_q7_circular_add_x8, swar_q7_scale_le128_with_bias_x8,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, AttributionTag, BitCut8, LacunaPartition8,
-    PhaseQ7, Scoped, ScopedCut, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
-    SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR, SCOPE_REGION_SELF_REF,
+    AttributionTag, BitCut8, LacunaPartition8, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR, SCOPE_REGION_SELF_REF, Scoped,
+    ScopedCut, branchless_select_u8, branchless_select_u32,
 };
+use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 use crate::stigmergy::anchor::{PhaseAnchorRecord, PhaseProfile64};
 use crate::stigmergy::granule::StigmergicGranuleState;
-use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
 /// Maximum number of inline P-Frame [`DistortionDelta`] nodes hosted by [`EgoDifferentialNet`].
 pub const MAX_EGO_PFRAME_NODES: usize = 8;

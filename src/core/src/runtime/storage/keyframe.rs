@@ -5,6 +5,8 @@
 
 use super::KvKeyframeHeader;
 use crate::foundation::{
+    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, AlignedSlice16, AlignedSlice32,
+    AlignedSlice64, AlignedSliceMut64, KvMotionDeltaPacket, Pod, TaggedPtr,
     apply_pframe_motion_step_words_64, branchless_abs_f32, branchless_atan2_f32,
     branchless_clamp_f32, branchless_copysign_f32, branchless_fast_transition_log_prob,
     branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32,
@@ -16,18 +18,17 @@ use crate::foundation::{
     load_q7_words_64, pack_action_slot_tag, seek_pframe_chain_words_64, store_q7_words_64,
     swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
     swar_q7_phase_step_filter_words_64, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, AlignedSlice16, AlignedSlice32, AlignedSlice64,
-    AlignedSliceMut64, KvMotionDeltaPacket, Pod, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
-    ATTRACTOR_SLOT_ID_MASK,
+    unpack_attractor_slot_from_tag,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS,
-    LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT,
-    LMNK_ERR_INVALID_STATE, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, LmnkResult, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, PhaseQ7, Q7_PHASE_SCALE_RAD, branchless_select_f32,
+    branchless_select_u32,
 };
 use crate::stigmergy::{
-    trail_phase_words_mut, ContrastivePhaseBloomFilter, LedgerSlot, PointerTrail,
-    ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
+    ATTRACTOR_SLOT_REPULSION, ContrastivePhaseBloomFilter, LedgerSlot, MAX_ATTRACTOR_PULL_FORCE,
+    PointerTrail, TRAIL_FLAG_REPULSION_ACTIVE, trail_phase_words_mut,
 };
 
 /// 128-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Keyframe (I-Frame) Packet** (Section 4.3).

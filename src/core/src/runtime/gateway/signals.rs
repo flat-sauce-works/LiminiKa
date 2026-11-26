@@ -8,21 +8,21 @@
 use super::*;
 use crate::drivers::EntropyState;
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
-    branchless_is_finite_f32, branchless_max_f32, branchless_relu_f32, fast_inv_pos_normal_f32,
-    load_q7_words_64, Pod, RawPhaseProjectable, TaggedPtr, DEFAULT_PHASE_STEP_MIN_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, Pod, RawPhaseProjectable, TaggedPtr, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32,
+    branchless_max_f32, branchless_relu_f32, fast_inv_pos_normal_f32, load_q7_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, branchless_select_u32, branchless_select_u8,
-    PhaseQ7, RuntimeConfig, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig,
     THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_OBJECTIVE_FACT,
-    THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
+    THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT, branchless_select_f32,
+    branchless_select_i32, branchless_select_u8, branchless_select_u32,
 };
 use crate::runtime::context::CoreStateStack;
 use crate::stigmergy::{
-    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, PointerTrail,
-    StigmergicScaleGranularity, StigmergicThresholds, DEFAULT_FACT_PHASE_CLAMP_RAD,
-    DEFAULT_PERSONA_PHASE_CLAMP_RAD,
+    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    DEFAULT_PERSONA_PHASE_CLAMP_RAD, PointerTrail, StigmergicScaleGranularity,
+    StigmergicThresholds,
 };
 
 pub(super) const INV_FACT_PHASE_CLAMP_RAD: f32 = 1.0 / DEFAULT_FACT_PHASE_CLAMP_RAD;
@@ -1085,7 +1085,7 @@ pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
 
     /// Evaluates repulsive severity in $[0.0, 1.0]$ against `candidate_phases`.
     fn evaluate_repulsion_severity(&self, candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS])
-        -> f32;
+    -> f32;
 
     /// Evaluates repulsive severity directly from 8 register-resident `u64` SWAR words (`candidate_words`).
     #[inline(always)]

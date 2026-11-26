@@ -232,47 +232,44 @@ impl ModelSteeringAdapter {
                     rep_phases,
                 ))
             });
-        if preset.prioritizes_repulsion() {
-            if let Some(spec) = repulsion_spec {
-                if specs.len() < lane_budget {
-                    specs.push(spec);
-                }
-            }
+        if preset.prioritizes_repulsion()
+            && let Some(spec) = repulsion_spec
+            && specs.len() < lane_budget
+        {
+            specs.push(spec);
         }
         for fact_rank in 0..n_facts.min(3) {
             if specs.len() >= lane_budget {
                 break;
             }
-            if let Some(anchor) = recall.recalled_fact_at(fact_rank) {
-                if let Some(&phases) = anchor.per_layer_q7.last() {
-                    let (min_s, max_s, min_w, max_w) = match fact_rank {
-                        0 => (0.25_f32, 1.0_f32, 0.15_f32, 1.0_f32),
-                        1 => (0.20_f32, 0.90_f32, 0.10_f32, 0.90_f32),
-                        _ => (0.15_f32, 0.80_f32, 0.10_f32, 0.80_f32),
-                    };
-                    specs.push(WorkbenchSlotSpec::auto_free(
-                        (anchor.energy * anchor.score.clamp(min_s, max_s)).clamp(min_w, max_w),
-                        phases,
-                    ));
-                }
+            if let Some(anchor) = recall.recalled_fact_at(fact_rank)
+                && let Some(&phases) = anchor.per_layer_q7.last()
+            {
+                let (min_s, max_s, min_w, max_w) = match fact_rank {
+                    0 => (0.25_f32, 1.0_f32, 0.15_f32, 1.0_f32),
+                    1 => (0.20_f32, 0.90_f32, 0.10_f32, 0.90_f32),
+                    _ => (0.15_f32, 0.80_f32, 0.10_f32, 0.80_f32),
+                };
+                specs.push(WorkbenchSlotSpec::auto_free(
+                    (anchor.energy * anchor.score.clamp(min_s, max_s)).clamp(min_w, max_w),
+                    phases,
+                ));
             }
         }
-        if specs.len() < lane_budget {
-            if let Some(anchor) = recall.recalled_persona_at(0) {
-                if let Some(&phases) = anchor.per_layer_q7.last() {
-                    specs.push(WorkbenchSlotSpec::auto_free(
-                        (anchor.energy * anchor.score.clamp(0.20, 1.0)).clamp(0.15, 1.0),
-                        phases,
-                    ));
-                }
-            }
+        if specs.len() < lane_budget
+            && let Some(anchor) = recall.recalled_persona_at(0)
+            && let Some(&phases) = anchor.per_layer_q7.last()
+        {
+            specs.push(WorkbenchSlotSpec::auto_free(
+                (anchor.energy * anchor.score.clamp(0.20, 1.0)).clamp(0.15, 1.0),
+                phases,
+            ));
         }
-        if !preset.prioritizes_repulsion() {
-            if let Some(spec) = repulsion_spec {
-                if specs.len() < lane_budget {
-                    specs.push(spec);
-                }
-            }
+        if !preset.prioritizes_repulsion()
+            && let Some(spec) = repulsion_spec
+            && specs.len() < lane_budget
+        {
+            specs.push(spec);
         }
         let prev_was_sandbox = self.ctx.sandbox_workbench_lane().is_some();
         // Non-fatal by design: `apply_preset_lanes` validates every spec before touching a lane, so an
@@ -293,36 +290,36 @@ impl ModelSteeringAdapter {
             self.prev_sandbox_coherence = top1_fact;
             self.prev_sandbox_assim_drift = assim_drift;
         }
-        if !has_guard_conflict && is_known_unknown {
-            if let Some(ext_anchor) = recall.exterior_sandbox_at(0) {
-                if let Some(&ext_phases) = ext_anchor.per_layer_q7.last() {
-                    let ext_weight =
-                        (ext_anchor.energy * ext_anchor.score.clamp(0.20, 0.90)).clamp(0.15, 0.95);
-                    if let Ok(lane) = self
+        if !has_guard_conflict
+            && is_known_unknown
+            && let Some(ext_anchor) = recall.exterior_sandbox_at(0)
+            && let Some(&ext_phases) = ext_anchor.per_layer_q7.last()
+        {
+            let ext_weight =
+                (ext_anchor.energy * ext_anchor.score.clamp(0.20, 0.90)).clamp(0.15, 0.95);
+            if let Ok(lane) = self
+                .ctx
+                .substrate_mut()
+                .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(ext_weight, ext_phases))
+            {
+                *self.ctx.sandbox_workbench_lane_mut() = Some(lane);
+                if self.sandbox_settlement_streak >= 2
+                    && self
                         .ctx
                         .substrate_mut()
-                        .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(ext_weight, ext_phases))
-                    {
-                        *self.ctx.sandbox_workbench_lane_mut() = Some(lane);
-                        if self.sandbox_settlement_streak >= 2
-                            && self
-                                .ctx
-                                .substrate_mut()
-                                .settle_sandbox_lane(lane)
-                                .unwrap_or(false)
-                        {
-                            self.ctx.increment_sandbox_settlements();
-                            *self.ctx.sandbox_workbench_lane_mut() = None;
-                            self.sandbox_settlement_streak = 0;
-                        }
-                    }
+                        .settle_sandbox_lane(lane)
+                        .unwrap_or(false)
+                {
+                    self.ctx.increment_sandbox_settlements();
+                    *self.ctx.sandbox_workbench_lane_mut() = None;
+                    self.sandbox_settlement_streak = 0;
                 }
             }
         }
-        if let Some(esc_lane) = self.ctx.escalated_workbench_lane() {
-            if (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0 {
-                *self.ctx.escalated_workbench_lane_mut() = None;
-            }
+        if let Some(esc_lane) = self.ctx.escalated_workbench_lane()
+            && (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0
+        {
+            *self.ctx.escalated_workbench_lane_mut() = None;
         }
         if self.ctx.core_layers().ego.is_active() {
             let mut p_frame = gateway_frame;
@@ -361,10 +358,10 @@ impl ModelSteeringAdapter {
             .substrate_mut()
             .apply_preset_lanes(specs)
             .map_err(|e| format!("apply_preset_lanes error: {e}"))?;
-        if let Some(esc_lane) = self.ctx.escalated_workbench_lane() {
-            if (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0 {
-                *self.ctx.escalated_workbench_lane_mut() = None;
-            }
+        if let Some(esc_lane) = self.ctx.escalated_workbench_lane()
+            && (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0
+        {
+            *self.ctx.escalated_workbench_lane_mut() = None;
         }
         self.active_workbench_preset = preset;
         Ok(updated)

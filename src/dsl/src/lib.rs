@@ -10,10 +10,10 @@ pub mod parser;
 pub use ast::{
     AttractRule, AttractorsBlock, Declaration, PersonaDecl, RepelRule, SessionDecl, TargetDecl,
 };
-pub use compiler::{compile_lmnk_declarations, CompiledDslProgram};
+pub use compiler::{CompiledDslProgram, compile_lmnk_declarations};
 pub use parser::{
-    parse_lmnk_program, LMNK_DSL_MAX_DECLARATIONS, LMNK_DSL_MAX_INPUT_BYTES,
-    LMNK_DSL_MAX_RULES_PER_PERSONA, LMNK_DSL_MAX_TOKENS,
+    LMNK_DSL_MAX_DECLARATIONS, LMNK_DSL_MAX_INPUT_BYTES, LMNK_DSL_MAX_RULES_PER_PERSONA,
+    LMNK_DSL_MAX_TOKENS, parse_lmnk_program,
 };
 
 /// Returns the `liminika-dsl` crate version string from `Cargo.toml`.
@@ -99,59 +99,73 @@ mod tests {
 
         // 5. NUL and ASCII control chars inside string literals
         assert!(parse_and_validate_lmnk("persona P extends \"presets/a\0b\" { }").is_err());
-        assert!(parse_and_validate_lmnk(
-            "persona P { attractors { attract \"presets/\x1b[31m\" @ 0.5 } }"
-        )
-        .is_err());
+        assert!(
+            parse_and_validate_lmnk(
+                "persona P { attractors { attract \"presets/\x1b[31m\" @ 0.5 } }"
+            )
+            .is_err()
+        );
 
         // 6. Non-finite scientific-notation floats (1e50) and invalid vram_budget_mb
         assert!(
             parse_and_validate_lmnk("persona P { attractors { attract \"a.lmnk\" @ 1e50 } }")
                 .is_err()
         );
-        assert!(parse_and_validate_lmnk(
-            "persona P {}\ntarget T { vram_budget_mb = 1.5 }\nsession S using P on T { }"
-        )
-        .is_err());
-        assert!(parse_and_validate_lmnk(
-            "persona P {}\ntarget T { vram_budget_mb = 0 }\nsession S using P on T { }"
-        )
-        .is_err());
-        assert!(parse_and_validate_lmnk(
-            "persona P {}\ntarget T { vram_budget_mb = 65537 }\nsession S using P on T { }"
-        )
-        .is_err());
+        assert!(
+            parse_and_validate_lmnk(
+                "persona P {}\ntarget T { vram_budget_mb = 1.5 }\nsession S using P on T { }"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_and_validate_lmnk(
+                "persona P {}\ntarget T { vram_budget_mb = 0 }\nsession S using P on T { }"
+            )
+            .is_err()
+        );
+        assert!(
+            parse_and_validate_lmnk(
+                "persona P {}\ntarget T { vram_budget_mb = 65537 }\nsession S using P on T { }"
+            )
+            .is_err()
+        );
 
         // 7. Path traversal '..' across source_path, parent_preset, model_path, export_path
-        assert!(parse_and_validate_lmnk(
-            "persona P { attractors { attract \"../../etc/passwd\" @ 0.5 } }"
-        )
-        .is_err());
+        assert!(
+            parse_and_validate_lmnk(
+                "persona P { attractors { attract \"../../etc/passwd\" @ 0.5 } }"
+            )
+            .is_err()
+        );
         assert!(parse_and_validate_lmnk("persona P extends \"../secret\" { }").is_err());
-        assert!(parse_and_validate_lmnk(
-            "persona P {}\ntarget T { model = \"models/../escape.gguf\" }"
-        )
-        .is_err());
-        assert!(parse_and_validate_lmnk(
-            "persona P {}\ntarget T { export = \"out\\\\..\\\\escape.lmnkc\" }"
-        )
-        .is_err());
+        assert!(
+            parse_and_validate_lmnk("persona P {}\ntarget T { model = \"models/../escape.gguf\" }")
+                .is_err()
+        );
+        assert!(
+            parse_and_validate_lmnk(
+                "persona P {}\ntarget T { export = \"out\\\\..\\\\escape.lmnkc\" }"
+            )
+            .is_err()
+        );
 
         // 8. Duplicate declaration names, duplicate fields, and target-only (empty persona/session)
         assert!(parse_and_validate_lmnk("persona P {}\npersona P {}").is_err());
-        assert!(parse_and_validate_lmnk(
-            "persona P {}\nsession S using P {}\nsession S using P {}"
-        )
-        .is_err());
+        assert!(
+            parse_and_validate_lmnk("persona P {}\nsession S using P {}\nsession S using P {}")
+                .is_err()
+        );
         assert!(parse_and_validate_lmnk("persona P { attractors {} attractors {} }").is_err());
         assert!(
             parse_and_validate_lmnk("persona P {}\nsession S using P { mode = a mode = b }")
                 .is_err()
         );
-        assert!(parse_and_validate_lmnk(
-            "persona P {}\ntarget T { vram_budget_mb = 512 vram_budget_mb = 1024 }"
-        )
-        .is_err());
+        assert!(
+            parse_and_validate_lmnk(
+                "persona P {}\ntarget T { vram_budget_mb = 512 vram_budget_mb = 1024 }"
+            )
+            .is_err()
+        );
         assert!(parse_and_validate_lmnk("target Solo { vram_budget_mb = 1024 }").is_err());
     }
 

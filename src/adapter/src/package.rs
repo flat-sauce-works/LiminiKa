@@ -24,11 +24,11 @@ use std::path::Path;
 use liminika_core::foundation::compute_crc32_ieee;
 
 use crate::host::integrity::{
-    compute_archive_entries_content_hash, sign_archive_content_hash,
-    verify_archive_entries_integrity, IntegrityPolicy, IntegrityReport, SigningKeyPair,
+    IntegrityPolicy, IntegrityReport, SigningKeyPair, compute_archive_entries_content_hash,
+    sign_archive_content_hash, verify_archive_entries_integrity,
 };
 use crate::host::path_guard::{
-    validate_archive_relative_path, validate_local_output_path, PathGuardError,
+    PathGuardError, validate_archive_relative_path, validate_local_output_path,
 };
 
 /// Hard upper byte limit (`64 MiB`) enforced for any `.lmnkp` package.
@@ -1573,11 +1573,13 @@ mod tests {
         assert_eq!(compiled_e.payload, compiled.as_slice());
 
         // 3. Wrong public key rejected.
-        assert!(verify_lmnkp_integrity(
-            &signed_pkg,
-            &IntegrityPolicy::RequireSignature(wrong_kp.verifying_key()),
-        )
-        .is_err());
+        assert!(
+            verify_lmnkp_integrity(
+                &signed_pkg,
+                &IntegrityPolicy::RequireSignature(wrong_kp.verifying_key()),
+            )
+            .is_err()
+        );
 
         // 4. 1-bit flip in manifest/source/compiled (with fresh ZIP CRC32) rejected fail-closed.
         {

@@ -14,7 +14,7 @@ use crate::runtime::gateway::GatewayPhaseSteeringExt;
 ///
 /// # Safety
 /// `kernel_out` must be a non-null, naturally aligned writable handle pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_create(
     head_dim: u32,
     num_heads: u32,
@@ -34,7 +34,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_create(
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply(
     query_tensor: *mut f32,
     phase_deltas: *const lmnk_q7_t,
@@ -69,7 +69,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_fused(
     query_tensor: *mut f32,
     key_tensor: *mut f32,
@@ -114,7 +114,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_fused(
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_safe(
     query_tensor: *mut f32,
     phase_deltas: *const lmnk_q7_t,
@@ -152,7 +152,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_safe(
 /// # Safety
 /// `query_tensor` (32B aligned), `phase_deltas` (16B aligned), and `config` (64B aligned)
 /// must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_with_config_safe(
     query_tensor: *mut f32,
     phase_deltas: *const lmnk_q7_t,
@@ -215,7 +215,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_with_config_safe(
 /// # Safety
 /// `query_tensor` (32B aligned), `fact_phases` (16B aligned), `persona_phases` (16B aligned),
 /// `trail_inout` (64B aligned), and `config` (64B aligned) must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_steer_with_gateway_and_config_safe(
     query_tensor: *mut f32,
     fact_phases: *const lmnk_q7_t,
@@ -304,7 +304,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_steer_with_gateway_and_config_safe(
 /// # Safety
 /// `q_before` (32B aligned), `q_after` (32B aligned), and `q7_phase_out` (16B aligned)
 /// must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_half_split(
     q_before: *const f32,
     q_after: *const f32,
@@ -356,7 +356,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_half_split(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_fused_safe(
     query_tensor: *mut f32,
     key_tensor: *mut f32,
@@ -407,7 +407,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_fused_safe(
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_geodesic_safe(
     query_tensor: *mut f32,
     phase_deltas: *const lmnk_q7_t,
@@ -444,7 +444,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_geodesic_safe(
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_safe(
     tagged_ptr: u64,
     query_tensor: *mut f32,
@@ -487,7 +487,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_safe(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, 32B/16B alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_fused_safe(
     tagged_ptr: u64,
     query_tensor: *mut f32,
@@ -541,7 +541,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_pointer_gated_fused_safe(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, and bounds invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_gateway_project_bytes_to_q7_64(
     bytes: *const u8,
     byte_len: usize,
@@ -579,7 +579,7 @@ pub unsafe extern "C" fn lmnk_gateway_project_bytes_to_q7_64(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, and bounds invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_gateway_project_f32_to_q7_64(
     values: *const f32,
     num_values: usize,
@@ -624,7 +624,7 @@ pub unsafe extern "C" fn lmnk_gateway_project_f32_to_q7_64(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_gateway_synthesize_multi_origin_frame(
     vram_pressure: f32,
     gpu_frame_overrun: f32,
@@ -725,7 +725,7 @@ pub unsafe extern "C" fn lmnk_gateway_synthesize_multi_origin_frame(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_steer_gateway_frame_safe(
     frame: *const lmnk_gateway_frame_t,
     trail_inout: *mut lmnk_pointer_trail_t,
@@ -805,7 +805,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_steer_gateway_frame_safe(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_gateway_project_bytes_synthesize_kmeans_and_steer_qk_safe(
     vram_pressure: f32,
     gpu_frame_overrun: f32,
@@ -909,7 +909,7 @@ pub unsafe extern "C" fn lmnk_gateway_project_bytes_synthesize_kmeans_and_steer_
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_gateway_project_f32_synthesize_kmeans_and_steer_qk_safe(
     vram_pressure: f32,
     gpu_frame_overrun: f32,
@@ -1015,7 +1015,7 @@ pub unsafe extern "C" fn lmnk_gateway_project_f32_synthesize_kmeans_and_steer_qk
 ///
 /// # Safety
 /// `query_tensor` must be non-null, 32B aligned, and valid for `head_dim * num_heads` floats.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_apply_soft_damping(
     query_tensor: *mut f32,
     head_dim: usize,
@@ -1038,7 +1038,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_apply_soft_damping(
 ///
 /// # Safety
 /// `phase_deltas` must be non-null, 16-byte aligned, and valid for `len` elements.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_step_filter(
     phase_deltas: *mut lmnk_q7_t,
     len: usize,
@@ -1059,7 +1059,7 @@ pub unsafe extern "C" fn lmnk_phase_step_filter(
 ///
 /// # Safety
 /// `query_tensor` and `context_accum` must be non-null, 32B aligned, and disjoint.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_lazy_unwrap_override(
     query_tensor: *mut f32,
     context_accum: *const f32,
@@ -1091,7 +1091,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_lazy_unwrap_override(
 ///
 /// # Safety
 /// `tensor` must be non-null, 32B aligned, and valid for `dim` floats.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_slerp_norm_guard_stable(
     tensor: *mut f32,
     dim: usize,
@@ -1113,7 +1113,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_slerp_norm_guard_stable(
 ///
 /// # Safety
 /// `logits` (32B aligned) and `phase_deltas` (16B aligned) must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_fused_logit_shift(
     logits: *mut f32,
     vocab_size: usize,
@@ -1148,7 +1148,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_fused_logit_shift(
 ///
 /// # Safety
 /// `source` (32B), `target` (32B), and `phase_out` (16B) must be non-null and aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_delta(
     source: *const f32,
     target: *const f32,
@@ -1187,7 +1187,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_compute_procrustes_delta(
 ///
 /// # Safety
 /// `kernel` must be `NULL` or a handle returned by [`lmnk_phase_steering_create`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_phase_steering_destroy(
     kernel: LmnkPhaseSteeringHandle,
 ) -> LmnkStatus {
@@ -1212,7 +1212,7 @@ pub unsafe extern "C" fn lmnk_phase_steering_destroy(
 ///
 /// # Safety
 /// `query_tensor` (32B aligned) and `subhead_cfg` (16B aligned) must be non-null and valid.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_subhead_dispatch_single_pass(
     query_tensor: *mut f32,
     subhead_cfg: *const lmnk_subhead_config_t,
@@ -1257,7 +1257,7 @@ pub unsafe extern "C" fn lmnk_subhead_dispatch_single_pass(
 ///
 /// # Safety
 /// `y_out` (32B), `x_in` (32B), and `rank1_desc` (32B) must be non-null, aligned, and disjoint.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_rank1_eval(
     y_out: *mut f32,
     x_in: *const f32,
@@ -1299,7 +1299,7 @@ pub unsafe extern "C" fn lmnk_rank1_eval(
 ///
 /// # Safety
 /// `y_inout` (32B), `x_in` (32B), and `rank1_desc` (32B) must be non-null, aligned, and disjoint.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_rank1_eval_fused(
     y_inout: *mut f32,
     x_in: *const f32,
@@ -1341,7 +1341,7 @@ pub unsafe extern "C" fn lmnk_rank1_eval_fused(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_lora_project(
     lora_a: *const f32,
     lora_b: *const f32,

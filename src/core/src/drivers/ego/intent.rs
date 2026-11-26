@@ -10,12 +10,12 @@
 #![warn(clippy::missing_errors_doc)]
 
 use crate::foundation::{
-    compute_crc32_ieee, project_bytes_swar_to_words_64, swar_q7_mean_i8_from_words_64, Pod,
-    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE, Pod,
+    compute_crc32_ieee, project_bytes_swar_to_words_64, swar_q7_mean_i8_from_words_64,
 };
 use crate::liminal::{
-    branchless_select_i32, branchless_select_i8, branchless_select_u32, branchless_select_u8,
-    PhaseQ7, MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
+    branchless_select_i8, branchless_select_i32, branchless_select_u8, branchless_select_u32,
 };
 use crate::stigmergy::{
     ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,

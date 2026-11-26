@@ -12,21 +12,22 @@
 
 use std::path::Path;
 
-use liminika_adapter::{extract_leading_alias_word, CompiledTokenCorpus};
+use liminika_adapter::{CompiledTokenCorpus, extract_leading_alias_word};
 use liminika_core::stigmergy::CognitiveTrajectoryLedger;
 use tokenizers::Tokenizer;
 
 use crate::bake::{
-    capture_and_build_shared_corpus, load_fixture, query_nvidia_smi_vram, FixtureSuite,
+    FixtureSuite, capture_and_build_shared_corpus, load_fixture, query_nvidia_smi_vram,
 };
 use crate::cli::{EvalCliConfig, EvalRuntime};
-use crate::eval::{count_semantic_forbid_hits, CircuitProfileMode};
+use crate::eval::{CircuitProfileMode, count_semantic_forbid_hits};
 use crate::eval_common::{
     compute_quantiles, count_semantic_forbid_hits_in_clauses, measure_baseline_entropies,
 };
 use crate::eval_suites::{
-    run_ood_selectivity_eval, run_partition_eval, run_repulsion_eval, ForbiddenTokenMode,
-    OodSelectivitySpec, PartitionEvalSpec, PartitionProbeRef, RepulsionEvalSpec, RepulsionProbeRef,
+    ForbiddenTokenMode, OodSelectivitySpec, PartitionEvalSpec, PartitionProbeRef,
+    RepulsionEvalSpec, RepulsionProbeRef, run_ood_selectivity_eval, run_partition_eval,
+    run_repulsion_eval,
 };
 use crate::model::{CausalLmModel, ChatTemplate, ModelConfig};
 use crate::physics_eval::PartitionClass;

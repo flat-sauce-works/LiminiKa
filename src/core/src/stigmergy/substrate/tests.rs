@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::*;
-use crate::foundation::{pack_action_slot_tag, AlignedBuffer32};
+use crate::foundation::{AlignedBuffer32, pack_action_slot_tag};
 use crate::liminal::LMNK_ERR_SUBSTRATE_FULL;
 use crate::stigmergy::trail::PointerSubstrate;
 use crate::stigmergy::{

@@ -5,20 +5,20 @@
 //! KV cache isolation, chunked prefill, and separate QKV/MLP forward passes.
 
 use super::config::{
-    active_layers_mask, clip_layer_mask, top_half_layer_mask, ChatTemplate, ChatTemplateKind,
-    ModelArch, ModelArchArg, ModelConfig, YarnRopeConfig,
+    ChatTemplate, ChatTemplateKind, ModelArch, ModelArchArg, ModelConfig, YarnRopeConfig,
+    active_layers_mask, clip_layer_mask, top_half_layer_mask,
 };
 use super::layers::{
     LinearLayer, MlpProjection, QkvProjection, TransformerAttention, TransformerLayer,
     TransformerMlp,
 };
 use super::rope::{
-    compute_rope_inv_freq, generate_norm_matched_random_q7, llama_4_attn_scale_scalar,
     EvalOscilloscopeSignal, ForwardSteer, LayerSteer, ProbeCoordinateFrame, RotaryCache,
+    compute_rope_inv_freq, generate_norm_matched_random_q7, llama_4_attn_scale_scalar,
 };
 use super::{CausalLmModel, KvCacheMode, LogitsFetchMode};
-use crate::eval::HorizonAblationMode;
 use crate::LayerResonantSlices;
+use crate::eval::HorizonAblationMode;
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{Embedding, Linear, RmsNorm};
 use liminika_adapter::{AnchorWorkingSetPager, ModelSteeringAdapter, RopeLayout};

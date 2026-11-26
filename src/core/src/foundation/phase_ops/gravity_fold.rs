@@ -31,8 +31,8 @@ use crate::foundation::scalar_math::{
 };
 use crate::foundation::swar_simd::{is_word_array_uniform_64, load_q7_words_64, store_q7_words_64};
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_usize, PhaseQ7,
-    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
+    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, PhaseQ7, branchless_select_f32,
+    branchless_select_u32, branchless_select_usize,
 };
 
 /// Register-resident Unified-Manifold folder returning `([u64; 8], total_pull, mean_coherence, dominant_idx, active_count)`.

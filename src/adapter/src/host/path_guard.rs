@@ -123,28 +123,26 @@ pub fn is_windows_reserved_device_name(segment: &str) -> bool {
     {
         return true;
     }
-    if let Some(prefix) = stem.get(..3) {
-        if prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT") {
-            if let Some(rest) = stem.get(3..) {
-                if matches!(
-                    rest,
-                    "0" | "1"
-                        | "2"
-                        | "3"
-                        | "4"
-                        | "5"
-                        | "6"
-                        | "7"
-                        | "8"
-                        | "9"
-                        | "\u{00B9}"
-                        | "\u{00B2}"
-                        | "\u{00B3}"
-                ) {
-                    return true;
-                }
-            }
-        }
+    if let Some(prefix) = stem.get(..3)
+        && (prefix.eq_ignore_ascii_case("COM") || prefix.eq_ignore_ascii_case("LPT"))
+        && let Some(rest) = stem.get(3..)
+        && matches!(
+            rest,
+            "0" | "1"
+                | "2"
+                | "3"
+                | "4"
+                | "5"
+                | "6"
+                | "7"
+                | "8"
+                | "9"
+                | "\u{00B9}"
+                | "\u{00B2}"
+                | "\u{00B3}"
+        )
+    {
+        return true;
     }
     false
 }

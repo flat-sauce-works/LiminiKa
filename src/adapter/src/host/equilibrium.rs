@@ -14,28 +14,28 @@ use std::io::Read;
 use std::path::Path;
 
 use liminika_core::drivers::{
-    SystemSpineState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_KNOWN_MASK,
-    SPINE_CONTROL_KNOWN_FLAGS, SPINE_ENTROPY_Q15_ONE,
+    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_CONTROL_KNOWN_FLAGS,
+    SPINE_ENTROPY_Q15_ONE, SystemSpineState,
 };
 use liminika_core::foundation::Pod;
 use liminika_core::liminal::{
-    Lacuna, LacunaPartition8, LMNK_ERR_TOPOLOGY_MISMATCH, MAX_ATTENTION_HEADS,
+    LMNK_ERR_TOPOLOGY_MISMATCH, Lacuna, LacunaPartition8, MAX_ATTENTION_HEADS,
 };
 use liminika_core::runtime::{
-    required_container_byte_len, write_container_sections_to_bytes, LmnkContainerHeader,
-    LmnkContainerView, LmnkSectionInput, CORE_TOPOLOGY, LMNK_CONTAINER_FLAG_COMPILED_CACHE,
-    LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT, LMNK_MAX_CONTAINER_BYTES,
-    LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES,
-    LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_RUNTIME_SNAPSHOT,
+    CORE_TOPOLOGY, LMNK_CONTAINER_FLAG_COMPILED_CACHE, LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT,
+    LMNK_MAX_CONTAINER_BYTES, LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES,
+    LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_RUNTIME_SNAPSHOT,
+    LmnkContainerHeader, LmnkContainerView, LmnkSectionInput, required_container_byte_len,
+    write_container_sections_to_bytes,
 };
 use liminika_core::stigmergy::PhaseAnchorRecord;
 
 use crate::host::integrity::{
-    sign_lmnkc_container, verify_lmnkc_integrity, IntegrityPolicy, SigningKeyPair,
+    IntegrityPolicy, SigningKeyPair, sign_lmnkc_container, verify_lmnkc_integrity,
 };
 use crate::host::pager::{
-    bitcut64_polarity_similarity, phase_profile_bitcut64, phase_profile_cosine_q7,
     AnchorPagerConfig, AnchorSlotEntry, AnchorWorkingSetPager, PagerStepOutcome, PagerStepQuery,
+    bitcut64_polarity_similarity, phase_profile_bitcut64, phase_profile_cosine_q7,
 };
 use crate::host::path_guard::validate_local_output_path;
 
@@ -461,19 +461,18 @@ impl EquilibriumState {
     /// Monotonically raises the `SystemSpineState` pin floor stored inside the embedded runtime
     /// snapshot (if present) so subsequent restores can never weaken host pin guarantees.
     pub fn enforce_snapshot_spine_pin_floor(&mut self, required_pinned_compute_mask: u64) {
-        if let Some(mut payload) = self.runtime_snapshot {
-            if let Ok(mut spine) =
+        if let Some(mut payload) = self.runtime_snapshot
+            && let Ok(mut spine) =
                 SystemSpineState::read_unaligned_from(&payload, SNAPSHOT_SPINE_PAYLOAD_OFFSET)
+        {
+            spine.apply_host_pin_floor(
+                required_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+            );
+            if spine
+                .write_unaligned_to(&mut payload, SNAPSHOT_SPINE_PAYLOAD_OFFSET)
+                .is_ok()
             {
-                spine.apply_host_pin_floor(
-                    required_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
-                );
-                if spine
-                    .write_unaligned_to(&mut payload, SNAPSHOT_SPINE_PAYLOAD_OFFSET)
-                    .is_ok()
-                {
-                    self.runtime_snapshot = Some(payload);
-                }
+                self.runtime_snapshot = Some(payload);
             }
         }
     }
@@ -592,11 +591,7 @@ impl EquilibriumState {
                     &working[pos].record.phase_profile,
                     &inc.record.phase_profile,
                 );
-                if cos >= 0.0 {
-                    Some(pos)
-                } else {
-                    None
-                }
+                if cos >= 0.0 { Some(pos) } else { None }
             } else {
                 // Coarse BitCut64 prefilter + exact Q7 cosine for near-duplicate consolidation.
                 let mut best: Option<(usize, f32)> = None;
@@ -1495,7 +1490,7 @@ mod tests {
         }
 
         let mut total_evaporated = 0_usize;
-        for gen in 1..=100_u64 {
+        for generation in 1..=100_u64 {
             let mut pulse = EquilibriumState::new(cfg);
             pulse
                 .insert_anchor(core_a, Lacuna::SelfRef, false)
@@ -1505,11 +1500,11 @@ mod tests {
                 .expect("pulse b");
             let report = state.join(&pulse).expect("join");
             total_evaporated += report.evaporated_anchors;
-            assert_eq!(report.generation, gen);
+            assert_eq!(report.generation, generation);
 
             // Round-trip through .lmnkc every generation to prove flat persistence parity.
             let bytes = state
-                .to_lmnkc_bytes(1_774_900_000 + gen)
+                .to_lmnkc_bytes(1_774_900_000 + generation)
                 .expect("serialize");
             state = EquilibriumState::from_lmnkc_bytes(&bytes, cfg).expect("restore");
         }
@@ -1567,7 +1562,7 @@ mod tests {
         }
 
         let mut max_lmnkc_bytes = 0_usize;
-        for gen in 1..=100_u64 {
+        for generation in 1..=100_u64 {
             let mut wave = EquilibriumState::new(cfg);
             // Reinforce existing 16 unpinned anchors to saturate the equilibrium.
             for id in 10..26_u32 {
@@ -1575,7 +1570,7 @@ mod tests {
                     .expect("wave");
             }
             // Inject rotating transient anchors to stress backing-bank bounds.
-            let transient_id = 1000 + (gen as u32);
+            let transient_id = 1000 + (generation as u32);
             wave.insert_anchor(
                 make_record(transient_id, transient_id * 13 + 7, 1.0),
                 Lacuna::SelfRef,
@@ -1589,7 +1584,9 @@ mod tests {
             assert!(state.pager().is_resident(1));
             assert!(state.pager().is_resident(2));
 
-            let bytes = state.to_lmnkc_bytes(1_774_900_000 + gen).expect("to_lmnkc");
+            let bytes = state
+                .to_lmnkc_bytes(1_774_900_000 + generation)
+                .expect("to_lmnkc");
             max_lmnkc_bytes = max_lmnkc_bytes.max(bytes.len());
             for entry in state.pager().backing_entries() {
                 assert!(entry.record.base_energy.is_finite());
@@ -1685,9 +1682,10 @@ mod tests {
         let lmnkc = eq_a.to_lmnkc_bytes(1_774_900_500).expect("to_lmnkc");
         let view = LmnkContainerView::parse(&lmnkc).expect("parse view");
         assert!(view.section_bytes(LMNK_SECTION_RUNTIME_SNAPSHOT).is_some());
-        assert!(view
-            .section_bytes(HOST_EQUILIBRIUM_META_SECTION_KIND)
-            .is_some());
+        assert!(
+            view.section_bytes(HOST_EQUILIBRIUM_META_SECTION_KIND)
+                .is_some()
+        );
 
         let restored = EquilibriumState::from_lmnkc_bytes(&lmnkc, cfg).expect("from_lmnkc");
         assert_eq!(restored.generation(), eq_a.generation());
@@ -1757,12 +1755,14 @@ mod tests {
 
         let unsigned = eq.to_lmnkc_bytes(1_774_901_000).expect("unsigned");
         assert!(EquilibriumState::from_lmnkc_bytes(&unsigned, cfg).is_ok());
-        assert!(EquilibriumState::from_lmnkc_bytes_with_policy(
-            &unsigned,
-            cfg,
-            &IntegrityPolicy::RequireSignature(pk),
-        )
-        .is_err());
+        assert!(
+            EquilibriumState::from_lmnkc_bytes_with_policy(
+                &unsigned,
+                cfg,
+                &IntegrityPolicy::RequireSignature(pk),
+            )
+            .is_err()
+        );
 
         let signed = eq
             .to_signed_lmnkc_bytes(1_774_901_000, &kp)
@@ -1775,15 +1775,18 @@ mod tests {
         .expect("verified restore");
         assert!(restored.pager().get_entry(7).unwrap().pinned);
 
-        assert!(EquilibriumState::from_lmnkc_bytes_with_policy(
-            &signed,
-            cfg,
-            &IntegrityPolicy::RequireSignature(wrong_kp.verifying_key()),
-        )
-        .is_err());
+        assert!(
+            EquilibriumState::from_lmnkc_bytes_with_policy(
+                &signed,
+                cfg,
+                &IntegrityPolicy::RequireSignature(wrong_kp.verifying_key()),
+            )
+            .is_err()
+        );
 
-        assert!(eq
-            .save_lmnkc_to_path(Path::new("out/CON.lmnkc"), 1_774_901_000)
-            .is_err());
+        assert!(
+            eq.save_lmnkc_to_path(Path::new("out/CON.lmnkc"), 1_774_901_000)
+                .is_err()
+        );
     }
 }

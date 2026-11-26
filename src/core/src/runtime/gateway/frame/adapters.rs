@@ -15,16 +15,16 @@ use super::synthesis::{
 use super::{GatewayFrame, ManifoldGatewaySignal};
 use crate::drivers::EntropyState;
 use crate::foundation::{
-    branchless_clamp_f32, branchless_max_f32, is_word_array_uniform_64, load_q7_words_64,
-    swar_words_nonzero_64, RawPhaseProjectable,
+    RawPhaseProjectable, branchless_clamp_f32, branchless_max_f32, is_word_array_uniform_64,
+    load_q7_words_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_f32, PhaseQ7, RuntimeConfig, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig, branchless_select_f32,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
-use crate::stigmergy::{trail_phase_words_ref, OverlapDiscoveryReport, PointerTrail};
+use crate::stigmergy::{OverlapDiscoveryReport, PointerTrail, trail_phase_words_ref};
 
 // ===================================================================
 // 7. Blanket `ManifoldGatewaySignal` Implementations for Wrappers, Tuples & Ensembles
@@ -317,11 +317,11 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
 }
 
 impl<
-        S: SystemConstraintSignal,
-        F: ObjectiveFactSignal,
-        P: SubjectivePersonaSignal,
-        G: ContradictionGuardSignal,
-    > CausalProvenanceSignal for (S, F, P, G)
+    S: SystemConstraintSignal,
+    F: ObjectiveFactSignal,
+    P: SubjectivePersonaSignal,
+    G: ContradictionGuardSignal,
+> CausalProvenanceSignal for (S, F, P, G)
 {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
@@ -350,11 +350,11 @@ impl<
 }
 
 impl<
-        S: SystemConstraintSignal,
-        F: ObjectiveFactSignal,
-        P: SubjectivePersonaSignal,
-        G: ContradictionGuardSignal,
-    > ManifoldGatewaySignal for (S, F, P, G)
+    S: SystemConstraintSignal,
+    F: ObjectiveFactSignal,
+    P: SubjectivePersonaSignal,
+    G: ContradictionGuardSignal,
+> ManifoldGatewaySignal for (S, F, P, G)
 {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(

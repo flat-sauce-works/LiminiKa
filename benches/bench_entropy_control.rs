@@ -9,30 +9,30 @@
 //!   Hodge obstruction pairing, and non-finite / odd-remainder boundary cases.
 
 use criterion::{
-    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+    BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use liminika_core::abi::{
     lmnk_entropy_state_t, lmnk_paged_bitmask_t, lmnk_q7_t, lmnk_tagged_ptr_t,
 };
 use liminika_core::drivers::spine::entropy::{
-    compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_barrier_pitchfork,
-    EntropyController,
+    EntropyController, compute_moving_z_score_entropy, compute_sparse_surrogate_entropy,
+    eval_barrier_pitchfork,
 };
 use liminika_core::foundation::{
+    ACTION_PRESET_EXPRESS_PHASE, AlignedBuffer32, AlignedSlice32,
     compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
-    evaluate_hodge_obstruction_and_dual_pairing, AlignedBuffer32, AlignedSlice32,
-    ACTION_PRESET_EXPRESS_PHASE,
+    evaluate_hodge_obstruction_and_dual_pairing,
 };
 use liminika_core::liminal::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
 use liminika_core::stigmergy::{
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ContrastivePhaseBloomFilter,
     eval_stigmergic_block_degrees, resolve_dyadic_qdpt_and_cascade_ptr,
-    ContrastivePhaseBloomFilter, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
 };
 use std::hint::black_box;
 use std::time::Duration;
 
 mod common;
-use common::{configured_noise_threshold, AlignedHeapBuffer, ScopedFtzdazGuard};
+use common::{AlignedHeapBuffer, ScopedFtzdazGuard, configured_noise_threshold};
 
 /// Generates a deterministic 64-supernode f32 field with non-zero spatial coboundary gradients
 /// across adjacent supernodes so Sheaf Cohomology and Hodge Obstruction kernels evaluate genuine

@@ -15,9 +15,11 @@
 use std::ptr;
 
 use liminika_core::abi::{
-    lmnk_config_init_default, lmnk_config_t, lmnk_container_map_and_steer_zero_copy_safe,
-    lmnk_container_verify_with_reports_zero_copy, lmnk_context_align,
-    lmnk_context_begin_turn_spine_policy, lmnk_context_configure_compute_pool,
+    LmnkContextHandle, LmnkEntropyControllerHandle, LmnkEntropyControllerOpaque,
+    LmnkPhaseSteeringHandle, LmnkPhaseSteeringOpaque, LmnkSubstrateHandle,
+    SPINE_DECODE_FLAG_REWARD_OVERRIDE, lmnk_config_init_default, lmnk_config_t,
+    lmnk_container_map_and_steer_zero_copy_safe, lmnk_container_verify_with_reports_zero_copy,
+    lmnk_context_align, lmnk_context_begin_turn_spine_policy, lmnk_context_configure_compute_pool,
     lmnk_context_configure_spine, lmnk_context_create, lmnk_context_deinit_in_place,
     lmnk_context_deserialize, lmnk_context_destroy, lmnk_context_get_spine_state,
     lmnk_context_init_in_place, lmnk_context_serialize, lmnk_context_size,
@@ -44,36 +46,34 @@ use liminika_core::abi::{
     lmnk_tagged_ptr_evolve_mode, lmnk_tagged_ptr_pack, lmnk_tagged_ptr_pack_action,
     lmnk_tagged_ptr_unpack_action_mode, lmnk_tagged_ptr_unpack_addr,
     lmnk_tagged_ptr_unpack_attractor_slot, lmnk_tagged_ptr_unpack_phase,
-    lmnk_tagged_ptr_unpack_tag, LmnkContextHandle, LmnkEntropyControllerHandle,
-    LmnkEntropyControllerOpaque, LmnkPhaseSteeringHandle, LmnkPhaseSteeringOpaque,
-    LmnkSubstrateHandle, SPINE_DECODE_FLAG_REWARD_OVERRIDE,
+    lmnk_tagged_ptr_unpack_tag,
 };
 use liminika_core::drivers::{
-    DistortionDelta, DistortionTension, EgoDifferentialNet, LiminalEgoPreset, LiminalEgoState,
-    SystemSpineState, DISTORTION_DELTA_FLAG_ACTIVE, DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID,
-    HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    DISTORTION_DELTA_FLAG_ACTIVE, DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, DistortionDelta,
+    DistortionTension, EgoDifferentialNet, HOST_IMMUTABLE_PINNED_COMPUTE_MASK, LiminalEgoPreset,
+    LiminalEgoState, SystemSpineState,
 };
 use liminika_core::foundation::{
-    compute_crc32_ieee, eval_rank1, eval_rank1_fused, AlignedBuffer16, AlignedBuffer32,
-    AlignedBuffer64, PagedBitmask, Pod, SubheadConfig, ACTION_MODE_PHASE_STEER,
+    ACTION_MODE_PHASE_STEER, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64, PagedBitmask, Pod,
+    SubheadConfig, compute_crc32_ieee, eval_rank1, eval_rank1_fused,
 };
 use liminika_core::liminal::{
-    evaluate_lacuna_partition_branchless, LacunaPartition8, LMNK_ERR_ALIGNMENT,
-    LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT,
-    LMNK_ERR_INVALID_STATE, LMNK_ERR_NULL_POINTER, LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_OK,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, LMNK_ERR_NULL_POINTER,
+    LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_OK, LacunaPartition8, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES, evaluate_lacuna_partition_branchless,
 };
 use liminika_core::runtime::{
-    Config, GatewayFrame, LmnkContainerView, LmnkSectionInput, RuntimeContext, CORE_TOPOLOGY,
-    LMNK_CONTAINER_FLAG_COMPILED_CACHE, LMNK_CONTAINER_HEADER_BYTES, LMNK_MAX_CONTAINER_SECTIONS,
-    LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES, LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CONTENT_HASH,
-    LMNK_SECTION_ENTRY_BYTES, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS,
-    LMNK_SECTION_SIGNATURE,
+    CORE_TOPOLOGY, Config, GatewayFrame, LMNK_CONTAINER_FLAG_COMPILED_CACHE,
+    LMNK_CONTAINER_HEADER_BYTES, LMNK_MAX_CONTAINER_SECTIONS, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES,
+    LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CONTENT_HASH, LMNK_SECTION_ENTRY_BYTES,
+    LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS, LMNK_SECTION_SIGNATURE,
+    LmnkContainerView, LmnkSectionInput, RuntimeContext,
 };
 use liminika_core::stigmergy::{
-    ContrastivePhaseBloomFilter, LedgerSlot, PhaseAnchorRecord, PointerTrail,
-    StigmergicGranuleState, StigmergicReconstitutionReport, StigmergicSubstrate,
-    StigmergicThresholds, SubstrateStepReport, ATTRACTOR_SLOT_KNOWLEDGE,
+    ATTRACTOR_SLOT_KNOWLEDGE, ContrastivePhaseBloomFilter, LedgerSlot, PhaseAnchorRecord,
+    PointerTrail, StigmergicGranuleState, StigmergicReconstitutionReport, StigmergicSubstrate,
+    StigmergicThresholds, SubstrateStepReport,
 };
 
 #[derive(Clone, Copy)]
@@ -1599,8 +1599,8 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
 #[test]
 fn suite6_abi_major_minor_and_patch_compatibility_policy() {
     use liminika_core::liminal::{
-        is_compatible_abi_version, validate_abi_version, LMNK_ABI_COMPAT_MASK,
-        LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_HEX, LMNK_ERR_VERSION_MISMATCH,
+        LMNK_ABI_COMPAT_MASK, LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_HEX,
+        LMNK_ERR_VERSION_MISMATCH, is_compatible_abi_version, validate_abi_version,
     };
     use liminika_core::runtime::CORE_TOPOLOGY;
 

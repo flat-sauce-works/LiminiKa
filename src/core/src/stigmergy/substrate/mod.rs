@@ -12,15 +12,15 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::{
-    branchless_flush_subnormal_f32, branchless_max_f32, branchless_relu_f32, AlignedBuffer64,
-    AlignedSlice16, Pod, TaggedPtr, ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE,
-    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
-    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, DEFAULT_PHASE_STEER_HEAD_DIM,
-    DEFAULT_PHASE_STEER_NUM_HEADS,
+    ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_PASSIVE_SIDECAR,
+    ACTION_PRESET_REPULSION_ESCAPE, AlignedBuffer64, AlignedSlice16, DEFAULT_PHASE_STEER_HEAD_DIM,
+    DEFAULT_PHASE_STEER_NUM_HEADS, Pod, TaggedPtr, branchless_flush_subnormal_f32,
+    branchless_max_f32, branchless_relu_f32,
 };
 use crate::liminal::{
-    branchless_select_usize, LmnkResult, PhaseQ7, RuntimeConfig, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7,
+    RuntimeConfig, branchless_select_usize,
 };
 use crate::stigmergy::gate::PhaseSteeringEngine;
 use crate::stigmergy::ledger::{ContrastivePhaseBloomFilter, LedgerSlot};

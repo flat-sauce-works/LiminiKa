@@ -4,44 +4,44 @@
 //! Runtime step execution, lifecycle actions, and latent-horizon orchestration on [`RuntimeContext`].
 
 use super::{
-    abi_version, abi_version_string, query_capability, CoreStateStack, Result, RuntimeContext,
+    CoreStateStack, Result, RuntimeContext, abi_version, abi_version_string, query_capability,
 };
 use crate::drivers::{
-    DistortionTension, EgoDifferentialNet, EntropyState, SpineDecodeSignal, SpineStepPlan,
-    SystemSpineState, TokenBypassObservation, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    DistortionTension, EgoDifferentialNet, EntropyState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
     SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID, SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT,
     SPINE_ENTROPY_CALM_THRESH_Q15, SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE,
     SPINE_ENTROPY_REWARD_LOW_THRESH_Q15, SPINE_ENTROPY_SURGE_THRESH_Q15,
     SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN,
     SPINE_STEP_EVENT_GUARD_REESCALATED, SPINE_STEP_EVENT_INSTABILITY_RECOVERY,
     SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED, SPINE_STEP_EVENT_NONE,
-    SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED,
+    SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED, SpineDecodeSignal, SpineStepPlan, SystemSpineState,
+    TokenBypassObservation,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_max_f32, branchless_min_f32, store_q7_words_64,
-    swar_words_nonzero_64, AlignedBuffer16, AlignedSlice16, AlignedSliceMut32, PhaseSteering,
-    RopeSteeringTarget, TaggedPtr, ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, AlignedBuffer16, AlignedSlice16,
+    AlignedSliceMut32, PhaseSteering, RopeSteeringTarget, TaggedPtr, branchless_clamp_f32,
+    branchless_max_f32, branchless_min_f32, store_q7_words_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    AttributionTag, BitCut8, DriverKind, EpistemicRegime, Lacuna, LacunaPartition8, PrimitiveKind,
-    RuntimeConfig, Scoped, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    AttributionTag, BitCut8, DriverKind, EpistemicRegime, LMNK_ERR_INVALID_ARGUMENT, Lacuna,
+    LacunaPartition8, MAX_ATTENTION_HEADS, PrimitiveKind, RuntimeConfig, Scoped,
+    branchless_select_f32, branchless_select_u8, branchless_select_u32, branchless_select_u64,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
     CausalProvenanceReport, GatewayFrame, ManifoldGatewaySignal, ROOT_CAUSE_SYSTEM_QOS_THROTTLE,
 };
 use crate::runtime::horizon::{
-    apply_latent_horizon_slots, EpistemicHorizonReading, HorizonEscalationProvider,
-    HorizonEscalationRequest, HorizonTriggerInput, LatentHorizonSlot,
+    EpistemicHorizonReading, HorizonEscalationProvider, HorizonEscalationRequest,
+    HorizonTriggerInput, LatentHorizonSlot, apply_latent_horizon_slots,
 };
 use crate::runtime::storage::KvKeyframeHeader;
 use crate::stigmergy::{
-    trail_phase_words_mut, trail_phase_words_ref, LedgerSlot, OverlapDiscoveryReport,
-    PhaseDeltaSlice, PointerSubstrate, PointerTrail, SandboxLifecycleEvent,
-    StigmergicActionDecision, StigmergicSubstrateOps, WorkbenchLanePlacement,
     LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_PHASE_STEERED, LEDGER_METRIC_REPULSION_APPLIED,
-    MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE, WORKBENCH_LANE_FLAG_REPULSION,
+    LedgerSlot, MAX_ATTRACTOR_PULL_FORCE, OverlapDiscoveryReport, PhaseDeltaSlice,
+    PointerSubstrate, PointerTrail, SandboxLifecycleEvent, StigmergicActionDecision,
+    StigmergicSubstrateOps, TRAIL_FLAG_REPULSION_ACTIVE, WORKBENCH_LANE_FLAG_REPULSION,
+    WorkbenchLanePlacement, trail_phase_words_mut, trail_phase_words_ref,
 };
 
 // ===================================================================
@@ -712,26 +712,26 @@ impl RuntimeContext {
         );
 
         let mut steered = false;
-        if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) == 0 {
-            if let Some(q) = query_tensor {
-                let final_w = *trail_phase_words_ref(trail_out);
-                if swar_words_nonzero_64(&final_w) {
-                    let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
-                    store_q7_words_64(&mut q7_stack.data, &final_w);
-                    let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
-                    if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
-                        .cut_by_lacuna(frame.phase_clamp_rad > 0.0, frame.phase_clamp_rad, 0.0)
-                        .into_active()
-                    {
-                        self.phase_steering
-                            .apply_phase_steering_for_geometry_safe_active(
-                                geometry,
-                                q,
-                                active_deltas,
-                                frame.phase_clamp_rad,
-                            )?;
-                        steered = true;
-                    }
+        if (frame.action_mode_flags & ACTION_MODE_LAYER_SKIP) == 0
+            && let Some(q) = query_tensor
+        {
+            let final_w = *trail_phase_words_ref(trail_out);
+            if swar_words_nonzero_64(&final_w) {
+                let mut q7_stack = AlignedBuffer16::new([0i8; MAX_ATTENTION_HEADS]);
+                store_q7_words_64(&mut q7_stack.data, &final_w);
+                let p_aligned = AlignedSlice16::new(&q7_stack.data[..num_heads])?;
+                if let Some(active_deltas) = Scoped::from_boundary(PhaseDeltaSlice(p_aligned))
+                    .cut_by_lacuna(frame.phase_clamp_rad > 0.0, frame.phase_clamp_rad, 0.0)
+                    .into_active()
+                {
+                    self.phase_steering
+                        .apply_phase_steering_for_geometry_safe_active(
+                            geometry,
+                            q,
+                            active_deltas,
+                            frame.phase_clamp_rad,
+                        )?;
+                    steered = true;
                 }
             }
         }

@@ -14,28 +14,28 @@
 //!   `PhaseSteering_Provisional_LMNK_Container` Criterion group.
 
 use criterion::{
-    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+    BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use liminika_core::abi::{
     lmnk_paged_bitmask_t, lmnk_pointer_trail_t, lmnk_q7_t, lmnk_subhead_config_t,
 };
 use liminika_core::foundation::{
-    detect_frame_delta_bitmask, dispatch_subhead_slot_ensemble,
-    dispatch_subhead_slot_ensemble_geodesic, steer_visual_grid_2d_bitmask_gated,
-    steer_visual_grid_3d_bitmask_gated, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64,
-    AlignedSlice16, AlignedSlice32, AlignedSliceMut16, PhaseSteering, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    AlignedBuffer16, AlignedBuffer32, AlignedBuffer64, AlignedSlice16, AlignedSlice32,
+    AlignedSliceMut16, DEFAULT_PHASE_CLAMP_MAX_RAD, PhaseSteering, detect_frame_delta_bitmask,
+    dispatch_subhead_slot_ensemble, dispatch_subhead_slot_ensemble_geodesic,
+    steer_visual_grid_2d_bitmask_gated, steer_visual_grid_3d_bitmask_gated,
 };
 use liminika_core::runtime::GatewayPhaseSteeringExt;
 use liminika_core::stigmergy::{
-    PhaseAnchorRecord, PhaseProfileRef64, PhaseSteeringEngine, ATTRACTOR_SLOT_KNOWLEDGE,
-    ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ATTRACTOR_SLOT_SYSTEM_BASELINE,
+    PhaseAnchorRecord, PhaseProfileRef64, PhaseSteeringEngine,
 };
 use std::hint::black_box;
 use std::time::Duration;
 
 mod common;
 use common::{
-    configured_noise_threshold, should_run_provisional_lmnk, AlignedHeapBuffer, ScopedFtzdazGuard,
+    AlignedHeapBuffer, ScopedFtzdazGuard, configured_noise_threshold, should_run_provisional_lmnk,
 };
 
 #[repr(align(64))]
@@ -997,11 +997,7 @@ fn bench_phase_steering_extreme_and_edge_cases(c: &mut Criterion) {
         for (h, slot) in extreme_spikes.iter_mut().enumerate() {
             let mag = 127i8.saturating_sub((h & 7) as i8);
             *slot = if (h & 1) == 0 {
-                if (h & 7) == 0 {
-                    -128
-                } else {
-                    -mag
-                }
+                if (h & 7) == 0 { -128 } else { -mag }
             } else {
                 mag
             };

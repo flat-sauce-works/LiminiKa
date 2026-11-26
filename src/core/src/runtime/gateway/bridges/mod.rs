@@ -8,20 +8,20 @@
 
 use super::*;
 use crate::drivers::{
-    DistortionTension, EgoDifferentialNet, FrameDirective, LiminalEgoState,
-    SpineFrameTransitionInput, SystemSpineState, EGO_TRIGGER_BASIN_CAPTURE,
-    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
-    EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR,
+    DistortionTension, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
+    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION,
+    EGO_TRIGGER_LIMINAL_EXTERIOR, EgoDifferentialNet, FrameDirective, LiminalEgoState,
+    SpineFrameTransitionInput, SystemSpineState,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_max_f32, branchless_relu_f32, pack_action_slot_tag,
-    swar_q7_avg_round_x8, swar_q7_mean_i8_from_words_64, AlignedSlice32, AlignedSliceMut32,
-    TaggedPtr, ATTRACTOR_SLOT_ID_MASK, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK,
+    ATTRACTOR_SLOT_ID_MASK, AlignedSlice32, AlignedSliceMut32, SWAR_SIGN_MASK_64,
+    SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK, TaggedPtr, branchless_clamp_f32, branchless_max_f32,
+    branchless_relu_f32, pack_action_slot_tag, swar_q7_avg_round_x8, swar_q7_mean_i8_from_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u64,
-    branchless_select_u8, BitCut8, Lacuna, LacunaPartition8, LiminalThresholdState, LmnkResult,
-    PhaseQ7, MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+    BitCut8, Lacuna, LacunaPartition8, LiminalThresholdState, LmnkResult, MAX_ATTRACTOR_DOMAINS,
+    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_i8, branchless_select_i32, branchless_select_u8, branchless_select_u64,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::context::CoreStateStack;

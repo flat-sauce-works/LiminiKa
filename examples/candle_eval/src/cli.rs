@@ -7,17 +7,17 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::eval::{
-    parse_bench_trials, parse_chat_template, parse_circuit_mode, parse_ego_max_hops,
-    parse_ego_mode, parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens,
-    parse_horizon_mode, parse_kv_min_res, parse_layer_mask_spec, parse_logits_observe_stride,
+    CircuitProfileMode, DEFAULT_LAYER_STEER_MASK, EgoProfileMode, FairBenchCondition,
+    HorizonAblationMode, LayerMaskSpec, PressureSimMode, ReflectMode, parse_bench_trials,
+    parse_chat_template, parse_circuit_mode, parse_ego_max_hops, parse_ego_mode,
+    parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens, parse_horizon_mode,
+    parse_kv_min_res, parse_layer_mask_spec, parse_logits_observe_stride,
     parse_long_doc_bench_path, parse_max_tokens, parse_model_arch, parse_model_path,
     parse_phase_clamp_rad, parse_prefill_chunk_size, parse_pressure_sim_mode, parse_probe_frame,
     parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature, parse_tokenizer_path,
-    CircuitProfileMode, EgoProfileMode, FairBenchCondition, HorizonAblationMode, LayerMaskSpec,
-    PressureSimMode, ReflectMode, DEFAULT_LAYER_STEER_MASK,
 };
 use crate::model::{
-    clip_layer_mask, ChatTemplate, ChatTemplateArg, ModelArchArg, ModelConfig, ProbeCoordinateFrame,
+    ChatTemplate, ChatTemplateArg, ModelArchArg, ModelConfig, ProbeCoordinateFrame, clip_layer_mask,
 };
 use candle_core::quantized::GgmlDType;
 use liminika_core::abi::lmnk_q7_t;
@@ -91,29 +91,51 @@ pub(crate) fn print_help() {
     println!("Usage: candle_eval [OPTIONS]");
     println!("Options:");
     println!("  -h, --help                         Print this help message and exit");
-    println!("  --model=<path>                     Override model directory (default: models/Phi-4-mini-instruct)");
+    println!(
+        "  --model=<path>                     Override model directory (default: models/Phi-4-mini-instruct)"
+    );
     println!(
         "  --model-arch=<auto|phi4|mistral3>  Override model architecture loader (default: auto)"
     );
-    println!("  --tokenizer=<path>                 Override tokenizer.json path (default: <model>/tokenizer.json)");
+    println!(
+        "  --tokenizer=<path>                 Override tokenizer.json path (default: <model>/tokenizer.json)"
+    );
     println!(
         "  --chat-template=<auto|phi4|mistral3> Override chat template formatting (default: auto)"
     );
     println!(
         "  --smoke-test                       Run Steer-OFF greedy generation smoke test and exit"
     );
-    println!("  --fixture=<path>                   Override evaluation fixture file (default: tests/fixtures/gcso_eval_samples.txt)");
-    println!("  --bench-trials=<N>                 Run N independent benchmark trials after warmup and report median/spread (default: 1)");
-    println!("  --step2-only                       Skip Step 1 sweeps and run Step 2 (+ Step 3) directly");
-    println!("  --recall-only                      Run recall/timeline evaluation without LLM weight inference");
-    println!("  --base-prior                       Enable 1-pass neutral base-model prior calibration (default: on)");
-    println!("  --no-base-prior                    Disable startup base-model prior calibration (A/B opt-out)");
+    println!(
+        "  --fixture=<path>                   Override evaluation fixture file (default: tests/fixtures/gcso_eval_samples.txt)"
+    );
+    println!(
+        "  --bench-trials=<N>                 Run N independent benchmark trials after warmup and report median/spread (default: 1)"
+    );
+    println!(
+        "  --step2-only                       Skip Step 1 sweeps and run Step 2 (+ Step 3) directly"
+    );
+    println!(
+        "  --recall-only                      Run recall/timeline evaluation without LLM weight inference"
+    );
+    println!(
+        "  --base-prior                       Enable 1-pass neutral base-model prior calibration (default: on)"
+    );
+    println!(
+        "  --no-base-prior                    Disable startup base-model prior calibration (A/B opt-out)"
+    );
     println!("  --no-reflect                       Disable reflection critique retries");
     println!("  --reflect-mode=<off|conditional|always>");
     println!("  --no-pre-bypass                    Disable whole-token pre-inference bypass");
-    println!("  --logits-observe-stride=<N>        Dynamic GPU->CPU logits observe max stride (default: 1, clamp 0->1)");
-    println!("  --guard-hold-tokens=<N>            Transient contradiction-guard hold window before relaxation (default: 0 = full turn)");
-    println!("  --multi-turn                       Run 8-turn persistent KV dialogue evaluation (Step 2B)");
+    println!(
+        "  --logits-observe-stride=<N>        Dynamic GPU->CPU logits observe max stride (default: 1, clamp 0->1)"
+    );
+    println!(
+        "  --guard-hold-tokens=<N>            Transient contradiction-guard hold window before relaxation (default: 0 = full turn)"
+    );
+    println!(
+        "  --multi-turn                       Run 8-turn persistent KV dialogue evaluation (Step 2B)"
+    );
     println!(
         "  --quant=<bf16|q4_0|q4k|q8_0>       Model quantization mode (default: bf16 on CUDA)"
     );
@@ -169,8 +191,12 @@ pub(crate) fn print_help() {
     println!("  --ablate-ego                       Run NoEgo vs Ego ablation");
     println!("  --ablate-horizon                   Run Core3 vs Spillover vs SlowLoop ablation");
     println!("  --horizon-mode=<core3|spillover|slow-loop>");
-    println!("  --fair-bench                       Run all Fair Benchmark conditions (A, B, C-off, C-on, D)");
-    println!("  --bench-cond=<list>                Comma-separated conditions: a,b,c,c-byp-off,c-byp-on,c-reflect,d,all");
+    println!(
+        "  --fair-bench                       Run all Fair Benchmark conditions (A, B, C-off, C-on, D)"
+    );
+    println!(
+        "  --bench-cond=<list>                Comma-separated conditions: a,b,c,c-byp-off,c-byp-on,c-reflect,d,all"
+    );
     println!("  --pressure-sim=<off|elevated|surge>");
     println!(
         "  --persona-lmnk=<path>              Load persona cognitive circuit from .lmnkc/.lmnkp"
@@ -823,7 +849,7 @@ pub(crate) fn build_step2_run_specs(cli: &EvalCliConfig) -> Vec<Step2RunSpec> {
                 rng_seed: 42,
             },
         ]
-    } else if let Some(ref conds) = fair_bench_conditions {
+    } else if let Some(conds) = fair_bench_conditions {
         conds
             .iter()
             .map(|&(cond, cond_no_reflect, byp_override)| {

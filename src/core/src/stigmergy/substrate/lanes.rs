@@ -9,7 +9,7 @@ use crate::foundation::{
     branchless_is_finite_f32, branchless_relu_f32,
 };
 use crate::liminal::{
-    BitCut8, LmnkResult, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_SUBSTRATE_FULL, MAX_ATTENTION_HEADS,
+    BitCut8, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_SUBSTRATE_FULL, LmnkResult, MAX_ATTENTION_HEADS,
     MAX_ATTRACTOR_DOMAINS,
 };
 

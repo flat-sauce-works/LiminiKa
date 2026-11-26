@@ -14,7 +14,7 @@ use crate::stigmergy::PointerSubstrate;
 ///
 /// # Safety
 /// `substrate_out` must be a non-null, naturally aligned writable handle pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_create(
     capacity: u32,
     substrate_out: *mut LmnkSubstrateHandle,
@@ -33,7 +33,7 @@ pub unsafe extern "C" fn lmnk_substrate_create(
 ///
 /// # Safety
 /// `handle` must be `NULL` or a valid substrate handle returned by [`lmnk_substrate_create`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_destroy(handle: LmnkSubstrateHandle) -> LmnkStatus {
     if handle.is_null() {
         return LMNK_OK;
@@ -56,7 +56,7 @@ pub unsafe extern "C" fn lmnk_substrate_destroy(handle: LmnkSubstrateHandle) -> 
 ///
 /// # Safety
 /// `thresholds_out` must be a non-null, 32-byte aligned writable [`lmnk_stigmergic_thresholds_t`] pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_init_default_thresholds(
     thresholds_out: *mut lmnk_stigmergic_thresholds_t,
 ) -> LmnkStatus {
@@ -74,7 +74,7 @@ pub unsafe extern "C" fn lmnk_substrate_init_default_thresholds(
 /// # Safety
 /// `trail` (64B aligned) and `report_out` (32B aligned) must be non-null and non-overlapping;
 /// `thresholds_opt` may be `NULL` or 32B aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_evaluate_thresholds(
     thresholds_opt: *const lmnk_stigmergic_thresholds_t,
     trail: *const lmnk_pointer_trail_t,
@@ -141,7 +141,7 @@ pub unsafe extern "C" fn lmnk_substrate_evaluate_thresholds(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_step_safe(
     substrate_opt: LmnkSubstrateHandle,
     thresholds_opt: *const lmnk_stigmergic_thresholds_t,
@@ -303,7 +303,7 @@ pub unsafe extern "C" fn lmnk_substrate_step_safe(
 ///
 /// # Safety
 /// `context` and `trail_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_step_pointer(
     context: LmnkContextHandle,
     current_ptr: u64,
@@ -341,7 +341,7 @@ pub unsafe extern "C" fn lmnk_substrate_step_pointer(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_resolve_trail_in_swarm(
     trail_inout: *mut lmnk_pointer_trail_t,
     action_ptr: u64,
@@ -404,7 +404,7 @@ pub unsafe extern "C" fn lmnk_substrate_resolve_trail_in_swarm(
 ///
 /// # Safety
 /// Pure arithmetic function safe for any `u64` value.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_hash_slot256_index(ptr: u64) -> u32 {
     (branchless_splitmix64(ptr) & 0xFF) as u32
 }
@@ -413,7 +413,7 @@ pub unsafe extern "C" fn lmnk_substrate_hash_slot256_index(ptr: u64) -> u32 {
 ///
 /// # Safety
 /// `context` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_pull_trail_to_anchor(
     context: LmnkContextHandle,
     trail_id: u32,
@@ -436,7 +436,7 @@ pub unsafe extern "C" fn lmnk_substrate_pull_trail_to_anchor(
 ///
 /// # Safety
 /// `context` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_link_hallucinated_trails(
     context: LmnkContextHandle,
     src_trail_id: u32,
@@ -456,7 +456,7 @@ pub unsafe extern "C" fn lmnk_substrate_link_hallucinated_trails(
 ///
 /// # Safety
 /// `bitmasks` and `reduced_out` must be non-null, 32-byte aligned, and disjoint.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_reduce_bit_tree(
     bitmasks: *const lmnk_paged_bitmask_t,
     num_masks: usize,
@@ -524,14 +524,14 @@ pub unsafe extern "C" fn lmnk_substrate_reduce_bit_tree(
             let mut b2 = 0u64;
             let mut b3 = 0u64;
 
-            let mut chunks = masks_slice.as_slice().chunks_exact(4);
-            for c in chunks.by_ref() {
+            let (chunks, rem) = masks_slice.as_slice().as_chunks::<4>();
+            for c in chunks {
                 b0 |= (c[0].bits[0] | c[1].bits[0]) | (c[2].bits[0] | c[3].bits[0]);
                 b1 |= (c[0].bits[1] | c[1].bits[1]) | (c[2].bits[1] | c[3].bits[1]);
                 b2 |= (c[0].bits[2] | c[1].bits[2]) | (c[2].bits[2] | c[3].bits[2]);
                 b3 |= (c[0].bits[3] | c[1].bits[3]) | (c[2].bits[3] | c[3].bits[3]);
             }
-            for m in chunks.remainder() {
+            for m in rem {
                 b0 |= m.bits[0];
                 b1 |= m.bits[1];
                 b2 |= m.bits[2];
@@ -549,7 +549,7 @@ pub unsafe extern "C" fn lmnk_substrate_reduce_bit_tree(
 ///
 /// # Safety
 /// `kv_bits` and `mask_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_substrate_paged_block_warp_bitmask(
     kv_bits: *const u64,
     num_blocks: usize,
@@ -627,9 +627,9 @@ pub unsafe extern "C" fn lmnk_substrate_paged_block_warp_bitmask(
 
             #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
             let rem_start = {
-                let mut c8 = word_chunk.chunks_exact(8);
+                let (c8, _) = word_chunk.as_chunks::<8>();
                 let mut bit_base = 0u32;
-                for q in c8.by_ref() {
+                for q in c8 {
                     let m0 = u64::from(q[0] != 0);
                     let m1 = u64::from(q[1] != 0) << 1;
                     let m2 = u64::from(q[2] != 0) << 2;
@@ -660,7 +660,7 @@ pub unsafe extern "C" fn lmnk_substrate_paged_block_warp_bitmask(
 ///
 /// # Safety
 /// `slot` must be a non-null, 64-byte aligned writable [`lmnk_ledger_slot_t`] pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ledger_reset_telemetry(slot: *mut lmnk_ledger_slot_t) -> LmnkStatus {
     ffi_boundary!({
         // SAFETY: Validated for non-nullness and 64B alignment.
@@ -674,7 +674,7 @@ pub unsafe extern "C" fn lmnk_ledger_reset_telemetry(slot: *mut lmnk_ledger_slot
 ///
 /// # Safety
 /// `slot` and `shortcut_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ledger_fast_path_lookup(
     slot: *const lmnk_ledger_slot_t,
     input_key: u64,
@@ -704,7 +704,7 @@ pub unsafe extern "C" fn lmnk_ledger_fast_path_lookup(
 ///
 /// # Safety
 /// `slot` must be a non-null, 64-byte aligned writable [`lmnk_ledger_slot_t`] pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ledger_telemetry_push(
     slot: *mut lmnk_ledger_slot_t,
     metric_code: u8,
@@ -721,7 +721,7 @@ pub unsafe extern "C" fn lmnk_ledger_telemetry_push(
 ///
 /// # Safety
 /// `slot` must be a non-null, 64-byte aligned writable [`lmnk_ledger_slot_t`] pointer.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ledger_set_mode(
     slot: *mut lmnk_ledger_slot_t,
     mode: u32,
@@ -738,7 +738,7 @@ pub unsafe extern "C" fn lmnk_ledger_set_mode(
 ///
 /// # Safety
 /// `slot` and `config_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ledger_evaluate_auto_tune(
     slot: *const lmnk_ledger_slot_t,
     config_out: *mut lmnk_config_t,

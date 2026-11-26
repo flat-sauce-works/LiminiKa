@@ -14,19 +14,19 @@
 use crate::foundation::Q7_FULL_COS_REF;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::Q7_FULL_COS_REF;
-use crate::foundation::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_popcount_rsqrt_u32, branchless_relu_f32, branchless_rsqrt_f32,
-    coherence_from_word_arrays_with_both_uniform_flags_64, fast_ln_1p_bounded_f32,
-    is_word_array_uniform_64, Pod, RawPhaseProjectable,
-};
 pub use crate::foundation::{PagedBitmask, TaggedPtr};
-use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, PhaseQ7, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+use crate::foundation::{
+    Pod, RawPhaseProjectable, branchless_abs_f32, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_popcount_rsqrt_u32, branchless_relu_f32,
+    branchless_rsqrt_f32, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_ln_1p_bounded_f32, is_word_array_uniform_64,
 };
-pub use crate::stigmergy::ledger::LedgerSlot;
+use crate::liminal::{
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_u32,
+};
 use crate::stigmergy::TRAIL_FLAG_REPULSION_ACTIVE;
+pub use crate::stigmergy::ledger::LedgerSlot;
 
 mod ops;
 mod resonance;

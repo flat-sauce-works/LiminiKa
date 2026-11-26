@@ -4,30 +4,30 @@
 //! Autonomy thresholds and 7-regime next-action selection for [`super::StigmergicSubstrate`].
 
 use super::{
-    StigmergicActionDecision, SubstrateStepReport, DEFAULT_STIGMERGIC_CONTRADICTION_THRESH,
-    DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH, DEFAULT_STIGMERGIC_EVAPORATION_RETAIN,
-    DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH, DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY,
-    DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH, DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN,
-    DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH,
+    DEFAULT_STIGMERGIC_CONTRADICTION_THRESH, DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH,
+    DEFAULT_STIGMERGIC_EVAPORATION_RETAIN, DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH,
+    DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY, DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH,
+    DEFAULT_STIGMERGIC_REINFORCEMENT_GAIN, DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH,
+    StigmergicActionDecision, SubstrateStepReport,
 };
 use crate::foundation::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_min_f32, branchless_rad_to_phase_step_u8,
-    branchless_relu_f32, dispatch_fused_phase_clamp_and_subhead_words_core, pack_action_slot_tag,
+    ACTION_MODE_PHASE_STEER, ATTRACTOR_SLOT_ID_MASK, AlignedSliceMut32,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, Pod, SubheadConfig, TaggedPtr, branchless_abs_f32,
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    dispatch_fused_phase_clamp_and_subhead_words_core, pack_action_slot_tag,
     phase_clamp_upper_rot_dim, scale_f32_slice_unrolled8, steer_from_swar_words_core_safe,
     swar_q7_phase_step_filter_words_64, swar_words_nonzero_64, unpack_attractor_slot_from_tag,
-    AlignedSliceMut32, Pod, SubheadConfig, TaggedPtr, ACTION_MODE_PHASE_STEER,
-    ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    LmnkResult, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES, branchless_select_f32, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64,
 };
 use crate::stigmergy::anchor::DEFAULT_TOROIDAL_CENTROID_MERGE_COHERENCE;
 use crate::stigmergy::gate::PhaseSteeringEngine;
 use crate::stigmergy::granule::StigmergicGranuleState;
-use crate::stigmergy::trail::{trail_phase_words_ref, PointerTrail};
+use crate::stigmergy::trail::{PointerTrail, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
@@ -411,16 +411,17 @@ impl StigmergicThresholds {
                 } else {
                     swar_q7_phase_step_filter_words_64(steer_words, min_step_q7)
                 };
-                if swar_words_nonzero_64(&swar_w) {
-                    if let Some(q) = query_tensor {
-                        let is_default_clamp = (phase_clamp_max.to_bits()
-                            == DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits())
-                            & (num_heads > 0)
-                            & (num_heads <= MAX_ATTENTION_HEADS);
-                        if is_default_clamp {
-                            let rot_dim = phase_clamp_upper_rot_dim(head_dim);
-                            if let Some(k) = key_tensor {
-                                crate::foundation::rope::rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
+                if swar_words_nonzero_64(&swar_w)
+                    && let Some(q) = query_tensor
+                {
+                    let is_default_clamp = (phase_clamp_max.to_bits()
+                        == DEFAULT_PHASE_CLAMP_MAX_RAD.to_bits())
+                        & (num_heads > 0)
+                        & (num_heads <= MAX_ATTENTION_HEADS);
+                    if is_default_clamp {
+                        let rot_dim = phase_clamp_upper_rot_dim(head_dim);
+                        if let Some(k) = key_tensor {
+                            crate::foundation::rope::rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
                                     q.as_mut_slice(),
                                     k.as_mut_slice(),
                                     &swar_w,
@@ -428,8 +429,8 @@ impl StigmergicThresholds {
                                     head_dim,
                                     rot_dim,
                                 );
-                            } else {
-                                crate::foundation::rope::rotate_fused_self_phase_clamp_and_subhead_default_words(
+                        } else {
+                            crate::foundation::rope::rotate_fused_self_phase_clamp_and_subhead_default_words(
                                     q.as_mut_slice(),
                                     &swar_w,
                                     num_heads,
@@ -437,64 +438,63 @@ impl StigmergicThresholds {
                                     rot_dim,
                                     true,
                                 );
-                            }
-                        } else {
-                            let f_heads = (num_heads >> 1) as u16;
-                            let l_heads = (num_heads >> 2) as u16;
-                            let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
-                            let subhead_cfg = SubheadConfig {
-                                num_fact_heads: f_heads,
-                                num_logic_heads: l_heads,
-                                num_explore_heads: e_heads,
-                                flags: 0,
-                                fact_phase_gain: 1.0,
-                                logic_phase_gain: 1.0,
-                                explore_phase_gain: 1.15,
-                                reserved: [0; 12],
-                            };
-                            dispatch_fused_phase_clamp_and_subhead_words_core(
-                                q,
-                                &swar_w,
-                                phase_clamp_max,
-                                &subhead_cfg,
-                                &swar_w,
-                                &swar_w,
-                                &swar_w,
-                                phase_clamp_max,
-                                0,
-                                head_dim,
-                                true,
-                            )?;
-                            if let Some(k) = key_tensor {
-                                steer_from_swar_words_core_safe(
-                                    &swar_w,
-                                    0xFF,
-                                    128,
-                                    head_dim,
-                                    num_heads,
-                                    false,
-                                    phase_clamp_max,
-                                    k,
-                                    None,
-                                );
-                            }
                         }
-                        steered = true;
-                        subhead_routed = true;
+                    } else {
+                        let f_heads = (num_heads >> 1) as u16;
+                        let l_heads = (num_heads >> 2) as u16;
+                        let e_heads = (num_heads as u16).saturating_sub(f_heads + l_heads);
+                        let subhead_cfg = SubheadConfig {
+                            num_fact_heads: f_heads,
+                            num_logic_heads: l_heads,
+                            num_explore_heads: e_heads,
+                            flags: 0,
+                            fact_phase_gain: 1.0,
+                            logic_phase_gain: 1.0,
+                            explore_phase_gain: 1.15,
+                            reserved: [0; 12],
+                        };
+                        dispatch_fused_phase_clamp_and_subhead_words_core(
+                            q,
+                            &swar_w,
+                            phase_clamp_max,
+                            &subhead_cfg,
+                            &swar_w,
+                            &swar_w,
+                            &swar_w,
+                            phase_clamp_max,
+                            0,
+                            head_dim,
+                            true,
+                        )?;
+                        if let Some(k) = key_tensor {
+                            steer_from_swar_words_core_safe(
+                                &swar_w,
+                                0xFF,
+                                128,
+                                head_dim,
+                                num_heads,
+                                false,
+                                phase_clamp_max,
+                                k,
+                                None,
+                            );
+                        }
                     }
+                    steered = true;
+                    subhead_routed = true;
                 }
             }
         }
 
-        if let Some(logits) = logits_opt {
-            if !logits.is_empty() {
-                let inv_temp = branchless_select_f32(
-                    decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
-                    0.80,
-                    branchless_clamp_f32(1.0 + 0.15 * branchless_relu_f32(best_coh), 0.75, 1.35),
-                );
-                scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
-            }
+        if let Some(logits) = logits_opt
+            && !logits.is_empty()
+        {
+            let inv_temp = branchless_select_f32(
+                decision as u8 == StigmergicActionDecision::RepulsionEscape as u8,
+                0.80,
+                branchless_clamp_f32(1.0 + 0.15 * branchless_relu_f32(best_coh), 0.75, 1.35),
+            );
+            scale_f32_slice_unrolled8(logits.as_mut_slice(), inv_temp);
         }
         Ok((steered, subhead_routed, skip_compensated))
     }

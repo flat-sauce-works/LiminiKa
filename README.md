@@ -97,7 +97,7 @@ Requirements: stable Rust; CMake and a C11 / C++20 compiler for native C-ABI che
 # Rust workspace tests, #![no_std] check, architecture rules, and DSL smoke check
 cargo test --workspace
 cargo rustc -p liminika-core --no-default-features --lib --crate-type rlib
-python scripts/verify_architecture.py --check
+cargo xtask --check
 cargo run -p liminika-cli -- check examples/dsl/limina_poc.lmnk
 ```
 

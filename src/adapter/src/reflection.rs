@@ -11,12 +11,12 @@
 
 use crate::corpus_recall::AttractorRecallProjection;
 use crate::{DynamicAttractorRecall, LacunaBoundaryState, OwnedAttractorRecall, RecallPolicy};
-use liminika_core::drivers::{LiminalEgoState, EGO_TRIGGER_LIMINAL_EXTERIOR};
+use liminika_core::drivers::{EGO_TRIGGER_LIMINAL_EXTERIOR, LiminalEgoState};
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
-    AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame,
-    GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    AdaptiveThresholdPolicy, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame, GuardPhaseAnchor,
+    ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
 };
 use liminika_core::stigmergy::{
     CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,

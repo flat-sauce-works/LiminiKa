@@ -8,7 +8,7 @@
 #![allow(dead_code)]
 
 use liminika_core::foundation::{AlignedSlice, AlignedSliceMut};
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{Layout, alloc, dealloc};
 
 /// Scoped x86_64 MXCSR Flush-To-Zero (`FTZ`, bit 15 = `0x8000`) and Denormals-Are-Zero
 /// (`DAZ`, bit 6 = `0x0040`) guard preventing hardware subnormal microcode traps across
@@ -83,7 +83,7 @@ impl<T: Copy, const ALIGN: usize> AlignedHeapBuffer<T, ALIGN> {
         assert!(ALIGN > 0 && ALIGN.is_power_of_two());
         let elem_size = std::mem::size_of::<T>();
         assert!(len > 0 && elem_size > 0);
-        assert!((phase_offset_elems * elem_size) % ALIGN == 0);
+        assert!((phase_offset_elems * elem_size).is_multiple_of(ALIGN));
         let alloc_elems = len
             .checked_add(phase_offset_elems)
             .expect("Element count overflow");

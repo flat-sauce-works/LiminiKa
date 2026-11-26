@@ -13,38 +13,37 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use self::crc32_delta::{
+    ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB, ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
+    ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB, ANCHOR_CRC32_RBAR_ONE_FINAL_CONTRIB,
+    ANCHOR_CRC32_W0_FINAL_CONTRIB, AnchorHeaderDelta, CRC32_ANCHOR_ACTION_BYTE57_REF,
+    CRC32_ANCHOR_AID_BYTE0_REF, CRC32_ANCHOR_AID_BYTE1_REF, CRC32_ANCHOR_PROV_BYTE0_REF,
+    CRC32_ANCHOR_PROV_BYTE1_REF, CRC32_ANCHOR_SC_BYTE0_REF, CRC32_ANCHOR_SLOT_BYTE56_LUT_8,
+    CRC32_ANCHOR_ZOFF_BYTE1_REF, CRC32_ANCHOR_ZOFF_BYTE2_REF, CRC32_ANCHOR_ZOFF_BYTE3_REF,
     crc32_anchor_be24_final_u32, crc32_anchor_gm36_final_u32, crc32_anchor_zoff16_final_u32,
     crc32_update_anchor_absorption_delta, crc32_update_anchor_stationary_fields_delta,
-    AnchorHeaderDelta, ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB,
-    ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB, ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB,
-    ANCHOR_CRC32_RBAR_ONE_FINAL_CONTRIB, ANCHOR_CRC32_W0_FINAL_CONTRIB,
-    CRC32_ANCHOR_ACTION_BYTE57_REF, CRC32_ANCHOR_AID_BYTE0_REF, CRC32_ANCHOR_AID_BYTE1_REF,
-    CRC32_ANCHOR_PROV_BYTE0_REF, CRC32_ANCHOR_PROV_BYTE1_REF, CRC32_ANCHOR_SC_BYTE0_REF,
-    CRC32_ANCHOR_SLOT_BYTE56_LUT_8, CRC32_ANCHOR_ZOFF_BYTE1_REF, CRC32_ANCHOR_ZOFF_BYTE2_REF,
-    CRC32_ANCHOR_ZOFF_BYTE3_REF,
-};
-use crate::foundation::{
-    atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast, branchless_clamp_f32,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_maturity_scale_u32,
-    branchless_min_f32, branchless_relu_f32, branchless_sincos_q7, branchless_von_mises_kappa,
-    circular_r_bar_from_words_64, coherence_above_floor_from_word_arrays_64,
-    coherence_from_uniform_words_x8, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
-    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
-    crc32_step_block64_words, crc32_step_l3, crc32_step_l4, crc32_step_l5, crc32_step_l6,
-    is_aligned_to, is_word_array_uniform_64, load_q7_words_64,
-    step_toroidal_centroid_words_cached_64, store_q7_words_64, Pod, RawPhaseProjectable, TaggedPtr,
-    CRC32_IEEE_SLICE16_REF, Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 use crate::foundation::{
     ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
+use crate::foundation::{
+    CRC32_IEEE_SLICE16_REF, Pod, Q7_FULL_COS_REF, RawPhaseProjectable, TaggedPtr,
+    VON_MISES_KAPPA_AT_MAX_R_BITS, atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast,
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_maturity_scale_u32, branchless_min_f32, branchless_relu_f32, branchless_sincos_q7,
+    branchless_von_mises_kappa, circular_r_bar_from_words_64,
+    coherence_above_floor_from_word_arrays_64, coherence_from_uniform_words_x8,
+    crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
+    crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2, crc32_step_block64_words, crc32_step_l3,
+    crc32_step_l4, crc32_step_l5, crc32_step_l6, is_aligned_to, is_word_array_uniform_64,
+    load_q7_words_64, step_toroidal_centroid_words_cached_64, store_q7_words_64,
+};
 use crate::liminal::{
-    branchless_select_f32, branchless_select_q7, branchless_select_usize,
-    is_compatible_abi_version, AbstractDomain, Grounded, Indivisible, LmnkResult, PhaseQ7, Scoped,
-    DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
-    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+    AbstractDomain, DEFAULT_ENTROPY_EPS, Grounded, Indivisible, LMNK_ABI_VERSION_HEX,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
+    Scoped, branchless_select_f32, branchless_select_q7, branchless_select_usize,
+    is_compatible_abi_version,
 };
 
 /// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
@@ -97,7 +96,7 @@ const _: () = {
             == align_of::<&[u64; NUM_STIGMERGIC_GRANULES]>()
     );
 };
-use crate::stigmergy::trail::{trail_phase_words_ref, PointerTrail};
+use crate::stigmergy::trail::{PointerTrail, trail_phase_words_ref};
 use crate::stigmergy::{ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY};
 
 /// Nominal cause code (`0`) stored in [`PhaseAnchorRecord::attribution_tag`].

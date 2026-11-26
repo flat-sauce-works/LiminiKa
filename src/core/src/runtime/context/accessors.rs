@@ -9,25 +9,24 @@ use crate::drivers::{
     EntropyController, SystemPressureReading, SystemSpineState, TokenBypassObservation,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
-    branchless_q7_inhibit_words_64, branchless_relu_f32,
-    coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
-    is_word_array_uniform_64, load_q7_words_64, swar_slerp_words_with_uniform_flag_64,
-    swar_words_equal_64, swar_words_nonzero_64, AlignedSlice16, AlignedSliceMut16,
-    SWAR_SPLAT_BYTE_64,
+    AlignedSlice16, AlignedSliceMut16, SWAR_SPLAT_BYTE_64, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_min_f32, branchless_q7_inhibit_words_64,
+    branchless_relu_f32, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_inv_pos_normal_f32, is_word_array_uniform_64, load_q7_words_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    LacunaPartition8, PhaseQ7, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{CoreLayerEvalContext, GatewayFrame, ManifoldProbeBaseline};
 use crate::runtime::horizon::{EpistemicHorizonReading, HorizonDwellState};
 use crate::runtime::telemetry::{CoreTelemetryBank, CoreTelemetrySnapshot, TelemetryCapturePolicy};
 use crate::stigmergy::{
-    trail_phase_words_ref, ContrastivePhaseBloomFilter, LedgerSlot, OverlapDiscoveryReport,
+    ContrastivePhaseBloomFilter, LedgerSlot, MAX_ATTRACTOR_PULL_FORCE, OverlapDiscoveryReport,
     PhaseSteeringEngine, PointerTrail, SandboxLifecycleEvent, StigmergicActionDecision,
-    StigmergicSubstrate, StigmergicThresholds, MAX_ATTRACTOR_PULL_FORCE,
+    StigmergicSubstrate, StigmergicThresholds, trail_phase_words_ref,
 };
 
 impl RuntimeContext {

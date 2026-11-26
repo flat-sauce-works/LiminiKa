@@ -4,7 +4,7 @@
 //! Dynamic RoPE cache (standard + YaRN + Llama-4 long-context query scaling) with SSOT
 //! `HalfSplit`/`Interleaved` dispatch and pre-RoPE/post-RoPE `ModelSteeringAdapter` hooks.
 
-use candle_core::{DType, Device, Result as CResult, Tensor, D};
+use candle_core::{D, DType, Device, Result as CResult, Tensor};
 use liminika_adapter::{CorpusRecallEscalationProvider, ModelSteeringAdapter, RopeLayout};
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
 use liminika_core::foundation::TaggedPtr;
@@ -14,9 +14,9 @@ use liminika_core::runtime::{
     ResonantSignalSlice, SubjectivePersona,
 };
 
+use crate::LayerResonantSlices;
 use crate::eval::HorizonAblationMode;
 use crate::model::config::{ModelConfig, YarnRopeConfig};
-use crate::LayerResonantSlices;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ProbeCoordinateFrame {

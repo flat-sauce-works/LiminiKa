@@ -10,22 +10,21 @@ use crate::drivers::spine::entropy::kernels::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_temperature_for_mode,
 };
 use crate::drivers::spine::entropy::{
-    EntropyState, DEFAULT_BIFURCATION_THRESHOLD, DEFAULT_HYSTERESIS_BAND,
-    DEFAULT_SAMPLE_TEMPERATURE, DEFAULT_SINGULARITY_EPS, DEFAULT_TAU_FLUX, EMA_ALPHA_ENTROPY,
-    ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
-    ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION, ENTROPY_GATE_SLIDING_WINDOW_HORIZON,
-    ENTROPY_GATE_WINDOW_RING_CAPACITY, INV_LN_2, LUT_REPULSION_GAIN, LUT_SAMPLE_TEMPERATURE,
-    MAX_BARRIER_CEILING, MAX_VALID_TOKEN_Z_SCORE,
+    DEFAULT_BIFURCATION_THRESHOLD, DEFAULT_HYSTERESIS_BAND, DEFAULT_SAMPLE_TEMPERATURE,
+    DEFAULT_SINGULARITY_EPS, DEFAULT_TAU_FLUX, EMA_ALPHA_ENTROPY, ENTROPY_GATE_MODE_NORMAL_ENTROPY,
+    ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION, ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION,
+    ENTROPY_GATE_SLIDING_WINDOW_HORIZON, ENTROPY_GATE_WINDOW_RING_CAPACITY, EntropyState, INV_LN_2,
+    LUT_REPULSION_GAIN, LUT_SAMPLE_TEMPERATURE, MAX_BARRIER_CEILING, MAX_VALID_TOKEN_Z_SCORE,
 };
 use crate::foundation::{
+    ATTRACTOR_SLOT_ID_MASK, AlignedSlice32, F32_MIN_POSITIVE_NORMAL, Pod, TaggedPtr,
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_relu_f32, branchless_sanitize_z_score_f32,
-    fast_inv_len_f32, fast_inv_pos_normal_f32, sum_sq_f32_simd8, AlignedSlice32, Pod, TaggedPtr,
-    ATTRACTOR_SLOT_ID_MASK, F32_MIN_POSITIVE_NORMAL,
+    fast_inv_len_f32, fast_inv_pos_normal_f32, sum_sq_f32_simd8,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, LmnkResult,
-    LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
+    LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, branchless_select_f32,
+    branchless_select_u8, branchless_select_u32,
 };
 
 /// `EntropyController` stateful engine (128 bytes = 2 cache lines, 64B aligned).

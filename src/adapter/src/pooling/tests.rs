@@ -539,9 +539,11 @@ fn append_entry_token_observations_preserves_pooled_sigs_matches_sequential_and_
             per_layer_token_qs: obs_entry1.per_layer_token_qs.clone(),
         },
     ];
-    assert!(compiled_batch
-        .append_entry_token_observations(&adapter, &bad_batch)
-        .is_err());
+    assert!(
+        compiled_batch
+            .append_entry_token_observations(&adapter, &bad_batch)
+            .is_err()
+    );
     assert_eq!(compiled_batch.entry_token_sigs[1].len(), 2);
 
     // Valid batch append matches sequential single-item application bit-for-bit.

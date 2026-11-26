@@ -9,11 +9,12 @@
 //! synchronization pass through [`TurnOrchestrator::prepare_turn`] as a single atomic boundary.
 
 use crate::corpus_recall::{
+    AttractorRecallProjection, RecalledAnchorRef,
     build_exterior_sandbox_anchors_per_layer_from_projection,
     build_fact_anchors_per_layer_from_projection, build_guard_anchors_per_layer_from_projection,
     build_persona_anchors_per_layer_from_projection, context_fingerprint_from_projection,
     join_exterior_context_from_projection, join_fact_context_from_projection,
-    join_persona_context_from_projection, AttractorRecallProjection, RecalledAnchorRef,
+    join_persona_context_from_projection,
 };
 use crate::{
     AttractorRole, CompiledTokenCorpus, DynamicAttractorRecall, LacunaBoundaryState,

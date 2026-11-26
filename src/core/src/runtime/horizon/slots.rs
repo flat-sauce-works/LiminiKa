@@ -5,14 +5,14 @@
 //! [`HorizonEscalationProvider`], dwell anti-chattering state, and [`StigmergicSubstrate`] escalation.
 
 use crate::liminal::{
-    BitCut8, LmnkResult, PhaseQ7, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS,
+    BitCut8, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    PhaseQ7,
 };
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::gateway::{GatewayFrame, ROOT_CAUSE_NOMINAL};
 use crate::runtime::topology::CORE_TOPOLOGY;
 use crate::stigmergy::{
-    StigmergicSubstrate, WorkbenchLanePlacement, WorkbenchSlotSpec, WORKBENCH_LANE_FLAG_PINNED,
+    StigmergicSubstrate, WORKBENCH_LANE_FLAG_PINNED, WorkbenchLanePlacement, WorkbenchSlotSpec,
 };
 
 /// Consecutive-step hysteresis tracker for dynamic [`LatentHorizonSlot`] slide-in / slide-out.
@@ -459,10 +459,10 @@ impl StigmergicSubstrate {
         active_lane_inout: &mut Option<u8>,
         escalation_provider: &mut E,
     ) -> LmnkResult<bool> {
-        if let WorkbenchLanePlacement::Explicit { lane, .. } = req.placement {
-            if usize::from(lane) >= MAX_ATTRACTOR_DOMAINS {
-                return Err(LMNK_ERR_INVALID_ARGUMENT);
-            }
+        if let WorkbenchLanePlacement::Explicit { lane, .. } = req.placement
+            && usize::from(lane) >= MAX_ATTRACTOR_DOMAINS
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         if req.trigger.is_destabilized() {
             let mut escalated_phases = [0i8; MAX_ATTENTION_HEADS];
@@ -487,13 +487,12 @@ impl StigmergicSubstrate {
                         }
                     }
                     WorkbenchLanePlacement::Explicit { lane, pin } => {
-                        if let Some(prev) = *active_lane_inout {
-                            if prev != lane
-                                && usize::from(prev) < MAX_ATTRACTOR_DOMAINS
-                                && (self.slot_pinned_mask & (1u8 << prev)) == 0
-                            {
-                                let _ = self.release_lane(prev)?;
-                            }
+                        if let Some(prev) = *active_lane_inout
+                            && prev != lane
+                            && usize::from(prev) < MAX_ATTRACTOR_DOMAINS
+                            && (self.slot_pinned_mask & (1u8 << prev)) == 0
+                        {
+                            let _ = self.release_lane(prev)?;
                         }
                         WorkbenchLanePlacement::Explicit { lane, pin }
                     }

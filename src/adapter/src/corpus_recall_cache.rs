@@ -8,8 +8,8 @@
 use std::sync::OnceLock;
 
 use crate::{
-    AttractorRole, EntryNeighborhoodStats, NeighborhoodStatsProvider, TextAttractorCorpus,
-    TextAttractorEntry, DEFAULT_NEIGHBOR_K, EXACT_CORPUS_STATS_LIMIT,
+    AttractorRole, DEFAULT_NEIGHBOR_K, EXACT_CORPUS_STATS_LIMIT, EntryNeighborhoodStats,
+    NeighborhoodStatsProvider, TextAttractorCorpus, TextAttractorEntry,
 };
 use liminika_core::liminal::BitCut64;
 

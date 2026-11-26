@@ -84,9 +84,5 @@ pub const fn branchless_select_q7(cond: bool, if_true: PhaseQ7, if_false: PhaseQ
 #[inline(always)]
 #[must_use]
 pub const fn branchless_select_f32(cond: bool, if_true: f32, if_false: f32) -> f32 {
-    if cond {
-        if_true
-    } else {
-        if_false
-    }
+    if cond { if_true } else { if_false }
 }

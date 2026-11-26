@@ -21,30 +21,29 @@ use liminika_core::stigmergy::{CognitiveTrajectoryLedger, StandardCognitiveBank}
 use tokenizers::Tokenizer;
 
 use crate::bake::{
-    capture_and_build_shared_corpus, load_fixture, query_nvidia_smi_vram, BakedModelProfile,
+    BakedModelProfile, capture_and_build_shared_corpus, load_fixture, query_nvidia_smi_vram,
 };
-use crate::cli::{mean_reply_bigram_jaccard, EvalCliConfig};
+use crate::cli::{EvalCliConfig, mean_reply_bigram_jaccard};
 use crate::eval::{
-    generate_steered_reply_from_embeds_with_offset, generate_steered_reply_with_offset,
     CircuitProfileMode, ReplyTiming, SteerDecodeConfig,
+    generate_steered_reply_from_embeds_with_offset, generate_steered_reply_with_offset,
 };
 use crate::eval_common::{
-    anchor_disjoint_stats, build_steered_body, make_decode_cfg, mean_f64,
-    measure_baseline_entropies, measure_guard_antiphase, pct, reset_clean_probe_adapter,
-    resolve_forbidden_token_id, ClassMetricSamples, DecodeCfgOptions,
+    ClassMetricSamples, DecodeCfgOptions, anchor_disjoint_stats, build_steered_body,
+    make_decode_cfg, mean_f64, measure_baseline_entropies, measure_guard_antiphase, pct,
+    reset_clean_probe_adapter, resolve_forbidden_token_id,
 };
 use crate::extended_eval::{
-    count_semantic_forbid_hits_utf8, load_extended_boundary_probes, ExtendedBoundarySuite,
-    ExtendedPartitionProbe, ExtendedRepulsionProbe,
+    ExtendedBoundarySuite, ExtendedPartitionProbe, ExtendedRepulsionProbe,
+    count_semantic_forbid_hits_utf8, load_extended_boundary_probes,
 };
 use crate::metrics::{delta_log_prob, kl_divergence_and_max_abs_delta};
 use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, ModelConfig};
 use crate::physics_eval::PartitionClass;
 use crate::vision::{
-    build_mistral3_image_turn_tokens, build_multimodal_inputs_embeds,
-    build_raw_multimodal_probe_tokens, make_image_a_red_circle,
-    make_image_b_blue_left_yellow_right, make_image_c_dark_ui_layout, RgbImage, VisionConfig,
-    VisionModel,
+    RgbImage, VisionConfig, VisionModel, build_mistral3_image_turn_tokens,
+    build_multimodal_inputs_embeds, build_raw_multimodal_probe_tokens, make_image_a_red_circle,
+    make_image_b_blue_left_yellow_right, make_image_c_dark_ui_layout,
 };
 use crate::{
     build_persona_bank, calibrate_trial_adapter, configure_trial_adapter, resolve_fixture_path,
@@ -774,23 +773,21 @@ fn run_boundary_condition(
                 else {
                     continue;
                 };
-                if let Some(hyb_l) = on_cfg.first_prefill_logits.as_deref() {
-                    if let Some(dlp) =
+                if let Some(hyb_l) = on_cfg.first_prefill_logits.as_deref()
+                    && let Some(dlp) =
                         delta_log_prob(off_l, hyb_l, tok_id).filter(|v| v.is_finite())
-                    {
-                        guard_dlp_hyb_tot += 1;
-                        guard_dlp_hyb_sum += dlp;
-                        guard_dlp_hyb_le0 += usize::from(dlp <= 0.0);
-                    }
+                {
+                    guard_dlp_hyb_tot += 1;
+                    guard_dlp_hyb_sum += dlp;
+                    guard_dlp_hyb_le0 += usize::from(dlp <= 0.0);
                 }
-                if let Some(rope_l) = rope_cfg.first_prefill_logits.as_deref() {
-                    if let Some(dlp) =
+                if let Some(rope_l) = rope_cfg.first_prefill_logits.as_deref()
+                    && let Some(dlp) =
                         delta_log_prob(off_l, rope_l, tok_id).filter(|v| v.is_finite())
-                    {
-                        guard_dlp_rope_tot += 1;
-                        guard_dlp_rope_sum += dlp;
-                        guard_dlp_rope_le0 += usize::from(dlp <= 0.0);
-                    }
+                {
+                    guard_dlp_rope_tot += 1;
+                    guard_dlp_rope_sum += dlp;
+                    guard_dlp_rope_le0 += usize::from(dlp <= 0.0);
                 }
             }
         }

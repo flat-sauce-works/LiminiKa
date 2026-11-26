@@ -97,7 +97,7 @@ session DesktopAssistant using Limina on LocalDevice {
 # Rust ワークスペースのテスト、#![no_std] ビルド、アーキテクチャ規則、DSL スモークテスト
 cargo test --workspace
 cargo rustc -p liminika-core --no-default-features --lib --crate-type rlib
-python scripts/verify_architecture.py --check
+cargo xtask --check
 cargo run -p liminika-cli -- check examples/dsl/limina_poc.lmnk
 ```
 

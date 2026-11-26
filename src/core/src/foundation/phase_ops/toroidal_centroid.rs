@@ -25,13 +25,13 @@ use crate::foundation::lut_crc32::SWAR_SPLAT_BYTE_64;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::lut_crc32::{INV_8_Q14_F32, Q14_BIAS_X8_I32};
 use crate::foundation::pod::KvMotionDeltaPacket;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::foundation::scalar_math::{VON_MISES_KAPPA_AT_MAX_R, fast_sqrt_unit_f32};
 use crate::foundation::scalar_math::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
     branchless_is_finite_f32, branchless_rad_to_q7, branchless_relu_f32,
     branchless_von_mises_kappa, fast_inv_pos_normal_f32,
 };
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use crate::foundation::scalar_math::{fast_sqrt_unit_f32, VON_MISES_KAPPA_AT_MAX_R};
 use crate::foundation::swar_simd::{
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_circular_add_x8,
     swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
@@ -40,8 +40,8 @@ use crate::foundation::swar_simd::{
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::liminal::Q7_PHASE_INV_SCALE_RAD;
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u8, LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, PhaseQ7,
+    branchless_select_f32, branchless_select_u8,
 };
 
 /// Executes an **Online Toroidal $k$-Means M-Step Centroid Update** in 8 register-resident `u64`
@@ -211,10 +211,10 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
         // rigid SO(2) invariance, and circular resultant evaluation (`0` GPR-to-YMM or YMM-to-GPR STLF stalls).
         unsafe {
             use core::arch::x86_64::{
-                _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastb_epi8, _mm256_castsi256_si128,
-                _mm256_mulhrs_epi16, _mm256_or_si256, _mm256_permute4x64_epi64, _mm256_set1_epi16,
-                _mm256_slli_epi16, _mm256_sub_epi8, _mm256_testz_si256, _mm256_xor_si256,
-                _mm_cvtsi128_si64,
+                _mm_cvtsi128_si64, _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastb_epi8,
+                _mm256_castsi256_si128, _mm256_mulhrs_epi16, _mm256_or_si256,
+                _mm256_permute4x64_epi64, _mm256_set1_epi16, _mm256_slli_epi16, _mm256_sub_epi8,
+                _mm256_testz_si256, _mm256_xor_si256,
             };
             let (va0, va1) = avx2_words64_to_vec64_with_uniform(centroid_words, c_uni);
             let (vb0, vb1) = avx2_words64_to_vec64_with_uniform(sample_words, sample_uni);

@@ -6,14 +6,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use candle_core::quantized::GgmlDType;
 use candle_core::Tensor;
+use candle_core::quantized::GgmlDType;
 use liminika_adapter::{
     AttractorTrajectoryEvaluator, CompiledTokenCorpus, CorpusRecallEscalationProvider,
     LmnkTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
-    ReflectionPolicy, SpineDecodeInput, SpineLogitsObserveMode, SystemPressureReading,
-    TrajectoryManifoldSnapshot, SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_PINNED_LOCK,
-    SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_SENTINEL_AUTO_U8,
+    ReflectionPolicy, SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_SENTINEL_AUTO_U8, SpineDecodeInput,
+    SpineLogitsObserveMode, SystemPressureReading, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
 use liminika_core::drivers::LiminalEgoPreset;
@@ -30,9 +30,9 @@ use tokenizers::Tokenizer;
 use crate::bake::argmax;
 use crate::eval_common::count_semantic_forbid_hits_in_clauses;
 use crate::model::{
-    active_layers_mask, clip_layer_mask, top_half_layer_mask, CausalLmModel, ChatTemplate,
-    ChatTemplateArg, ForwardSteer, KvCacheMode, LogitsFetchMode, LogitsOutcome, ModelArchArg,
-    ProbeCoordinateFrame, ResonantAnchors,
+    CausalLmModel, ChatTemplate, ChatTemplateArg, ForwardSteer, KvCacheMode, LogitsFetchMode,
+    LogitsOutcome, ModelArchArg, ProbeCoordinateFrame, ResonantAnchors, active_layers_mask,
+    clip_layer_mask, top_half_layer_mask,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,10 +161,10 @@ pub(crate) fn parse_circuit_mode<'a>(
             if val.eq_ignore_ascii_case("hybrid") {
                 return CircuitProfileMode::Hybrid(64);
             }
-            if let Some(blend_str) = val.strip_prefix("hybrid:") {
-                if let Ok(blend) = blend_str.parse::<u8>() {
-                    return CircuitProfileMode::Hybrid(blend.min(128));
-                }
+            if let Some(blend_str) = val.strip_prefix("hybrid:")
+                && let Ok(blend) = blend_str.parse::<u8>()
+            {
+                return CircuitProfileMode::Hybrid(blend.min(128));
             }
         }
     }
@@ -212,10 +212,10 @@ pub(crate) fn apply_ego_mode(adapter: &mut ModelSteeringAdapter, mode: &EgoProfi
 
 pub(crate) fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<lmnk_q7_t> {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--kv-min-res=") {
-            if let Ok(parsed) = val.parse::<i8>() {
-                return Some(parsed.clamp(-127, 127));
-            }
+        if let Some(val) = arg.strip_prefix("--kv-min-res=")
+            && let Ok(parsed) = val.parse::<i8>()
+        {
+            return Some(parsed.clamp(-127, 127));
         }
     }
     None
@@ -265,10 +265,10 @@ pub(crate) fn parse_reflect_mode<'a>(args: impl IntoIterator<Item = &'a str>) ->
 
 pub(crate) fn parse_ego_max_hops<'a>(args: impl IntoIterator<Item = &'a str>) -> u8 {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--ego-max-hops=") {
-            if let Ok(parsed) = val.parse::<u8>() {
-                return parsed.clamp(1, 4);
-            }
+        if let Some(val) = arg.strip_prefix("--ego-max-hops=")
+            && let Ok(parsed) = val.parse::<u8>()
+        {
+            return parsed.clamp(1, 4);
         }
     }
     1
@@ -276,12 +276,12 @@ pub(crate) fn parse_ego_max_hops<'a>(args: impl IntoIterator<Item = &'a str>) ->
 
 pub(crate) fn parse_temperature<'a>(args: impl IntoIterator<Item = &'a str>) -> f32 {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--temp=") {
-            if let Ok(parsed) = val.parse::<f32>() {
-                if parsed.is_finite() && parsed >= 0.0 {
-                    return parsed;
-                }
-            }
+        if let Some(val) = arg.strip_prefix("--temp=")
+            && let Ok(parsed) = val.parse::<f32>()
+            && parsed.is_finite()
+            && parsed >= 0.0
+        {
+            return parsed;
         }
     }
     0.0
@@ -289,10 +289,10 @@ pub(crate) fn parse_temperature<'a>(args: impl IntoIterator<Item = &'a str>) -> 
 
 pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64 {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--seed=") {
-            if let Ok(parsed) = val.parse::<u64>() {
-                return parsed.max(1);
-            }
+        if let Some(val) = arg.strip_prefix("--seed=")
+            && let Ok(parsed) = val.parse::<u64>()
+        {
+            return parsed.max(1);
         }
     }
     42
@@ -306,10 +306,10 @@ pub(crate) const DEFAULT_PREFILL_CHUNK_SIZE: usize = crate::model::DEFAULT_PREFI
 
 pub(crate) fn parse_prefill_chunk_size<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
     for arg in args {
-        if let Some(raw) = arg.strip_prefix("--prefill-chunk-size=") {
-            if let Ok(parsed) = raw.trim().parse::<usize>() {
-                return parsed.clamp(16, 4096);
-            }
+        if let Some(raw) = arg.strip_prefix("--prefill-chunk-size=")
+            && let Ok(parsed) = raw.trim().parse::<usize>()
+        {
+            return parsed.clamp(16, 4096);
         }
     }
     DEFAULT_PREFILL_CHUNK_SIZE
@@ -355,10 +355,10 @@ pub(crate) fn parse_layer_mask_spec<'a>(
             }
             if let Some(hex_raw) = val.strip_prefix("0x").or_else(|| val.strip_prefix("0X")) {
                 let cleaned = hex_raw.replace('_', "");
-                if let Ok(parsed) = u64::from_str_radix(&cleaned, 16) {
-                    if parsed != 0 {
-                        return Some(LayerMaskSpec::Fixed(parsed));
-                    }
+                if let Ok(parsed) = u64::from_str_radix(&cleaned, 16)
+                    && parsed != 0
+                {
+                    return Some(LayerMaskSpec::Fixed(parsed));
                 }
             }
         }
@@ -368,12 +368,13 @@ pub(crate) fn parse_layer_mask_spec<'a>(
 
 pub(crate) fn parse_phase_clamp_rad<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<f32> {
     for arg in args {
-        if let Some(raw) = arg.strip_prefix("--phase-clamp-rad=") {
-            if let Ok(parsed) = raw.trim().parse::<f32>() {
-                if parsed.is_finite() && parsed > 0.0 && parsed <= std::f32::consts::FRAC_PI_2 {
-                    return Some(parsed);
-                }
-            }
+        if let Some(raw) = arg.strip_prefix("--phase-clamp-rad=")
+            && let Ok(parsed) = raw.trim().parse::<f32>()
+            && parsed.is_finite()
+            && parsed > 0.0
+            && parsed <= std::f32::consts::FRAC_PI_2
+        {
+            return Some(parsed);
         }
     }
     None
@@ -381,10 +382,10 @@ pub(crate) fn parse_phase_clamp_rad<'a>(args: impl IntoIterator<Item = &'a str>)
 
 pub(crate) fn parse_max_tokens<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
     for arg in args {
-        if let Some(raw) = arg.strip_prefix("--max-tokens=") {
-            if let Ok(parsed) = raw.trim().parse::<usize>() {
-                return parsed.clamp(1, 512);
-            }
+        if let Some(raw) = arg.strip_prefix("--max-tokens=")
+            && let Ok(parsed) = raw.trim().parse::<usize>()
+        {
+            return parsed.clamp(1, 512);
         }
     }
     DEFAULT_MAX_GEN_TOKENS
@@ -392,10 +393,10 @@ pub(crate) fn parse_max_tokens<'a>(args: impl IntoIterator<Item = &'a str>) -> u
 
 pub(crate) fn parse_logits_observe_stride<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--logits-observe-stride=") {
-            if let Ok(parsed) = val.parse::<usize>() {
-                return parsed.max(1);
-            }
+        if let Some(val) = arg.strip_prefix("--logits-observe-stride=")
+            && let Ok(parsed) = val.parse::<usize>()
+        {
+            return parsed.max(1);
         }
     }
     DEFAULT_LOGITS_OBSERVE_STRIDE
@@ -403,10 +404,10 @@ pub(crate) fn parse_logits_observe_stride<'a>(args: impl IntoIterator<Item = &'a
 
 pub(crate) fn parse_guard_hold_tokens<'a>(args: impl IntoIterator<Item = &'a str>) -> u8 {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--guard-hold-tokens=") {
-            if let Ok(parsed) = val.parse::<u8>() {
-                return parsed;
-            }
+        if let Some(val) = arg.strip_prefix("--guard-hold-tokens=")
+            && let Ok(parsed) = val.parse::<u8>()
+        {
+            return parsed;
         }
     }
     DEFAULT_GUARD_HOLD_TOKENS
@@ -414,10 +415,10 @@ pub(crate) fn parse_guard_hold_tokens<'a>(args: impl IntoIterator<Item = &'a str
 
 pub(crate) fn parse_bench_trials<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
     for arg in args {
-        if let Some(val) = arg.strip_prefix("--bench-trials=") {
-            if let Ok(parsed) = val.parse::<usize>() {
-                return parsed.max(1);
-            }
+        if let Some(val) = arg.strip_prefix("--bench-trials=")
+            && let Ok(parsed) = val.parse::<usize>()
+        {
+            return parsed.max(1);
         }
     }
     1
@@ -1241,10 +1242,10 @@ fn generate_steered_reply_core(
             }
         };
         let prefill_secs = t_prefill.elapsed().as_secs_f64();
-        if cfg.capture_first_logits {
-            if let LogitsOutcome::ObservedFull(ref logits) = pending_outcome {
-                cfg.first_prefill_logits = Some(logits.clone());
-            }
+        if cfg.capture_first_logits
+            && let LogitsOutcome::ObservedFull(ref logits) = pending_outcome
+        {
+            cfg.first_prefill_logits = Some(logits.clone());
         }
 
         let max_gen_tokens = cfg.max_tokens.max(1);

@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use liminika_core::foundation::{compute_crc32_ieee, Pod};
+use liminika_core::foundation::{Pod, compute_crc32_ieee};
 use liminika_core::liminal::{
     BitCut8, LMNK_ABI_COMPAT_MASK, LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_HEX,
 };

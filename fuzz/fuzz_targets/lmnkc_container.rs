@@ -5,7 +5,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use liminika_adapter::{
-    verify_lmnkc_integrity, EquilibriumConfig, EquilibriumState, IntegrityPolicy,
+    EquilibriumConfig, EquilibriumState, IntegrityPolicy, verify_lmnkc_integrity,
 };
 use liminika_core::runtime::LmnkContainerView;
 

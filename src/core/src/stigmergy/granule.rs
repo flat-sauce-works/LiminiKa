@@ -13,21 +13,22 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::{
-    atan2_to_q7_word_x8_simd, branchless_mask8_min_delta, branchless_max_f32, branchless_relu_f32,
-    branchless_sincos_q7, coherence_from_uniform_words_x8, is_word_array_uniform_64,
-    store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, swar_u8_mean_round_x8, Pod,
+    Pod, atan2_to_q7_word_x8_simd, branchless_mask8_min_delta, branchless_max_f32,
+    branchless_relu_f32, branchless_sincos_q7, coherence_from_uniform_words_x8,
+    is_word_array_uniform_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8,
+    swar_u8_mean_round_x8,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_select_usize, LiminalThresholdState,
-    LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LiminalThresholdState, LmnkResult,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, THRESHOLD_RELATIVE_COUPLING,
+    branchless_select_f32, branchless_select_i8, branchless_select_i32, branchless_select_u8,
+    branchless_select_u32, branchless_select_u64, branchless_select_usize,
 };
+use crate::stigmergy::DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
 use crate::stigmergy::anchor::{DissipativeOverflowReport, PhaseAnchorRecord};
 use crate::stigmergy::circuit::{CognitiveOpKind, CognitiveTrajectoryLedger};
 use crate::stigmergy::pheromone::StigmergicReconstitutionReport;
-use crate::stigmergy::trail::{trail_phase_words_ref, PagedBitmask, PointerTrail, TaggedPtr};
-use crate::stigmergy::DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
+use crate::stigmergy::trail::{PagedBitmask, PointerTrail, TaggedPtr, trail_phase_words_ref};
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) state engine for the 8-granule SWAR
 /// stigmergic approximation-and-reconstitution field and QDPT/CPT hierarchical pointer cascade.

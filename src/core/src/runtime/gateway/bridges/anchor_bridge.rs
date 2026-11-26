@@ -5,25 +5,25 @@
 
 use super::super::*;
 use crate::foundation::{
+    ACTION_MODE_PHASE_REPULSE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64, TaggedPtr,
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_lerp_f32, branchless_max_f32,
     branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
     fast_ln_1p_bounded_f32, fast_mean_q7_tag_from_words_64, is_word_array_uniform_64,
     pack_action_slot_tag, swar_q7_circular_diff_x8,
     swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_slerp_words_with_uniform_flag_64,
-    swar_words_equal_64, words_to_q7_array_64, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
-    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
+    swar_words_equal_64, words_to_q7_array_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    branchless_select_usize, Grounded, Indivisible, PhaseQ7, Scoped, ScopedCut,
-    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    DEFAULT_ENTROPY_EPS, Grounded, Indivisible, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, Scoped, ScopedCut, branchless_select_f32, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64, branchless_select_usize,
 };
 use crate::stigmergy::{
-    DissipativeOverflowReport, OverlapDiscoveryReport, PhaseAnchorRecord, PhaseWordsRef64,
-    PointerTrail, ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
-    MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
+    ATTRACTOR_SLOT_CRYSTALLIZED, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
+    DissipativeOverflowReport, MAX_ATTRACTOR_PULL_FORCE, OverlapDiscoveryReport, PhaseAnchorRecord,
+    PhaseWordsRef64, PointerTrail, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
 };
 
 #[derive(Clone, Copy)]

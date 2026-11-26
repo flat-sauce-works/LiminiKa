@@ -7,17 +7,24 @@ members = [
   "src/dsl",
   "src/adapter",
   "src/cli",
+  "xtask",
+]
+default-members = [
+  "src/core",
+  "src/dsl",
+  "src/adapter",
+  "src/cli",
 ]
 exclude = [
   "fuzz",
   "examples/candle_eval",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "0.3.0"
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.100.0"
 license = "MIT OR Apache-2.0"
 
 authors = ["flat-sauce-works"]

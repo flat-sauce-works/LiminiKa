@@ -16,10 +16,10 @@ use core::mem::{align_of, offset_of, size_of};
 use crate::drivers::spine::compute_pool::{
     ComputeDispatchMask, SystemPressureReading, TokenBypassObservation,
 };
-use crate::foundation::{Pod, ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK};
+use crate::foundation::{ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, Pod};
 use crate::liminal::{
-    branchless_select_u8, sensitivity_4p1mp_q7, AttributionTag, BitCut32, BitCut64, BitCut8,
-    Lacuna, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_SYSTEM_CONSTRAINT,
+    AttributionTag, BitCut8, BitCut32, BitCut64, Lacuna, THRESHOLD_CONTRADICTION_GUARD,
+    THRESHOLD_SYSTEM_CONSTRAINT, branchless_select_u8, sensitivity_4p1mp_q7,
 };
 use crate::stigmergy::{ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE};
 

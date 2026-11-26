@@ -5,7 +5,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use liminika_adapter::{
-    validate_archive_relative_path, verify_lmnkp_integrity, IntegrityPolicy, LmnkPackageView,
+    IntegrityPolicy, LmnkPackageView, validate_archive_relative_path, verify_lmnkp_integrity,
 };
 
 fuzz_target!(|data: &[u8]| {

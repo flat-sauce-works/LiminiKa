@@ -16,7 +16,7 @@ use crate::foundation::simd_stats::{
 };
 use crate::foundation::swar_simd::branchless_hysteresis_quantize_depth;
 use crate::liminal::{
-    branchless_select_f32, LmnkResult, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
+    LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, branchless_select_f32,
 };
 
 /// Polynomial degree of the Cold-Path Chebyshev spectral filter (`3`).

@@ -34,14 +34,14 @@ use std::path::Path;
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use liminika_core::liminal::LMNK_ERR_TOPOLOGY_MISMATCH;
 use liminika_core::runtime::{
-    required_container_byte_len, write_container_sections_to_bytes, LmnkContainerHeader,
-    LmnkContainerView, LmnkSectionInput, CORE_TOPOLOGY, LMNK_SECTION_CONTENT_HASH,
-    LMNK_SECTION_SIGNATURE,
+    CORE_TOPOLOGY, LMNK_SECTION_CONTENT_HASH, LMNK_SECTION_SIGNATURE, LmnkContainerHeader,
+    LmnkContainerView, LmnkSectionInput, required_container_byte_len,
+    write_container_sections_to_bytes,
 };
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::host::path_guard::{validate_local_output_path, PathGuardError};
+use crate::host::path_guard::{PathGuardError, validate_local_output_path};
 
 /// Exact byte length of a SHA-256 `ContentHash` (`0xFF01`) digest (`32`).
 pub const CONTENT_HASH_BYTES: usize = 32;
@@ -825,7 +825,7 @@ mod tests {
     use liminika_core::runtime::{
         LMNK_CONTAINER_FLAG_COMPILED_CACHE, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS,
     };
-    use liminika_core::stigmergy::{PhaseAnchorRecord, PointerTrail, ATTRACTOR_SLOT_KNOWLEDGE};
+    use liminika_core::stigmergy::{ATTRACTOR_SLOT_KNOWLEDGE, PhaseAnchorRecord, PointerTrail};
 
     fn make_sample_container() -> Vec<u8> {
         let mut anchor = PhaseAnchorRecord::new_empty(7, ATTRACTOR_SLOT_KNOWLEDGE, 0);

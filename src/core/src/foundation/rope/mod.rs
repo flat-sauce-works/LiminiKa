@@ -52,14 +52,14 @@ use crate::foundation::lut_crc32::{
     SWAR_SPLAT_BYTE_64,
 };
 use crate::foundation::pod::{
-    unpack_action_mode_from_tag, Rank1Descriptor, SubheadConfig, TaggedPtr, ACTION_MODE_PHASE_STEER,
+    ACTION_MODE_PHASE_STEER, Rank1Descriptor, SubheadConfig, TaggedPtr, unpack_action_mode_from_tag,
 };
 use crate::foundation::scalar_math::{
-    branchless_clamp_f32, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32,
-    branchless_q7_add_sat, branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7,
-    branchless_rad_to_phase_step_u8, branchless_sincos_f32, branchless_sincos_half_pi_f32,
-    branchless_sincos_q7_phase_clamp_preinv, fast_inv_len_f32, fast_inv_pos_normal_f32,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, branchless_clamp_f32,
+    branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32, branchless_q7_add_sat,
+    branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7, branchless_rad_to_phase_step_u8,
+    branchless_sincos_f32, branchless_sincos_half_pi_f32, branchless_sincos_q7_phase_clamp_preinv,
+    fast_inv_len_f32, fast_inv_pos_normal_f32,
 };
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::simd_stats::avx2_rotate_so2_block32;
@@ -75,8 +75,8 @@ use crate::foundation::swar_simd::{
     swar_q7_scale_u7_x8, swar_u8_sum_x8,
 };
 use crate::liminal::{
-    branchless_select_f32, LmnkResult, PhaseQ7, LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT, LmnkResult,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7, Q7_PHASE_SCALE_RAD, branchless_select_f32,
 };
 use core::f32::consts::FRAC_PI_2;
 use core::mem::{align_of, size_of};

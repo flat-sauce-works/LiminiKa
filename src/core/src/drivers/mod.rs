@@ -19,7 +19,7 @@ pub use self::ego::*;
 pub use self::spine::*;
 
 use crate::foundation::Pod;
-use crate::liminal::{branchless_select_u8, AttributionTag};
+use crate::liminal::{AttributionTag, branchless_select_u8};
 
 // ===================================================================
 // Asymmetric Homeostatic Tension (`DistortionTension`, 32 B)

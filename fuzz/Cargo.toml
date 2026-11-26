@@ -4,7 +4,8 @@
 [package]
 name = "liminika-fuzz"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.100.0"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -12,12 +13,24 @@ publish = false
 cargo-fuzz = true
 
 [workspace]
+resolver = "3"
 
 [dependencies]
 libfuzzer-sys = "0.4"
 liminika-adapter = { path = "../src/adapter" }
 liminika-core = { path = "../src/core" }
 liminika-dsl = { path = "../src/dsl" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[lints.clippy]
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+inline_always = "allow"
+undocumented_unsafe_blocks = "warn"
 
 [[bin]]
 name = "lmnkc_container"

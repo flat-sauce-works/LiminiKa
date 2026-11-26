@@ -832,25 +832,25 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
     if limit == 0 {
         return;
     }
-    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words) {
-        if let Some(s_u8) = byte_uniform_word_u8(subhead_eff_words) {
-            if (b_u8 | s_u8) != 0 {
-                let (sin_comb, cos_comb) = eval_fused_phase_clamp_subhead_pair_u8(
-                    b_u8,
-                    s_u8,
-                    base_is_def,
-                    base_eff_max,
-                    base_scale,
-                    subhead_is_def,
-                    subhead_eff_max,
-                    subhead_scale,
-                );
-                rotate_phase_clamp_upper_heads_uniform_sincos(
-                    t_slice, 0, limit, head_dim, rot_dim, sin_comb, cos_comb,
-                );
-            }
-            return;
+    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words)
+        && let Some(s_u8) = byte_uniform_word_u8(subhead_eff_words)
+    {
+        if (b_u8 | s_u8) != 0 {
+            let (sin_comb, cos_comb) = eval_fused_phase_clamp_subhead_pair_u8(
+                b_u8,
+                s_u8,
+                base_is_def,
+                base_eff_max,
+                base_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
+            );
+            rotate_phase_clamp_upper_heads_uniform_sincos(
+                t_slice, 0, limit, head_dim, rot_dim, sin_comb, cos_comb,
+            );
         }
+        return;
     }
     let upper_off = head_dim - rot_dim;
     if base_is_def & subhead_is_def {

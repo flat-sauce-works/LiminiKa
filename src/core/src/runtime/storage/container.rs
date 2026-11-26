@@ -6,25 +6,25 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use super::{
-    init_container_header, KvKeyframeCache, KvKeyframeHeader, LmnkContainerHeader,
-    LmnkSectionEntry, LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_KNOWN_FLAGS,
+    KvKeyframeCache, KvKeyframeHeader, LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_KNOWN_FLAGS,
     LMNK_CONTAINER_MAGIC, LMNK_MAX_CONTAINER_BYTES, LMNK_MAX_CONTAINER_SECTIONS,
     LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CAUSAL_PROVENANCE, LMNK_SECTION_ENTRY_BYTES,
     LMNK_SECTION_LEDGER_SLOT, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS,
+    LmnkContainerHeader, LmnkSectionEntry, init_container_header,
 };
 use crate::foundation::{
-    compute_aligned64_payload_crc32_ieee, compute_crc32_ieee, AlignedSlice, Pod,
+    AlignedSlice, Pod, compute_aligned64_payload_crc32_ieee, compute_crc32_ieee,
 };
 use crate::liminal::{
-    validate_abi_version, LmnkResult, RuntimeConfig, LMNK_ABI_VERSION_HEX,
-    LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT,
-    LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_ERR_VERSION_MISMATCH,
+    LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_ERR_VERSION_MISMATCH, LmnkResult,
+    RuntimeConfig, validate_abi_version,
 };
 use crate::runtime::gateway::signals::CausalProvenanceReport;
 use crate::runtime::topology::CORE_TOPOLOGY;
 use crate::stigmergy::{
-    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LedgerSlot, PhaseAnchorRecord,
-    PointerTrail, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
+    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
+    LedgerSlot, PhaseAnchorRecord, PointerTrail,
 };
 
 /// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (mapped-storage) (**Storage / Persistence Level**).
@@ -599,10 +599,10 @@ impl<'a> LmnkContainerView<'a> {
         let mut idx = 0usize;
         let count = usize::from(self.header.section_count);
         while idx < count {
-            if let Some(&entry) = self.sections.get(idx) {
-                if entry.kind == kind {
-                    return Some(entry);
-                }
+            if let Some(&entry) = self.sections.get(idx)
+                && entry.kind == kind
+            {
+                return Some(entry);
             }
             idx += 1;
         }

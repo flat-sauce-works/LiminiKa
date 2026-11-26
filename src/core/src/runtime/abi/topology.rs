@@ -16,7 +16,7 @@ use crate::runtime::topology::CORE_TOPOLOGY;
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans(
     centroids_inout: *mut lmnk_phase_anchor_record_t,
     num_centroids: usize,
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans(
 ///
 /// # Safety
 /// Pointers must satisfy non-null, alignment, bounds, and `LMNK_RESTRICT` invariants.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans_batch(
     centroids_inout: *mut lmnk_phase_anchor_record_t,
     num_centroids: usize,
@@ -163,7 +163,7 @@ pub unsafe extern "C" fn lmnk_anchor_step_online_toroidal_kmeans_batch(
 ///
 /// # Safety
 /// `initial_state` and `controller_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_entropy_controller_create(
     initial_state: *const lmnk_entropy_state_t,
     controller_out: *mut LmnkEntropyControllerHandle,
@@ -196,7 +196,7 @@ pub unsafe extern "C" fn lmnk_entropy_controller_create(
 ///
 /// # Safety
 /// `controller` and `state_out` must be non-null, naturally aligned, and non-overlapping.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_entropy_eval_stateful(
     controller: LmnkEntropyControllerHandle,
     token_z_score: f32,
@@ -231,7 +231,7 @@ pub unsafe extern "C" fn lmnk_entropy_eval_stateful(
 ///
 /// # Safety
 /// `key_vector` (32B aligned) and `lacuna_score_out` must be non-null, valid, and non-overlapping.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_liminal_eval_dyadic128(
     key_vector: *const f32,
     dim: usize,
@@ -267,7 +267,7 @@ pub unsafe extern "C" fn lmnk_liminal_eval_dyadic128(
 ///
 /// # Safety
 /// `barrier_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_liminal_eval_barrier(
     lacuna_score: f32,
     tau_eff: f32,
@@ -286,7 +286,7 @@ pub unsafe extern "C" fn lmnk_liminal_eval_barrier(
 ///
 /// # Safety
 /// `barrier_out` must be non-null and naturally aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_liminal_eval_barrier_pitchfork(
     liminal_score: f32,
     tau_eff: f32,
@@ -307,7 +307,7 @@ pub unsafe extern "C" fn lmnk_liminal_eval_barrier_pitchfork(
 ///
 /// # Safety
 /// `controller` must be `NULL` or a handle returned by [`lmnk_entropy_controller_create`].
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_entropy_controller_destroy(
     controller: LmnkEntropyControllerHandle,
 ) -> LmnkStatus {
@@ -334,7 +334,7 @@ pub unsafe extern "C" fn lmnk_entropy_controller_destroy(
 /// # Safety
 /// `query_phases` (64 bytes) and `reading_out` (16-byte aligned) must be non-null; if
 /// `num_records > 0`, `records` must be non-null and 64-byte aligned with `num_records` valid items.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_epistemic_evaluate_horizon(
     records: *const lmnk_phase_anchor_record_t,
     num_records: usize,
@@ -387,7 +387,7 @@ pub unsafe extern "C" fn lmnk_epistemic_evaluate_horizon(
 /// `query_phases`, `drifted_phases`, and `report_out` (16B aligned) must be non-null; if
 /// `num_centroids > 0`, `centroids_inout` must be non-null and 64B aligned and disjoint from
 /// `report_out` and `did_nucleate_out`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_stigmergic_evaluate_overlap_and_discovery(
     centroids_inout: *mut lmnk_phase_anchor_record_t,
     num_centroids: usize,
@@ -491,7 +491,7 @@ pub unsafe extern "C" fn lmnk_stigmergic_evaluate_overlap_and_discovery(
 ///
 /// # Safety
 /// `stack_out` must be non-null and 64-byte aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_core_stack_init_default(
     stack_out: *mut lmnk_core_state_stack_t,
 ) -> LmnkStatus {
@@ -509,7 +509,7 @@ pub unsafe extern "C" fn lmnk_core_stack_init_default(
 /// # Safety
 /// `stack_inout` (64B aligned), `horizon` (16B aligned), and `overlap_report` (16B aligned) must be
 /// non-null and non-overlapping; `ledger` may be `NULL` or 8-byte aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_core_stack_adapt(
     stack_inout: *mut lmnk_core_state_stack_t,
     ledger: *const lmnk_cognitive_ledger_t,
@@ -559,7 +559,7 @@ pub unsafe extern "C" fn lmnk_core_stack_adapt(
 /// `stack` (64B aligned) and `horizon` (16B aligned) must be non-null; `overlap_report` may be `NULL`
 /// or 16B aligned. If `out_buf` is non-null, it must reference `buf_cap` writable bytes disjoint from
 /// `bytes_written_out`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_topology_format_mermaid(
     stack: *const lmnk_core_state_stack_t,
     horizon: *const lmnk_epistemic_horizon_t,
@@ -647,7 +647,7 @@ pub unsafe extern "C" fn lmnk_topology_format_mermaid(
 ///
 /// # Safety
 /// `ego_out` must be non-null and 64-byte aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ego_state_init_preset(
     preset_code: u8,
     ego_out: *mut lmnk_liminal_ego_state_t,
@@ -666,7 +666,7 @@ pub unsafe extern "C" fn lmnk_ego_state_init_preset(
 /// # Safety
 /// `ego_out` must be non-null and 64-byte aligned. When `utf8_len > 0`, `utf8_ptr` must be
 /// non-null, valid for `utf8_len` readable UTF-8 bytes, and disjoint from `ego_out`.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ego_state_derive_from_text(
     utf8_ptr: *const u8,
     utf8_len: usize,
@@ -713,7 +713,7 @@ pub unsafe extern "C" fn lmnk_ego_state_derive_from_text(
 /// `ego_inout` (64B), `stack_inout` (64B), `delta` (16B), `horizon` (16B), and `frame_inout`
 /// (64B) must be non-null, naturally aligned, and mutually non-overlapping; `overlap_report` may be
 /// `NULL` or 16B aligned and disjoint from mutable outputs.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_ego_state_intervene_frame(
     ego_inout: *mut lmnk_liminal_ego_state_t,
     stack_inout: *mut lmnk_core_state_stack_t,
@@ -841,7 +841,7 @@ pub unsafe extern "C" fn lmnk_ego_state_intervene_frame(
 /// # Safety
 /// `other_granule_density_q7` (`8` bytes), `granule_noise_tolerance_q7` (`8` bytes), and
 /// `partition_out` (`16 B` aligned) must be non-null and non-overlapping.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_liminal_evaluate_lacuna_partition(
     self_mask: u8,
     other_granule_density_q7: *const u8,
@@ -893,7 +893,7 @@ pub unsafe extern "C" fn lmnk_liminal_evaluate_lacuna_partition(
 ///
 /// # Safety
 /// `tension_inout` must be non-null and 16-byte aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_distortion_tension_step_hot_path(
     tension_inout: *mut lmnk_distortion_tension_t,
     ego_delta_norm_q7: u8,
@@ -923,7 +923,7 @@ pub unsafe extern "C" fn lmnk_distortion_tension_step_hot_path(
 /// All required struct pointers (`nodes`, `ego`, `spine`, `partition`, `stigmergy`, `tension`,
 /// `frame_inout`) must be non-null, naturally aligned, and `frame_inout` / optional outputs
 /// (`delta_norm_out`, `hops_traversed_out`) must not overlap inputs.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_distortion_delta_apply_chain(
     nodes: *const lmnk_distortion_delta_t,
     num_nodes: usize,
@@ -1018,7 +1018,7 @@ pub unsafe extern "C" fn lmnk_distortion_delta_apply_chain(
 ///
 /// # Safety
 /// `out_matrix` must be non-null and 64-byte aligned.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn lmnk_topology_get_matrix(
     out_matrix: *mut lmnk_topology_matrix_t,
 ) -> LmnkStatus {

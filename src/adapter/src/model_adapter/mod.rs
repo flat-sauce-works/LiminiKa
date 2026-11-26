@@ -81,7 +81,7 @@ impl RopeGeometry {
         if self.num_q_heads == 0 || self.num_kv_heads == 0 {
             return Err("num_q_heads and num_kv_heads must be > 0".to_string());
         }
-        if self.num_q_heads % self.num_kv_heads != 0 {
+        if !self.num_q_heads.is_multiple_of(self.num_kv_heads) {
             return Err(format!(
                 "num_q_heads ({}) must be divisible by num_kv_heads ({})",
                 self.num_q_heads, self.num_kv_heads

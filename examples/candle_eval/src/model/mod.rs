@@ -8,7 +8,7 @@ use std::path::Path;
 
 use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
 use candle_core::{DType, Device, IndexOp, Module, Result as CResult, Tensor};
-use candle_nn::{linear_no_bias, Embedding, Linear, RmsNorm, VarBuilder};
+use candle_nn::{Embedding, Linear, RmsNorm, VarBuilder, linear_no_bias};
 use liminika_adapter::{
     AnchorWorkingSetPager, ModelSteeringAdapter, PagerStepQuery, SystemPressureReading,
 };
@@ -23,10 +23,10 @@ pub(crate) mod rope;
 mod tests;
 
 pub(crate) use config::{
-    active_layers_mask, clip_layer_mask, resolve_safetensors_files, top_half_layer_mask,
-    ChatTemplate, ChatTemplateArg, ChatTemplateKind, ModelArchArg, ModelConfig,
+    ChatTemplate, ChatTemplateArg, ChatTemplateKind, ModelArchArg, ModelConfig, active_layers_mask,
+    clip_layer_mask, resolve_safetensors_files, top_half_layer_mask,
 };
-pub(crate) use layers::{load_rms_norm_on_device, LinearLayer, TransformerLayer};
+pub(crate) use layers::{LinearLayer, TransformerLayer, load_rms_norm_on_device};
 pub(crate) use rope::{
     EvalOscilloscopeSignal, ForwardSteer, LayerSteer, ProbeCoordinateFrame, ResonantAnchors,
     RotaryCache,
@@ -80,10 +80,10 @@ impl LogitsOutcome {
 }
 
 pub(crate) fn extract_device_argmax_token(logits_1d: &Tensor) -> CResult<u32> {
-    if let Ok(tok_t) = logits_1d.argmax(0) {
-        if let Ok(tok_id) = tok_t.to_scalar::<u32>() {
-            return Ok(tok_id);
-        }
+    if let Ok(tok_t) = logits_1d.argmax(0)
+        && let Ok(tok_id) = tok_t.to_scalar::<u32>()
+    {
+        return Ok(tok_id);
     }
     logits_1d
         .to_dtype(DType::F32)?
@@ -431,122 +431,115 @@ impl CausalLmModel {
             Vec::new()
         };
 
-        if !whole_bypass {
-            if let Some(st) = steer.as_deref_mut() {
-                if let Some((u_vec, v_vec, rank1_scale)) = st.rank1 {
-                    if rank1_scale != 0.0 {
-                        let ad: &mut ModelSteeringAdapter = &mut *st.adapter;
-                        let q7s = st.q7s;
-                        let persona_q7s = st.persona_q7s;
-                        let rope_rad = st.rope_rad;
-                        let phase_clamp_override = st.phase_clamp_override;
-                        let random_push_seed = st.random_push_seed;
-                        let last_layer_idx = self.layers.len().saturating_sub(1);
-                        let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-                        if rank1_scale < 0.0 {
-                            let dyn_rank1 = st
-                                .resonant_ctx
-                                .and_then(|rc| rc.layer_slices(last_layer_idx))
-                                .filter(|(fa, _, _, _, _)| !fa.is_empty());
-                            if let Some((fact_anchors, persona_anchors, guard_anchors, _, _)) =
-                                dyn_rank1
-                            {
-                                let fact_res =
-                                    ResonantSignalSlice::from_trail(fact_anchors, st.trail);
-                                if !persona_anchors.is_empty() && !guard_anchors.is_empty() {
-                                    let persona_res =
-                                        ResonantSignalSlice::from_trail(persona_anchors, st.trail);
-                                    let guard_res =
-                                        ResonantSignalSlice::from_trail(guard_anchors, st.trail);
-                                    let sys_res = *ad.system_constraint();
-                                    let composite = (sys_res, fact_res, persona_res, guard_res);
-                                    dispatch_rank1_signal(
-                                        ad,
-                                        rope_rad,
-                                        last_layer_idx,
-                                        &composite,
-                                        &mut h_vec,
-                                        u_vec,
-                                        v_vec,
-                                        phase_clamp_override,
-                                        random_push_seed,
-                                    )?;
-                                } else if !persona_anchors.is_empty() {
-                                    let persona_res =
-                                        ResonantSignalSlice::from_trail(persona_anchors, st.trail);
-                                    let composite = (fact_res, persona_res);
-                                    dispatch_rank1_signal(
-                                        ad,
-                                        rope_rad,
-                                        last_layer_idx,
-                                        &composite,
-                                        &mut h_vec,
-                                        u_vec,
-                                        v_vec,
-                                        phase_clamp_override,
-                                        random_push_seed,
-                                    )?;
-                                } else {
-                                    dispatch_rank1_signal(
-                                        ad,
-                                        rope_rad,
-                                        last_layer_idx,
-                                        &fact_res,
-                                        &mut h_vec,
-                                        u_vec,
-                                        v_vec,
-                                        phase_clamp_override,
-                                        random_push_seed,
-                                    )?;
-                                }
-                            } else {
-                                let mut fact_arr = [0i8; 64];
-                                if let Some(last_q7) = q7s.and_then(|qs| qs.last()) {
-                                    let n = last_q7.len().min(64);
-                                    fact_arr[..n].copy_from_slice(&last_q7[..n]);
-                                }
-                                let fact = ObjectiveFact::new(fact_arr, 2.5, 0, 1);
-                                if let Some(last_p) = persona_q7s.and_then(|ps| ps.last()) {
-                                    let mut persona_arr = [0i8; 64];
-                                    let pn = last_p.len().min(64);
-                                    persona_arr[..pn].copy_from_slice(&last_p[..pn]);
-                                    let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
-                                    let composite = (fact, persona);
-                                    dispatch_rank1_signal(
-                                        ad,
-                                        rope_rad,
-                                        last_layer_idx,
-                                        &composite,
-                                        &mut h_vec,
-                                        u_vec,
-                                        v_vec,
-                                        phase_clamp_override,
-                                        random_push_seed,
-                                    )?;
-                                } else {
-                                    dispatch_rank1_signal(
-                                        ad,
-                                        rope_rad,
-                                        last_layer_idx,
-                                        &fact,
-                                        &mut h_vec,
-                                        u_vec,
-                                        v_vec,
-                                        phase_clamp_override,
-                                        random_push_seed,
-                                    )?;
-                                }
-                            }
-                        } else {
-                            ad.apply_rank1_hidden_fused(&mut h_vec, u_vec, v_vec, rank1_scale)
-                                .map_err(candle_core::Error::Msg)?;
-                        }
-                        let len = h_vec.len();
-                        last = Tensor::from_vec(h_vec, (1, len), &self.device)?
-                            .to_dtype(last.dtype())?;
+        if !whole_bypass
+            && let Some(st) = steer.as_deref_mut()
+            && let Some((u_vec, v_vec, rank1_scale)) = st.rank1
+            && rank1_scale != 0.0
+        {
+            let ad: &mut ModelSteeringAdapter = &mut *st.adapter;
+            let q7s = st.q7s;
+            let persona_q7s = st.persona_q7s;
+            let rope_rad = st.rope_rad;
+            let phase_clamp_override = st.phase_clamp_override;
+            let random_push_seed = st.random_push_seed;
+            let last_layer_idx = self.layers.len().saturating_sub(1);
+            let mut h_vec = last.squeeze(0)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
+            if rank1_scale < 0.0 {
+                let dyn_rank1 = st
+                    .resonant_ctx
+                    .and_then(|rc| rc.layer_slices(last_layer_idx))
+                    .filter(|(fa, _, _, _, _)| !fa.is_empty());
+                if let Some((fact_anchors, persona_anchors, guard_anchors, _, _)) = dyn_rank1 {
+                    let fact_res = ResonantSignalSlice::from_trail(fact_anchors, st.trail);
+                    if !persona_anchors.is_empty() && !guard_anchors.is_empty() {
+                        let persona_res =
+                            ResonantSignalSlice::from_trail(persona_anchors, st.trail);
+                        let guard_res = ResonantSignalSlice::from_trail(guard_anchors, st.trail);
+                        let sys_res = *ad.system_constraint();
+                        let composite = (sys_res, fact_res, persona_res, guard_res);
+                        dispatch_rank1_signal(
+                            ad,
+                            rope_rad,
+                            last_layer_idx,
+                            &composite,
+                            &mut h_vec,
+                            u_vec,
+                            v_vec,
+                            phase_clamp_override,
+                            random_push_seed,
+                        )?;
+                    } else if !persona_anchors.is_empty() {
+                        let persona_res =
+                            ResonantSignalSlice::from_trail(persona_anchors, st.trail);
+                        let composite = (fact_res, persona_res);
+                        dispatch_rank1_signal(
+                            ad,
+                            rope_rad,
+                            last_layer_idx,
+                            &composite,
+                            &mut h_vec,
+                            u_vec,
+                            v_vec,
+                            phase_clamp_override,
+                            random_push_seed,
+                        )?;
+                    } else {
+                        dispatch_rank1_signal(
+                            ad,
+                            rope_rad,
+                            last_layer_idx,
+                            &fact_res,
+                            &mut h_vec,
+                            u_vec,
+                            v_vec,
+                            phase_clamp_override,
+                            random_push_seed,
+                        )?;
+                    }
+                } else {
+                    let mut fact_arr = [0i8; 64];
+                    if let Some(last_q7) = q7s.and_then(|qs| qs.last()) {
+                        let n = last_q7.len().min(64);
+                        fact_arr[..n].copy_from_slice(&last_q7[..n]);
+                    }
+                    let fact = ObjectiveFact::new(fact_arr, 2.5, 0, 1);
+                    if let Some(last_p) = persona_q7s.and_then(|ps| ps.last()) {
+                        let mut persona_arr = [0i8; 64];
+                        let pn = last_p.len().min(64);
+                        persona_arr[..pn].copy_from_slice(&last_p[..pn]);
+                        let persona = SubjectivePersona::new(persona_arr, 1.5, 0, 101);
+                        let composite = (fact, persona);
+                        dispatch_rank1_signal(
+                            ad,
+                            rope_rad,
+                            last_layer_idx,
+                            &composite,
+                            &mut h_vec,
+                            u_vec,
+                            v_vec,
+                            phase_clamp_override,
+                            random_push_seed,
+                        )?;
+                    } else {
+                        dispatch_rank1_signal(
+                            ad,
+                            rope_rad,
+                            last_layer_idx,
+                            &fact,
+                            &mut h_vec,
+                            u_vec,
+                            v_vec,
+                            phase_clamp_override,
+                            random_push_seed,
+                        )?;
                     }
                 }
+            } else {
+                ad.apply_rank1_hidden_fused(&mut h_vec, u_vec, v_vec, rank1_scale)
+                    .map_err(candle_core::Error::Msg)?;
             }
+            let len = h_vec.len();
+            last = Tensor::from_vec(h_vec, (1, len), &self.device)?.to_dtype(last.dtype())?;
         }
 
         let logits_1d = self.lm_head.forward(&last)?.squeeze(0)?;
@@ -558,18 +551,19 @@ impl CausalLmModel {
             }
             _ => {
                 let mut logits = logits_1d.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-                if use_entropy_gate && !whole_bypass {
-                    if let Some(st) = steer {
-                        let ad = &mut *st.adapter;
-                        if st.rope_rad <= -1.5 {
-                            let _ = ad
-                                .measure_entropy_state(&logits)
-                                .map_err(candle_core::Error::Msg)?;
-                        } else {
-                            let _ = ad
-                                .step_entropy_logits(&mut logits)
-                                .map_err(candle_core::Error::Msg)?;
-                        }
+                if use_entropy_gate
+                    && !whole_bypass
+                    && let Some(st) = steer
+                {
+                    let ad = &mut *st.adapter;
+                    if st.rope_rad <= -1.5 {
+                        let _ = ad
+                            .measure_entropy_state(&logits)
+                            .map_err(candle_core::Error::Msg)?;
+                    } else {
+                        let _ = ad
+                            .step_entropy_logits(&mut logits)
+                            .map_err(candle_core::Error::Msg)?;
                     }
                 }
                 LogitsOutcome::ObservedFull(logits)

@@ -4,22 +4,23 @@
 //! Unified `.lmnk` binary snapshot serialization and deserialization for [`RuntimeContext`].
 
 use super::{
-    CoreStateStack, Result, RuntimeContext, LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES,
-    LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES,
+    CoreStateStack, LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES, Result,
+    RuntimeContext,
 };
 use crate::drivers::{
-    EntropyController, EntropyState, SystemSpineState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    EntropyController, EntropyState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
     SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_CONTROL_KNOWN_FLAGS, SPINE_ENTROPY_Q15_ONE,
+    SystemSpineState,
 };
-use crate::foundation::{branchless_is_finite_f32, Pod, RopePairLayout};
+use crate::foundation::{Pod, RopePairLayout, branchless_is_finite_f32};
 use crate::liminal::{
     LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, MAX_ATTENTION_HEADS,
 };
 use crate::runtime::storage::{
-    write_container_sections_to_bytes, LmnkContainerView, LmnkSectionInput,
-    LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT, LMNK_SECTION_RUNTIME_SNAPSHOT,
+    LMNK_CONTAINER_FLAG_RUNTIME_SNAPSHOT, LMNK_SECTION_RUNTIME_SNAPSHOT, LmnkContainerView,
+    LmnkSectionInput, write_container_sections_to_bytes,
 };
-use crate::stigmergy::{LedgerSlot, PhaseSteeringEngine, DEFAULT_SUBSTRATE_CAPACITY};
+use crate::stigmergy::{DEFAULT_SUBSTRATE_CAPACITY, LedgerSlot, PhaseSteeringEngine};
 
 impl RuntimeContext {
     /// Serializes active runtime context state into a unified `.lmnk` binary snapshot container

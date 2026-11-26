@@ -14,16 +14,16 @@ use crate::drivers::{
     LiminalEgoState, SystemSpineState,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_is_finite_f32, Pod, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, Pod, branchless_clamp_f32,
+    branchless_is_finite_f32,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, LacunaPartition8,
-    LiminalThresholdState, LmnkResult, RuntimeConfig, DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_MAJOR,
-    LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH, LMNK_ABI_VERSION_STRING,
-    LMNK_CAP_INPLACE_CONTEXT_INIT, LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON, LMNK_CAP_SIMD_WASM128,
-    LMNK_CAP_SWAR_BASELINE, LMNK_CAP_ZERO_ALLOC_CORE, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_MAJOR, LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH,
+    LMNK_ABI_VERSION_STRING, LMNK_CAP_INPLACE_CONTEXT_INIT, LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON,
+    LMNK_CAP_SIMD_WASM128, LMNK_CAP_SWAR_BASELINE, LMNK_CAP_ZERO_ALLOC_CORE,
+    LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, LiminalThresholdState, LmnkResult,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD, RuntimeConfig,
+    branchless_select_f32, branchless_select_u8, branchless_select_u32,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
@@ -33,9 +33,9 @@ use crate::runtime::gateway::{
 use crate::runtime::horizon::{EpistemicHorizonReading, HorizonDwellState};
 use crate::runtime::telemetry::{CoreTelemetryBank, TelemetryCapturePolicy};
 use crate::stigmergy::{
-    CognitiveTrajectoryLedger, CorePrimitiveState, DissipativeOverflowReport,
-    OverlapDiscoveryReport, PhaseSteeringEngine, SandboxLifecycleEvent, StigmergicGranuleState,
-    StigmergicSubstrate, StigmergicSubstrateOps, DEFAULT_SUBSTRATE_CAPACITY, MAX_PHASE_ANCHORS,
+    CognitiveTrajectoryLedger, CorePrimitiveState, DEFAULT_SUBSTRATE_CAPACITY,
+    DissipativeOverflowReport, MAX_PHASE_ANCHORS, OverlapDiscoveryReport, PhaseSteeringEngine,
+    SandboxLifecycleEvent, StigmergicGranuleState, StigmergicSubstrate, StigmergicSubstrateOps,
 };
 
 mod accessors;

@@ -1393,11 +1393,7 @@ impl TextAttractorCorpus {
         let raw_cosines: Vec<f32> = (0..n_entries)
             .map(|i| {
                 let c = Self::cosine_f32(&query_sig, cache.projected_sig(i));
-                if c > 0.0 {
-                    c * ortho_gate
-                } else {
-                    c
-                }
+                if c > 0.0 { c * ortho_gate } else { c }
             })
             .collect();
         let (
@@ -1500,18 +1496,18 @@ impl TextAttractorCorpus {
         let self_mask = {
             let mut g_abs = [0u32; NUM_STIGMERGIC_GRANULES];
             let heads = geom.num_q_heads.max(1);
-            if let Some((entry, _)) = top_any_entry {
-                if let Some(q7) = entry.per_layer_q7.last() {
-                    let per_g = (heads / NUM_STIGMERGIC_GRANULES).max(1);
-                    for (g, g_slot) in g_abs.iter_mut().enumerate().take(NUM_STIGMERGIC_GRANULES) {
-                        let start = (g * per_g) % heads;
-                        let mut sum = 0u32;
-                        for off in 0..per_g {
-                            let h = (start + off) % heads;
-                            sum += u32::from(q7[h.min(MAX_ATTENTION_HEADS - 1)].unsigned_abs());
-                        }
-                        *g_slot = sum / (per_g as u32);
+            if let Some((entry, _)) = top_any_entry
+                && let Some(q7) = entry.per_layer_q7.last()
+            {
+                let per_g = (heads / NUM_STIGMERGIC_GRANULES).max(1);
+                for (g, g_slot) in g_abs.iter_mut().enumerate().take(NUM_STIGMERGIC_GRANULES) {
+                    let start = (g * per_g) % heads;
+                    let mut sum = 0u32;
+                    for off in 0..per_g {
+                        let h = (start + off) % heads;
+                        sum += u32::from(q7[h.min(MAX_ATTENTION_HEADS - 1)].unsigned_abs());
                     }
+                    *g_slot = sum / (per_g as u32);
                 }
             }
             let min_v = *g_abs.iter().min().unwrap_or(&0);
@@ -1660,27 +1656,25 @@ impl TextAttractorCorpus {
                 && signal.boundary_metrics.guard_conflict_margin <= 0.0
                 && lacuna_partition.is_sandbox_eligible()
                 && lacuna_partition.bridge_count >= 2;
-            if bridge_eligible {
-                if let Some((entry, score)) = top1_fact_candidate {
-                    let top1_s = signal.boundary_metrics.top1_fact_score;
-                    let top2_s = signal.boundary_metrics.top2_fact_score;
-                    let unimodal_margin = (top1_s - top2_s).max(0.0);
-                    let sharp_unimodal_lock = unimodal_margin >= policy.boundary_margin * 2.0
-                        && top1_s >= policy.min_coherence * 1.20;
-                    let sub_threshold_bridged = recalled_facts.is_empty()
-                        && top1_s >= policy.min_coherence * 0.90
-                        && (0.59..0.80).contains(&unexplained_token_ratio);
-                    let semi_known_cutoff = if sharp_unimodal_lock { 0.72 } else { 0.59 };
-                    let semi_known_high_unexplained = !recalled_facts.is_empty()
-                        && unexplained_token_ratio >= semi_known_cutoff
-                        && top1_s < 0.90;
-                    if sub_threshold_bridged {
-                        final_lacuna_state = LacunaBoundaryState::LiminalExterior;
-                        exterior_sandbox_facts.push((entry, score));
-                    } else if semi_known_high_unexplained {
-                        final_lacuna_state = LacunaBoundaryState::LiminalExterior;
-                        exterior_sandbox_facts.append(&mut recalled_facts);
-                    }
+            if bridge_eligible && let Some((entry, score)) = top1_fact_candidate {
+                let top1_s = signal.boundary_metrics.top1_fact_score;
+                let top2_s = signal.boundary_metrics.top2_fact_score;
+                let unimodal_margin = (top1_s - top2_s).max(0.0);
+                let sharp_unimodal_lock = unimodal_margin >= policy.boundary_margin * 2.0
+                    && top1_s >= policy.min_coherence * 1.20;
+                let sub_threshold_bridged = recalled_facts.is_empty()
+                    && top1_s >= policy.min_coherence * 0.90
+                    && (0.59..0.80).contains(&unexplained_token_ratio);
+                let semi_known_cutoff = if sharp_unimodal_lock { 0.72 } else { 0.59 };
+                let semi_known_high_unexplained = !recalled_facts.is_empty()
+                    && unexplained_token_ratio >= semi_known_cutoff
+                    && top1_s < 0.90;
+                if sub_threshold_bridged {
+                    final_lacuna_state = LacunaBoundaryState::LiminalExterior;
+                    exterior_sandbox_facts.push((entry, score));
+                } else if semi_known_high_unexplained {
+                    final_lacuna_state = LacunaBoundaryState::LiminalExterior;
+                    exterior_sandbox_facts.append(&mut recalled_facts);
                 }
             }
         }

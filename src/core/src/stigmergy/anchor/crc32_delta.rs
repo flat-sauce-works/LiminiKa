@@ -4,13 +4,13 @@
 //! 128-byte `"LNKR"` [`super::PhaseAnchorRecord`] GF(2) differential IEEE 802.3 CRC32
 //! lookup tables and O(1) incremental checksum update helpers.
 
+use crate::foundation::DEFAULT_PHASE_CLAMP_MAX_RAD;
 use crate::foundation::lut_crc32::{
+    AlignedLut4x256, AlignedLut256, CRC32_IEEE_SLICE16_LUT, VON_MISES_KAPPA_AT_MAX_R_BITS,
     crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
     crc32_slice16_indep_lo1_u32, crc32_step_block64_words, crc32_step_l2, crc32_step_l3,
-    crc32_step_l4, crc32_step_l5, crc32_step_l6, AlignedLut256, AlignedLut4x256,
-    CRC32_IEEE_SLICE16_LUT, VON_MISES_KAPPA_AT_MAX_R_BITS,
+    crc32_step_l4, crc32_step_l5, crc32_step_l6,
 };
-use crate::foundation::DEFAULT_PHASE_CLAMP_MAX_RAD;
 
 use super::{LMNK_PHASE_ANCHOR_MAGIC, LMNK_PHASE_ANCHOR_VERSION};
 

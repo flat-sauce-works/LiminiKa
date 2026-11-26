@@ -156,11 +156,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else if cmd == "inspect" {
         use liminika_adapter::{
-            verify_lmnkc_integrity, AttractorContainerCodec, IntegrityPolicy, LmnkPackageOwned,
-            LmnkTimeline, LmnkTimelineError,
+            AttractorContainerCodec, IntegrityPolicy, LmnkPackageOwned, LmnkTimeline,
+            LmnkTimelineError, verify_lmnkc_integrity,
         };
         use liminika_core::liminal::LMNK_ERR_TOPOLOGY_MISMATCH;
-        use liminika_core::runtime::{LmnkContainerHeader, LmnkContainerView, CORE_TOPOLOGY};
+        use liminika_core::runtime::{CORE_TOPOLOGY, LmnkContainerHeader, LmnkContainerView};
 
         let mut pubkey_arg: Option<String> = None;
         let mut require_hash = false;
@@ -265,9 +265,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|e| format!("failed to read container header: {e}"))?;
                 println!(
                     "Container '{}' requires rebake: found topology_crc32=0x{:08x}, active=0x{:08x}",
-                    path,
-                    hdr.topology_crc32,
-                    CORE_TOPOLOGY.topology_crc32
+                    path, hdr.topology_crc32, CORE_TOPOLOGY.topology_crc32
                 );
                 return Err(LmnkTimelineError::TopologyMismatch {
                     expected_crc32: CORE_TOPOLOGY.topology_crc32,
@@ -669,9 +667,9 @@ fn run_sign_artifact(
     key_file: Option<&std::path::Path>,
 ) -> Result<CliSignSummary, Box<dyn std::error::Error>> {
     use liminika_adapter::{
-        attach_lmnkc_content_hash, attach_lmnkp_content_hash, sign_lmnkc_container,
-        sign_lmnkp_package, validate_local_output_path, verify_lmnkc_integrity,
-        verify_lmnkp_integrity, IntegrityPolicy, SigningKeyPair,
+        IntegrityPolicy, SigningKeyPair, attach_lmnkc_content_hash, attach_lmnkp_content_hash,
+        sign_lmnkc_container, sign_lmnkp_package, validate_local_output_path,
+        verify_lmnkc_integrity, verify_lmnkp_integrity,
     };
 
     validate_local_output_path(dst)?;
@@ -721,7 +719,7 @@ fn run_verify_artifact(
     path: &std::path::Path,
     policy: &liminika_adapter::IntegrityPolicy,
 ) -> Result<liminika_adapter::IntegrityReport, Box<dyn std::error::Error>> {
-    use liminika_adapter::{verify_lmnkc_integrity, IntegrityPolicy, LmnkPackageView};
+    use liminika_adapter::{IntegrityPolicy, LmnkPackageView, verify_lmnkc_integrity};
 
     let raw = read_bounded_artifact(path)?;
     if raw.starts_with(b"PK\x03\x04") || is_lmnkp_path(path) {
@@ -976,13 +974,10 @@ mod tests {
         assert!(
             run_sign_artifact(&unsigned_c, &base.join("NUL.lmnkc"), Some(&secret_key)).is_err()
         );
-        assert!(bake_fixture_to_lmnk_file(
-            &fixture_path,
-            &base.join("aux.lmnkp"),
-            "phi4-mini",
-            true
-        )
-        .is_err());
+        assert!(
+            bake_fixture_to_lmnk_file(&fixture_path, &base.join("aux.lmnkp"), "phi4-mini", true)
+                .is_err()
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }

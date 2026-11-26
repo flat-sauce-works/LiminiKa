@@ -13,17 +13,17 @@ use crate::foundation::pod::{Pod, Rank1Descriptor};
 use crate::foundation::projection::project_bytes_swar_to_words_64;
 use crate::foundation::rank1_kernels::eval_rank1_slices_fused;
 use crate::foundation::rope::{
-    PhaseSteering, PhaseSteeringGeometryExt, RopeSteeringTarget, DEFAULT_PHASE_STEER_HEAD_DIM,
-    DEFAULT_PHASE_STEER_NUM_HEADS,
+    DEFAULT_PHASE_STEER_HEAD_DIM, DEFAULT_PHASE_STEER_NUM_HEADS, PhaseSteering,
+    PhaseSteeringGeometryExt, RopeSteeringTarget,
 };
 use crate::foundation::scalar_math::{
-    branchless_clamp_f32, branchless_is_finite_f32, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, branchless_clamp_f32,
+    branchless_is_finite_f32,
 };
 use crate::liminal::{
-    branchless_select_f32, AbstractDomain, Active, Indivisible, LmnkResult, PhaseQ7, RuntimeConfig,
-    HEADS_PER_STIGMERGIC_GRANULE, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+    AbstractDomain, Active, HEADS_PER_STIGMERGIC_GRANULE, Indivisible, LMNK_ERR_INVALID_ARGUMENT,
+    LmnkResult, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig,
+    branchless_select_f32,
 };
 
 /// Zero-byte domain-tagged scalar scale factor for Rank-1 residual injection (`Active` phase).
@@ -415,7 +415,7 @@ mod tests {
     use core::f32::consts::PI;
 
     use super::*;
-    use crate::foundation::aligned::{AlignedBuffer128, AlignedBuffer16, AlignedBuffer32};
+    use crate::foundation::aligned::{AlignedBuffer16, AlignedBuffer32, AlignedBuffer128};
     use crate::foundation::scalar_math::{branchless_sincos_q7, branchless_sqrt_f32};
     use crate::liminal::{Scoped, ScopedCut};
 
@@ -554,7 +554,7 @@ mod tests {
 
         let engine_8h = PhaseSteeringEngine::new(16, 8).unwrap();
         let mut src_8h = AlignedBuffer32::new([0.0f32; 128]);
-        for pair in src_8h.data.chunks_exact_mut(2) {
+        for pair in src_8h.data.as_chunks_mut::<2>().0 {
             pair[0] = 1.0;
             pair[1] = 0.0;
         }

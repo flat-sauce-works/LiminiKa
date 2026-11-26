@@ -8,12 +8,12 @@ use crate::drivers::spine::entropy::{
     ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION, INV_LN_2, MAX_VALID_TOKEN_Z_SCORE,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32, branchless_relu_f32,
-    fast_inv_pos_normal_f32, tanh_lut_eval_nonneg, F32_MIN_POSITIVE_NORMAL,
+    F32_MIN_POSITIVE_NORMAL, branchless_clamp_f32, branchless_eyring_kramers_escape,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_relu_f32, fast_inv_pos_normal_f32, tanh_lut_eval_nonneg,
 };
 use crate::liminal::{
-    branchless_select_f32, LmnkResult, LMNK_ERR_ENTROPY_SINGULARITY, MAX_SURROGATE_ENTROPY_LN2,
+    LMNK_ERR_ENTROPY_SINGULARITY, LmnkResult, MAX_SURROGATE_ENTROPY_LN2, branchless_select_f32,
 };
 
 // ===================================================================

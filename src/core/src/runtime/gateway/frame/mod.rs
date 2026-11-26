@@ -8,12 +8,12 @@ use super::*;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::branchless_rotate_so2_pair;
 use crate::foundation::{
+    ACTION_MODE_PHASE_REPULSE, ACTION_PRESET_EXPRESS_PHASE, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, Pod, RawPhaseProjectable, SubheadConfig, TaggedPtr,
     branchless_clamp_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
-    branchless_sincos_q7_phase_clamp, pack_action_slot_tag, resolve_autonomous_swarm_rot_dim, Pod,
-    RawPhaseProjectable, SubheadConfig, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
-    ACTION_PRESET_EXPRESS_PHASE, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
+    branchless_sincos_q7_phase_clamp, pack_action_slot_tag, resolve_autonomous_swarm_rot_dim,
 };
-use crate::liminal::{branchless_select_u8, PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use crate::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_u8};
 use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
 mod adapters;
@@ -21,8 +21,8 @@ mod signal;
 mod synthesis;
 
 pub use adapters::ResonantSignalSlice;
-pub(crate) use signal::tangent_cosine_active_heads_64;
 pub use signal::ManifoldGatewaySignal;
+pub(crate) use signal::tangent_cosine_active_heads_64;
 pub use synthesis::{
     synthesize_multi_origin_gateway_frame, synthesize_multi_origin_gateway_frame_with_words,
 };

@@ -15,8 +15,8 @@ use liminika_core::foundation::load_q7_words_64;
 use liminika_core::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
 use liminika_core::runtime::StigmergicReceptor;
 use liminika_core::stigmergy::{
-    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicReconstitutionReport,
-    StigmergicScaleGranularity, StigmergicSubstrate, SUBSTRATE_INLINE_TRAILS,
+    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, SUBSTRATE_INLINE_TRAILS,
+    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
 };
 
 /// Trait abstracting multi-point stigmergic coalition decomposition over token resonance

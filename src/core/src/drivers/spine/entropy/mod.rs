@@ -10,7 +10,7 @@
 
 use core::f32::consts::LN_2;
 
-use crate::foundation::{Pod, DEFAULT_MAX_VALID_Z_SCORE};
+use crate::foundation::{DEFAULT_MAX_VALID_Z_SCORE, Pod};
 use crate::liminal::DEFAULT_ENTROPY_EPS;
 
 /// `EntropyController` state structure (32 bytes, 32-byte aligned, Canonical Little-Endian `Pod`).

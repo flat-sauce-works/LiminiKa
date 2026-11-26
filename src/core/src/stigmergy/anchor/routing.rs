@@ -5,21 +5,21 @@
 //! folding for [`PhaseAnchorRecord`].
 
 use crate::foundation::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
-    branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
+    TaggedPtr, branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_min_f32, branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
     branchless_q7_default_gravity_from_diff_u8, branchless_relu_f32, branchless_rsqrt_f32,
     coherence_above_floor_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
     fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
     pack_action_slot_tag, store_q7_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
-    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, TaggedPtr,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, PhaseQ7, DEFAULT_ENTROPY_EPS,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
+    branchless_select_f32, branchless_select_u32,
 };
-use crate::stigmergy::trail::{trail_phase_words_mut, trail_phase_words_ref, PointerTrail};
+use crate::stigmergy::trail::{PointerTrail, trail_phase_words_mut, trail_phase_words_ref};
 use crate::stigmergy::{
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
@@ -542,11 +542,7 @@ impl PhaseAnchorRecord {
 
         let macro_anchor_id = if has_win_centroid {
             let aid = centroids[win_k].anchor_id;
-            if aid != 0 {
-                aid
-            } else {
-                (win_k as u32) + 1
-            }
+            if aid != 0 { aid } else { (win_k as u32) + 1 }
         } else {
             src_trail.cluster_id
         };

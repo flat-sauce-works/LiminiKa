@@ -23,17 +23,17 @@ use liminika_adapter::{
     SubtitleActivationEncoder, TimelineResumeOutcome, TurnOrchestrator, TurnPrepareInput,
 };
 use liminika_core::foundation::compute_crc32_ieee;
-use liminika_core::liminal::{evaluate_lacuna_partition_branchless, Lacuna};
-use liminika_core::runtime::{AdaptiveThresholdPolicy, StandardPhaseKvGopCache, CORE_TOPOLOGY};
+use liminika_core::liminal::{Lacuna, evaluate_lacuna_partition_branchless};
+use liminika_core::runtime::{AdaptiveThresholdPolicy, CORE_TOPOLOGY, StandardPhaseKvGopCache};
 use liminika_core::stigmergy::{
-    PhaseAnchorRecord, StandardCognitiveBank, ATTRACTOR_SLOT_KNOWLEDGE,
+    ATTRACTOR_SLOT_KNOWLEDGE, PhaseAnchorRecord, StandardCognitiveBank,
 };
 use tokenizers::Tokenizer;
 
-use crate::bake::{argmax, query_nvidia_smi_vram, BakedModelProfile};
+use crate::bake::{BakedModelProfile, argmax, query_nvidia_smi_vram};
 use crate::cli::EvalCliConfig;
 use crate::eval::{
-    apply_ego_mode, count_semantic_forbid_hits, generate_steered_reply, SteerDecodeConfig,
+    SteerDecodeConfig, apply_ego_mode, count_semantic_forbid_hits, generate_steered_reply,
 };
 use crate::metrics::kl_divergence_and_max_abs_delta;
 use crate::model::{
@@ -342,12 +342,12 @@ pub(crate) fn run_equilibrium_benchmark(
         .get_entry(first_anchor_id)
         .map(|e| e.record)
         .unwrap_or_else(|| make_synthetic_anchor(first_anchor_id, 1, 1.5));
-    for gen in 1..=100_u64 {
+    for generation in 1..=100_u64 {
         let mut pulse = EquilibriumState::new(eq_cfg);
         pulse.insert_anchor(core_pulse_rec, Lacuna::SelfRef, false)?;
         let rep = eq_100.join(&pulse)?;
         evap_total += rep.evaporated_anchors;
-        let bytes = eq_100.to_lmnkc_bytes(1_774_900_100 + gen)?;
+        let bytes = eq_100.to_lmnkc_bytes(1_774_900_100 + generation)?;
         max_gen_bytes = max_gen_bytes.max(bytes.len());
         eq_100 = EquilibriumState::from_lmnkc_bytes(&bytes, eq_cfg)?;
     }

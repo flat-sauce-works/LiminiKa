@@ -90,9 +90,10 @@ fn test_runtime_context_lifecycle_and_serialization() {
     assert_eq!(required_size, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES);
 
     let mut buffer = alloc::vec![0u8; required_size];
-    assert!(ctx
-        .serialize_to_bytes(&mut buffer, &mut required_size)
-        .is_ok());
+    assert!(
+        ctx.serialize_to_bytes(&mut buffer, &mut required_size)
+            .is_ok()
+    );
 
     // Host-pinned Spine bits must survive untrusted snapshot deserialization intact.
     ctx.apply_host_spine_pin_floor(0b0101_0000);
@@ -278,8 +279,8 @@ fn test_runtime_context_vertical_piercing_and_dynamic_slide_in_out() {
 #[test]
 fn test_latent_horizon_slot_tuple_isolation_dwell_and_slide_out_cleanup() {
     use {
-        apply_latent_horizon_slots, CoreStateStack, GatewayFrame, HorizonDwellState,
-        HorizonTriggerInput,
+        CoreStateStack, GatewayFrame, HorizonDwellState, HorizonTriggerInput,
+        apply_latent_horizon_slots,
     };
 
     struct FastSlot {
