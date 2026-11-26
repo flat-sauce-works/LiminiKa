@@ -1133,7 +1133,7 @@ impl PhaseAnchorRecord {
             // 256-bit-to-64-bit Store-to-Load Forwarding (STLF) stalls.
             let expected_w0 =
                 (LMNK_PHASE_ANCHOR_MAGIC as u64) | ((LMNK_PHASE_ANCHOR_VERSION as u64) << 32);
-            let dst_ptr = dst_bytes.as_mut_ptr().cast::<u64>();
+            let dst_base = dst_bytes.as_mut_ptr();
             let mut idx = 0usize;
             while idx < records.len() {
                 let r = &records[idx];
@@ -1154,24 +1154,19 @@ impl PhaseAnchorRecord {
                     };
                     w6 = (w6 & 0xFFFF_FFFFu64) | ((crc as u64) << 32);
                 }
-                // SAFETY: `dst_bytes` is 8-byte aligned with `dst_bytes.len() >= records.len() * 128` (`idx < records.len()`).
-                let out_w = unsafe { &mut *dst_ptr.add(idx * 16).cast::<[u64; 16]>() };
-                out_w[0] = w0;
-                out_w[1] = src_w[1];
-                out_w[2] = src_w[2];
-                out_w[3] = src_w[3];
-                out_w[4] = src_w[4];
-                out_w[5] = src_w[5];
-                out_w[6] = w6;
-                out_w[7] = src_w[7];
-                out_w[8] = src_w[8];
-                out_w[9] = src_w[9];
-                out_w[10] = src_w[10];
-                out_w[11] = src_w[11];
-                out_w[12] = src_w[12];
-                out_w[13] = src_w[13];
-                out_w[14] = src_w[14];
-                out_w[15] = src_w[15];
+                let out_words = [
+                    w0, src_w[1], src_w[2], src_w[3], src_w[4], src_w[5], w6, src_w[7], src_w[8],
+                    src_w[9], src_w[10], src_w[11], src_w[12], src_w[13], src_w[14], src_w[15],
+                ];
+                // SAFETY: `dst_bytes.len() >= records.len() * 128` (`idx < records.len()`). Using
+                // `write_unaligned` avoids constructing a `&mut [u64; 16]` reference when `dst_bytes`
+                // comes from a 1-byte-aligned `[u8; N]` or `Vec<u8>` whose address happens to be 8-byte aligned.
+                unsafe {
+                    dst_base
+                        .add(idx * size_of::<Self>())
+                        .cast::<[u64; 16]>()
+                        .write_unaligned(out_words);
+                }
                 idx += 1;
             }
             return Ok(total_bytes);

@@ -741,6 +741,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cargo metadata --format-version 1 --locked >/dev/null
+          cargo metadata --manifest-path examples/candle_eval/Cargo.toml --format-version 1 --locked >/dev/null
           cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -752,6 +753,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           cargo metadata --format-version 1 --locked > $null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo metadata --manifest-path examples/candle_eval/Cargo.toml --format-version 1 --locked > $null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -838,6 +841,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: miri-linux-nightly-2026-11-20
+
+      - name: Cache Miri sysroot
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/miri
+          key: miri-sysroot-${{ runner.os }}-nightly-2026-11-20-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            miri-sysroot-${{ runner.os }}-nightly-2026-11-20-
 
       - name: Run Miri on liminika-core and liminika-dsl
         env:
