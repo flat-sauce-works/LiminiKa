@@ -22,7 +22,8 @@
  *   `lmnk_section_input_t`) carry a leading `uint32_t struct_size` field validated fail-closed
  *   across the C-ABI boundary.
  * - Transient pointer-carrying host parameter structs are strictly in-memory call descriptors and
- *   are NEVER persisted or hashed. All tensor buffer pointers are strongly typed `float*` (`0 void*`).
+ *   are NEVER persisted or hashed. All tensor buffer pointers are strongly typed `float*` (`0
+ * void*`).
  *
  * Canonical 4-State Lacuna Classification:
  * - `0` (`Unobserved`): well-defined zero-aperture non-observation

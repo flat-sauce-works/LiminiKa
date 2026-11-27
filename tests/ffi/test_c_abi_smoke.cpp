@@ -247,7 +247,8 @@ void test_context_lifecycle_policy_decode_and_snapshot() {
     LMNK_TEST_CHECK(lmnk_context_emit_boundary_signal(ctx, &bad_emit, &emitted_sig) ==
                     LMNK_ERR_INVALID_ARGUMENT);
 
-    // Tier-1 standalone Envelope step (#26): DEFAULT_BOUNDS zero-init, breach, calm recovery, fail-closed
+    // Tier-1 standalone Envelope step (#26): DEFAULT_BOUNDS zero-init, breach, calm recovery,
+    // fail-closed
     alignas(64) lmnk_envelope_state_t env_state{};
     env_state.contraction_q7 = 128U;
     env_state.baseline_pinned_compute_mask = LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
@@ -268,8 +269,8 @@ void test_context_lifecycle_policy_decode_and_snapshot() {
     LMNK_TEST_CHECK(env_fb.contraction_q7 < 128U);
     LMNK_TEST_CHECK((env_fb.breach_mask & LMNK_ENVELOPE_BREACH_PRESSURE) != 0U);
     LMNK_TEST_CHECK(env_state.violation_epochs == 1U);
-    LMNK_TEST_CHECK((env_fb.effective_pinned_compute_mask &
-                     LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK) != 0ULL);
+    LMNK_TEST_CHECK(
+        (env_fb.effective_pinned_compute_mask & LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK) != 0ULL);
     const uint8_t contracted = env_fb.contraction_q7;
 
     // Calm step monotonically recovers contraction

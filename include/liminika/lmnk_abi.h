@@ -127,10 +127,10 @@ lmnk_lacuna_partition_eval(const lmnk_lacuna_eval_params_t* LMNK_RESTRICT params
  * When `LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS` is set, `params->bounds` is ignored and canonical
  * defaults are applied.
  */
-LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_envelope_step(
-    lmnk_envelope_state_t* LMNK_RESTRICT state_inout,
-    const lmnk_envelope_step_params_t* LMNK_RESTRICT params,
-    lmnk_envelope_feedback_t* LMNK_RESTRICT feedback_out) LMNK_NOEXCEPT;
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
+lmnk_envelope_step(lmnk_envelope_state_t* LMNK_RESTRICT state_inout,
+                   const lmnk_envelope_step_params_t* LMNK_RESTRICT params,
+                   lmnk_envelope_feedback_t* LMNK_RESTRICT feedback_out) LMNK_NOEXCEPT;
 
 /* -------------------------------------------------------------------------- */
 /* 4. Generic Unified `.lmnk` Container I/O (3 functions)                     */
