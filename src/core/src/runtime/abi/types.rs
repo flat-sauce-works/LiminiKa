@@ -27,7 +27,8 @@ pub use crate::drivers::{
     ComputeDispatchMask, DistortionDelta, DistortionTension, ENVELOPE_BREACH_CHATTER,
     ENVELOPE_BREACH_EXTERIOR, ENVELOPE_BREACH_KNOWN_MASK, ENVELOPE_BREACH_NONE,
     ENVELOPE_BREACH_PRESSURE, ENVELOPE_BREACH_UNDEFINED_FAULT, ENVELOPE_FLAG_CONTRACTED,
-    ENVELOPE_FLAG_KNOWN_MASK, ENVELOPE_FLAG_RECOVERY_ACTIVE, ENVELOPE_LOCK_FAULT_ISOLATED,
+    ENVELOPE_FLAG_EMA_INITIALIZED, ENVELOPE_FLAG_EMA_PAUSED, ENVELOPE_FLAG_KNOWN_MASK,
+    ENVELOPE_FLAG_RECOVERY_ACTIVE, ENVELOPE_LOCK_EMA_PAUSED, ENVELOPE_LOCK_FAULT_ISOLATED,
     ENVELOPE_LOCK_IRREVERSIBLE, ENVELOPE_LOCK_UNOBSERVED, EgoIntentAxes, EntropyController,
     EntropyState, EnvelopeBounds, EnvelopeFeedback, EnvelopeState,
     HOST_IMMUTABLE_PINNED_COMPUTE_MASK, LiminalEgoState, SPINE_BYPASS_VETO_GUARD_ACTIVE,
@@ -107,8 +108,11 @@ pub use crate::stigmergy::{
 pub const LMNK_POLICY_FLAG_SPINE: u32 = 1 << 0;
 /// Apply compute-pool mask and baseline-pressure fields in [`lmnk_runtime_policy_t`].
 pub const LMNK_POLICY_FLAG_COMPUTE_POOL: u32 = 1 << 1;
-/// Valid bitmask for [`lmnk_runtime_policy_t::flags`].
-pub const LMNK_POLICY_KNOWN_FLAGS: u32 = LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_COMPUTE_POOL;
+/// Apply safety-envelope bounds and online EMA fields in [`lmnk_runtime_policy_t`].
+pub const LMNK_POLICY_FLAG_ENVELOPE: u32 = 1 << 2;
+/// Valid bitmask for [`lmnk_runtime_policy_t::flags`] (`0x07`).
+pub const LMNK_POLICY_KNOWN_FLAGS: u32 =
+    LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_COMPUTE_POOL | LMNK_POLICY_FLAG_ENVELOPE;
 
 /// Marks the turn as contradiction-guard active in [`lmnk_turn_begin_params_t::flags`].
 pub const LMNK_TURN_FLAG_GUARD_ACTIVE: u32 = 1 << 0;
@@ -289,7 +293,7 @@ impl Default for lmnk_abi_info_t {
 pub struct lmnk_runtime_policy_t {
     /// Parameter struct byte size (`sizeof(lmnk_runtime_policy_t)` == `64`, `offset 0..4`).
     pub struct_size: u32,
-    /// Policy section bitflags (`LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_COMPUTE_POOL`, `offset 4..8`).
+    /// Policy section bitflags (`LMNK_POLICY_FLAG_SPINE | COMPUTE_POOL | ENVELOPE`, `offset 4..8`).
     pub flags: u32,
     /// Monotonic host compute pin floor (`0` preserves active floor, `offset 8..16`).
     pub baseline_pinned_compute_mask: u64,
@@ -307,8 +311,20 @@ pub struct lmnk_runtime_policy_t {
     pub max_observe_stride: u8,
     /// Non-zero enables pre-bypass scheduling (`offset 44`).
     pub pre_bypass_enabled: u8,
-    /// Explicit zero-initialized extension space (`offset 45..64`).
-    pub reserved: [u8; 19],
+    /// Consecutive calm steps required before online EMA resumes (`0` preserves current, `offset 45`).
+    pub ema_resume_dwell_target: u8,
+    /// Minimum online baseline pressure bound in Q0.15 (`offset 46..48`).
+    pub envelope_min_baseline_pressure_q15: u16,
+    /// Maximum online baseline pressure bound in Q0.15 (`0` preserves pair if min == 0, `offset 48..50`).
+    pub envelope_max_baseline_pressure_q15: u16,
+    /// Upper pressure ceiling in Q0.15 (`0` preserves pair if floor == 0, `offset 50..52`).
+    pub envelope_pressure_ceiling_q15: u16,
+    /// Lower pressure floor in Q0.15 (`offset 52..54`).
+    pub envelope_pressure_floor_q15: u16,
+    /// Online EMA right-shift exponent (`0` preserves current, valid `0..=7`, `offset 54`).
+    pub envelope_ema_shift: u8,
+    /// Explicit zero-initialized extension space (`offset 55..64`).
+    pub reserved: [u8; 9],
 }
 
 impl Default for lmnk_runtime_policy_t {
@@ -325,7 +341,13 @@ impl Default for lmnk_runtime_policy_t {
             guard_hold_tokens: 0,
             max_observe_stride: 1,
             pre_bypass_enabled: 0,
-            reserved: [0; 19],
+            ema_resume_dwell_target: 0,
+            envelope_min_baseline_pressure_q15: 0,
+            envelope_max_baseline_pressure_q15: 0,
+            envelope_pressure_ceiling_q15: 0,
+            envelope_pressure_floor_q15: 0,
+            envelope_ema_shift: 0,
+            reserved: [0; 9],
         }
     }
 }
@@ -1010,7 +1032,13 @@ const _: () = {
     assert!(offset_of!(lmnk_runtime_policy_t, struct_size) == 0);
     assert!(offset_of!(lmnk_runtime_policy_t, baseline_pinned_compute_mask) == 8);
     assert!(offset_of!(lmnk_runtime_policy_t, baseline_pressure_q15) == 40);
-    assert!(offset_of!(lmnk_runtime_policy_t, reserved) == 45);
+    assert!(offset_of!(lmnk_runtime_policy_t, ema_resume_dwell_target) == 45);
+    assert!(offset_of!(lmnk_runtime_policy_t, envelope_min_baseline_pressure_q15) == 46);
+    assert!(offset_of!(lmnk_runtime_policy_t, envelope_max_baseline_pressure_q15) == 48);
+    assert!(offset_of!(lmnk_runtime_policy_t, envelope_pressure_ceiling_q15) == 50);
+    assert!(offset_of!(lmnk_runtime_policy_t, envelope_pressure_floor_q15) == 52);
+    assert!(offset_of!(lmnk_runtime_policy_t, envelope_ema_shift) == 54);
+    assert!(offset_of!(lmnk_runtime_policy_t, reserved) == 55);
 
     assert!(
         size_of::<lmnk_turn_begin_params_t>() == 16 && align_of::<lmnk_turn_begin_params_t>() == 4
@@ -1065,6 +1093,8 @@ const _: () = {
     assert!(
         size_of::<lmnk_envelope_bounds_t>() == 32 && align_of::<lmnk_envelope_bounds_t>() == 32
     );
+    assert!(offset_of!(lmnk_envelope_bounds_t, ema_shift) == 24);
+    assert!(offset_of!(lmnk_envelope_bounds_t, reserved) == 25);
     assert!(
         size_of::<lmnk_envelope_feedback_t>() == 16 && align_of::<lmnk_envelope_feedback_t>() == 16
     );

@@ -17,9 +17,10 @@ use crate::foundation::{
     swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT, BOUNDARY_SIGNAL_KNOWN_FLAGS, BoundarySignal,
-    DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig,
+    BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT, BOUNDARY_SIGNAL_FLAG_OBSERVED,
+    BOUNDARY_SIGNAL_KNOWN_FLAGS, BoundarySignal, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT,
+    LacunaPartition8, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
+    RuntimeConfig,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
@@ -82,10 +83,20 @@ impl RuntimeContext {
         &self.probe_baseline
     }
 
-    /// Updates the [`ManifoldProbeBaseline`] gauge origin used for assimilation drift.
+    /// Updates the [`ManifoldProbeBaseline`] gauge origin used for assimilation drift and, when a
+    /// calibrated normalized baseline entropy (`probe_epoch > 0`, `0 < baseline_entropy <= 1`) is
+    /// provided, seeds [`EnvelopeState::baseline_pressure_q15`] via [`EnvelopeState::seed_baseline_pressure_q15`].
     #[inline(always)]
     pub const fn set_probe_baseline(&mut self, baseline: ManifoldProbeBaseline) {
         self.probe_baseline = baseline;
+        if baseline.probe_epoch > 0
+            && baseline.baseline_entropy > 0.0
+            && baseline.baseline_entropy <= 1.0
+        {
+            let q15 = (baseline.baseline_entropy * 32_768.0 + 0.5) as u16;
+            self.envelope
+                .seed_baseline_pressure_q15(q15, &self.envelope_bounds);
+        }
     }
 
     /// Returns a mutable reference to the active [`ManifoldProbeBaseline`] gauge origin.
@@ -255,6 +266,34 @@ impl RuntimeContext {
         &self.envelope
     }
 
+    /// Returns a read-only reference to the active [`EnvelopeBounds`] configuration (`offset 416`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn envelope_bounds(&self) -> &EnvelopeBounds {
+        &self.envelope_bounds
+    }
+
+    /// Validates and updates [`RuntimeContext::envelope_bounds`] atomically (`0 alloc`).
+    ///
+    /// # Errors
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] without modifying internal state if
+    /// [`EnvelopeBounds::validate_invariants`] returns `false`.
+    #[inline(always)]
+    pub fn configure_envelope_bounds(&mut self, bounds: EnvelopeBounds) -> Result<()> {
+        if !bounds.validate_invariants() {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        self.envelope_bounds = bounds;
+        Ok(())
+    }
+
+    /// Seeds `EnvelopeState::baseline_pressure_q15` clamped to the active [`EnvelopeBounds`].
+    #[inline(always)]
+    pub const fn seed_envelope_baseline_pressure_q15(&mut self, baseline_q15: u16) {
+        self.envelope
+            .seed_baseline_pressure_q15(baseline_q15, &self.envelope_bounds);
+    }
+
     /// Extracts a 16-byte [`SpinePinSnapshot`] from [`EnvelopeState`] for isolated spine queries.
     #[inline(always)]
     #[must_use]
@@ -346,12 +385,21 @@ impl RuntimeContext {
         );
         sig.contraction_q7 = self.envelope.contraction_q7;
         sig.dominant_lane = (self.find_dominant_domain().0 as u8) & 0x07;
+        let explicit_obs = (!sig.is_fault())
+            && !self.last_lacuna_partition.is_unobserved_aperture_zero()
+            && self.envelope.unobserved_locked == 0
+            && (clamped_pressure > 0 || chatter_q7 > 0);
+        let obs_flag = if explicit_obs {
+            BOUNDARY_SIGNAL_FLAG_OBSERVED
+        } else {
+            0
+        };
         let irrev_flag = if self.envelope.irreversible_step_lock != 0 {
             BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT
         } else {
             0
         };
-        sig.signal_flags |= (flags & BOUNDARY_SIGNAL_KNOWN_FLAGS) | irrev_flag;
+        sig.signal_flags |= (flags & BOUNDARY_SIGNAL_KNOWN_FLAGS) | obs_flag | irrev_flag;
         sig
     }
 

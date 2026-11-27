@@ -3144,7 +3144,7 @@ fn test_pinned_sandbox_handle_preservation_and_repulsion_sandbox_isolation() {
 
 #[test]
 fn test_runtime_context_new_boxed_and_zeroize_in_place() {
-    assert_eq!(core::mem::size_of::<RuntimeContext>(), 5120);
+    assert_eq!(core::mem::size_of::<RuntimeContext>(), 5184);
     assert_eq!(core::mem::align_of::<RuntimeContext>(), 64);
     assert!(!core::mem::needs_drop::<RuntimeContext>());
 

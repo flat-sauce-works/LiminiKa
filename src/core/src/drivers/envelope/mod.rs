@@ -19,7 +19,7 @@ use crate::foundation::{ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, Pod};
 use crate::liminal::{
     AttributionTag, BitCut8, BitCut32, BoundarySignal, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
     PrimitiveKind, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_SYSTEM_CONSTRAINT,
-    branchless_select_u8, branchless_select_u16, branchless_select_u32,
+    branchless_select_i32, branchless_select_u8, branchless_select_u16, branchless_select_u32,
 };
 use crate::stigmergy::{ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE};
 
@@ -45,13 +45,22 @@ pub const ENVELOPE_LOCK_UNOBSERVED: u8 = 1 << 0;
 pub const ENVELOPE_LOCK_IRREVERSIBLE: u8 = 1 << 1;
 /// Lock bit (`bit 2`): fault isolation engaged due to `Undefined` input.
 pub const ENVELOPE_LOCK_FAULT_ISOLATED: u8 = 1 << 2;
+/// Lock bit (`bit 3`): online baseline pressure EMA is paused (breach, fault, unobserved, or dwell).
+pub const ENVELOPE_LOCK_EMA_PAUSED: u8 = 1 << 3;
 
 /// State flag (`bit 0`): aperture contraction is currently below unit scale (`contraction_q7 < 128`).
 pub const ENVELOPE_FLAG_CONTRACTED: u8 = 1 << 0;
 /// State flag (`bit 1`): calm recovery toward unit aperture (`128`) is in progress.
 pub const ENVELOPE_FLAG_RECOVERY_ACTIVE: u8 = 1 << 1;
-/// Bitmask of all defined `ENVELOPE_FLAG_*` bits (`0x03`).
-pub const ENVELOPE_FLAG_KNOWN_MASK: u8 = ENVELOPE_FLAG_CONTRACTED | ENVELOPE_FLAG_RECOVERY_ACTIVE;
+/// State flag (`bit 2`): online `baseline_pressure_q15` EMA has been seeded from valid observations.
+pub const ENVELOPE_FLAG_EMA_INITIALIZED: u8 = 1 << 2;
+/// State flag (`bit 3`): online `baseline_pressure_q15` EMA is paused awaiting calm dwell completion.
+pub const ENVELOPE_FLAG_EMA_PAUSED: u8 = 1 << 3;
+/// Bitmask of all defined `ENVELOPE_FLAG_*` bits (`0x0F`).
+pub const ENVELOPE_FLAG_KNOWN_MASK: u8 = ENVELOPE_FLAG_CONTRACTED
+    | ENVELOPE_FLAG_RECOVERY_ACTIVE
+    | ENVELOPE_FLAG_EMA_INITIALIZED
+    | ENVELOPE_FLAG_EMA_PAUSED;
 
 /// Default Q0.15 upper pressure ceiling (`0.85` = `27_853`) triggering pressure contraction.
 pub const DEFAULT_ENVELOPE_PRESSURE_CEILING_Q15: u16 = 27_853;
@@ -62,6 +71,10 @@ pub const DEFAULT_ENVELOPE_MAX_BASELINE_PRESSURE_Q15: u16 = 25_559;
 
 /// Unit Q0.15 scalar ceiling (`1.0` = `32_768`) used for pressure range validation.
 const ENVELOPE_PRESSURE_Q15_ONE: u16 = 32_768;
+/// Default integer-shift exponent (`4`, corresponding to $\alpha = 1/16$) when `ema_shift == 0`.
+const DEFAULT_ENVELOPE_EMA_SHIFT: u8 = 4;
+/// Maximum valid integer-shift exponent (`7`, corresponding to $\alpha = 1/128$).
+const MAX_ENVELOPE_EMA_SHIFT: u8 = 7;
 
 /// Canonical 8-bit host-pinned aperture bitmask (`SystemConstraint | ContradictionGuard`).
 const DEFAULT_PINNED_APERTURE_MASK_U8: u8 =
@@ -77,13 +90,13 @@ const DEFAULT_PINNED_SLOT_MASK_U8: u8 =
 pub struct EnvelopeBounds {
     /// Host-immutable compute slot bitmask never cleared across steps or restores (`offset 0..8`).
     pub immutable_compute_pin_mask: u64,
-    /// Upper signal pressure ceiling in Q0.15 (`0..=32768`; `0` disables pressure breach, `offset 8..10`).
+    /// Upper signal pressure ceiling in Q0.15 (`1..=32768`, `offset 8..10`).
     pub pressure_ceiling_q15: u16,
-    /// Lower signal pressure floor in Q0.15 (`0..=32768`, `offset 10..12`).
+    /// Lower signal pressure floor in Q0.15 (`0..=pressure_ceiling_q15`, `offset 10..12`).
     pub pressure_floor_q15: u16,
-    /// Minimum online baseline pressure bound in Q0.15 reserved for adaptive calibration (`offset 12..14`).
+    /// Minimum online baseline pressure bound in Q0.15 (`0..=max_baseline_pressure_q15`, `offset 12..14`).
     pub min_baseline_pressure_q15: u16,
-    /// Maximum online baseline pressure bound in Q0.15 reserved for adaptive calibration (`offset 14..16`).
+    /// Maximum online baseline pressure bound in Q0.15 (`0` disables EMA, `offset 14..16`).
     pub max_baseline_pressure_q15: u16,
     /// Host-immutable 8-bit cognitive aperture pin mask (`offset 16`).
     pub immutable_aperture_pin_mask: u8,
@@ -101,8 +114,10 @@ pub struct EnvelopeBounds {
     pub min_aperture_q7: u8,
     /// Consecutive calm steps required before online baseline tracking resumes (`offset 23`).
     pub ema_resume_dwell_target: u8,
-    /// Explicit zero-initialized extension space (`offset 24..32`).
-    pub reserved: [u8; 8],
+    /// Integer right-shift exponent for online baseline EMA (`0` = default `4` [1/16], valid `0..=7`, `offset 24`).
+    pub ema_shift: u8,
+    /// Explicit zero-initialized extension space (`offset 25..32`).
+    pub reserved: [u8; 7],
 }
 
 const _: () = {
@@ -121,7 +136,8 @@ const _: () = {
     assert!(offset_of!(EnvelopeBounds, recovery_gain_q7) == 21);
     assert!(offset_of!(EnvelopeBounds, min_aperture_q7) == 22);
     assert!(offset_of!(EnvelopeBounds, ema_resume_dwell_target) == 23);
-    assert!(offset_of!(EnvelopeBounds, reserved) == 24);
+    assert!(offset_of!(EnvelopeBounds, ema_shift) == 24);
+    assert!(offset_of!(EnvelopeBounds, reserved) == 25);
 };
 
 // SAFETY: `EnvelopeBounds` is `#[repr(C, align(32))]`, exact size 32 bytes with zero padding.
@@ -153,25 +169,29 @@ impl EnvelopeBounds {
             recovery_gain_q7: 8,
             min_aperture_q7: 16,
             ema_resume_dwell_target: 4,
-            reserved: [0; 8],
+            ema_shift: 0,
+            reserved: [0; 7],
         }
     }
 
     /// Validates numeric range and ordering invariants on [`EnvelopeBounds`] branchlessly.
+    ///
+    /// Rejects all-zero tampered bounds (`pressure_ceiling_q15 == 0`), inverted pressure or
+    /// baseline intervals, out-of-range Q0.15/Q0.7 scalars, and `ema_shift > 7`.
     #[inline(always)]
     #[must_use]
     pub const fn validate_invariants(&self) -> bool {
-        let ceiling_ok = self.pressure_ceiling_q15 <= ENVELOPE_PRESSURE_Q15_ONE;
-        let floor_ok = self.pressure_floor_q15 <= ENVELOPE_PRESSURE_Q15_ONE;
-        let order_ok = (self.pressure_ceiling_q15 == 0)
-            | (self.pressure_floor_q15 <= self.pressure_ceiling_q15);
+        let ceiling_ok = (self.pressure_ceiling_q15 > 0)
+            & (self.pressure_ceiling_q15 <= ENVELOPE_PRESSURE_Q15_ONE);
+        let floor_ok = self.pressure_floor_q15 <= self.pressure_ceiling_q15;
         let base_ok = (self.max_baseline_pressure_q15 <= ENVELOPE_PRESSURE_Q15_ONE)
             & (self.min_baseline_pressure_q15 <= self.max_baseline_pressure_q15);
         let q7_ok = (self.max_chatter_q7 <= 128)
             & (self.contraction_gain_q7 <= 128)
             & (self.recovery_gain_q7 <= 128)
             & (self.min_aperture_q7 <= 128);
-        ceiling_ok & floor_ok & order_ok & base_ok & q7_ok
+        let shift_ok = self.ema_shift <= MAX_ENVELOPE_EMA_SHIFT;
+        ceiling_ok & floor_ok & base_ok & q7_ok & shift_ok
     }
 }
 
@@ -324,12 +344,14 @@ impl EnvelopeState {
             & ((self.envelope_flags & !ENVELOPE_FLAG_KNOWN_MASK) == 0)
     }
 
-    /// Packs the active `ENVELOPE_LOCK_*` bitmask (`UNOBSERVED | IRREVERSIBLE | FAULT_ISOLATED`)
-    /// from latched lock fields and `breach_mask`.
+    /// Packs the active `ENVELOPE_LOCK_*` bitmask
+    /// (`UNOBSERVED | IRREVERSIBLE | FAULT_ISOLATED | EMA_PAUSED`)
+    /// from latched lock fields, `breach_mask`, and `envelope_flags`.
     #[inline(always)]
     #[must_use]
     pub const fn lock_flags(&self) -> u8 {
         let is_fault = (self.breach_mask & ENVELOPE_BREACH_UNDEFINED_FAULT) != 0;
+        let is_ema_paused = (self.envelope_flags & ENVELOPE_FLAG_EMA_PAUSED) != 0;
         branchless_select_u8(self.unobserved_locked != 0, ENVELOPE_LOCK_UNOBSERVED, 0)
             | branchless_select_u8(
                 self.irreversible_step_lock != 0,
@@ -337,6 +359,26 @@ impl EnvelopeState {
                 0,
             )
             | branchless_select_u8(is_fault, ENVELOPE_LOCK_FAULT_ISOLATED, 0)
+            | branchless_select_u8(is_ema_paused, ENVELOPE_LOCK_EMA_PAUSED, 0)
+    }
+
+    /// Safely seeds `baseline_pressure_q15` from an external calibration reading clamped within
+    /// `[bounds.min_baseline_pressure_q15, bounds.max_baseline_pressure_q15]`, marking the online
+    /// EMA initialized and ready to track without cold-start pause.
+    #[inline(always)]
+    pub const fn seed_baseline_pressure_q15(&mut self, baseline_q15: u16, bounds: &EnvelopeBounds) {
+        let ema_enabled = (bounds.max_baseline_pressure_q15 > 0)
+            & (bounds.min_baseline_pressure_q15 <= bounds.max_baseline_pressure_q15);
+        if ema_enabled {
+            let min_b = bounds.min_baseline_pressure_q15;
+            let max_b = bounds.max_baseline_pressure_q15;
+            let clamped_lo = branchless_select_u16(baseline_q15 < min_b, min_b, baseline_q15);
+            let clamped = branchless_select_u16(clamped_lo > max_b, max_b, clamped_lo);
+            self.baseline_pressure_q15 = clamped;
+            self.ema_resume_dwell = bounds.ema_resume_dwell_target;
+            self.envelope_flags =
+                (self.envelope_flags | ENVELOPE_FLAG_EMA_INITIALIZED) & !ENVELOPE_FLAG_EMA_PAUSED;
+        }
     }
 
     /// Monotonically raises both permanent baseline and active compute pin masks, always
@@ -478,10 +520,7 @@ impl EnvelopeState {
             | branchless_select_u8(exterior_breach, ENVELOPE_BREACH_EXTERIOR, 0)
             | branchless_select_u8(is_undefined, ENVELOPE_BREACH_UNDEFINED_FAULT, 0);
         let any_breach = breach_mask != 0;
-        let unobserved_zero = (!is_undefined)
-            & (!any_breach)
-            & signal.partition.is_unobserved_aperture_zero()
-            & (!signal.is_observed());
+        let unobserved_zero = (!is_undefined) & (!any_breach) & (!signal.is_observed());
 
         let cur = self.contraction_q7.min(128);
         let min_floor = bounds.min_aperture_q7.min(128);
@@ -505,25 +544,65 @@ impl EnvelopeState {
         self.violation_epochs = self.violation_epochs.saturating_add(u32::from(any_breach));
         let next_calm = self.calm_epochs.saturating_add(u32::from(!unobserved_zero));
         self.calm_epochs = branchless_select_u32(any_breach, 0, next_calm);
-        self.last_pressure_q15 =
-            branchless_select_u16(is_undefined, self.last_pressure_q15, signal.pressure_q15);
+        self.last_pressure_q15 = branchless_select_u16(
+            is_undefined | unobserved_zero,
+            self.last_pressure_q15,
+            signal.pressure_q15,
+        );
         self.breach_mask = breach_mask;
 
-        let dwell_cap = bounds.ema_resume_dwell_target;
-        let next_dwell_raw = self
-            .ema_resume_dwell
-            .saturating_add(u8::from(!unobserved_zero));
-        let next_dwell =
-            branchless_select_u8(next_dwell_raw > dwell_cap, dwell_cap, next_dwell_raw);
-        self.ema_resume_dwell = branchless_select_u8(any_breach, 0, next_dwell);
+        // Branchless `0 fdiv` integer-shift online baseline pressure EMA with cold-start seed
+        // and calm-dwell resumption after breaches, faults, or unobserved steps.
+        let ema_enabled = (bounds.max_baseline_pressure_q15 > 0)
+            & (bounds.min_baseline_pressure_q15 <= bounds.max_baseline_pressure_q15);
+        let can_track = (!is_undefined) & (!any_breach) & (!unobserved_zero);
+        let was_init = (self.envelope_flags & ENVELOPE_FLAG_EMA_INITIALIZED) != 0;
+        let cold_seed = (!was_init) & ema_enabled & can_track;
 
+        let dwell_cap = bounds.ema_resume_dwell_target;
+        let next_dwell_raw = self.ema_resume_dwell.saturating_add(1);
+        let next_dwell_clamped =
+            branchless_select_u8(next_dwell_raw > dwell_cap, dwell_cap, next_dwell_raw);
+        let next_dwell_calm = branchless_select_u8(cold_seed, dwell_cap, next_dwell_clamped);
+        let next_dwell = branchless_select_u8(can_track, next_dwell_calm, 0);
+        self.ema_resume_dwell = next_dwell;
+
+        let ema_paused = ema_enabled & ((!can_track) | (next_dwell < dwell_cap));
+        let ema_update = was_init & ema_enabled & can_track & (!ema_paused);
+
+        let min_b = bounds.min_baseline_pressure_q15;
+        let max_b = bounds.max_baseline_pressure_q15;
+        let obs_lo = branchless_select_u16(signal.pressure_q15 < min_b, min_b, signal.pressure_q15);
+        let obs_clamped = branchless_select_u16(obs_lo > max_b, max_b, obs_lo);
+
+        let eff_shift = branchless_select_u8(
+            bounds.ema_shift == 0,
+            DEFAULT_ENVELOPE_EMA_SHIFT,
+            bounds.ema_shift.min(MAX_ENVELOPE_EMA_SHIFT),
+        );
+        let diff = i32::from(signal.pressure_q15) - i32::from(self.baseline_pressure_q15);
+        let abs_d = diff.unsigned_abs();
+        let half = 1u32 << (eff_shift - 1);
+        let mag = (abs_d + half) >> eff_shift;
+        let step_delta = branchless_select_i32(diff < 0, -(mag as i32), mag as i32);
+        let sum = i32::from(self.baseline_pressure_q15) + step_delta;
+        let sum_lo = branchless_select_i32(sum < i32::from(min_b), i32::from(min_b), sum);
+        let ema_next =
+            branchless_select_i32(sum_lo > i32::from(max_b), i32::from(max_b), sum_lo) as u16;
+
+        let after_seed = branchless_select_u16(cold_seed, obs_clamped, self.baseline_pressure_q15);
+        self.baseline_pressure_q15 = branchless_select_u16(ema_update, ema_next, after_seed);
+
+        let is_init = was_init | cold_seed;
         let is_contracted = self.contraction_q7 < 128;
         self.envelope_flags = branchless_select_u8(is_contracted, ENVELOPE_FLAG_CONTRACTED, 0)
             | branchless_select_u8(
                 (!any_breach) & (!unobserved_zero) & is_contracted,
                 ENVELOPE_FLAG_RECOVERY_ACTIVE,
                 0,
-            );
+            )
+            | branchless_select_u8(is_init, ENVELOPE_FLAG_EMA_INITIALIZED, 0)
+            | branchless_select_u8(ema_paused, ENVELOPE_FLAG_EMA_PAUSED, 0);
 
         let lock_flags = self.lock_flags()
             | branchless_select_u8(unobserved_zero, ENVELOPE_LOCK_UNOBSERVED, 0)
@@ -644,7 +723,7 @@ mod tests {
         }
         assert_eq!(state.contraction_q7, 128);
         assert_eq!(state.calm_epochs, 20);
-        assert_eq!(state.envelope_flags, 0);
+        assert_eq!(state.envelope_flags, ENVELOPE_FLAG_EMA_INITIALIZED);
 
         // 4. Undefined fault fails closed immediately to contraction_q7 == 0 and FAULT_ISOLATED.
         let fault_obs = [80, 0x80, 0, 0, 0, 0, 0, 0];
@@ -677,5 +756,139 @@ mod tests {
             state.pinned_compute_mask,
             0b0010_0100 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
         );
+        assert_eq!(state.baseline_pressure_q15, 0);
+        assert_eq!(state.ema_resume_dwell, 0);
+        assert_eq!(state.envelope_flags, 0);
+    }
+
+    #[test]
+    fn test_envelope_online_ema_cold_start_convergence_clamping_and_pause_resume() {
+        let tol = [10u8; 8];
+        let calm_obs = [80, 72, 0, 0, 0, 0, 0, 0];
+        let lp_calm = evaluate_lacuna_partition_branchless(0x03, &calm_obs, &tol, 40);
+        let lp_unobs = evaluate_lacuna_partition_branchless(0x03, &[0; 8], &tol, 40);
+        let lp_fault =
+            evaluate_lacuna_partition_branchless(0x03, &[80, 0x80, 0, 0, 0, 0, 0, 0], &tol, 40);
+
+        // 1. Validate EnvelopeBounds invariants SSOT (rejects all-zero, ema_shift > 7, inverted ranges).
+        let mut bounds = EnvelopeBounds::new();
+        assert!(bounds.validate_invariants());
+        assert!(!EnvelopeBounds::zeroed().validate_invariants());
+        bounds.ema_shift = 8;
+        assert!(!bounds.validate_invariants());
+        bounds.ema_shift = 0;
+        bounds.pressure_floor_q15 = bounds.pressure_ceiling_q15 + 1;
+        assert!(!bounds.validate_invariants());
+        bounds = EnvelopeBounds::new();
+        bounds.min_baseline_pressure_q15 = bounds.max_baseline_pressure_q15 + 1;
+        assert!(!bounds.validate_invariants());
+
+        // 2. Cold-start immediate seed clamps into [min_baseline, max_baseline] and avoids 0-bias.
+        let mut state = EnvelopeState::new();
+        let bounds = EnvelopeBounds {
+            min_baseline_pressure_q15: 6_000,
+            max_baseline_pressure_q15: 20_000,
+            ema_resume_dwell_target: 3,
+            ema_shift: 0, // default shift 4 (alpha = 1/16)
+            ..EnvelopeBounds::new()
+        };
+        let sig_low = BoundarySignal::from_partition(lp_calm, 2_000, 0, 4, 1);
+        let fb_seed = state.step(&bounds, &sig_low);
+        assert_eq!(state.baseline_pressure_q15, 6_000);
+        assert_ne!(state.envelope_flags & ENVELOPE_FLAG_EMA_INITIALIZED, 0);
+        assert_eq!(state.envelope_flags & ENVELOPE_FLAG_EMA_PAUSED, 0);
+        assert_eq!(fb_seed.lock_flags, state.lock_flags());
+        assert_eq!(fb_seed.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+
+        // 3. Default shift (s = 4 -> 1/16) symmetric integer-shift convergence & upper clamp.
+        let sig_up = BoundarySignal::from_partition(lp_calm, 14_000, 0, 4, 2);
+        let fb_up = state.step(&bounds, &sig_up);
+        // diff = +8000, (8000 + 8) >> 4 = 500 -> 6500
+        assert_eq!(state.baseline_pressure_q15, 6_500);
+        assert_eq!(fb_up.lock_flags, state.lock_flags());
+
+        // Symmetric negative step check with custom ema_shift = 2 (alpha = 1/4).
+        let fast_bounds = EnvelopeBounds {
+            ema_shift: 2,
+            ..bounds
+        };
+        let sig_down = BoundarySignal::from_partition(lp_calm, 6_492, 0, 4, 3);
+        let _ = state.step(&fast_bounds, &sig_down);
+        // diff = -8, (8 + 2) >> 2 = 2 -> 6498
+        assert_eq!(state.baseline_pressure_q15, 6_498);
+
+        let sig_high_calm = BoundarySignal::from_partition(lp_calm, 24_000, 0, 4, 4);
+        for ep in 5..=40 {
+            let mut s = sig_high_calm;
+            s.epoch_id = ep;
+            let _ = state.step(&fast_bounds, &s);
+        }
+        assert_eq!(
+            state.baseline_pressure_q15,
+            bounds.max_baseline_pressure_q15
+        );
+
+        // 4. Pressure breach pauses EMA, resets ema_resume_dwell, and matches lock_flags 100%.
+        let frozen_base = state.baseline_pressure_q15;
+        let sig_breach = BoundarySignal::from_partition(lp_calm, 30_000, 0, 4, 41);
+        let fb_breach = state.step(&bounds, &sig_breach);
+        assert_eq!(state.baseline_pressure_q15, frozen_base);
+        assert_eq!(state.ema_resume_dwell, 0);
+        assert_ne!(state.envelope_flags & ENVELOPE_FLAG_EMA_PAUSED, 0);
+        assert_ne!(fb_breach.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+        assert_eq!(fb_breach.lock_flags, state.lock_flags());
+
+        // 5. Calm steps hold EMA paused until dwell == ema_resume_dwell_target (3), then resume.
+        let sig_pull = BoundarySignal::from_partition(lp_calm, 12_000, 0, 4, 42);
+        let fb_d1 = state.step(&bounds, &sig_pull);
+        assert_eq!(state.ema_resume_dwell, 1);
+        assert_eq!(state.baseline_pressure_q15, frozen_base);
+        assert_ne!(fb_d1.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+        assert_eq!(fb_d1.lock_flags, state.lock_flags());
+
+        let fb_d2 = state.step(&bounds, &sig_pull);
+        assert_eq!(state.ema_resume_dwell, 2);
+        assert_eq!(state.baseline_pressure_q15, frozen_base);
+        assert_ne!(fb_d2.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+        assert_eq!(fb_d2.lock_flags, state.lock_flags());
+
+        let fb_d3 = state.step(&bounds, &sig_pull);
+        assert_eq!(state.ema_resume_dwell, 3);
+        assert!(state.baseline_pressure_q15 < frozen_base);
+        assert_eq!(fb_d3.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+        assert_eq!(fb_d3.lock_flags, state.lock_flags());
+
+        // 6. Unobserved & Undefined signals pause EMA and reset dwell without corrupting baseline.
+        let after_resume = state.baseline_pressure_q15;
+        let sig_unobs = BoundarySignal::from_partition(lp_unobs, 0, 0, 0, 45);
+        let fb_unobs = state.step(&bounds, &sig_unobs);
+        assert_eq!(state.baseline_pressure_q15, after_resume);
+        assert_eq!(state.ema_resume_dwell, 0);
+        assert_ne!(fb_unobs.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+        assert_eq!(
+            fb_unobs.lock_flags & ENVELOPE_LOCK_EMA_PAUSED,
+            state.lock_flags() & ENVELOPE_LOCK_EMA_PAUSED
+        );
+
+        let sig_fault = BoundarySignal::from_partition(lp_fault, 15_000, 0, 0, 46);
+        let fb_fault = state.step(&bounds, &sig_fault);
+        assert_eq!(state.baseline_pressure_q15, after_resume);
+        assert_eq!(state.ema_resume_dwell, 0);
+        assert_ne!(fb_fault.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+        assert_ne!(fb_fault.lock_flags & ENVELOPE_LOCK_FAULT_ISOLATED, 0);
+        assert_eq!(fb_fault.lock_flags, state.lock_flags());
+
+        // 7. seed_baseline_pressure_q15 and reset_preserving_pin_floor invariants.
+        state.apply_host_pin_floor(1 << 4);
+        state.reset_preserving_pin_floor();
+        assert_eq!(state.baseline_pressure_q15, 0);
+        assert_eq!(state.ema_resume_dwell, 0);
+        assert_eq!(state.envelope_flags, 0);
+        assert_ne!(state.baseline_pinned_compute_mask & (1 << 4), 0);
+
+        state.seed_baseline_pressure_q15(13_500, &bounds);
+        assert_eq!(state.baseline_pressure_q15, 13_500);
+        assert_eq!(state.ema_resume_dwell, bounds.ema_resume_dwell_target);
+        assert_eq!(state.envelope_flags, ENVELOPE_FLAG_EMA_INITIALIZED);
     }
 }

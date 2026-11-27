@@ -729,5 +729,126 @@ fn test_config_spine_policy_propagation_and_configure_spine() {
         let inplace = uninit.assume_init_ref();
         assert_eq!(inplace.system_spine().guard_hold_tokens, 5);
         assert_eq!(inplace.system_spine().max_observe_stride, 1);
+        assert_eq!(*inplace.envelope_bounds(), EnvelopeBounds::new());
     }
+}
+
+#[test]
+fn test_decode_control_envelope_ema_unobserved_stride_and_snapshot_bounds_roundtrip() {
+    let mut ctx = RuntimeContext::new(Config::new()).unwrap();
+    let custom_bounds = EnvelopeBounds {
+        pressure_ceiling_q15: 24_000,
+        pressure_floor_q15: 4_000,
+        min_baseline_pressure_q15: 4_000,
+        max_baseline_pressure_q15: 22_000,
+        ema_resume_dwell_target: 3,
+        ema_shift: 2,
+        ..EnvelopeBounds::new()
+    };
+    ctx.configure_envelope_bounds(custom_bounds)
+        .expect("valid bounds");
+    assert_eq!(*ctx.envelope_bounds(), custom_bounds);
+
+    // Invalid bounds rejected fail-closed without mutating active bounds.
+    let mut bad_bounds = custom_bounds;
+    bad_bounds.ema_shift = 8;
+    assert_eq!(
+        ctx.configure_envelope_bounds(bad_bounds),
+        Err(LMNK_ERR_INVALID_ARGUMENT)
+    );
+    assert_eq!(*ctx.envelope_bounds(), custom_bounds);
+
+    // Three-baseline separation: ComputePool Gauge-Zero baseline stays untouched by Envelope EMA.
+    ctx.configure_compute_pool(0x00FF, 0, 0x00FE, 9_500);
+    let pool_base_before = ctx.compute_pool().baseline_pressure_q15;
+    assert_eq!(pool_base_before, 9_500);
+
+    let pressure = SystemPressureReading::default();
+    ctx.begin_turn_spine_policy(false, false);
+
+    // 1. Observed calm steps seed and converge EnvelopeState::baseline_pressure_q15.
+    let _ = ctx.step_decode_control(
+        &SpineDecodeInput::from_observed_entropy_f32(pressure, 0, 0.30, 8, false, true),
+        false,
+    );
+    let seeded_base = ctx.envelope().baseline_pressure_q15;
+    assert!((9_800..=9_900).contains(&seeded_base));
+    assert_ne!(
+        ctx.envelope().envelope_flags & ENVELOPE_FLAG_EMA_INITIALIZED,
+        0
+    );
+    assert_eq!(ctx.envelope().lock_flags() & ENVELOPE_LOCK_EMA_PAUSED, 0);
+
+    for step in 1..=6u16 {
+        let _ = ctx.step_decode_control(
+            &SpineDecodeInput::from_observed_entropy_f32(pressure, step, 0.50, 8, false, true),
+            false,
+        );
+    }
+    let tracked_base = ctx.envelope().baseline_pressure_q15;
+    assert!(tracked_base > seeded_base);
+    assert_eq!(ctx.compute_pool().baseline_pressure_q15, pool_base_before);
+
+    // 2. Unobserved stride never triggers false breach or pulls baseline toward zero.
+    let _ = ctx.step_decode_control(
+        &SpineDecodeInput::unobserved(pressure, 7, 8, false, true),
+        false,
+    );
+    assert_eq!(ctx.envelope().breach_mask, ENVELOPE_BREACH_NONE);
+    assert_eq!(ctx.envelope().baseline_pressure_q15, tracked_base);
+    assert_eq!(ctx.envelope().ema_resume_dwell, 0);
+    assert_ne!(ctx.envelope().lock_flags() & ENVELOPE_LOCK_EMA_PAUSED, 0);
+
+    // 3. High-entropy breach above custom ceiling (24_000 / 32_768 ~ 0.732) triggers recovery,
+    //    pauses EMA, and resets dwell; 3 consecutive calm steps resume EMA tracking.
+    let breach_plan = ctx.step_decode_control(
+        &SpineDecodeInput::from_observed_entropy_f32(pressure, 8, 0.76, 8, false, true),
+        false,
+    );
+    assert_ne!(
+        breach_plan.event_flags & SPINE_STEP_EVENT_INSTABILITY_RECOVERY,
+        0
+    );
+    assert_ne!(ctx.envelope().breach_mask & ENVELOPE_BREACH_PRESSURE, 0);
+    assert_eq!(ctx.envelope().baseline_pressure_q15, tracked_base);
+    assert_eq!(ctx.envelope().ema_resume_dwell, 0);
+    assert_ne!(ctx.envelope().lock_flags() & ENVELOPE_LOCK_EMA_PAUSED, 0);
+
+    for step in 9..=10u16 {
+        let _ = ctx.step_decode_control(
+            &SpineDecodeInput::from_observed_entropy_f32(pressure, step, 0.25, 8, false, true),
+            false,
+        );
+        assert_eq!(ctx.envelope().baseline_pressure_q15, tracked_base);
+        assert_ne!(ctx.envelope().lock_flags() & ENVELOPE_LOCK_EMA_PAUSED, 0);
+    }
+    let _ = ctx.step_decode_control(
+        &SpineDecodeInput::from_observed_entropy_f32(pressure, 11, 0.25, 8, false, true),
+        false,
+    );
+    assert_eq!(ctx.envelope().ema_resume_dwell, 3);
+    assert_eq!(ctx.envelope().lock_flags() & ENVELOPE_LOCK_EMA_PAUSED, 0);
+    assert!(ctx.envelope().baseline_pressure_q15 < tracked_base);
+
+    // 4. RuntimeSnapshot roundtrip preserves both EnvelopeState and custom EnvelopeBounds.
+    let mut snap = [0u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES];
+    let mut req = 0usize;
+    ctx.serialize_to_bytes(&mut snap, &mut req).unwrap();
+    assert_eq!(req, LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES);
+
+    let mut restored = RuntimeContext::new(Config::new()).unwrap();
+    restored.deserialize_from_bytes(&snap).unwrap();
+    assert_eq!(*restored.envelope_bounds(), custom_bounds);
+    assert_eq!(
+        restored.envelope().baseline_pressure_q15,
+        ctx.envelope().baseline_pressure_q15
+    );
+    assert_eq!(
+        restored.envelope().ema_resume_dwell,
+        ctx.envelope().ema_resume_dwell
+    );
+    assert_eq!(
+        restored.envelope().envelope_flags,
+        ctx.envelope().envelope_flags
+    );
 }

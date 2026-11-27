@@ -161,7 +161,9 @@ typedef int32_t lmnk_status_t;
 /* -------------------------------------------------------------------------- */
 #define LMNK_POLICY_FLAG_SPINE (1U << 0)
 #define LMNK_POLICY_FLAG_COMPUTE_POOL (1U << 1)
-#define LMNK_POLICY_KNOWN_FLAGS (LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_COMPUTE_POOL)
+#define LMNK_POLICY_FLAG_ENVELOPE (1U << 2)
+#define LMNK_POLICY_KNOWN_FLAGS \
+    (LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_COMPUTE_POOL | LMNK_POLICY_FLAG_ENVELOPE)
 
 #define LMNK_TURN_FLAG_GUARD_ACTIVE (1U << 0)
 #define LMNK_TURN_FLAG_UNOBSERVED_LOCKED (1U << 1)
@@ -200,10 +202,13 @@ typedef int32_t lmnk_status_t;
 #define LMNK_ENVELOPE_LOCK_UNOBSERVED (1U << 0)
 #define LMNK_ENVELOPE_LOCK_IRREVERSIBLE (1U << 1)
 #define LMNK_ENVELOPE_LOCK_FAULT_ISOLATED (1U << 2)
+#define LMNK_ENVELOPE_LOCK_EMA_PAUSED (1U << 3)
 
 #define LMNK_ENVELOPE_FLAG_CONTRACTED (1U << 0)
 #define LMNK_ENVELOPE_FLAG_RECOVERY_ACTIVE (1U << 1)
-#define LMNK_ENVELOPE_FLAG_KNOWN_MASK 0x03U
+#define LMNK_ENVELOPE_FLAG_EMA_INITIALIZED (1U << 2)
+#define LMNK_ENVELOPE_FLAG_EMA_PAUSED (1U << 3)
+#define LMNK_ENVELOPE_FLAG_KNOWN_MASK 0x0FU
 
 /* -------------------------------------------------------------------------- */
 /* Primitive/Driver attribution, Lacuna states, Scope & Causal constants      */
@@ -910,7 +915,8 @@ struct LMNK_ALIGN_PREFIX(32) lmnk_envelope_bounds {
     uint8_t recovery_gain_q7;
     uint8_t min_aperture_q7;
     uint8_t ema_resume_dwell_target;
-    uint8_t reserved[8];
+    uint8_t ema_shift;
+    uint8_t reserved[7];
 } LMNK_ALIGN_SUFFIX(32);
 typedef struct lmnk_envelope_bounds lmnk_envelope_bounds_t;
 
@@ -973,7 +979,13 @@ typedef struct lmnk_runtime_policy {
     uint8_t guard_hold_tokens;
     uint8_t max_observe_stride;
     uint8_t pre_bypass_enabled;
-    uint8_t reserved[19];
+    uint8_t ema_resume_dwell_target;
+    uint16_t envelope_min_baseline_pressure_q15;
+    uint16_t envelope_max_baseline_pressure_q15;
+    uint16_t envelope_pressure_ceiling_q15;
+    uint16_t envelope_pressure_floor_q15;
+    uint8_t envelope_ema_shift;
+    uint8_t reserved[9];
 } lmnk_runtime_policy_t;
 
 typedef struct lmnk_turn_begin_params {
@@ -1210,7 +1222,19 @@ LMNK_STATIC_ASSERT(offsetof(lmnk_abi_info_t, capability_flags) == 24,
 LMNK_STATIC_ASSERT(sizeof(lmnk_runtime_policy_t) == 64, "lmnk_runtime_policy_t must be 64 bytes");
 LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, baseline_pressure_q15) == 40,
                    "lmnk_runtime_policy_t baseline_pressure_q15 offset mismatch");
-LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, reserved) == 45,
+LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, ema_resume_dwell_target) == 45,
+                   "lmnk_runtime_policy_t ema_resume_dwell_target offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, envelope_min_baseline_pressure_q15) == 46,
+                   "lmnk_runtime_policy_t envelope_min_baseline_pressure_q15 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, envelope_max_baseline_pressure_q15) == 48,
+                   "lmnk_runtime_policy_t envelope_max_baseline_pressure_q15 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, envelope_pressure_ceiling_q15) == 50,
+                   "lmnk_runtime_policy_t envelope_pressure_ceiling_q15 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, envelope_pressure_floor_q15) == 52,
+                   "lmnk_runtime_policy_t envelope_pressure_floor_q15 offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, envelope_ema_shift) == 54,
+                   "lmnk_runtime_policy_t envelope_ema_shift offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_runtime_policy_t, reserved) == 55,
                    "lmnk_runtime_policy_t reserved offset mismatch");
 LMNK_STATIC_ASSERT(sizeof(lmnk_turn_begin_params_t) == 16,
                    "lmnk_turn_begin_params_t must be 16 bytes");
@@ -1264,6 +1288,10 @@ LMNK_STATIC_ASSERT(offsetof(lmnk_boundary_signal_t, epoch_id) == 28,
 LMNK_STATIC_ASSERT(sizeof(lmnk_envelope_bounds_t) == 32, "lmnk_envelope_bounds_t must be 32 bytes");
 LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_envelope_bounds_t) == 32,
                    "lmnk_envelope_bounds_t must be 32-byte aligned");
+LMNK_STATIC_ASSERT(offsetof(lmnk_envelope_bounds_t, ema_shift) == 24,
+                   "lmnk_envelope_bounds_t ema_shift offset mismatch");
+LMNK_STATIC_ASSERT(offsetof(lmnk_envelope_bounds_t, reserved) == 25,
+                   "lmnk_envelope_bounds_t reserved offset mismatch");
 LMNK_STATIC_ASSERT(sizeof(lmnk_envelope_feedback_t) == 16,
                    "lmnk_envelope_feedback_t must be 16 bytes");
 LMNK_STATIC_ASSERT(LMNK_ALIGNOF(lmnk_envelope_feedback_t) == 16,

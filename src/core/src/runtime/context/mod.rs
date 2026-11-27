@@ -11,7 +11,7 @@
 
 use crate::drivers::{
     AnonymousComputePool, DistortionTension, EgoDifferentialNet, EntropyController, EntropyState,
-    EnvelopeState, LiminalEgoState, SystemSpineState,
+    EnvelopeBounds, EnvelopeState, LiminalEgoState, SystemSpineState,
 };
 use crate::foundation::{
     DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, Pod, branchless_clamp_f32,
@@ -379,8 +379,8 @@ pub const LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES: usize = 448;
 pub const LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES: usize = 576;
 
 /// Compact derived configuration fields split out of [`Config`] (`24 B, align(8)`) so
-/// [`RuntimeContext`] embeds [`EnvelopeState`] (`@ 320`) and [`SystemSpineState`] (`@ 384`)
-/// while preserving its exact 5,120-byte L1D footprint.
+/// [`RuntimeContext`] embeds [`EnvelopeState`] (`@ 320`), [`SystemSpineState`] (`@ 384`), and
+/// [`EnvelopeBounds`] (`@ 416`) while preserving its exact 5,184-byte L1D footprint.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct DerivedRuntimeConfig {
@@ -472,6 +472,7 @@ pub struct RuntimeContext {
     entropy_controller: EntropyController,
     envelope: EnvelopeState,
     system_spine: SystemSpineState,
+    envelope_bounds: EnvelopeBounds,
     last_horizon: EpistemicHorizonReading,
     last_overlap_report: OverlapDiscoveryReport,
     distortion_tension: DistortionTension,
@@ -496,13 +497,15 @@ pub struct RuntimeContext {
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<RuntimeContext>() == 5120);
+    assert!(core::mem::size_of::<RuntimeContext>() == 5184);
     assert!(core::mem::align_of::<RuntimeContext>() == 64);
     assert!(core::mem::offset_of!(RuntimeContext, raw_config) == 0);
     assert!(core::mem::offset_of!(RuntimeContext, envelope) == 320);
     assert!(core::mem::offset_of!(RuntimeContext, system_spine) == 384);
-    assert!(core::mem::offset_of!(RuntimeContext, derived_config) == 560);
-    assert!(core::mem::offset_of!(RuntimeContext, telemetry) == 4544);
+    assert!(core::mem::offset_of!(RuntimeContext, envelope_bounds) == 416);
+    assert!(core::mem::offset_of!(RuntimeContext, derived_config) == 592);
+    assert!(core::mem::offset_of!(RuntimeContext, allocation_mode) == 654);
+    assert!(core::mem::offset_of!(RuntimeContext, telemetry) == 4608);
     assert!(!core::mem::needs_drop::<RuntimeContext>());
 };
 
@@ -545,6 +548,7 @@ impl RuntimeContext {
             entropy_controller: entropy_ctrl,
             envelope: EnvelopeState::new(),
             system_spine,
+            envelope_bounds: EnvelopeBounds::new(),
             last_horizon: EpistemicHorizonReading::default(),
             last_overlap_report: OverlapDiscoveryReport::default(),
             distortion_tension: DistortionTension::default(),
@@ -628,6 +632,10 @@ impl RuntimeContext {
                 ),
             );
             core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).envelope_bounds),
+                EnvelopeBounds::new(),
+            );
+            core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).last_horizon),
                 EpistemicHorizonReading::default(),
             );
@@ -697,7 +705,7 @@ impl RuntimeContext {
     }
 
     /// Allocates and initializes a [`RuntimeContext`] directly on the heap via `Box::new_uninit`
-    /// without staging the 5,120-byte structure on the caller's stack.
+    /// without staging the 5,184-byte structure on the caller's stack.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `config` violates architectural invariants or
@@ -715,7 +723,7 @@ impl RuntimeContext {
         }
     }
 
-    /// Scrubs all 5,120 bytes of a raw [`RuntimeContext`] pointer via volatile zeroization without
+    /// Scrubs all 5,184 bytes of a raw [`RuntimeContext`] pointer via volatile zeroization without
     /// creating any intermediate Rust reference (preserving Stacked Borrows provenance for FFI teardown).
     ///
     /// # Safety
@@ -743,11 +751,11 @@ impl RuntimeContext {
         unsafe { core::ptr::addr_of!((*ptr).allocation_mode).read() }
     }
 
-    /// Scrubs all 5,120 bytes of this [`RuntimeContext`] via volatile zeroization and restores valid
+    /// Scrubs all 5,184 bytes of this [`RuntimeContext`] via volatile zeroization and restores valid
     /// empty enum discriminants so the reference remains structurally valid without drop glue.
     pub fn zeroize_in_place(&mut self) {
         let raw = core::ptr::from_mut(self);
-        // SAFETY: `raw` derives from a uniquely borrowed 5,120-byte `RuntimeContext` with `!needs_drop`
+        // SAFETY: `raw` derives from a uniquely borrowed 5,184-byte `RuntimeContext` with `!needs_drop`
         // and is never re-borrowed through `self` after `zeroize_raw`. Recursive field audit confirms
         // `EntropyController.is_active: bool` (`false`), `CoreTelemetryBank.ema_initialized: bool`
         // (`false`), `ComputePressureRegime::Quiescent = 0`, `TelemetryVerbosityMode::Coarse = 0`,

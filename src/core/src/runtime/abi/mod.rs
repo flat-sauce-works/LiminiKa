@@ -216,7 +216,8 @@ mod tests {
                     recovery_gain_q7: 0,
                     min_aperture_q7: 255,
                     ema_resume_dwell_target: 0,
-                    reserved: [0; 8],
+                    ema_shift: 0,
+                    reserved: [0; 7],
                 },
                 signal: sig_out,
                 ..Default::default()

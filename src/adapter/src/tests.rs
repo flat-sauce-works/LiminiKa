@@ -3004,7 +3004,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
 fn adapter_embeds_boxed_runtime_context_with_drop_and_spine_pin_floor() {
     use liminika_core::runtime::RuntimeContext;
 
-    assert_eq!(core::mem::size_of::<RuntimeContext>(), 5120);
+    assert_eq!(core::mem::size_of::<RuntimeContext>(), 5184);
     assert_eq!(core::mem::align_of::<RuntimeContext>(), 64);
     assert!(!core::mem::needs_drop::<RuntimeContext>());
     assert!(core::mem::needs_drop::<ModelSteeringAdapter>());

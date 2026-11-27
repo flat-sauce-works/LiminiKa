@@ -14,8 +14,9 @@ use std::io::Read;
 use std::path::Path;
 
 use liminika_core::drivers::{
-    EnvelopeState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_KNOWN_MASK,
-    SPINE_CONTROL_KNOWN_FLAGS, SPINE_ENTROPY_Q15_ONE, SystemSpineState,
+    EnvelopeBounds, EnvelopeState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_CONTROL_KNOWN_FLAGS, SPINE_ENTROPY_Q15_ONE,
+    SystemSpineState,
 };
 use liminika_core::foundation::Pod;
 use liminika_core::liminal::{
@@ -51,6 +52,7 @@ const EQUILIBRIUM_META_HEADER_BYTES: usize = 24;
 const EQUILIBRIUM_META_RECORD_BYTES: usize = 20;
 const SNAPSHOT_SPINE_PAYLOAD_OFFSET: usize = 320;
 const SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET: usize = 352;
+const SNAPSHOT_ENVELOPE_BOUNDS_PAYLOAD_OFFSET: usize = 416;
 const SNAPSHOT_SLOT_PINNED_MASK_OFFSET: usize = 21;
 const SNAPSHOT_STEP_COUNTER_OFFSET: usize = 0;
 
@@ -383,6 +385,13 @@ impl EquilibriumState {
     pub fn snapshot_envelope_state(&self) -> Option<EnvelopeState> {
         let payload = self.runtime_snapshot.as_ref()?;
         EnvelopeState::read_unaligned_from(payload, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET).ok()
+    }
+
+    /// Extracts the persisted [`EnvelopeBounds`] from the stored snapshot payload, if present.
+    #[must_use]
+    pub fn snapshot_envelope_bounds(&self) -> Option<EnvelopeBounds> {
+        let payload = self.runtime_snapshot.as_ref()?;
+        EnvelopeBounds::read_unaligned_from(payload, SNAPSHOT_ENVELOPE_BOUNDS_PAYLOAD_OFFSET).ok()
     }
 
     /// Executes one bounded working-set step through the embedded [`AnchorWorkingSetPager`].
@@ -1063,6 +1072,16 @@ fn validate_snapshot_payload(
             "EnvelopeState failed range/flag invariant checks".to_string(),
         ));
     }
+    let bounds =
+        EnvelopeBounds::read_unaligned_from(&payload, SNAPSHOT_ENVELOPE_BOUNDS_PAYLOAD_OFFSET)
+            .map_err(|_| {
+                EquilibriumError::SnapshotInvalid("failed to decode EnvelopeBounds".to_string())
+            })?;
+    if !bounds.validate_invariants() {
+        return Err(EquilibriumError::SnapshotInvalid(
+            "EnvelopeBounds failed range/ordering invariant checks".to_string(),
+        ));
+    }
     Ok(payload)
 }
 
@@ -1131,6 +1150,20 @@ fn reconcile_snapshot_payloads(
             EquilibriumError::SnapshotInvalid("corrupt incoming EnvelopeState".to_string())
         })?;
 
+    let cur_bounds =
+        EnvelopeBounds::read_unaligned_from(cur, SNAPSHOT_ENVELOPE_BOUNDS_PAYLOAD_OFFSET).map_err(
+            |_| EquilibriumError::SnapshotInvalid("corrupt current EnvelopeBounds".to_string()),
+        )?;
+    let inc_bounds =
+        EnvelopeBounds::read_unaligned_from(inc, SNAPSHOT_ENVELOPE_BOUNDS_PAYLOAD_OFFSET).map_err(
+            |_| EquilibriumError::SnapshotInvalid("corrupt incoming EnvelopeBounds".to_string()),
+        )?;
+    if !cur_bounds.validate_invariants() || !inc_bounds.validate_invariants() {
+        return Err(EquilibriumError::SnapshotInvalid(
+            "EnvelopeBounds failed invariant checks during reconciliation".to_string(),
+        ));
+    }
+
     let cur_steps = read_u64_le_at(cur, SNAPSHOT_STEP_COUNTER_OFFSET);
     let inc_steps = read_u64_le_at(inc, SNAPSHOT_STEP_COUNTER_OFFSET);
     let take_incoming = if prefer_incoming {
@@ -1141,6 +1174,11 @@ fn reconcile_snapshot_payloads(
 
     let mut out = if take_incoming { *inc } else { *cur };
     let mut merged_spine = if take_incoming { inc_spine } else { cur_spine };
+    let winner_bounds = if take_incoming {
+        inc_bounds
+    } else {
+        cur_bounds
+    };
     if merged_spine.max_observe_stride == 0 {
         merged_spine.max_observe_stride = 1;
     }
@@ -1173,6 +1211,11 @@ fn reconcile_snapshot_payloads(
         .write_unaligned_to(&mut out, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
         .map_err(|_| {
             EquilibriumError::SnapshotInvalid("failed to write merged EnvelopeState".to_string())
+        })?;
+    winner_bounds
+        .write_unaligned_to(&mut out, SNAPSHOT_ENVELOPE_BOUNDS_PAYLOAD_OFFSET)
+        .map_err(|_| {
+            EquilibriumError::SnapshotInvalid("failed to write winner EnvelopeBounds".to_string())
         })?;
     Ok(out)
 }

@@ -339,7 +339,7 @@ pub unsafe extern "C" fn lmnk_lacuna_partition_eval(
 }
 
 /// Evaluates one standalone Tier-1 safety-envelope constraint step (`0 alloc`, `0 fdiv`)
-/// directly on a 64-byte [`lmnk_envelope_state_t`] without requiring a 5,120-byte `RuntimeContext`.
+/// directly on a 64-byte [`lmnk_envelope_state_t`] without requiring a 5,184-byte `RuntimeContext`.
 ///
 /// Caller must initialize `params->struct_size = sizeof(lmnk_envelope_step_params_t)` (`96`).
 /// When `LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS` is set in `params->flags`, `params->bounds` is

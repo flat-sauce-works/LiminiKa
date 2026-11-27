@@ -8,7 +8,8 @@
 use liminika_adapter::host::{EquilibriumConfig, EquilibriumState};
 use liminika_core::drivers::{
     ENVELOPE_BREACH_NONE, ENVELOPE_BREACH_PRESSURE, ENVELOPE_BREACH_UNDEFINED_FAULT,
-    ENVELOPE_LOCK_FAULT_ISOLATED, EnvelopeBounds, EnvelopeState,
+    ENVELOPE_FLAG_EMA_INITIALIZED, ENVELOPE_LOCK_EMA_PAUSED, ENVELOPE_LOCK_FAULT_ISOLATED,
+    EnvelopeBounds, EnvelopeState,
 };
 use liminika_core::foundation::Pod;
 use liminika_core::liminal::{
@@ -245,4 +246,97 @@ fn scenario5_envelope_attribution_tags_count_cleanly_without_driver_pollution() 
     assert_eq!(snap.attribution_counts[3], 0);
     assert_eq!(snap.attribution_counts[4], 2);
     assert_eq!(snap.attribution_counts[5], 1);
+}
+
+#[test]
+fn scenario6_two_stream_online_ema_convergence_pause_resume_and_bounds_join() {
+    // Stream A: slower shift (ema_shift = 4) and tighter ceiling; experiences a breach then dwells.
+    let mut ctx_a = RuntimeContext::new(Config::new()).expect("ctx_a");
+    let bounds_a = EnvelopeBounds {
+        pressure_ceiling_q15: 25_000,
+        pressure_floor_q15: 4_000,
+        min_baseline_pressure_q15: 4_000,
+        max_baseline_pressure_q15: 22_000,
+        ema_resume_dwell_target: 3,
+        ema_shift: 4,
+        ..EnvelopeBounds::new()
+    };
+    ctx_a.configure_envelope_bounds(bounds_a).expect("bounds_a");
+    let _ = ctx_a.step_envelope(&bounds_a, &build_nominal_signal(10_000, 4, 1));
+    assert_eq!(ctx_a.envelope().baseline_pressure_q15, 10_000);
+    assert_ne!(
+        ctx_a.envelope().envelope_flags & ENVELOPE_FLAG_EMA_INITIALIZED,
+        0
+    );
+    let fb_breach = ctx_a.step_envelope(&bounds_a, &build_nominal_signal(29_000, 4, 2));
+    assert_ne!(fb_breach.breach_mask & ENVELOPE_BREACH_PRESSURE, 0);
+    assert_ne!(fb_breach.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+    assert_eq!(ctx_a.envelope().ema_resume_dwell, 0);
+    assert_eq!(ctx_a.envelope().baseline_pressure_q15, 10_000);
+    for ep in 3..=4_u32 {
+        let fb = ctx_a.step_envelope(&bounds_a, &build_nominal_signal(14_000, 4, ep));
+        assert_ne!(fb.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+        assert_eq!(ctx_a.envelope().baseline_pressure_q15, 10_000);
+    }
+    let fb_resume = ctx_a.step_envelope(&bounds_a, &build_nominal_signal(14_000, 4, 5));
+    assert_eq!(fb_resume.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+    assert!(ctx_a.envelope().baseline_pressure_q15 > 10_000);
+    ctx_a.substrate_mut().step_counter = 12;
+
+    // Stream B (winner): faster shift (ema_shift = 2) converging upward on a steady stream.
+    let mut ctx_b = RuntimeContext::new(Config::new()).expect("ctx_b");
+    let bounds_b = EnvelopeBounds {
+        pressure_ceiling_q15: 26_500,
+        pressure_floor_q15: 5_000,
+        min_baseline_pressure_q15: 5_000,
+        max_baseline_pressure_q15: 24_000,
+        ema_resume_dwell_target: 2,
+        ema_shift: 2,
+        ..EnvelopeBounds::new()
+    };
+    ctx_b.configure_envelope_bounds(bounds_b).expect("bounds_b");
+    let _ = ctx_b.step_envelope(&bounds_b, &build_nominal_signal(8_000, 2, 1));
+    for ep in 2..=8_u32 {
+        let fb = ctx_b.step_envelope(&bounds_b, &build_nominal_signal(16_000, 2, ep));
+        assert_eq!(fb.lock_flags & ENVELOPE_LOCK_EMA_PAUSED, 0);
+    }
+    assert!(ctx_b.envelope().baseline_pressure_q15 > 14_000);
+    ctx_b.substrate_mut().step_counter = 24;
+
+    let mut snap_a = [0_u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES];
+    let mut snap_b = [0_u8; LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES];
+    let mut req = 0_usize;
+    ctx_a.serialize_to_bytes(&mut snap_a, &mut req).expect("a");
+    ctx_b.serialize_to_bytes(&mut snap_b, &mut req).expect("b");
+
+    let cfg = EquilibriumConfig::default();
+    let mut eq_a = EquilibriumState::new(cfg);
+    eq_a.update_runtime_snapshot_from_container(&snap_a)
+        .expect("install a");
+    let mut eq_b = EquilibriumState::new(cfg);
+    eq_b.update_runtime_snapshot_from_container(&snap_b)
+        .expect("install b");
+    assert_eq!(eq_a.snapshot_envelope_bounds(), Some(bounds_a));
+    assert_eq!(eq_b.snapshot_envelope_bounds(), Some(bounds_b));
+
+    let rep = eq_a.join(&eq_b).expect("join streams");
+    assert!(rep.snapshot_updated);
+    // Winner (Stream B) EnvelopeBounds @ 416..448 is inherited with valid invariants.
+    let joined_bounds = eq_a.snapshot_envelope_bounds().expect("joined bounds");
+    assert_eq!(joined_bounds, bounds_b);
+    assert!(joined_bounds.validate_invariants());
+
+    // Roundtrip back into a fresh RuntimeContext restores both EnvelopeState and EnvelopeBounds.
+    let container_576 = eq_a
+        .runtime_snapshot_container_bytes()
+        .expect("576B container");
+    let mut restored = RuntimeContext::new(Config::new()).expect("restored");
+    restored
+        .deserialize_from_bytes(&container_576)
+        .expect("deserialize");
+    assert_eq!(*restored.envelope_bounds(), bounds_b);
+    assert_eq!(
+        restored.envelope().baseline_pressure_q15,
+        ctx_b.envelope().baseline_pressure_q15
+    );
 }

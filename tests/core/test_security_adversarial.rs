@@ -11,7 +11,7 @@
 //!    `num_tokens != 1`, `Rank1Descriptor` `ArenaSpan` overflow, NULL, misalignment, aliasing,
 //!    `usize::MAX`, `NaN`/`Inf`, cross-mode destroy/deinit) + direct Rust API parity.
 //! 4. `EnvelopeState` / `SystemSpineState` privilege isolation & transactional corrupt snapshot rejection.
-//! 5. UAF-free `zeroize_volatile` proof for `5,120`-byte `RuntimeContext` buffers.
+//! 5. UAF-free `zeroize_volatile` proof for `5,184`-byte `RuntimeContext` buffers.
 //! 6. Spine & Envelope ABI alignment/overlap/monotonic pin-floor guards + `0x0000_0400` version policy.
 
 use std::mem::offset_of;
@@ -19,19 +19,19 @@ use std::ptr;
 
 use liminika_core::abi::{
     LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT, LMNK_DECODE_STEP_FLAG_EXTERNAL_GUARD,
-    LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS, LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE,
-    LMNK_RANK1_FLAG_FUSED, LMNK_ROPE_STEER_FLAG_UNCLAMPED, LMNK_TURN_FLAG_GUARD_ACTIVE,
-    LmnkContextHandle, SPINE_DECODE_FLAG_REWARD_OVERRIDE, lmnk_abi_info, lmnk_abi_info_t,
-    lmnk_abi_version_hex, lmnk_abi_version_string, lmnk_boundary_emit_params_t,
-    lmnk_boundary_signal_t, lmnk_config_init_default, lmnk_config_t, lmnk_config_validate,
-    lmnk_container_find_section, lmnk_container_section_view_t, lmnk_container_verify,
-    lmnk_container_verify_report_t, lmnk_container_write, lmnk_container_write_params_t,
-    lmnk_context_begin_turn, lmnk_context_configure_policy, lmnk_context_create,
-    lmnk_context_deinit_in_place, lmnk_context_deserialize, lmnk_context_destroy,
-    lmnk_context_emit_boundary_signal, lmnk_context_get_state, lmnk_context_init_in_place,
-    lmnk_context_reset, lmnk_context_serialize, lmnk_context_step_decode,
-    lmnk_decode_step_params_t, lmnk_decode_step_report_t, lmnk_envelope_bounds_t,
-    lmnk_envelope_feedback_t, lmnk_envelope_state_t, lmnk_envelope_step,
+    LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS, LMNK_POLICY_FLAG_COMPUTE_POOL,
+    LMNK_POLICY_FLAG_ENVELOPE, LMNK_POLICY_FLAG_SPINE, LMNK_RANK1_FLAG_FUSED,
+    LMNK_ROPE_STEER_FLAG_UNCLAMPED, LMNK_TURN_FLAG_GUARD_ACTIVE, LmnkContextHandle,
+    SPINE_DECODE_FLAG_REWARD_OVERRIDE, lmnk_abi_info, lmnk_abi_info_t, lmnk_abi_version_hex,
+    lmnk_abi_version_string, lmnk_boundary_emit_params_t, lmnk_boundary_signal_t,
+    lmnk_config_init_default, lmnk_config_t, lmnk_config_validate, lmnk_container_find_section,
+    lmnk_container_section_view_t, lmnk_container_verify, lmnk_container_verify_report_t,
+    lmnk_container_write, lmnk_container_write_params_t, lmnk_context_begin_turn,
+    lmnk_context_configure_policy, lmnk_context_create, lmnk_context_deinit_in_place,
+    lmnk_context_deserialize, lmnk_context_destroy, lmnk_context_emit_boundary_signal,
+    lmnk_context_get_state, lmnk_context_init_in_place, lmnk_context_reset, lmnk_context_serialize,
+    lmnk_context_step_decode, lmnk_decode_step_params_t, lmnk_decode_step_report_t,
+    lmnk_envelope_bounds_t, lmnk_envelope_feedback_t, lmnk_envelope_state_t, lmnk_envelope_step,
     lmnk_envelope_step_params_t, lmnk_gateway_steer, lmnk_gateway_steer_params_t,
     lmnk_lacuna_eval_params_t, lmnk_lacuna_partition_eval, lmnk_pointer_trail_t, lmnk_q7_t,
     lmnk_rank1_descriptor_t, lmnk_rank1_eval, lmnk_rank1_eval_params_t,
@@ -578,7 +578,7 @@ fn suite3_hostile_c_abi_v040_guards_and_direct_rust_parity() {
         info = lmnk_abi_info_t::default();
         assert_eq!(lmnk_abi_info(&mut info), LMNK_OK);
     }
-    assert_eq!(info.context_size, 5120);
+    assert_eq!(info.context_size, 5184);
     assert_eq!(info.context_align, 64);
 
     let mut cfg = lmnk_config_t::default();
@@ -600,8 +600,8 @@ fn suite3_hostile_c_abi_v040_guards_and_direct_rust_parity() {
     }
 
     // 2. Context lifecycle: cross-mode misuse, double deinit, undersized & usize::MAX serialize/deserialize
-    let mut backing = AlignedBuffer64::<u8, 5120>::new([0u8; 5120]);
-    // SAFETY: Aligned 5120B caller buffer.
+    let mut backing = AlignedBuffer64::<u8, 5184>::new([0u8; 5184]);
+    // SAFETY: Aligned 5184B caller buffer.
     unsafe {
         assert_eq!(
             lmnk_context_init_in_place(
@@ -1194,6 +1194,45 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
                 b[off + 352 + offset_of!(EnvelopeState, envelope_flags)] = 0x80;
             }),
         ),
+        (
+            "All-zero EnvelopeBounds @ 416..448",
+            Box::new(|b, off| {
+                b[off + 416..off + 448].fill(0);
+            }),
+        ),
+        (
+            "Inverted EnvelopeBounds floor > ceiling @ 416",
+            Box::new(|b, off| {
+                let c_pos = off + 416 + offset_of!(lmnk_envelope_bounds_t, pressure_ceiling_q15);
+                let f_pos = off + 416 + offset_of!(lmnk_envelope_bounds_t, pressure_floor_q15);
+                b[c_pos..c_pos + 2].copy_from_slice(&8_000u16.to_le_bytes());
+                b[f_pos..f_pos + 2].copy_from_slice(&12_000u16.to_le_bytes());
+            }),
+        ),
+        (
+            "Inverted EnvelopeBounds min_baseline > max_baseline @ 416",
+            Box::new(|b, off| {
+                let min_pos =
+                    off + 416 + offset_of!(lmnk_envelope_bounds_t, min_baseline_pressure_q15);
+                let max_pos =
+                    off + 416 + offset_of!(lmnk_envelope_bounds_t, max_baseline_pressure_q15);
+                b[min_pos..min_pos + 2].copy_from_slice(&20_000u16.to_le_bytes());
+                b[max_pos..max_pos + 2].copy_from_slice(&10_000u16.to_le_bytes());
+            }),
+        ),
+        (
+            "Out-of-range EnvelopeBounds.pressure_ceiling_q15 > 32768 @ 416",
+            Box::new(|b, off| {
+                let c_pos = off + 416 + offset_of!(lmnk_envelope_bounds_t, pressure_ceiling_q15);
+                b[c_pos..c_pos + 2].copy_from_slice(&40_000u16.to_le_bytes());
+            }),
+        ),
+        (
+            "Out-of-range EnvelopeBounds.ema_shift > 7 @ 416",
+            Box::new(|b, off| {
+                b[off + 416 + offset_of!(lmnk_envelope_bounds_t, ema_shift)] = 8;
+            }),
+        ),
     ];
 
     for (label, mutate) in cases {
@@ -1212,7 +1251,7 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
 }
 
 #[test]
-fn suite5_uaf_free_zeroize_volatile_all_5120_bytes_proof() {
+fn suite5_uaf_free_zeroize_volatile_all_5184_bytes_proof() {
     let mut cfg = lmnk_config_t::default();
     let mut info = lmnk_abi_info_t::default();
     // SAFETY: Stack structs are valid and aligned.
@@ -1221,11 +1260,11 @@ fn suite5_uaf_free_zeroize_volatile_all_5120_bytes_proof() {
         assert_eq!(lmnk_config_init_default(&mut cfg), LMNK_OK);
     }
     let req = info.context_size as usize;
-    assert_eq!(req, 5120);
-    let mut backing = AlignedBuffer64::<u8, 5120>::new([0xAA; 5120]);
+    assert_eq!(req, 5184);
+    let mut backing = AlignedBuffer64::<u8, 5184>::new([0xAA; 5184]);
     let mem_ptr = backing.as_mut_slice().as_mut_ptr();
 
-    // SAFETY: Caller-owned 64B-aligned 5,120B buffer initialized and scrubbed via C-ABI.
+    // SAFETY: Caller-owned 64B-aligned 5,184B buffer initialized and scrubbed via C-ABI.
     unsafe {
         assert_eq!(lmnk_context_init_in_place(&cfg, mem_ptr, req), LMNK_OK);
         let ctx_handle = mem_ptr.cast::<liminika_core::abi::LmnkContextOpaque>();
@@ -1244,7 +1283,7 @@ fn suite5_uaf_free_zeroize_volatile_all_5120_bytes_proof() {
     }
     assert!(
         backing.as_slice().iter().all(|&b| b == 0x00),
-        "all 5,120 bytes must equal 0x00 after lmnk_context_deinit_in_place"
+        "all 5,184 bytes must equal 0x00 after lmnk_context_deinit_in_place"
     );
 
     let mut ctx = RuntimeContext::new_boxed(Config::new()).expect("boxed ctx");
@@ -1256,6 +1295,7 @@ fn suite5_uaf_free_zeroize_volatile_all_5120_bytes_proof() {
     assert!(ctx.core_layers().as_bytes().iter().all(|&b| b == 0x00));
     assert!(ctx.envelope().as_bytes().iter().all(|&b| b == 0x00));
     assert!(ctx.system_spine().as_bytes().iter().all(|&b| b == 0x00));
+    assert!(ctx.envelope_bounds().as_bytes().iter().all(|&b| b == 0x00));
     assert!(ctx.substrate().as_bytes().iter().all(|&b| b == 0x00));
     assert_eq!(ctx.compute_pool().active_mask, 0);
     assert_eq!(ctx.ego_differential_net().active_node_mask, 0);
@@ -1272,7 +1312,7 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
 
     let mut backing = AlignedBuffer64::<u8, 5248>::new([0u8; 5248]);
     let base_ptr = backing.as_mut_slice().as_mut_ptr();
-    let req_size = 5120usize;
+    let req_size = 5184usize;
 
     // SAFETY: Exercising hostile NULL, misaligned, struct_size, and overlapping pointers.
     unsafe {
@@ -1342,12 +1382,76 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
             LMNK_ERR_ALIGNMENT
         );
 
-        // Overlapping `state_out` inside the 5,120 B `context` buffer must fail.
+        // Overlapping `state_out` inside the 5,184 B `context` buffer must fail.
         let overlap_state_out = base_ptr.add(384).cast::<lmnk_runtime_state_view_t>();
         assert_eq!(
             lmnk_context_get_state(ctx_handle, overlap_state_out),
             LMNK_ERR_INVALID_ARGUMENT
         );
+
+        // Transactional fail-closed checks for LMNK_POLICY_FLAG_ENVELOPE:
+        // any invalid envelope field must return INVALID_ARGUMENT without mutating 1 bit of context.
+        let mut before_bad_env = lmnk_runtime_state_view_t::default();
+        assert_eq!(
+            lmnk_context_get_state(ctx_handle, &mut before_bad_env),
+            LMNK_OK
+        );
+        let invalid_env_policies = [
+            lmnk_runtime_policy_t {
+                flags: LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_ENVELOPE,
+                guard_hold_tokens: 9,
+                envelope_ema_shift: 8,
+                ..Default::default()
+            },
+            lmnk_runtime_policy_t {
+                flags: LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_ENVELOPE,
+                guard_hold_tokens: 9,
+                envelope_pressure_ceiling_q15: 0,
+                envelope_pressure_floor_q15: 4_000,
+                ..Default::default()
+            },
+            lmnk_runtime_policy_t {
+                flags: LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_ENVELOPE,
+                guard_hold_tokens: 9,
+                envelope_max_baseline_pressure_q15: 0,
+                envelope_min_baseline_pressure_q15: 4_000,
+                ..Default::default()
+            },
+            lmnk_runtime_policy_t {
+                flags: LMNK_POLICY_FLAG_ENVELOPE,
+                envelope_pressure_ceiling_q15: 10_000,
+                envelope_pressure_floor_q15: 12_000,
+                ..Default::default()
+            },
+            lmnk_runtime_policy_t {
+                flags: LMNK_POLICY_FLAG_ENVELOPE,
+                envelope_min_baseline_pressure_q15: 20_000,
+                envelope_max_baseline_pressure_q15: 15_000,
+                ..Default::default()
+            },
+            lmnk_runtime_policy_t {
+                flags: LMNK_POLICY_FLAG_ENVELOPE,
+                envelope_pressure_ceiling_q15: 32_769,
+                ..Default::default()
+            },
+            lmnk_runtime_policy_t {
+                flags: LMNK_POLICY_FLAG_ENVELOPE,
+                envelope_max_baseline_pressure_q15: 32_769,
+                ..Default::default()
+            },
+        ];
+        for bad_pol in &invalid_env_policies {
+            assert_eq!(
+                lmnk_context_configure_policy(ctx_handle, bad_pol),
+                LMNK_ERR_INVALID_ARGUMENT
+            );
+            let mut after_bad_env = lmnk_runtime_state_view_t::default();
+            assert_eq!(
+                lmnk_context_get_state(ctx_handle, &mut after_bad_env),
+                LMNK_OK
+            );
+            assert_eq!(after_bad_env, before_bad_env);
+        }
 
         // Monotonic non-strippable host pin floor
         assert_eq!(
@@ -1604,6 +1708,34 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
                 &lmnk_envelope_step_params_t {
                     flags: 0,
                     bounds: bad_bounds,
+                    signal: sig_out,
+                    ..Default::default()
+                },
+                &mut env_fb
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_envelope_step(
+                &mut env_state,
+                &lmnk_envelope_step_params_t {
+                    flags: 0,
+                    bounds: lmnk_envelope_bounds_t::zeroed(),
+                    signal: sig_out,
+                    ..Default::default()
+                },
+                &mut env_fb
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        let mut bad_shift_bounds = lmnk_envelope_bounds_t::new();
+        bad_shift_bounds.ema_shift = 8;
+        assert_eq!(
+            lmnk_envelope_step(
+                &mut env_state,
+                &lmnk_envelope_step_params_t {
+                    flags: 0,
+                    bounds: bad_shift_bounds,
                     signal: sig_out,
                     ..Default::default()
                 },

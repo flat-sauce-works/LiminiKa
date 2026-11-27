@@ -260,11 +260,12 @@ pub unsafe extern "C" fn lmnk_context_reset(context: LmnkContextHandle) -> LmnkS
     })
 }
 
-/// Configures runtime spine and/or anonymous compute pool policies atomically (`0 alloc`).
+/// Configures runtime spine, anonymous compute pool, and/or safety-envelope EMA policies
+/// atomically (`0 alloc`, transactional fail-closed validation).
 ///
-/// Controlled by `policy->flags` (`LMNK_POLICY_FLAG_SPINE`, `LMNK_POLICY_FLAG_COMPUTE_POOL`).
-/// When both flags are set, spine pin floors are applied first and compute-pool masks are clamped
-/// against the updated floor, guaranteeing identical commutative behavior regardless of call order.
+/// Controlled by `policy->flags` (`LMNK_POLICY_FLAG_SPINE`, `LMNK_POLICY_FLAG_COMPUTE_POOL`,
+/// `LMNK_POLICY_FLAG_ENVELOPE`). All candidate invariants are verified before mutating `context`,
+/// ensuring zero partial updates on error.
 ///
 /// # Safety
 /// `context` (64B aligned) and `policy` must be non-null, naturally aligned, and disjoint.
@@ -293,6 +294,42 @@ pub unsafe extern "C" fn lmnk_context_configure_policy(
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
 
+        // Transactional validation before mutating any state on `ctx`.
+        let candidate_bounds = if (pol.flags & LMNK_POLICY_FLAG_ENVELOPE) != 0 {
+            let mut cand = *ctx.envelope_bounds();
+            if pol.envelope_pressure_ceiling_q15 == 0 {
+                if pol.envelope_pressure_floor_q15 != 0 {
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
+                }
+            } else {
+                cand.pressure_ceiling_q15 = pol.envelope_pressure_ceiling_q15;
+                cand.pressure_floor_q15 = pol.envelope_pressure_floor_q15;
+            }
+            if pol.envelope_max_baseline_pressure_q15 == 0 {
+                if pol.envelope_min_baseline_pressure_q15 != 0 {
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
+                }
+            } else {
+                cand.min_baseline_pressure_q15 = pol.envelope_min_baseline_pressure_q15;
+                cand.max_baseline_pressure_q15 = pol.envelope_max_baseline_pressure_q15;
+            }
+            if pol.ema_resume_dwell_target > 0 {
+                cand.ema_resume_dwell_target = pol.ema_resume_dwell_target;
+            }
+            if pol.envelope_ema_shift > 0 {
+                if pol.envelope_ema_shift > 7 {
+                    return Err(LMNK_ERR_INVALID_ARGUMENT);
+                }
+                cand.ema_shift = pol.envelope_ema_shift;
+            }
+            if !cand.validate_invariants() {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            }
+            Some(cand)
+        } else {
+            None
+        };
+
         if (pol.flags & LMNK_POLICY_FLAG_SPINE) != 0 {
             ctx.configure_spine(
                 pol.baseline_pinned_compute_mask,
@@ -308,6 +345,9 @@ pub unsafe extern "C" fn lmnk_context_configure_policy(
                 pol.reversible_compute_mask,
                 pol.baseline_pressure_q15,
             );
+        }
+        if let Some(bounds) = candidate_bounds {
+            ctx.configure_envelope_bounds(bounds)?;
         }
         Ok(LMNK_OK)
     })

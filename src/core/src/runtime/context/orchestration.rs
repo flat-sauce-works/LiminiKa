@@ -7,15 +7,16 @@ use super::{
     CoreStateStack, Result, RuntimeContext, abi_version, abi_version_string, query_capability,
 };
 use crate::drivers::{
-    DistortionTension, EgoDifferentialNet, EntropyState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
-    SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID, SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT,
-    SPINE_ENTROPY_CALM_THRESH_Q15, SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE,
-    SPINE_ENTROPY_REWARD_LOW_THRESH_Q15, SPINE_ENTROPY_SURGE_THRESH_Q15,
-    SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN,
-    SPINE_STEP_EVENT_GUARD_REESCALATED, SPINE_STEP_EVENT_INSTABILITY_RECOVERY,
-    SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED, SPINE_STEP_EVENT_NONE,
-    SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED, SpineDecodeSignal, SpineStepPlan, SystemSpineState,
-    TokenBypassObservation,
+    DistortionTension, ENVELOPE_BREACH_NONE, ENVELOPE_BREACH_PRESSURE,
+    ENVELOPE_FLAG_EMA_INITIALIZED, EgoDifferentialNet, EntropyState,
+    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID,
+    SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT, SPINE_ENTROPY_CALM_THRESH_Q15,
+    SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE, SPINE_ENTROPY_REWARD_LOW_THRESH_Q15,
+    SPINE_ENTROPY_SURGE_THRESH_Q15, SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_SENTINEL_AUTO_U8,
+    SPINE_STEP_EVENT_BOUNDARY_CHURN, SPINE_STEP_EVENT_GUARD_REESCALATED,
+    SPINE_STEP_EVENT_INSTABILITY_RECOVERY, SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED,
+    SPINE_STEP_EVENT_NONE, SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED, SpineDecodeSignal,
+    SpineStepPlan, SystemSpineState, TokenBypassObservation,
 };
 use crate::foundation::{
     ACTION_MODE_LAYER_SKIP, ACTION_MODE_SUBHEAD_ROUTE, AlignedBuffer16, AlignedSlice16,
@@ -23,9 +24,14 @@ use crate::foundation::{
     branchless_max_f32, branchless_min_f32, store_q7_words_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    AttributionTag, BitCut8, DriverKind, EpistemicRegime, LMNK_ERR_INVALID_ARGUMENT, Lacuna,
-    LacunaPartition8, MAX_ATTENTION_HEADS, PrimitiveKind, RuntimeConfig, Scoped,
-    branchless_select_f32, branchless_select_u8, branchless_select_u32, branchless_select_u64,
+    AttributionTag, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, BOUNDARY_SIGNAL_FLAG_FAULT,
+    BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT, BOUNDARY_SIGNAL_FLAG_OBSERVED,
+    BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BitCut8, BoundarySignal, DriverKind, EpistemicRegime,
+    LACUNA_PARTITION_FLAG_HAS_UNDEFINED_BOTTOM, LACUNA_PARTITION_FLAG_SANDBOX_ELIGIBLE,
+    LACUNA_PARTITION_FLAG_SELF_ALIGNED, LACUNA_PARTITION_FLAG_UNOBSERVED_APERTURE_ZERO,
+    LMNK_ERR_INVALID_ARGUMENT, Lacuna, LacunaPartition8, MAX_ATTENTION_HEADS, PrimitiveKind,
+    RuntimeConfig, Scoped, branchless_select_f32, branchless_select_u8, branchless_select_u16,
+    branchless_select_u32, branchless_select_u64,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
@@ -225,6 +231,7 @@ impl RuntimeContext {
         external_guard_active: bool,
     ) -> SpineStepPlan {
         const Q15_TO_F32: f32 = 1.0_f32 / 32_768.0_f32;
+        const ENVELOPE_RELATIVE_SURGE_DELTA_Q15: u16 = 11_469; // ~0.35 above initialized H0
 
         let step_was_whole_bypass = self.system_spine.whole_token_bypass_active != 0;
         let lacuna = signal.exit_entropy_lacuna();
@@ -262,7 +269,7 @@ impl RuntimeContext {
         self.telemetry
             .record_decode_residency(step_was_whole_bypass, churn);
 
-        let entropy_surge = match lacuna {
+        let mut entropy_surge = match lacuna {
             Lacuna::SelfRef | Lacuna::Exterior => {
                 let ent_q15 = signal
                     .observed_exit_entropy_q15()
@@ -306,6 +313,76 @@ impl RuntimeContext {
             }
         };
 
+        // Stage 1b: Step Lv.3 `EnvelopeState` branchlessly over a 32-byte `BoundarySignal`
+        // (`0 alloc`, `0 fdiv`), leaving `BOUNDARY_SIGNAL_FLAG_OBSERVED` clear on unobserved strides.
+        let env_observed = matches!(lacuna, Lacuna::SelfRef | Lacuna::Exterior);
+        let env_fault = matches!(lacuna, Lacuna::Undefined);
+        let env_exterior = matches!(lacuna, Lacuna::Exterior) | eff_repulsion;
+        let env_unobserved = (!env_observed) & (!env_fault);
+        let env_stationary = matches!(lacuna, Lacuna::SelfRef) & (!eff_repulsion) & (sens_q7 < 80);
+        let env_irrev = (signal.pressure_reading().irreversible_step != 0)
+            | (self.envelope.irreversible_step_lock != 0);
+        let raw_ent_q15 = signal
+            .observed_exit_entropy_q15()
+            .min(SPINE_ENTROPY_Q15_ONE);
+        let env_pressure_q15 = branchless_select_u16(env_observed, raw_ent_q15, 0);
+        let env_delta_q15 = branchless_select_u16(
+            env_observed,
+            raw_ent_q15
+                .abs_diff(self.envelope.last_pressure_q15)
+                .min(SPINE_ENTROPY_Q15_ONE),
+            0,
+        );
+        let env_chatter_q7 = (self.last_boundary_delta.chatter_potential_u8 >> 1).min(128);
+        let env_part_flags =
+            branchless_select_u8(env_exterior, LACUNA_PARTITION_FLAG_SANDBOX_ELIGIBLE, 0)
+                | branchless_select_u8(
+                    env_unobserved,
+                    LACUNA_PARTITION_FLAG_UNOBSERVED_APERTURE_ZERO,
+                    0,
+                )
+                | branchless_select_u8(env_fault, LACUNA_PARTITION_FLAG_HAS_UNDEFINED_BOTTOM, 0)
+                | branchless_select_u8(env_stationary, LACUNA_PARTITION_FLAG_SELF_ALIGNED, 0);
+        let env_sig_flags = branchless_select_u8(env_observed, BOUNDARY_SIGNAL_FLAG_OBSERVED, 0)
+            | branchless_select_u8(env_fault, BOUNDARY_SIGNAL_FLAG_FAULT, 0)
+            | branchless_select_u8(env_exterior, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, 0)
+            | branchless_select_u8(env_stationary, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, 0)
+            | branchless_select_u8(env_irrev, BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT, 0);
+        let env_sig = BoundarySignal {
+            partition: LacunaPartition8 {
+                boundary_sensitivity_q7: sens_q7,
+                partition_flags: env_part_flags,
+                dominant_lacuna: lacuna.code(),
+                attribution_tag: AttributionTag::LIMINAL_ENVELOPE.raw(),
+                ..LacunaPartition8::default()
+            },
+            pressure_q15: env_pressure_q15,
+            delta_q15: env_delta_q15,
+            attribution_tag: AttributionTag::LIMINAL_ENVELOPE.raw(),
+            contraction_q7: 128,
+            chatter_q7: env_chatter_q7,
+            signal_flags: env_sig_flags,
+            dominant_lane: 0,
+            root_cause_code: 0,
+            reserved: [0; 2],
+            epoch_id: u32::from(signal.decode_step_index()),
+        };
+        let prev_ema_init = (self.envelope.envelope_flags & ENVELOPE_FLAG_EMA_INITIALIZED) != 0;
+        let prev_baseline_q15 = self.envelope.baseline_pressure_q15;
+        let env_fb = self.envelope.step(&self.envelope_bounds, &env_sig);
+        let env_breached = env_fb.breach_mask != ENVELOPE_BREACH_NONE;
+        let env_pressure_breach = (env_fb.breach_mask & ENVELOPE_BREACH_PRESSURE) != 0;
+        let env_relative_surge = env_observed
+            && prev_ema_init
+            && (env_pressure_q15 >= SPINE_ENTROPY_GUARD_RELAX_MAX_Q15)
+            && (env_pressure_q15.saturating_sub(prev_baseline_q15)
+                >= ENVELOPE_RELATIVE_SURGE_DELTA_Q15);
+        if !entropy_surge && (env_pressure_breach || env_relative_surge) {
+            self.signal_compute_instability();
+            event_flags |= SPINE_STEP_EVENT_INSTABILITY_RECOVERY;
+            entropy_surge = true;
+        }
+
         // Stage 2: Commit completed-step compute reward when observation is well-defined.
         if lacuna.is_defined() {
             let raw_reward = signal.exit_reward_override_q7();
@@ -330,6 +407,7 @@ impl RuntimeContext {
         // Stage 3: Transient contradiction-guard relaxation or instability re-escalation.
         let liminal_stationary = u8::from(
             lacuna.is_defined()
+                && !env_breached
                 && (self.system_spine.last_observed_entropy_q15 < SPINE_ENTROPY_CALM_THRESH_Q15)
                 && (sens_q7 < 80),
         );

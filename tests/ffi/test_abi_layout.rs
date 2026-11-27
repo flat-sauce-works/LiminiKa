@@ -85,8 +85,50 @@ fn test_lmnk_types_abi_layout_invariants() {
         40
     );
     assert_eq!(
-        offset_of!(liminika_core::abi::lmnk_runtime_policy_t, reserved),
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_policy_t,
+            ema_resume_dwell_target
+        ),
         45
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_policy_t,
+            envelope_min_baseline_pressure_q15
+        ),
+        46
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_policy_t,
+            envelope_max_baseline_pressure_q15
+        ),
+        48
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_policy_t,
+            envelope_pressure_ceiling_q15
+        ),
+        50
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_policy_t,
+            envelope_pressure_floor_q15
+        ),
+        52
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_policy_t,
+            envelope_ema_shift
+        ),
+        54
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_runtime_policy_t, reserved),
+        55
     );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_turn_begin_params_t>(),
@@ -200,6 +242,14 @@ fn test_lmnk_types_abi_layout_invariants() {
     );
     assert_eq!(size_of::<liminika_core::abi::lmnk_envelope_bounds_t>(), 32);
     assert_eq!(align_of::<liminika_core::abi::lmnk_envelope_bounds_t>(), 32);
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_bounds_t, ema_shift),
+        24
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_bounds_t, reserved),
+        25
+    );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_envelope_feedback_t>(),
         16
@@ -337,7 +387,7 @@ fn test_lmnk_types_abi_layout_invariants() {
     }
 
     // Verify RuntimeContext & handshake consistency
-    assert_eq!(size_of::<liminika_core::runtime::RuntimeContext>(), 5120);
+    assert_eq!(size_of::<liminika_core::runtime::RuntimeContext>(), 5184);
     assert_eq!(align_of::<liminika_core::runtime::RuntimeContext>(), 64);
     assert!(!needs_drop::<liminika_core::runtime::RuntimeContext>());
     let mut info = liminika_core::abi::lmnk_abi_info_t::default();

@@ -8,9 +8,9 @@ use super::{
     RuntimeContext,
 };
 use crate::drivers::{
-    EntropyController, EntropyState, EnvelopeState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
-    SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_CONTROL_KNOWN_FLAGS, SPINE_ENTROPY_Q15_ONE,
-    SystemSpineState,
+    EntropyController, EntropyState, EnvelopeBounds, EnvelopeState,
+    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_CONTROL_KNOWN_FLAGS,
+    SPINE_ENTROPY_Q15_ONE, SystemSpineState,
 };
 use crate::foundation::{Pod, RopePairLayout, branchless_is_finite_f32};
 use crate::liminal::{
@@ -74,7 +74,7 @@ impl RuntimeContext {
         self.core_layers.write_unaligned_to(&mut payload, 192)?;
         self.system_spine.write_unaligned_to(&mut payload, 320)?;
         self.envelope.write_unaligned_to(&mut payload, 352)?;
-        // Bytes `416..448` remain zero-initialized reserved extension space.
+        self.envelope_bounds.write_unaligned_to(&mut payload, 416)?;
 
         let sections = [LmnkSectionInput {
             kind: LMNK_SECTION_RUNTIME_SNAPSHOT,
@@ -229,6 +229,11 @@ impl RuntimeContext {
             return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
 
+        let restored_envelope_bounds = EnvelopeBounds::read_unaligned_from(payload, 416)?;
+        if !restored_envelope_bounds.validate_invariants() {
+            return Err(LMNK_ERR_CONTAINER_CORRUPTED);
+        }
+
         // Host-locked Envelope & slot privilege invariants cannot be stripped by untrusted snapshot data,
         // and transient turn-guard compute pins never bleed into permanent baseline pin floors.
         let default_envelope = EnvelopeState::new();
@@ -280,6 +285,7 @@ impl RuntimeContext {
         self.core_layers = saved_core_layers;
         self.system_spine = restored_spine;
         self.envelope = restored_envelope;
+        self.envelope_bounds = restored_envelope_bounds;
 
         Ok(())
     }
