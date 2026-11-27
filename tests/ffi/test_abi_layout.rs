@@ -68,14 +68,14 @@ fn test_lmnk_types_abi_layout_invariants() {
     );
     assert_eq!(offset_of!(liminika_core::abi::lmnk_config_t, reserved), 50);
 
-    // Verify versioned fixed-width v0.4.0 envelopes and views
+    // Verify versioned fixed-width v0.4.0 parameter structs and views
     assert_eq!(size_of::<liminika_core::abi::lmnk_abi_info_t>(), 64);
     assert_eq!(align_of::<liminika_core::abi::lmnk_abi_info_t>(), 8);
     assert_eq!(
         offset_of!(liminika_core::abi::lmnk_abi_info_t, capability_flags),
         24
     );
-    assert_eq!(size_of::<liminika_core::abi::lmnk_runtime_policy_t>(), 48);
+    assert_eq!(size_of::<liminika_core::abi::lmnk_runtime_policy_t>(), 64);
     assert_eq!(align_of::<liminika_core::abi::lmnk_runtime_policy_t>(), 8);
     assert_eq!(
         offset_of!(
@@ -83,6 +83,10 @@ fn test_lmnk_types_abi_layout_invariants() {
             baseline_pressure_q15
         ),
         40
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_runtime_policy_t, reserved),
+        45
     );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_turn_begin_params_t>(),
@@ -97,12 +101,16 @@ fn test_lmnk_types_abi_layout_invariants() {
         16
     );
     assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_decode_step_params_t, flags),
+        4
+    );
+    assert_eq!(
         offset_of!(liminika_core::abi::lmnk_decode_step_params_t, decode_input),
         16
     );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_decode_step_report_t>(),
-        80
+        64
     );
     assert_eq!(
         align_of::<liminika_core::abi::lmnk_decode_step_report_t>(),
@@ -111,6 +119,10 @@ fn test_lmnk_types_abi_layout_invariants() {
     assert_eq!(
         offset_of!(liminika_core::abi::lmnk_decode_step_report_t, dispatch),
         8
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_decode_step_report_t, reserved),
+        48
     );
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_runtime_state_view_t>(),
@@ -127,6 +139,130 @@ fn test_lmnk_types_abi_layout_invariants() {
         ),
         32
     );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_state_view_t,
+            envelope_contraction_q7
+        ),
+        46
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_state_view_t,
+            envelope_violation_epochs
+        ),
+        48
+    );
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_runtime_state_view_t,
+            envelope_baseline_pressure_q15
+        ),
+        52
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_runtime_state_view_t, reserved),
+        56
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_system_pressure_reading_t>(),
+        8
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_system_pressure_reading_t>(),
+        2
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_compute_dispatch_mask_t>(),
+        40
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_compute_dispatch_mask_t>(),
+        8
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_spine_decode_input_t>(),
+        32
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_spine_decode_input_t>(),
+        16
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_boundary_signal_t>(), 32);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_boundary_signal_t>(), 32);
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_boundary_signal_t, reserved),
+        26
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_boundary_signal_t, epoch_id),
+        28
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_envelope_bounds_t>(), 32);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_envelope_bounds_t>(), 32);
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_envelope_feedback_t>(),
+        16
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_envelope_feedback_t>(),
+        16
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_feedback_t, contraction_q7),
+        11
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_feedback_t, breach_mask),
+        12
+    );
+    assert_eq!(size_of::<liminika_core::abi::lmnk_envelope_state_t>(), 64);
+    assert_eq!(align_of::<liminika_core::abi::lmnk_envelope_state_t>(), 64);
+    assert_eq!(
+        offset_of!(
+            liminika_core::abi::lmnk_envelope_state_t,
+            baseline_pressure_q15
+        ),
+        24
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_state_t, contraction_q7),
+        33
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_state_t, reserved),
+        37
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_envelope_step_params_t>(),
+        96
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_envelope_step_params_t>(),
+        32
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_step_params_t, bounds),
+        32
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_envelope_step_params_t, signal),
+        64
+    );
+    assert_eq!(
+        size_of::<liminika_core::abi::lmnk_boundary_emit_params_t>(),
+        16
+    );
+    assert_eq!(
+        align_of::<liminika_core::abi::lmnk_boundary_emit_params_t>(),
+        4
+    );
+    assert_eq!(
+        offset_of!(liminika_core::abi::lmnk_boundary_emit_params_t, epoch_id),
+        12
+    );
+    assert_eq!(size_of::<liminika_core::drivers::SystemSpineState>(), 32);
+    assert_eq!(align_of::<liminika_core::drivers::SystemSpineState>(), 32);
     assert_eq!(
         size_of::<liminika_core::abi::lmnk_lacuna_eval_params_t>(),
         24
@@ -216,6 +352,7 @@ fn test_lmnk_types_abi_layout_invariants() {
         info.context_align as usize,
         align_of::<liminika_core::runtime::RuntimeContext>()
     );
+    assert_eq!(info.snapshot_max_bytes, 576);
 
     // Verify core Portable PODs and renamed v0.4.0 fields
     assert_eq!(size_of::<liminika_core::abi::lmnk_pointer_trail_t>(), 128);

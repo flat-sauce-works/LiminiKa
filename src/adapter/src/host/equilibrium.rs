@@ -14,8 +14,8 @@ use std::io::Read;
 use std::path::Path;
 
 use liminika_core::drivers::{
-    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_CONTROL_KNOWN_FLAGS,
-    SPINE_ENTROPY_Q15_ONE, SystemSpineState,
+    EnvelopeState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK, SPINE_BYPASS_VETO_KNOWN_MASK,
+    SPINE_CONTROL_KNOWN_FLAGS, SPINE_ENTROPY_Q15_ONE, SystemSpineState,
 };
 use liminika_core::foundation::Pod;
 use liminika_core::liminal::{
@@ -50,6 +50,7 @@ const EQUILIBRIUM_META_VERSION: u32 = 1;
 const EQUILIBRIUM_META_HEADER_BYTES: usize = 24;
 const EQUILIBRIUM_META_RECORD_BYTES: usize = 20;
 const SNAPSHOT_SPINE_PAYLOAD_OFFSET: usize = 320;
+const SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET: usize = 352;
 const SNAPSHOT_SLOT_PINNED_MASK_OFFSET: usize = 21;
 const SNAPSHOT_STEP_COUNTER_OFFSET: usize = 0;
 
@@ -242,7 +243,7 @@ pub struct EquilibriumJoinReport {
     pub pinned_preserved: usize,
     /// Number of `Lacuna::Exterior` anchors kept isolated without `SelfRef` promotion.
     pub exterior_isolated: usize,
-    /// `true` when the embedded 384-byte `RuntimeSnapshot` payload was updated or merged.
+    /// `true` when the embedded 448-byte `RuntimeSnapshot` payload was updated or merged.
     pub snapshot_updated: bool,
     /// Total backing-bank anchors after reconciliation (`<= config.max_backing_anchors`).
     pub backing_len: usize,
@@ -334,7 +335,7 @@ impl EquilibriumState {
         &self.pager
     }
 
-    /// Returns the raw 384-byte `LMNK_SECTION_RUNTIME_SNAPSHOT` payload if present.
+    /// Returns the raw 448-byte `LMNK_SECTION_RUNTIME_SNAPSHOT` payload if present.
     #[inline]
     #[must_use]
     pub const fn runtime_snapshot_payload(
@@ -343,7 +344,7 @@ impl EquilibriumState {
         self.runtime_snapshot.as_ref()
     }
 
-    /// Wraps the stored 384-byte snapshot payload into a validated 512-byte standalone `.lmnk`
+    /// Wraps the stored 448-byte snapshot payload into a validated 576-byte standalone `.lmnk`
     /// snapshot container compatible with `RuntimeContext::deserialize_from_bytes`.
     #[must_use]
     pub fn runtime_snapshot_container_bytes(
@@ -375,6 +376,13 @@ impl EquilibriumState {
     pub fn snapshot_spine_state(&self) -> Option<SystemSpineState> {
         let payload = self.runtime_snapshot.as_ref()?;
         SystemSpineState::read_unaligned_from(payload, SNAPSHOT_SPINE_PAYLOAD_OFFSET).ok()
+    }
+
+    /// Extracts the persisted [`EnvelopeState`] from the stored snapshot payload, if present.
+    #[must_use]
+    pub fn snapshot_envelope_state(&self) -> Option<EnvelopeState> {
+        let payload = self.runtime_snapshot.as_ref()?;
+        EnvelopeState::read_unaligned_from(payload, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET).ok()
     }
 
     /// Executes one bounded working-set step through the embedded [`AnchorWorkingSetPager`].
@@ -432,9 +440,9 @@ impl EquilibriumState {
             .map_err(EquilibriumError::ContainerInvalid)
     }
 
-    /// Validates and installs a 512-byte standalone `RuntimeContext` snapshot container (or any
+    /// Validates and installs a 576-byte standalone `RuntimeContext` snapshot container (or any
     /// `.lmnkc` container carrying `LMNK_SECTION_RUNTIME_SNAPSHOT`), monotonically preserving any
-    /// previously latched `SystemSpineState` pin floors.
+    /// previously latched [`EnvelopeState`] pin floors.
     ///
     /// # Errors
     /// Returns [`EquilibriumError::TopologyMismatch`] or [`EquilibriumError::SnapshotInvalid`].
@@ -458,18 +466,18 @@ impl EquilibriumState {
         Ok(())
     }
 
-    /// Monotonically raises the `SystemSpineState` pin floor stored inside the embedded runtime
-    /// snapshot (if present) so subsequent restores can never weaken host pin guarantees.
+    /// Monotonically raises the [`EnvelopeState`] compute pin floor stored inside the embedded
+    /// runtime snapshot (if present) so subsequent restores can never weaken host pin guarantees.
     pub fn enforce_snapshot_spine_pin_floor(&mut self, required_pinned_compute_mask: u64) {
         if let Some(mut payload) = self.runtime_snapshot
-            && let Ok(mut spine) =
-                SystemSpineState::read_unaligned_from(&payload, SNAPSHOT_SPINE_PAYLOAD_OFFSET)
+            && let Ok(mut envelope) =
+                EnvelopeState::read_unaligned_from(&payload, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
         {
-            spine.apply_host_pin_floor(
+            envelope.apply_host_pin_floor(
                 required_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
             );
-            if spine
-                .write_unaligned_to(&mut payload, SNAPSHOT_SPINE_PAYLOAD_OFFSET)
+            if envelope
+                .write_unaligned_to(&mut payload, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
                 .is_ok()
             {
                 self.runtime_snapshot = Some(payload);
@@ -688,7 +696,7 @@ impl EquilibriumState {
             working = kept;
         }
 
-        // Phase 4: Reconcile optional 384-byte RuntimeSnapshot payloads transactionally.
+        // Phase 4: Reconcile optional 448-byte RuntimeSnapshot payloads transactionally.
         let (next_snapshot, snapshot_updated) =
             match (self.runtime_snapshot, incoming.runtime_snapshot) {
                 (None, None) => (None, false),
@@ -737,7 +745,7 @@ impl EquilibriumState {
     /// Serializes this equilibrium state into a 64B-aligned `.lmnkc` binary container validated
     /// by [`LmnkContainerView`], embedding:
     /// - `LMNK_SECTION_PHASE_ANCHORS` (when non-empty),
-    /// - `LMNK_SECTION_RUNTIME_SNAPSHOT` (384-byte payload when present), and
+    /// - `LMNK_SECTION_RUNTIME_SNAPSHOT` (448-byte payload when present), and
     /// - `HOST_EQUILIBRIUM_META_SECTION_KIND` (`0x0101`: `generation`, `pinned`, `lacuna_state`,
     ///   `excitation`, `last_step`).
     ///
@@ -1046,6 +1054,15 @@ fn validate_snapshot_payload(
             "SystemSpineState failed control/veto invariant checks".to_string(),
         ));
     }
+    let envelope = EnvelopeState::read_unaligned_from(&payload, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
+        .map_err(|_| {
+        EquilibriumError::SnapshotInvalid("failed to decode EnvelopeState".to_string())
+    })?;
+    if !envelope.validate_invariants() {
+        return Err(EquilibriumError::SnapshotInvalid(
+            "EnvelopeState failed range/flag invariant checks".to_string(),
+        ));
+    }
     Ok(payload)
 }
 
@@ -1056,12 +1073,6 @@ fn enforce_immutable_spine_floor(
         .map_err(|_| {
             EquilibriumError::SnapshotInvalid("failed to read SystemSpineState".to_string())
         })?;
-    let default_spine = SystemSpineState::new();
-    spine.baseline_pinned_compute_mask |= HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
-    spine.pinned_compute_mask |= spine.baseline_pinned_compute_mask;
-    spine.pinned_aperture_mask |= default_spine.pinned_aperture_mask;
-    spine.pinned_slot_mask |= default_spine.pinned_slot_mask;
-    spine.pinned_action_mode_mask |= default_spine.pinned_action_mode_mask;
     if spine.max_observe_stride == 0 {
         spine.max_observe_stride = 1;
     }
@@ -1069,6 +1080,21 @@ fn enforce_immutable_spine_floor(
         .write_unaligned_to(&mut payload, SNAPSHOT_SPINE_PAYLOAD_OFFSET)
         .map_err(|_| {
             EquilibriumError::SnapshotInvalid("failed to encode SystemSpineState".to_string())
+        })?;
+
+    let mut envelope =
+        EnvelopeState::read_unaligned_from(&payload, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET).map_err(
+            |_| EquilibriumError::SnapshotInvalid("failed to read EnvelopeState".to_string()),
+        )?;
+    let default_envelope = EnvelopeState::new();
+    envelope.apply_host_pin_floor(HOST_IMMUTABLE_PINNED_COMPUTE_MASK);
+    envelope.pinned_aperture_mask |= default_envelope.pinned_aperture_mask;
+    envelope.pinned_slot_mask |= default_envelope.pinned_slot_mask;
+    envelope.pinned_action_mode_mask |= default_envelope.pinned_action_mode_mask;
+    envelope
+        .write_unaligned_to(&mut payload, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
+        .map_err(|_| {
+            EquilibriumError::SnapshotInvalid("failed to encode EnvelopeState".to_string())
         })?;
     Ok(payload)
 }
@@ -1096,6 +1122,14 @@ fn reconcile_snapshot_payloads(
         .map_err(|_| {
             EquilibriumError::SnapshotInvalid("corrupt incoming SystemSpineState".to_string())
         })?;
+    let cur_env = EnvelopeState::read_unaligned_from(cur, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
+        .map_err(|_| {
+            EquilibriumError::SnapshotInvalid("corrupt current EnvelopeState".to_string())
+        })?;
+    let inc_env = EnvelopeState::read_unaligned_from(inc, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
+        .map_err(|_| {
+            EquilibriumError::SnapshotInvalid("corrupt incoming EnvelopeState".to_string())
+        })?;
 
     let cur_steps = read_u64_le_at(cur, SNAPSHOT_STEP_COUNTER_OFFSET);
     let inc_steps = read_u64_le_at(inc, SNAPSHOT_STEP_COUNTER_OFFSET);
@@ -1107,25 +1141,26 @@ fn reconcile_snapshot_payloads(
 
     let mut out = if take_incoming { *inc } else { *cur };
     let mut merged_spine = if take_incoming { inc_spine } else { cur_spine };
-    let default_spine = SystemSpineState::new();
-
-    // Monotonic bitwise OR across all Spine & substrate pin floors: reconciliation can never
-    // weaken a previously locked pin floor.
-    merged_spine.baseline_pinned_compute_mask |= cur_spine.baseline_pinned_compute_mask
-        | inc_spine.baseline_pinned_compute_mask
-        | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
-    merged_spine.pinned_compute_mask |= merged_spine.baseline_pinned_compute_mask;
-    merged_spine.pinned_aperture_mask |= cur_spine.pinned_aperture_mask
-        | inc_spine.pinned_aperture_mask
-        | default_spine.pinned_aperture_mask;
-    merged_spine.pinned_slot_mask |=
-        cur_spine.pinned_slot_mask | inc_spine.pinned_slot_mask | default_spine.pinned_slot_mask;
-    merged_spine.pinned_action_mode_mask |= cur_spine.pinned_action_mode_mask
-        | inc_spine.pinned_action_mode_mask
-        | default_spine.pinned_action_mode_mask;
     if merged_spine.max_observe_stride == 0 {
         merged_spine.max_observe_stride = 1;
     }
+
+    // Winner inherits temporary locks (`unobserved_locked`, `irreversible_step_lock`) without OR;
+    // all 5 persistent pin-floor masks are monotonically OR-merged across both snapshots.
+    let mut merged_env = if take_incoming { inc_env } else { cur_env };
+    let default_env = EnvelopeState::new();
+    merged_env.baseline_pinned_compute_mask |= cur_env.baseline_pinned_compute_mask
+        | inc_env.baseline_pinned_compute_mask
+        | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+    merged_env.pinned_compute_mask |= merged_env.baseline_pinned_compute_mask;
+    merged_env.pinned_aperture_mask |= cur_env.pinned_aperture_mask
+        | inc_env.pinned_aperture_mask
+        | default_env.pinned_aperture_mask;
+    merged_env.pinned_slot_mask |=
+        cur_env.pinned_slot_mask | inc_env.pinned_slot_mask | default_env.pinned_slot_mask;
+    merged_env.pinned_action_mode_mask |= cur_env.pinned_action_mode_mask
+        | inc_env.pinned_action_mode_mask
+        | default_env.pinned_action_mode_mask;
 
     out[SNAPSHOT_SLOT_PINNED_MASK_OFFSET] |=
         cur[SNAPSHOT_SLOT_PINNED_MASK_OFFSET] | inc[SNAPSHOT_SLOT_PINNED_MASK_OFFSET];
@@ -1133,6 +1168,11 @@ fn reconcile_snapshot_payloads(
         .write_unaligned_to(&mut out, SNAPSHOT_SPINE_PAYLOAD_OFFSET)
         .map_err(|_| {
             EquilibriumError::SnapshotInvalid("failed to write merged SystemSpineState".to_string())
+        })?;
+    merged_env
+        .write_unaligned_to(&mut out, SNAPSHOT_ENVELOPE_PAYLOAD_OFFSET)
+        .map_err(|_| {
+            EquilibriumError::SnapshotInvalid("failed to write merged EnvelopeState".to_string())
         })?;
     Ok(out)
 }
@@ -1675,8 +1715,8 @@ mod tests {
         let report = eq_a.join(&eq_b).expect("join snapshots");
         assert!(report.snapshot_updated);
 
-        let merged_spine = eq_a.snapshot_spine_state().expect("merged spine");
-        assert_eq!(merged_spine.baseline_pinned_compute_mask & 0b1111, 0b1111);
+        let merged_env = eq_a.snapshot_envelope_state().expect("merged envelope");
+        assert_eq!(merged_env.baseline_pinned_compute_mask & 0b1111, 0b1111);
 
         // .lmnkc roundtrip preserves both RuntimeSnapshot section and host metadata.
         let lmnkc = eq_a.to_lmnkc_bytes(1_774_900_500).expect("to_lmnkc");
@@ -1690,21 +1730,23 @@ mod tests {
         let restored = EquilibriumState::from_lmnkc_bytes(&lmnkc, cfg).expect("from_lmnkc");
         assert_eq!(restored.generation(), eq_a.generation());
         assert!(restored.pager().get_entry(1).unwrap().pinned);
-        let restored_spine = restored.snapshot_spine_state().expect("restored spine");
-        assert_eq!(restored_spine.baseline_pinned_compute_mask & 0b1111, 0b1111);
+        let restored_env = restored
+            .snapshot_envelope_state()
+            .expect("restored envelope");
+        assert_eq!(restored_env.baseline_pinned_compute_mask & 0b1111, 0b1111);
 
         // Restore into a live RuntimeContext with a stronger host pin floor (bit 5).
         let live_cfg = Config::new().with_head_dim(64).with_num_heads(8);
         let mut live_ctx = RuntimeContext::new(live_cfg).expect("live ctx");
         live_ctx.apply_host_spine_pin_floor(1_u64 << 5);
-        let snap_512 = restored
+        let snap_576 = restored
             .runtime_snapshot_container_bytes()
-            .expect("512B snapshot");
+            .expect("576B snapshot");
         live_ctx
-            .deserialize_from_bytes(&snap_512)
+            .deserialize_from_bytes(&snap_576)
             .expect("deserialize into live ctx");
         assert_eq!(
-            live_ctx.system_spine().baseline_pinned_compute_mask & ((1 << 5) | 0b1111),
+            live_ctx.envelope().baseline_pinned_compute_mask & ((1 << 5) | 0b1111),
             (1 << 5) | 0b1111
         );
 

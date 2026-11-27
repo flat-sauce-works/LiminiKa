@@ -19,3 +19,7 @@ zeroize.workspace = true
 
 [lints]
 workspace = true
+
+[[test]]
+name = "host_envelope_coordination"
+path = "../../tests/integration/host_envelope_coordination.rs"

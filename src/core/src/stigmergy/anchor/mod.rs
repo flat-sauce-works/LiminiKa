@@ -43,7 +43,7 @@ use crate::liminal::{
     BOUNDARY_SIGNAL_FLAG_FAULT, BOUNDARY_SIGNAL_FLAG_OBSERVED,
     BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BoundarySignal, DEFAULT_ENTROPY_EPS, Grounded,
     Indivisible, LMNK_ABI_VERSION_HEX, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
-    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, Lacuna, LacunaPartition8, LmnkResult,
+    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, LmnkResult,
     MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, Scoped, branchless_select_f32,
     branchless_select_q7, branchless_select_u8, branchless_select_usize, is_compatible_abi_version,
 };
@@ -647,16 +647,6 @@ impl PhaseAnchorRecord {
         let has_ext = (!is_fault) & partition.has_exterior_gap();
         let is_obs = (!is_fault) & ((self.sample_count > 0) | (partition.observed_mask != 0));
         let is_stat = (!is_fault) & (!has_ext) & (self.sample_count >= 2) & (r_bar_clamped >= 0.45);
-        let base_lacuna = branchless_select_u8(
-            partition.dominant_lacuna != 0,
-            partition.dominant_lacuna & 0x03,
-            branchless_select_u8(
-                self.sample_count > 0,
-                Lacuna::SelfRef.code(),
-                Lacuna::Unobserved.code(),
-            ),
-        );
-        let lacuna_code = branchless_select_u8(is_fault, Lacuna::Undefined.code(), base_lacuna);
         let signal_flags = branchless_select_u8(is_obs, BOUNDARY_SIGNAL_FLAG_OBSERVED, 0)
             | branchless_select_u8(is_fault, BOUNDARY_SIGNAL_FLAG_FAULT, 0)
             | branchless_select_u8(has_ext, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, 0)
@@ -667,13 +657,12 @@ impl PhaseAnchorRecord {
             pressure_q15,
             delta_q15: disp_q15,
             attribution_tag: AttributionTag::STIGMERGY_SYSTEM.raw(),
-            lacuna_code,
             contraction_q7: 128,
             chatter_q7: 0,
             signal_flags,
             dominant_lane: self.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
             root_cause_code: self.root_cause_code,
-            breach_mask: 0,
+            reserved: [0; 2],
             epoch_id,
         }
     }

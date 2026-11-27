@@ -148,12 +148,11 @@ impl ModelSteeringAdapter {
         *self.ctx.escalated_workbench_lane_mut() = None;
         *self.ctx.sandbox_workbench_lane_mut() = None;
         self.active_workbench_preset = WorkbenchPreset::BalancedDialog;
-        let preserved_base = self.ctx.system_spine().baseline_pinned_compute_mask;
         let preserved_hold = self.ctx.system_spine().guard_hold_tokens;
         let preserved_stride = self.ctx.system_spine().max_observe_stride;
         let preserved_pre_bypass = self.ctx.system_spine().is_pre_bypass_enabled();
+        self.ctx.reset_envelope_preserving_pin_floor();
         let mut fresh_spine = SystemSpineState::new();
-        fresh_spine.set_baseline_pin_mask(preserved_base);
         fresh_spine.guard_hold_tokens = preserved_hold;
         fresh_spine.set_max_observe_stride(preserved_stride);
         fresh_spine.set_pre_bypass_enabled(preserved_pre_bypass);
@@ -190,10 +189,16 @@ impl ModelSteeringAdapter {
         self.ctx.core_layers().core_primitive_state()
     }
 
-    /// Returns a shared reference to the mechanical [`SystemSpineState`] (`pinned` isolation barrier).
+    /// Returns a shared reference to the mechanical [`SystemSpineState`].
     #[must_use]
     pub fn system_spine(&self) -> &SystemSpineState {
         self.ctx.system_spine()
+    }
+
+    /// Returns a read-only reference to the embedded [`liminika_core::drivers::EnvelopeState`].
+    #[must_use]
+    pub fn envelope(&self) -> &liminika_core::drivers::EnvelopeState {
+        self.ctx.envelope()
     }
 
     /// Returns the most recent branchless 4-region [`LacunaPartition8`].
@@ -340,11 +345,11 @@ impl ModelSteeringAdapter {
         if self.ctx.system_spine().is_transient_guard_relaxed() {
             if eff_repulsion || exit_entropy_rising {
                 let active_mask = self.ctx.compute_pool().active_mask;
+                self.ctx.arm_transient_guard_pin(active_mask);
                 {
                     let spine = self.ctx.system_spine_mut();
                     spine.set_transient_guard_relaxed(false);
                     spine.set_turn_guard_active(true);
-                    spine.arm_transient_guard_pin(active_mask);
                     spine.reset_turn_bypass_counters_only();
                     spine.unobserved_bypass_run = 0;
                 }
@@ -358,7 +363,7 @@ impl ModelSteeringAdapter {
         if !has_static_guard
             || hold_tokens == 0
             || self.ctx.system_spine().passive_saturation_probe_steps > 0
-            || self.ctx.system_spine().unobserved_locked != 0
+            || self.ctx.envelope().unobserved_locked != 0
             || !last_observed_entropy.is_finite()
             || last_observed_entropy >= 0.72
         {
@@ -375,11 +380,11 @@ impl ModelSteeringAdapter {
             return false;
         }
 
+        self.ctx.restore_baseline_pin_mask();
         {
             let spine = self.ctx.system_spine_mut();
             spine.set_transient_guard_relaxed(true);
             spine.set_turn_guard_active(false);
-            spine.restore_baseline_pin_mask();
         }
         self.ctx.on_transient_guard_relaxed(min_calm_dwell);
         self.ctx.telemetry_bank_mut().record_guard_relaxation();
@@ -521,9 +526,17 @@ impl ModelSteeringAdapter {
         let (guard_active, eff_repulsion) =
             self.effective_spine_guard_and_repulsion(repulsion_active);
         let spine = *self.ctx.system_spine();
+        let env = self.ctx.envelope();
+        let pins = liminika_core::drivers::SpinePinSnapshot::new(
+            env.pinned_compute_mask,
+            env.pinned_slot_mask,
+            env.unobserved_locked,
+            env.irreversible_step_lock,
+        );
         self.ctx.compute_pool_mut().step_dispatch_with_spine(
             reading,
             &spine,
+            pins,
             guard_active,
             eff_repulsion,
         )
@@ -595,7 +608,7 @@ impl ModelSteeringAdapter {
         std::mem::take(&mut self.crystallized_anchors)
     }
 
-    /// Exports the embedded [`RuntimeContext`] into a validated 512-byte standalone `.lmnk`
+    /// Exports the embedded [`RuntimeContext`] into a validated 576-byte standalone `.lmnk`
     /// snapshot container (`LMNK_SECTION_RUNTIME_SNAPSHOT`) without exposing mutable internals.
     ///
     /// # Errors
@@ -616,9 +629,9 @@ impl ModelSteeringAdapter {
         Ok(buf)
     }
 
-    /// Restores [`RuntimeContext`] state from a 512-byte snapshot container (or multi-section
+    /// Restores [`RuntimeContext`] state from a 576-byte snapshot container (or multi-section
     /// `.lmnkc` containing `LMNK_SECTION_RUNTIME_SNAPSHOT`) while strictly enforcing this host's
-    /// monotonic `Spine` pin floor (`apply_host_spine_pin_floor`) so deserialized bytes can never
+    /// monotonic `Envelope` pin floor (`apply_host_spine_pin_floor`) so deserialized bytes can never
     /// weaken irreversible boundary pins.
     ///
     /// # Errors
@@ -626,13 +639,12 @@ impl ModelSteeringAdapter {
     pub fn restore_runtime_snapshot(&mut self, bytes: &[u8]) -> Result<(), String> {
         let (active_slots, geom_pinned_slots, _) =
             Self::compute_slot_masks(self.geometry.num_layers);
-        let host_pin_floor =
-            geom_pinned_slots | self.ctx.system_spine().baseline_pinned_compute_mask;
+        let host_pin_floor = geom_pinned_slots | self.ctx.envelope().baseline_pinned_compute_mask;
         self.ctx
             .deserialize_from_bytes(bytes)
             .map_err(|e| format!("RuntimeContext::deserialize_from_bytes failed: {e}"))?;
         self.ctx.apply_host_spine_pin_floor(host_pin_floor);
-        let final_pinned = self.ctx.system_spine().baseline_pinned_compute_mask & active_slots;
+        let final_pinned = self.ctx.envelope().baseline_pinned_compute_mask & active_slots;
         let reversible = active_slots & !final_pinned;
         self.ctx
             .compute_pool_mut()
@@ -645,7 +657,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Bridges live adapter state into a domain-agnostic [`EquilibriumState`]: drains all buffered
-    /// Cold-Path crystallized anchors, captures the 512-byte runtime snapshot, and reconciles both
+    /// Cold-Path crystallized anchors, captures the 576-byte runtime snapshot, and reconciles both
     /// via flat renormalization (`EquilibriumState::ingest_crystallized_anchors`).
     ///
     /// # Errors
@@ -667,7 +679,7 @@ impl ModelSteeringAdapter {
     }
 
     /// Restores this adapter's [`RuntimeContext`] from an [`EquilibriumState`]'s persisted
-    /// `LMNK_SECTION_RUNTIME_SNAPSHOT` (when present) while enforcing host `Spine` pin floors.
+    /// `LMNK_SECTION_RUNTIME_SNAPSHOT` (when present) while enforcing host `Envelope` pin floors.
     ///
     /// Returns `Ok(true)` when a runtime snapshot was restored and `Ok(false)` for legacy `.lmnkc`
     /// equilibrium files carrying anchor records only.
@@ -678,10 +690,10 @@ impl ModelSteeringAdapter {
         &mut self,
         equilibrium: &EquilibriumState,
     ) -> Result<bool, String> {
-        let Some(snap_512) = equilibrium.runtime_snapshot_container_bytes() else {
+        let Some(snap_576) = equilibrium.runtime_snapshot_container_bytes() else {
             return Ok(false);
         };
-        self.restore_runtime_snapshot(&snap_512)?;
+        self.restore_runtime_snapshot(&snap_576)?;
         Ok(true)
     }
 

@@ -3,15 +3,16 @@
 
 /**
  * @file lmnk_abi.h
- * @brief LiminiKa Core Engine C-ABI v0.4.0 (`0x00000400`) Public Functional Interface (25 exports).
+ * @brief LiminiKa Core Engine C-ABI v0.4.0 (`0x00000400`) Public Functional Interface (27 exports).
  *
- * Exposes an exact 1:1, envelope-versioned (`struct_size`), `float*`-only (`0 void*`) C11/C++20
- * surface for `liminika-core`:
+ * Exposes an exact 1:1, versioned parameter struct (`struct_size`), `float*`-only (`0 void*`)
+ * C11/C++20 surface for `liminika-core`:
  * - Two-stage ABI handshake & configuration (`lmnk_abi_*`, `lmnk_config_*`)
  * - Zero-heap in-place and boxed `RuntimeContext` lifecycle, policy, decode step, state view,
- *   and `.lmnk` snapshot persistence (`lmnk_context_*`)
+ *   boundary signal emission, and `.lmnk` snapshot persistence (`lmnk_context_*`)
  * - Hot-path RoPE steering, Procrustes Q7 recovery, arena-indexed Rank-1 evaluation,
- *   2-origin Gateway steering, and 8-granule Lacuna partition evaluation
+ *   2-origin Gateway steering, 8-granule Lacuna partition evaluation, and Tier-1 standalone
+ *   safety-envelope stepping (`lmnk_envelope_step`)
  * - Generic zero-copy `.lmnk` container write, verify, and section lookup (`lmnk_container_*`)
  */
 
@@ -47,7 +48,7 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_config_validate(const lmnk_config_t* LMNK_RESTRICT config) LMNK_NOEXCEPT;
 
 /* -------------------------------------------------------------------------- */
-/* 2. RuntimeContext Lifecycle, Policy, Decode & Snapshot (11 functions)      */
+/* 2. RuntimeContext Lifecycle, Policy, Decode, State & Snapshot (12 functions)*/
 /* -------------------------------------------------------------------------- */
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_context_init_in_place(const lmnk_config_t* LMNK_RESTRICT config,
@@ -85,6 +86,14 @@ LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_context_get_state(lmnk_context_handle_t context,
                        lmnk_runtime_state_view_t* LMNK_RESTRICT state_out) LMNK_NOEXCEPT;
 
+/**
+ * Emits a raw 32-byte POD `lmnk_boundary_signal_t` from `context` (`0 alloc`, `0 fdiv`).
+ * Caller must set `params->struct_size = sizeof(lmnk_boundary_emit_params_t)`.
+ */
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_context_emit_boundary_signal(
+    lmnk_context_handle_t context, const lmnk_boundary_emit_params_t* LMNK_RESTRICT params,
+    lmnk_boundary_signal_t* LMNK_RESTRICT signal_out) LMNK_NOEXCEPT;
+
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_context_serialize(lmnk_context_handle_t context, uint8_t* LMNK_RESTRICT buffer,
                        size_t* LMNK_RESTRICT buffer_size) LMNK_NOEXCEPT;
@@ -94,7 +103,7 @@ lmnk_context_deserialize(const uint8_t* LMNK_RESTRICT buffer, size_t buffer_size
                          lmnk_context_handle_t* LMNK_RESTRICT context_out) LMNK_NOEXCEPT;
 
 /* -------------------------------------------------------------------------- */
-/* 3. Hot-Path Tensor Kernels & Lacuna Evaluation (5 functions)               */
+/* 3. Hot-Path Kernels, Lacuna & Tier-1 Standalone Envelope (6 functions)     */
 /* -------------------------------------------------------------------------- */
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_rope_steer_q(const lmnk_rope_steer_params_t* LMNK_RESTRICT params) LMNK_NOEXCEPT;
@@ -111,6 +120,17 @@ lmnk_gateway_steer(const lmnk_gateway_steer_params_t* LMNK_RESTRICT params) LMNK
 LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL
 lmnk_lacuna_partition_eval(const lmnk_lacuna_eval_params_t* LMNK_RESTRICT params,
                            lmnk_lacuna_partition_t* LMNK_RESTRICT out) LMNK_NOEXCEPT;
+
+/**
+ * Evaluates one Tier-1 standalone safety-envelope step directly on `state_inout` (`0 alloc`).
+ * Caller must set `params->struct_size = sizeof(lmnk_envelope_step_params_t)` (`96`).
+ * When `LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS` is set, `params->bounds` is ignored and canonical
+ * defaults are applied.
+ */
+LMNK_NODISCARD LMNK_API lmnk_status_t LMNK_CALL lmnk_envelope_step(
+    lmnk_envelope_state_t* LMNK_RESTRICT state_inout,
+    const lmnk_envelope_step_params_t* LMNK_RESTRICT params,
+    lmnk_envelope_feedback_t* LMNK_RESTRICT feedback_out) LMNK_NOEXCEPT;
 
 /* -------------------------------------------------------------------------- */
 /* 4. Generic Unified `.lmnk` Container I/O (3 functions)                     */

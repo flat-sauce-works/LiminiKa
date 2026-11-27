@@ -6,7 +6,8 @@
 use super::{Config, CoreStateStack, OrchestratorStatusSnapshot, Result, RuntimeContext};
 use crate::drivers::{
     AnonymousComputePool, ComputeDispatchMask, DistortionTension, EgoDifferentialNet,
-    EntropyController, SystemPressureReading, SystemSpineState, TokenBypassObservation,
+    EntropyController, EnvelopeBounds, EnvelopeFeedback, EnvelopeState, SpinePinSnapshot,
+    SystemPressureReading, SystemSpineState, TokenBypassObservation,
 };
 use crate::foundation::{
     AlignedSlice16, AlignedSliceMut16, SWAR_SPLAT_BYTE_64, branchless_clamp_f32,
@@ -16,8 +17,9 @@ use crate::foundation::{
     swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
+    BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT, BOUNDARY_SIGNAL_KNOWN_FLAGS, BoundarySignal,
     DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, MAX_ATTENTION_HEADS,
-    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
+    MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
@@ -246,6 +248,113 @@ impl RuntimeContext {
         &mut self.system_spine
     }
 
+    /// Returns a read-only reference to the embedded [`EnvelopeState`] (`DriverKind::Envelope`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn envelope(&self) -> &EnvelopeState {
+        &self.envelope
+    }
+
+    /// Extracts a 16-byte [`SpinePinSnapshot`] from [`EnvelopeState`] for isolated spine queries.
+    #[inline(always)]
+    #[must_use]
+    pub(crate) const fn spine_pin_snapshot(&self) -> SpinePinSnapshot {
+        SpinePinSnapshot::new(
+            self.envelope.pinned_compute_mask,
+            self.envelope.pinned_slot_mask,
+            self.envelope.unobserved_locked,
+            self.envelope.irreversible_step_lock,
+        )
+    }
+
+    /// Sets the permanent baseline compute pin mask on [`EnvelopeState`] while enforcing
+    /// [`crate::liminal::HOST_IMMUTABLE_PINNED_COMPUTE_MASK`].
+    #[inline(always)]
+    pub const fn set_baseline_pin_mask(&mut self, mask: u64) {
+        self.envelope.set_baseline_pin_mask(mask);
+    }
+
+    /// Arms a transient turn-guard compute pin mask on [`EnvelopeState`] without raising
+    /// the permanent baseline pin floor.
+    #[inline(always)]
+    pub const fn arm_transient_guard_pin(&mut self, active_mask: u64) {
+        self.envelope.arm_transient_guard_pin(active_mask);
+    }
+
+    /// Restores the active compute pin mask on [`EnvelopeState`] back to its baseline floor.
+    #[inline(always)]
+    pub const fn restore_baseline_pin_mask(&mut self) {
+        self.envelope.restore_baseline_pin_mask();
+    }
+
+    /// Monotonically adds compute slot pin bits into the active mask on [`EnvelopeState`].
+    #[inline(always)]
+    pub const fn pin_compute_slots(&mut self, mask: u64) {
+        self.envelope.pin_compute_slots(mask);
+    }
+
+    /// Updates the zero-aperture unobserved lock on [`EnvelopeState`].
+    #[inline(always)]
+    pub const fn set_unobserved_locked(&mut self, locked: bool) {
+        self.envelope.unobserved_locked = if locked { 1 } else { 0 };
+    }
+
+    /// Updates the irreversible step lock on [`EnvelopeState`].
+    #[inline(always)]
+    pub const fn set_irreversible_step_lock(&mut self, locked: bool) {
+        self.envelope.irreversible_step_lock = if locked { 1 } else { 0 };
+    }
+
+    /// Resets transient safety-envelope state while preserving permanent host pin floors.
+    #[inline(always)]
+    pub const fn reset_envelope_preserving_pin_floor(&mut self) {
+        self.envelope.reset_preserving_pin_floor();
+    }
+
+    /// Evaluates one branchless [`EnvelopeState`] safety-envelope step in-place (`0 alloc`, `0 fdiv`).
+    #[inline(always)]
+    #[must_use]
+    pub fn step_envelope(
+        &mut self,
+        bounds: &EnvelopeBounds,
+        signal: &BoundarySignal,
+    ) -> EnvelopeFeedback {
+        self.envelope.step(bounds, signal)
+    }
+
+    /// Emits a 32-byte domain-agnostic [`BoundarySignal`] summarizing this context's live
+    /// [`LacunaPartition8`], [`EnvelopeState`], dominant lane, and caller-supplied metrics.
+    #[inline]
+    #[must_use]
+    pub fn emit_boundary_signal(
+        &self,
+        pressure_q15: u16,
+        chatter_q7: u8,
+        epoch_id: u32,
+        flags: u8,
+    ) -> BoundarySignal {
+        let clamped_pressure = pressure_q15.min(32_768);
+        let delta_q15 = clamped_pressure
+            .abs_diff(self.envelope.last_pressure_q15)
+            .min(32_768);
+        let mut sig = BoundarySignal::from_partition(
+            self.last_lacuna_partition,
+            clamped_pressure,
+            delta_q15,
+            chatter_q7,
+            epoch_id,
+        );
+        sig.contraction_q7 = self.envelope.contraction_q7;
+        sig.dominant_lane = (self.find_dominant_domain().0 as u8) & 0x07;
+        let irrev_flag = if self.envelope.irreversible_step_lock != 0 {
+            BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT
+        } else {
+            0
+        };
+        sig.signal_flags |= (flags & BOUNDARY_SIGNAL_KNOWN_FLAGS) | irrev_flag;
+        sig
+    }
+
     /// Returns the most recent branchless [`LacunaPartition8`].
     #[inline(always)]
     #[must_use]
@@ -294,7 +403,7 @@ impl RuntimeContext {
     #[must_use]
     pub fn step_compute_dispatch(&mut self, reading: SystemPressureReading) -> ComputeDispatchMask {
         self.compute_pool
-            .step_dispatch(reading, self.system_spine.pinned_compute_mask)
+            .step_dispatch(reading, self.envelope.pinned_compute_mask)
     }
 
     /// Updates slot contribution pheromones strictly from an exit scalar reward (`0..=127`)
@@ -403,11 +512,26 @@ impl RuntimeContext {
         }
     }
 
-    /// Returns an immutable reference to the active [`Config`].
+    /// Returns a reconstructed value copy of the active high-level [`Config`].
     #[inline(always)]
     #[must_use]
-    pub const fn config(&self) -> &Config {
-        &self.config
+    pub const fn config(&self) -> Config {
+        Config {
+            raw: self.raw_config,
+            hysteresis_band: self.derived_config.hysteresis_band,
+            tau_flux: self.derived_config.tau_flux,
+            bifurcation_threshold: self.derived_config.bifurcation_threshold,
+            repulsion_threshold: self.derived_config.repulsion_threshold,
+            repulsion_scale_u7: self.derived_config.repulsion_scale_u7,
+            slot_coupling_matrix: self.derived_config.slot_coupling_matrix,
+        }
+    }
+
+    /// Returns an immutable reference to the active raw C-ABI [`RuntimeConfig`].
+    #[inline(always)]
+    #[must_use]
+    pub const fn raw_config(&self) -> &RuntimeConfig {
+        &self.raw_config
     }
 
     /// Returns an immutable reference to the underlying [`StigmergicSubstrate`].
@@ -593,11 +717,11 @@ impl RuntimeContext {
         }
         thresholds.validate()?;
         let new_phase_steering = PhaseSteeringEngine::new(head_dim, num_heads)?;
-        self.config.raw.head_dim = head_dim;
-        self.config.raw.num_heads = num_heads;
-        self.config.raw.rotary_dim = rotary_dim;
-        self.config.raw.rope_layout = rope_layout;
-        self.config.raw.substrate_capacity = substrate_capacity;
+        self.raw_config.head_dim = head_dim;
+        self.raw_config.num_heads = num_heads;
+        self.raw_config.rotary_dim = rotary_dim;
+        self.raw_config.rope_layout = rope_layout;
+        self.raw_config.substrate_capacity = substrate_capacity;
         let sub_ptr = core::ptr::addr_of_mut!(self.substrate);
         // SAFETY: `sub_ptr` is a valid, 64B-aligned mutable pointer to `self.substrate` (`Pod`);
         // zeroing followed immediately by `StigmergicSubstrate::init_in_place_on_zeroed`
@@ -606,10 +730,10 @@ impl RuntimeContext {
             core::ptr::write_bytes(sub_ptr, 0u8, 1);
             StigmergicSubstrate::init_in_place_on_zeroed(
                 sub_ptr,
-                &self.config.raw,
-                self.config.repulsion_threshold,
-                self.config.repulsion_scale_u7,
-                self.config.slot_coupling_matrix,
+                &self.raw_config,
+                self.derived_config.repulsion_threshold,
+                self.derived_config.repulsion_scale_u7,
+                self.derived_config.slot_coupling_matrix,
             );
         }
         self.substrate.thresholds = thresholds;
@@ -630,7 +754,7 @@ impl RuntimeContext {
                 overlap: &self.last_overlap_report,
                 derivative_alpha_q7: self.telemetry.derivative_alpha_q7(),
                 lacuna_partition: Some(&self.last_lacuna_partition),
-                spine: Some(&self.system_spine),
+                envelope: Some(&self.envelope),
                 ego_net: Some(&self.ego_differential_net),
                 tension: Some(&self.distortion_tension),
             })
@@ -656,7 +780,7 @@ impl RuntimeContext {
             overlap: &self.last_overlap_report,
             derivative_alpha_q7: self.telemetry.derivative_alpha_q7(),
             lacuna_partition: Some(&self.last_lacuna_partition),
-            spine: Some(&self.system_spine),
+            envelope: Some(&self.envelope),
             ego_net: Some(&self.ego_differential_net),
             tension: Some(&self.distortion_tension),
         });
@@ -673,11 +797,13 @@ impl RuntimeContext {
         guard_active: bool,
         dispatch: &mut ComputeDispatchMask,
     ) -> u8 {
+        let pins = self.spine_pin_snapshot();
         let veto = self
             .compute_pool
             .evaluate_whole_token_steering_bypass_with_spine(
                 obs,
                 &mut self.system_spine,
+                pins,
                 guard_active,
                 dispatch,
             );
@@ -695,7 +821,7 @@ impl RuntimeContext {
             .ego_differential_net
             .evaluate_pframe_chain_with_mask_branchless(
                 &self.core_layers.ego,
-                &self.system_spine,
+                &self.envelope,
                 &self.last_lacuna_partition,
                 &self.core_layers.stigmergy,
                 &self.distortion_tension,
@@ -741,7 +867,7 @@ impl RuntimeContext {
     #[inline(always)]
     pub fn set_slot_coupling_matrix(&mut self, matrix: u64) {
         self.substrate.coupling_matrix_8x8 = matrix;
-        self.config.slot_coupling_matrix = matrix;
+        self.derived_config.slot_coupling_matrix = matrix;
     }
 
     /// Returns the total number of processed token steps.

@@ -149,6 +149,7 @@ impl TimelineCutDetector for AdaptiveGopCutDetector {
         };
 
         let (directive, _) = SystemSpineState::new().evaluate_frame_transition_branchless(
+            liminika_core::drivers::SpinePinSnapshot::default(),
             SpineFrameTransitionInput {
                 lacuna_code,
                 phase_delta_q7: eff_phase_delta_q7,
@@ -591,7 +592,7 @@ impl LmnkTimeline {
         Ok(EquilibriumState::from_pager(pager, config))
     }
 
-    /// Extracts an embedded 512-byte standalone `RuntimeContext` snapshot container from a
+    /// Extracts an embedded 576-byte standalone `RuntimeContext` snapshot container from a
     /// unified `.lmnkc` byte stream carrying `LMNK_SECTION_RUNTIME_SNAPSHOT`, or returns `Ok(None)`
     /// for containers without a runtime snapshot section.
     ///
@@ -1002,14 +1003,14 @@ impl LmnkTimeline {
     }
 
     /// Serializes this timeline into a unified v2 `.lmnkc` container while optionally embedding
-    /// an `LMNK_SECTION_RUNTIME_SNAPSHOT` payload extracted from a 512-byte snapshot container.
+    /// an `LMNK_SECTION_RUNTIME_SNAPSHOT` payload extracted from a 576-byte snapshot container.
     ///
     /// # Errors
     /// Returns [`LmnkTimelineError`] if the optional snapshot or container boundary rules fail.
     pub fn to_container_bytes_with_snapshot(
         &self,
         container_flags: u32,
-        runtime_snapshot_512: Option<&[u8]>,
+        runtime_snapshot_576: Option<&[u8]>,
     ) -> Result<Vec<u8>, LmnkTimelineError> {
         let mut anchor_sec: Option<Vec<u8>> = None;
         let mut trail_sec: Option<Vec<u8>> = None;
@@ -1052,7 +1053,7 @@ impl LmnkTimeline {
             ledger_sec = Some(slot.as_bytes().to_vec());
         }
 
-        let snap_sec = if let Some(snap_bytes) = runtime_snapshot_512 {
+        let snap_sec = if let Some(snap_bytes) = runtime_snapshot_576 {
             let snap_view = LmnkContainerView::parse(snap_bytes)
                 .map_err(|e| map_container_err(snap_bytes, e))?;
             let payload = snap_view

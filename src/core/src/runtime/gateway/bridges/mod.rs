@@ -10,8 +10,8 @@ use super::*;
 use crate::drivers::{
     DistortionTension, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
     EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION,
-    EGO_TRIGGER_LIMINAL_EXTERIOR, EgoDifferentialNet, FrameDirective, LiminalEgoState,
-    SpineFrameTransitionInput, SystemSpineState,
+    EGO_TRIGGER_LIMINAL_EXTERIOR, EgoDifferentialNet, EnvelopeState, FrameDirective,
+    LiminalEgoState, SpineFrameTransitionInput, SpinePinSnapshot, SystemSpineState,
 };
 use crate::foundation::{
     ATTRACTOR_SLOT_ID_MASK, AlignedSlice32, AlignedSliceMut32, SWAR_SIGN_MASK_64,
@@ -56,7 +56,7 @@ impl ResidualAdapterEngine {
     }
 }
 
-impl SystemSpineState {
+impl EnvelopeState {
     /// Physical `pinned` isolation barrier executed without branching after Ego modulates `ego_frame`.
     ///
     /// - Under `unobserved_locked != 0` or `irreversible_step_lock != 0`, returns `*baseline_frame`.
@@ -97,7 +97,7 @@ impl SystemSpineState {
 }
 
 #[inline(always)]
-fn pframe_transition_allowed(spine: &SystemSpineState, partition: &LacunaPartition8) -> bool {
+fn pframe_transition_allowed(envelope: &EnvelopeState, partition: &LacunaPartition8) -> bool {
     let all_zero = (partition.self_ref_mask
         | partition.interior_mask
         | partition.exterior_mask
@@ -115,7 +115,14 @@ fn pframe_transition_allowed(spine: &SystemSpineState, partition: &LacunaPartiti
     } else if input.candidate_granule_mask == 0 {
         input.candidate_granule_mask = 0xFF;
     }
-    let (directive, _) = spine.evaluate_frame_transition_branchless(input);
+    let pins = SpinePinSnapshot {
+        pinned_compute_mask: envelope.pinned_compute_mask,
+        pinned_slot_mask: envelope.pinned_slot_mask,
+        unobserved_locked: envelope.unobserved_locked,
+        irreversible_step_lock: envelope.irreversible_step_lock,
+        reserved: [0; 5],
+    };
+    let (directive, _) = SystemSpineState::new().evaluate_frame_transition_branchless(pins, input);
     matches!(
         directive,
         FrameDirective::EmitDelta | FrameDirective::ReAnchorKeyframe
@@ -127,20 +134,20 @@ impl EgoDifferentialNet {
     /// (1-hop parallel perspective ensemble when `max_hops == 1`, or sequential chain up to 4 hops
     /// when `max_hops >= 2`; `0` heap alloc, `0 fdiv`) and returns `(delta_norm_q7, hops_traversed)`.
     ///
-    /// When Ego is inactive, tension scale is 0, or `spine` enforces `unobserved_locked` /
+    /// When Ego is inactive, tension scale is 0, or `envelope` enforces `unobserved_locked` /
     /// `irreversible_step_lock`, leaves `frame` untouched and returns `(0, 0)` (zero-copy bypass).
     #[inline]
     pub fn evaluate_pframe_chain_branchless(
         &self,
         ego: &LiminalEgoState,
-        spine: &SystemSpineState,
+        envelope: &EnvelopeState,
         partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         frame: &mut GatewayFrame,
     ) -> (u8, u8) {
         let (norm, hops, _mask) = self.evaluate_pframe_chain_with_mask_branchless(
-            ego, spine, partition, stigmergy, tension, frame,
+            ego, envelope, partition, stigmergy, tension, frame,
         );
         (norm, hops)
     }
@@ -152,13 +159,13 @@ impl EgoDifferentialNet {
     pub fn evaluate_pframe_chain_with_mask_branchless(
         &self,
         ego: &LiminalEgoState,
-        spine: &SystemSpineState,
+        envelope: &EnvelopeState,
         partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         frame: &mut GatewayFrame,
     ) -> (u8, u8, u8) {
-        if !pframe_transition_allowed(spine, partition) {
+        if !pframe_transition_allowed(envelope, partition) {
             return (0, 0, 0);
         }
         let (acc_words, avg_delta, hops_traversed, _entry_idx, matched_mask) = self
@@ -172,7 +179,7 @@ impl EgoDifferentialNet {
         if matched_mask == 0 {
             return (0, 0, 0);
         }
-        let (full_lock, eff_slot, eff_modes) = spine.isolate_slot_and_modes_branchless(
+        let (full_lock, eff_slot, eff_modes) = envelope.isolate_slot_and_modes_branchless(
             frame.dominant_slot,
             frame.action_mode_flags,
             frame.dominant_slot,

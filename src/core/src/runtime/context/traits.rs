@@ -51,7 +51,7 @@ impl PointerSubstrate for RuntimeContext {
 
     #[inline]
     fn step_pointer(&mut self, current_ptr: u64, trail_out: &mut PointerTrail) -> Result<()> {
-        let cap = self.config.raw.substrate_capacity;
+        let cap = self.raw_config.substrate_capacity;
         let cur_active = self.substrate.active_count;
         self.substrate.active_count =
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
@@ -80,7 +80,7 @@ impl PointerSubstrate for RuntimeContext {
 
     #[inline]
     fn update_cellular_state_express(&mut self, trail_id: u32, phase_delta: PhaseQ7) -> Result<()> {
-        if trail_id >= self.config.raw.substrate_capacity {
+        if trail_id >= self.raw_config.substrate_capacity {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         self.substrate
@@ -120,7 +120,7 @@ impl PointerSubstrate for RuntimeContext {
 
     #[inline(always)]
     fn capacity(&self) -> u32 {
-        self.config.raw.substrate_capacity
+        self.raw_config.substrate_capacity
     }
 
     #[inline(always)]
@@ -160,7 +160,7 @@ impl PointerSubstrate for RuntimeContext {
 impl FastPathLedger for RuntimeContext {
     #[inline]
     fn evaluate_auto_tune(&self, slot: &LedgerSlot, config_out: &mut RuntimeConfig) -> Result<()> {
-        *config_out = self.config.raw;
+        *config_out = self.raw_config;
 
         // Count high-intensity telemetry spike events (>= 0x80) across all 8 ring bytes via 1 SWAR op.
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
@@ -344,7 +344,7 @@ impl MappedStorage for RuntimeContext {
         config_out: &mut RuntimeConfig,
     ) -> Result<()> {
         self.deserialize_from_bytes(buffer)?;
-        *config_out = self.config.raw;
+        *config_out = self.raw_config;
         Ok(())
     }
 
@@ -364,14 +364,14 @@ impl MappedStorage for RuntimeContext {
 impl CausalProvenanceSignal for RuntimeContext {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        self.entropy_controller.causal_provenance_bits() | self.config.raw.causal_provenance_bits()
+        self.entropy_controller.causal_provenance_bits() | self.raw_config.causal_provenance_bits()
     }
 
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
         branchless_max_f32(
             self.entropy_controller.causal_anomaly_severity(),
-            self.config.raw.causal_anomaly_severity(),
+            self.raw_config.causal_anomaly_severity(),
         )
     }
 }
@@ -400,7 +400,7 @@ impl SystemConstraintSignal for RuntimeContext {
     #[inline(always)]
     fn phase_step_min_rad_override(&self) -> f32 {
         branchless_max_f32(
-            self.config.raw.phase_step_min_rad_override(),
+            self.raw_config.phase_step_min_rad_override(),
             self.entropy_controller.phase_step_min_rad_override(),
         )
     }

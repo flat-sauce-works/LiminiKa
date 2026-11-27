@@ -50,14 +50,43 @@ void test_static_invariants() {
     static_assert(offsetof(lmnk_config_t, reserved) == 50U);
 
     static_assert(sizeof(lmnk_abi_info_t) == 64U);
-    static_assert(sizeof(lmnk_runtime_policy_t) == 48U);
+    static_assert(sizeof(lmnk_runtime_policy_t) == 64U);
     static_assert(sizeof(lmnk_turn_begin_params_t) == 16U);
     static_assert(sizeof(lmnk_decode_step_params_t) == 48U);
     static_assert(alignof(lmnk_decode_step_params_t) == 16U);
-    static_assert(sizeof(lmnk_decode_step_report_t) == 80U);
+    static_assert(offsetof(lmnk_decode_step_params_t, flags) == 4U);
+    static_assert(sizeof(lmnk_decode_step_report_t) == 64U);
     static_assert(sizeof(lmnk_runtime_state_view_t) == 64U);
+    static_assert(offsetof(lmnk_runtime_state_view_t, envelope_contraction_q7) == 46U);
+    static_assert(offsetof(lmnk_runtime_state_view_t, envelope_violation_epochs) == 48U);
+    static_assert(offsetof(lmnk_runtime_state_view_t, envelope_baseline_pressure_q15) == 52U);
+    static_assert(offsetof(lmnk_runtime_state_view_t, reserved) == 56U);
     static_assert(sizeof(lmnk_lacuna_eval_params_t) == 24U);
     static_assert(sizeof(lmnk_container_verify_report_t) == 40U);
+    static_assert(sizeof(lmnk_system_pressure_reading_t) == 8U);
+    static_assert(sizeof(lmnk_compute_dispatch_mask_t) == 40U);
+    static_assert(sizeof(lmnk_spine_decode_input_t) == 32U);
+    static_assert(sizeof(lmnk_boundary_signal_t) == 32U);
+    static_assert(alignof(lmnk_boundary_signal_t) == 32U);
+    static_assert(offsetof(lmnk_boundary_signal_t, reserved) == 26U);
+    static_assert(offsetof(lmnk_boundary_signal_t, epoch_id) == 28U);
+    static_assert(sizeof(lmnk_envelope_bounds_t) == 32U);
+    static_assert(alignof(lmnk_envelope_bounds_t) == 32U);
+    static_assert(sizeof(lmnk_envelope_feedback_t) == 16U);
+    static_assert(alignof(lmnk_envelope_feedback_t) == 16U);
+    static_assert(offsetof(lmnk_envelope_feedback_t, contraction_q7) == 11U);
+    static_assert(offsetof(lmnk_envelope_feedback_t, breach_mask) == 12U);
+    static_assert(sizeof(lmnk_envelope_state_t) == 64U);
+    static_assert(alignof(lmnk_envelope_state_t) == 64U);
+    static_assert(offsetof(lmnk_envelope_state_t, baseline_pressure_q15) == 24U);
+    static_assert(offsetof(lmnk_envelope_state_t, contraction_q7) == 33U);
+    static_assert(offsetof(lmnk_envelope_state_t, reserved) == 37U);
+    static_assert(sizeof(lmnk_envelope_step_params_t) == 96U);
+    static_assert(alignof(lmnk_envelope_step_params_t) == 32U);
+    static_assert(offsetof(lmnk_envelope_step_params_t, bounds) == 32U);
+    static_assert(offsetof(lmnk_envelope_step_params_t, signal) == 64U);
+    static_assert(sizeof(lmnk_boundary_emit_params_t) == 16U);
+    static_assert(alignof(lmnk_boundary_emit_params_t) == 4U);
 
     static_assert(sizeof(lmnk_pointer_trail_t) == 128U);
     static_assert(alignof(lmnk_pointer_trail_t) == 64U);
@@ -107,7 +136,7 @@ void test_handshake_config_and_inline_tagged_ptr() {
     LMNK_TEST_CHECK(info.abi_version_hex == LMNK_ABI_VERSION_HEX);
     LMNK_TEST_CHECK(info.context_size == 5120U);
     LMNK_TEST_CHECK(info.context_align == 64U);
-    LMNK_TEST_CHECK(info.snapshot_max_bytes == 512U);
+    LMNK_TEST_CHECK(info.snapshot_max_bytes == 576U);
     LMNK_TEST_CHECK(info.topology_crc32 != 0U);
     LMNK_TEST_CHECK((info.capability_flags & LMNK_CAP_SWAR_BASELINE) != 0ULL);
     LMNK_TEST_CHECK((info.capability_flags & LMNK_CAP_ZERO_ALLOC_CORE) != 0ULL);
@@ -190,6 +219,79 @@ void test_context_lifecycle_policy_decode_and_snapshot() {
     LMNK_TEST_CHECK(state.active_compute_mask == 0x0000FFFFULL);
     LMNK_TEST_CHECK(state.guard_hold_tokens == 3U);
     LMNK_TEST_CHECK(state.max_observe_stride == 4U);
+    LMNK_TEST_CHECK(state.envelope_contraction_q7 == 128U);
+    LMNK_TEST_CHECK(state.envelope_breach_mask == LMNK_ENVELOPE_BREACH_NONE);
+    LMNK_TEST_CHECK(state.envelope_violation_epochs == 0U);
+
+    // Emit BoundarySignal (#27) + fail-closed checks
+    lmnk_boundary_emit_params_t emit_in{};
+    emit_in.struct_size = static_cast<uint32_t>(sizeof(emit_in));
+    emit_in.flags = LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT;
+    emit_in.pressure_q15 = 9000U;
+    emit_in.chatter_q7 = 16U;
+    emit_in.epoch_id = 11U;
+    alignas(32) lmnk_boundary_signal_t emitted_sig{};
+    LMNK_TEST_CHECK(lmnk_context_emit_boundary_signal(ctx, &emit_in, &emitted_sig) == LMNK_OK);
+    LMNK_TEST_CHECK(emitted_sig.pressure_q15 == 9000U);
+    LMNK_TEST_CHECK(emitted_sig.chatter_q7 == 16U);
+    LMNK_TEST_CHECK(emitted_sig.epoch_id == 11U);
+    LMNK_TEST_CHECK((emitted_sig.signal_flags & LMNK_BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT) !=
+                    0U);
+
+    lmnk_boundary_emit_params_t bad_emit = emit_in;
+    bad_emit.flags = (1U << 7);
+    LMNK_TEST_CHECK(lmnk_context_emit_boundary_signal(ctx, &bad_emit, &emitted_sig) ==
+                    LMNK_ERR_INVALID_ARGUMENT);
+    bad_emit = emit_in;
+    bad_emit.struct_size = 0U;
+    LMNK_TEST_CHECK(lmnk_context_emit_boundary_signal(ctx, &bad_emit, &emitted_sig) ==
+                    LMNK_ERR_INVALID_ARGUMENT);
+
+    // Tier-1 standalone Envelope step (#26): DEFAULT_BOUNDS zero-init, breach, calm recovery, fail-closed
+    alignas(64) lmnk_envelope_state_t env_state{};
+    env_state.contraction_q7 = 128U;
+    env_state.baseline_pinned_compute_mask = LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+    env_state.pinned_compute_mask = LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+    alignas(32) lmnk_envelope_step_params_t env_in{};
+    env_in.struct_size = static_cast<uint32_t>(sizeof(env_in));
+    env_in.flags = LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS;
+    env_in.signal = emitted_sig;
+    alignas(16) lmnk_envelope_feedback_t env_fb{};
+    LMNK_TEST_CHECK(lmnk_envelope_step(&env_state, &env_in, &env_fb) == LMNK_OK);
+    LMNK_TEST_CHECK(env_fb.contraction_q7 == 128U);
+    LMNK_TEST_CHECK(env_fb.breach_mask == LMNK_ENVELOPE_BREACH_NONE);
+
+    // Pressure breach contracts aperture and updates violation_epochs
+    env_in.signal.pressure_q15 = 31000U;
+    env_in.signal.epoch_id = 12U;
+    LMNK_TEST_CHECK(lmnk_envelope_step(&env_state, &env_in, &env_fb) == LMNK_OK);
+    LMNK_TEST_CHECK(env_fb.contraction_q7 < 128U);
+    LMNK_TEST_CHECK((env_fb.breach_mask & LMNK_ENVELOPE_BREACH_PRESSURE) != 0U);
+    LMNK_TEST_CHECK(env_state.violation_epochs == 1U);
+    LMNK_TEST_CHECK((env_fb.effective_pinned_compute_mask &
+                     LMNK_HOST_IMMUTABLE_PINNED_COMPUTE_MASK) != 0ULL);
+    const uint8_t contracted = env_fb.contraction_q7;
+
+    // Calm step monotonically recovers contraction
+    env_in.signal.pressure_q15 = 8000U;
+    env_in.signal.chatter_q7 = 4U;
+    env_in.signal.epoch_id = 13U;
+    LMNK_TEST_CHECK(lmnk_envelope_step(&env_state, &env_in, &env_fb) == LMNK_OK);
+    LMNK_TEST_CHECK(env_fb.contraction_q7 > contracted);
+    LMNK_TEST_CHECK(env_fb.breach_mask == LMNK_ENVELOPE_BREACH_NONE);
+
+    // Fail-closed checks on #26: bad flags, bad struct_size, bad bounds without DEFAULT_BOUNDS
+    alignas(32) lmnk_envelope_step_params_t bad_env = env_in;
+    bad_env.flags = 0U; // zeroed bounds invalid when DEFAULT_BOUNDS is clear
+    bad_env.bounds.pressure_floor_q15 = 32000U;
+    bad_env.bounds.pressure_ceiling_q15 = 1000U;
+    LMNK_TEST_CHECK(lmnk_envelope_step(&env_state, &bad_env, &env_fb) == LMNK_ERR_INVALID_ARGUMENT);
+    bad_env = env_in;
+    bad_env.flags = (1U << 5);
+    LMNK_TEST_CHECK(lmnk_envelope_step(&env_state, &bad_env, &env_fb) == LMNK_ERR_INVALID_ARGUMENT);
+    bad_env = env_in;
+    bad_env.struct_size = 0U;
+    LMNK_TEST_CHECK(lmnk_envelope_step(&env_state, &bad_env, &env_fb) == LMNK_ERR_INVALID_ARGUMENT);
 
     lmnk_turn_begin_params_t turn{};
     turn.struct_size = static_cast<uint32_t>(sizeof(turn));
@@ -197,6 +299,7 @@ void test_context_lifecycle_policy_decode_and_snapshot() {
 
     alignas(16) lmnk_decode_step_params_t step_in{};
     step_in.struct_size = static_cast<uint32_t>(sizeof(step_in));
+    step_in.flags = 0U;
     step_in.decode_input.pressure.frame_time_pressure_q15 = 8192U;
     step_in.decode_input.observed_exit_entropy_q15 = 9830U;
     step_in.decode_input.exit_entropy_lacuna_code = LMNK_LACUNA_SELF_REF;
@@ -209,6 +312,13 @@ void test_context_lifecycle_policy_decode_and_snapshot() {
 
     lmnk_decode_step_report_t step_rep{};
     step_rep.struct_size = static_cast<uint32_t>(sizeof(step_rep));
+    // Unknown decode flags rejected fail-closed
+    alignas(16) lmnk_decode_step_params_t bad_step = step_in;
+    bad_step.flags = (1U << 3);
+    LMNK_TEST_CHECK(lmnk_context_step_decode(ctx, &bad_step, &step_rep) ==
+                    LMNK_ERR_INVALID_ARGUMENT);
+    // Valid external guard flag accepted
+    step_in.flags = LMNK_DECODE_STEP_FLAG_EXTERNAL_GUARD;
     LMNK_TEST_CHECK(lmnk_context_step_decode(ctx, &step_in, &step_rep) == LMNK_OK);
     LMNK_TEST_CHECK((step_rep.dispatch.execute_mask & 0x0081ULL) == 0x0081ULL);
     LMNK_TEST_CHECK(step_rep.next_observe_mode == LMNK_SPINE_LOGITS_OBSERVE_FULL);

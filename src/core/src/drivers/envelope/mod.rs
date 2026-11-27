@@ -15,17 +15,17 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
-use crate::foundation::{ACTION_MODE_PHASE_REPULSE, Pod};
+use crate::foundation::{ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, Pod};
 use crate::liminal::{
-    AttributionTag, BoundarySignal, HOST_IMMUTABLE_PINNED_COMPUTE_MASK, PrimitiveKind,
-    THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_SYSTEM_CONSTRAINT, branchless_select_u8,
-    branchless_select_u16, branchless_select_u32,
+    AttributionTag, BitCut8, BitCut32, BoundarySignal, HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+    PrimitiveKind, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_SYSTEM_CONSTRAINT,
+    branchless_select_u8, branchless_select_u16, branchless_select_u32,
 };
 use crate::stigmergy::{ATTRACTOR_SLOT_REPULSION, ATTRACTOR_SLOT_SYSTEM_BASELINE};
 
 /// No safety-envelope breach active (`0x00`).
 pub const ENVELOPE_BREACH_NONE: u8 = 0x00;
-/// Breach bit (`bit 0`): signal pressure exceeded [`EnvelopeBounds::entropy_ceiling_q15`].
+/// Breach bit (`bit 0`): signal pressure exceeded [`EnvelopeBounds::pressure_ceiling_q15`].
 pub const ENVELOPE_BREACH_PRESSURE: u8 = 1 << 0;
 /// Breach bit (`bit 1`): signal chatter exceeded [`EnvelopeBounds::max_chatter_q7`].
 pub const ENVELOPE_BREACH_CHATTER: u8 = 1 << 1;
@@ -33,6 +33,11 @@ pub const ENVELOPE_BREACH_CHATTER: u8 = 1 << 1;
 pub const ENVELOPE_BREACH_EXTERIOR: u8 = 1 << 2;
 /// Breach bit (`bit 3`): terminal `Undefined` fault detected (`fail-closed` to zero contraction).
 pub const ENVELOPE_BREACH_UNDEFINED_FAULT: u8 = 1 << 3;
+/// Bitmask of all defined `ENVELOPE_BREACH_*` bits (`0x0F`).
+pub const ENVELOPE_BREACH_KNOWN_MASK: u8 = ENVELOPE_BREACH_PRESSURE
+    | ENVELOPE_BREACH_CHATTER
+    | ENVELOPE_BREACH_EXTERIOR
+    | ENVELOPE_BREACH_UNDEFINED_FAULT;
 
 /// Lock bit (`bit 0`): zero-aperture non-observation lock active.
 pub const ENVELOPE_LOCK_UNOBSERVED: u8 = 1 << 0;
@@ -45,13 +50,18 @@ pub const ENVELOPE_LOCK_FAULT_ISOLATED: u8 = 1 << 2;
 pub const ENVELOPE_FLAG_CONTRACTED: u8 = 1 << 0;
 /// State flag (`bit 1`): calm recovery toward unit aperture (`128`) is in progress.
 pub const ENVELOPE_FLAG_RECOVERY_ACTIVE: u8 = 1 << 1;
+/// Bitmask of all defined `ENVELOPE_FLAG_*` bits (`0x03`).
+pub const ENVELOPE_FLAG_KNOWN_MASK: u8 = ENVELOPE_FLAG_CONTRACTED | ENVELOPE_FLAG_RECOVERY_ACTIVE;
 
-/// Default Q0.15 upper ceiling (`0.85` = `27_853`) triggering pressure contraction.
-pub const DEFAULT_ENVELOPE_ENTROPY_CEILING_Q15: u16 = 27_853;
-/// Default Q0.15 lower floor (`0.15` = `4_915`).
-pub const DEFAULT_ENVELOPE_ENTROPY_FLOOR_Q15: u16 = 4_915;
-/// Default Q0.15 upper baseline bound (`0.78` = `25_559`).
-pub const DEFAULT_ENVELOPE_MAX_BASELINE_ENTROPY_Q15: u16 = 25_559;
+/// Default Q0.15 upper pressure ceiling (`0.85` = `27_853`) triggering pressure contraction.
+pub const DEFAULT_ENVELOPE_PRESSURE_CEILING_Q15: u16 = 27_853;
+/// Default Q0.15 lower pressure floor (`0.15` = `4_915`).
+pub const DEFAULT_ENVELOPE_PRESSURE_FLOOR_Q15: u16 = 4_915;
+/// Default Q0.15 upper baseline pressure bound (`0.78` = `25_559`).
+pub const DEFAULT_ENVELOPE_MAX_BASELINE_PRESSURE_Q15: u16 = 25_559;
+
+/// Unit Q0.15 scalar ceiling (`1.0` = `32_768`) used for pressure range validation.
+const ENVELOPE_PRESSURE_Q15_ONE: u16 = 32_768;
 
 /// Canonical 8-bit host-pinned aperture bitmask (`SystemConstraint | ContradictionGuard`).
 const DEFAULT_PINNED_APERTURE_MASK_U8: u8 =
@@ -67,21 +77,21 @@ const DEFAULT_PINNED_SLOT_MASK_U8: u8 =
 pub struct EnvelopeBounds {
     /// Host-immutable compute slot bitmask never cleared across steps or restores (`offset 0..8`).
     pub immutable_compute_pin_mask: u64,
-    /// Upper pressure/entropy ceiling in Q0.15 (`0..=32768`; `0` disables pressure breach, `offset 8..10`).
-    pub entropy_ceiling_q15: u16,
-    /// Lower pressure/entropy floor in Q0.15 (`0..=32768`, `offset 10..12`).
-    pub entropy_floor_q15: u16,
-    /// Minimum online baseline bound in Q0.15 reserved for adaptive calibration (`offset 12..14`).
-    pub min_baseline_entropy_q15: u16,
-    /// Maximum online baseline bound in Q0.15 reserved for adaptive calibration (`offset 14..16`).
-    pub max_baseline_entropy_q15: u16,
+    /// Upper signal pressure ceiling in Q0.15 (`0..=32768`; `0` disables pressure breach, `offset 8..10`).
+    pub pressure_ceiling_q15: u16,
+    /// Lower signal pressure floor in Q0.15 (`0..=32768`, `offset 10..12`).
+    pub pressure_floor_q15: u16,
+    /// Minimum online baseline pressure bound in Q0.15 reserved for adaptive calibration (`offset 12..14`).
+    pub min_baseline_pressure_q15: u16,
+    /// Maximum online baseline pressure bound in Q0.15 reserved for adaptive calibration (`offset 14..16`).
+    pub max_baseline_pressure_q15: u16,
     /// Host-immutable 8-bit cognitive aperture pin mask (`offset 16`).
     pub immutable_aperture_pin_mask: u8,
     /// Host-immutable 8-bit workbench slot pin mask (`offset 17`).
     pub immutable_slot_pin_mask: u8,
     /// Host-immutable 8-bit `ACTION_MODE_*` pin mask (`offset 18`).
     pub immutable_action_pin_mask: u8,
-    /// Maximum tolerated boundary chatter in Q0.7 (`0..=127`; `0` disables chatter breach, `offset 19`).
+    /// Maximum tolerated boundary chatter in Q0.7 (`0..=128`; `0` disables chatter breach, `offset 19`).
     pub max_chatter_q7: u8,
     /// Per-step contraction decrement in Q0.7 (`1..=128`) applied on non-fault violations (`offset 20`).
     pub contraction_gain_q7: u8,
@@ -99,10 +109,10 @@ const _: () = {
     assert!(size_of::<EnvelopeBounds>() == 32);
     assert!(align_of::<EnvelopeBounds>() == 32);
     assert!(offset_of!(EnvelopeBounds, immutable_compute_pin_mask) == 0);
-    assert!(offset_of!(EnvelopeBounds, entropy_ceiling_q15) == 8);
-    assert!(offset_of!(EnvelopeBounds, entropy_floor_q15) == 10);
-    assert!(offset_of!(EnvelopeBounds, min_baseline_entropy_q15) == 12);
-    assert!(offset_of!(EnvelopeBounds, max_baseline_entropy_q15) == 14);
+    assert!(offset_of!(EnvelopeBounds, pressure_ceiling_q15) == 8);
+    assert!(offset_of!(EnvelopeBounds, pressure_floor_q15) == 10);
+    assert!(offset_of!(EnvelopeBounds, min_baseline_pressure_q15) == 12);
+    assert!(offset_of!(EnvelopeBounds, max_baseline_pressure_q15) == 14);
     assert!(offset_of!(EnvelopeBounds, immutable_aperture_pin_mask) == 16);
     assert!(offset_of!(EnvelopeBounds, immutable_slot_pin_mask) == 17);
     assert!(offset_of!(EnvelopeBounds, immutable_action_pin_mask) == 18);
@@ -131,10 +141,10 @@ impl EnvelopeBounds {
     pub const fn new() -> Self {
         Self {
             immutable_compute_pin_mask: HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
-            entropy_ceiling_q15: DEFAULT_ENVELOPE_ENTROPY_CEILING_Q15,
-            entropy_floor_q15: DEFAULT_ENVELOPE_ENTROPY_FLOOR_Q15,
-            min_baseline_entropy_q15: DEFAULT_ENVELOPE_ENTROPY_FLOOR_Q15,
-            max_baseline_entropy_q15: DEFAULT_ENVELOPE_MAX_BASELINE_ENTROPY_Q15,
+            pressure_ceiling_q15: DEFAULT_ENVELOPE_PRESSURE_CEILING_Q15,
+            pressure_floor_q15: DEFAULT_ENVELOPE_PRESSURE_FLOOR_Q15,
+            min_baseline_pressure_q15: DEFAULT_ENVELOPE_PRESSURE_FLOOR_Q15,
+            max_baseline_pressure_q15: DEFAULT_ENVELOPE_MAX_BASELINE_PRESSURE_Q15,
             immutable_aperture_pin_mask: DEFAULT_PINNED_APERTURE_MASK_U8,
             immutable_slot_pin_mask: DEFAULT_PINNED_SLOT_MASK_U8,
             immutable_action_pin_mask: ACTION_MODE_PHASE_REPULSE,
@@ -145,6 +155,23 @@ impl EnvelopeBounds {
             ema_resume_dwell_target: 4,
             reserved: [0; 8],
         }
+    }
+
+    /// Validates numeric range and ordering invariants on [`EnvelopeBounds`] branchlessly.
+    #[inline(always)]
+    #[must_use]
+    pub const fn validate_invariants(&self) -> bool {
+        let ceiling_ok = self.pressure_ceiling_q15 <= ENVELOPE_PRESSURE_Q15_ONE;
+        let floor_ok = self.pressure_floor_q15 <= ENVELOPE_PRESSURE_Q15_ONE;
+        let order_ok = (self.pressure_ceiling_q15 == 0)
+            | (self.pressure_floor_q15 <= self.pressure_ceiling_q15);
+        let base_ok = (self.max_baseline_pressure_q15 <= ENVELOPE_PRESSURE_Q15_ONE)
+            & (self.min_baseline_pressure_q15 <= self.max_baseline_pressure_q15);
+        let q7_ok = (self.max_chatter_q7 <= 128)
+            & (self.contraction_gain_q7 <= 128)
+            & (self.recovery_gain_q7 <= 128)
+            & (self.min_aperture_q7 <= 128);
+        ceiling_ok & floor_ok & order_ok & base_ok & q7_ok
     }
 }
 
@@ -203,8 +230,8 @@ pub struct EnvelopeState {
     pub violation_epochs: u32,
     /// Consecutive calm violation-free observed steps (`offset 20..24`).
     pub calm_epochs: u32,
-    /// Online adaptive baseline reading in Q0.15 reserved for adaptive calibration (`offset 24..26`).
-    pub baseline_entropy_q15: u16,
+    /// Online adaptive baseline pressure reading in Q0.15 reserved for adaptive calibration (`offset 24..26`).
+    pub baseline_pressure_q15: u16,
     /// Latest finite pressure reading recorded in Q0.15 (`offset 26..28`).
     pub last_pressure_q15: u16,
     /// Active 8-bit cognitive aperture pin mask (`offset 28`).
@@ -236,7 +263,7 @@ const _: () = {
     assert!(offset_of!(EnvelopeState, pinned_compute_mask) == 8);
     assert!(offset_of!(EnvelopeState, violation_epochs) == 16);
     assert!(offset_of!(EnvelopeState, calm_epochs) == 20);
-    assert!(offset_of!(EnvelopeState, baseline_entropy_q15) == 24);
+    assert!(offset_of!(EnvelopeState, baseline_pressure_q15) == 24);
     assert!(offset_of!(EnvelopeState, last_pressure_q15) == 26);
     assert!(offset_of!(EnvelopeState, pinned_aperture_mask) == 28);
     assert!(offset_of!(EnvelopeState, pinned_slot_mask) == 29);
@@ -271,7 +298,7 @@ impl EnvelopeState {
             pinned_compute_mask: HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
             violation_epochs: 0,
             calm_epochs: 0,
-            baseline_entropy_q15: 0,
+            baseline_pressure_q15: 0,
             last_pressure_q15: 0,
             pinned_aperture_mask: DEFAULT_PINNED_APERTURE_MASK_U8,
             pinned_slot_mask: DEFAULT_PINNED_SLOT_MASK_U8,
@@ -286,6 +313,32 @@ impl EnvelopeState {
         }
     }
 
+    /// Validates numeric range and flag bitmask invariants on [`EnvelopeState`] branchlessly.
+    #[inline(always)]
+    #[must_use]
+    pub const fn validate_invariants(&self) -> bool {
+        (self.contraction_q7 <= 128)
+            & (self.baseline_pressure_q15 <= ENVELOPE_PRESSURE_Q15_ONE)
+            & (self.last_pressure_q15 <= ENVELOPE_PRESSURE_Q15_ONE)
+            & ((self.breach_mask & !ENVELOPE_BREACH_KNOWN_MASK) == 0)
+            & ((self.envelope_flags & !ENVELOPE_FLAG_KNOWN_MASK) == 0)
+    }
+
+    /// Packs the active `ENVELOPE_LOCK_*` bitmask (`UNOBSERVED | IRREVERSIBLE | FAULT_ISOLATED`)
+    /// from latched lock fields and `breach_mask`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn lock_flags(&self) -> u8 {
+        let is_fault = (self.breach_mask & ENVELOPE_BREACH_UNDEFINED_FAULT) != 0;
+        branchless_select_u8(self.unobserved_locked != 0, ENVELOPE_LOCK_UNOBSERVED, 0)
+            | branchless_select_u8(
+                self.irreversible_step_lock != 0,
+                ENVELOPE_LOCK_IRREVERSIBLE,
+                0,
+            )
+            | branchless_select_u8(is_fault, ENVELOPE_LOCK_FAULT_ISOLATED, 0)
+    }
+
     /// Monotonically raises both permanent baseline and active compute pin masks, always
     /// enforcing [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`].
     #[inline(always)]
@@ -293,6 +346,79 @@ impl EnvelopeState {
         let floor = required_pinned_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
         self.baseline_pinned_compute_mask |= floor;
         self.pinned_compute_mask |= floor;
+    }
+
+    /// Replaces `baseline_pinned_compute_mask` (e.g., on geometry rebind) and synchronizes
+    /// `pinned_compute_mask` while never dropping [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`].
+    #[inline(always)]
+    pub const fn set_baseline_pin_mask(&mut self, baseline_mask: u64) {
+        let safe_base = baseline_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        self.baseline_pinned_compute_mask = safe_base;
+        self.pinned_compute_mask = safe_base;
+    }
+
+    /// Arms a transient turn-local compute guard pin (`active_mask`) without polluting
+    /// `baseline_pinned_compute_mask`.
+    #[inline(always)]
+    pub const fn arm_transient_guard_pin(&mut self, active_mask: u64) {
+        self.pinned_compute_mask |=
+            active_mask | self.baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+    }
+
+    /// Restores `pinned_compute_mask` strictly to `baseline_pinned_compute_mask` plus
+    /// [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`], clearing transient turn-local pins.
+    #[inline(always)]
+    pub const fn restore_baseline_pin_mask(&mut self) {
+        self.pinned_compute_mask =
+            self.baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+    }
+
+    /// Pins additional compute slots in `pinned_compute_mask`.
+    #[inline(always)]
+    pub const fn pin_compute_slots(&mut self, slot_mask: u64) {
+        self.pinned_compute_mask |= slot_mask;
+    }
+
+    /// Unpins transient compute slots from `pinned_compute_mask` while preserving the permanent
+    /// baseline pin floor (`baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK`).
+    #[inline(always)]
+    pub const fn unpin_compute_slots(&mut self, slot_mask: u64) {
+        let floor = self.baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
+        self.pinned_compute_mask = (self.pinned_compute_mask & !slot_mask) | floor;
+    }
+
+    /// Physical `pinned` isolation barrier ensuring sibling modulation never mutates pinned apertures.
+    #[inline(always)]
+    #[must_use]
+    pub const fn mask_ego_aperture_edits(
+        &self,
+        prev_aperture_mask: u32,
+        next_aperture_mask: u32,
+    ) -> u32 {
+        let pinned = self.pinned_aperture_mask as u32;
+        let prev_cut = BitCut32::split(prev_aperture_mask, pinned);
+        let next_cut = BitCut32::split(next_aperture_mask, pinned);
+        next_cut.outside | prev_cut.inside
+    }
+
+    /// Primitive `pinned` isolation helper returning `(full_lock, effective_slot, effective_modes)`
+    /// without depending on upper-layer `GatewayFrame`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn isolate_slot_and_modes_branchless(
+        &self,
+        base_slot: u8,
+        base_modes: u8,
+        ego_slot: u8,
+        ego_modes: u8,
+    ) -> (bool, u8, u8) {
+        let masked_base = base_slot & ATTRACTOR_SLOT_ID_MASK;
+        let slot_is_pinned = BitCut8::split(self.pinned_slot_mask, 1u8 << masked_base).inside != 0;
+        let eff_slot = branchless_select_u8(slot_is_pinned, base_slot, ego_slot);
+        let preserved_modes = BitCut8::split(base_modes, self.pinned_action_mode_mask).inside;
+        let eff_modes = ego_modes | preserved_modes;
+        let full_lock = (self.unobserved_locked != 0) | (self.irreversible_step_lock != 0);
+        (full_lock, eff_slot, eff_modes)
     }
 
     /// Resets transient counters, locks, and contraction to nominal defaults while preserving the
@@ -304,7 +430,7 @@ impl EnvelopeState {
         self.pinned_compute_mask = floor;
         self.violation_epochs = 0;
         self.calm_epochs = 0;
-        self.baseline_entropy_q15 = 0;
+        self.baseline_pressure_q15 = 0;
         self.last_pressure_q15 = 0;
         self.pinned_aperture_mask = DEFAULT_PINNED_APERTURE_MASK_U8;
         self.pinned_slot_mask = DEFAULT_PINNED_SLOT_MASK_U8;
@@ -342,7 +468,7 @@ impl EnvelopeState {
 
         let is_undefined = signal.is_fault();
         let pressure_breach =
-            (bounds.entropy_ceiling_q15 > 0) & (signal.pressure_q15 > bounds.entropy_ceiling_q15);
+            (bounds.pressure_ceiling_q15 > 0) & (signal.pressure_q15 > bounds.pressure_ceiling_q15);
         let chatter_breach =
             (bounds.max_chatter_q7 > 0) & (signal.chatter_q7 > bounds.max_chatter_q7);
         let exterior_breach = signal.has_exterior_alert();
@@ -399,11 +525,13 @@ impl EnvelopeState {
                 0,
             );
 
-        let unobs_lock = (self.unobserved_locked != 0) | unobserved_zero;
-        let irrev_lock = (self.irreversible_step_lock != 0) | signal.is_irreversible_intent();
-        let lock_flags = branchless_select_u8(unobs_lock, ENVELOPE_LOCK_UNOBSERVED, 0)
-            | branchless_select_u8(irrev_lock, ENVELOPE_LOCK_IRREVERSIBLE, 0)
-            | branchless_select_u8(is_undefined, ENVELOPE_LOCK_FAULT_ISOLATED, 0);
+        let lock_flags = self.lock_flags()
+            | branchless_select_u8(unobserved_zero, ENVELOPE_LOCK_UNOBSERVED, 0)
+            | branchless_select_u8(
+                signal.is_irreversible_intent(),
+                ENVELOPE_LOCK_IRREVERSIBLE,
+                0,
+            );
 
         let is_stig = matches!(signal.attribution().primitive(), PrimitiveKind::Stigmergy);
         let attribution_tag = branchless_select_u8(

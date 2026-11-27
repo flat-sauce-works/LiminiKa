@@ -565,9 +565,7 @@ impl ModelSteeringAdapter {
         self.ctx
             .compute_pool_mut()
             .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
-        self.ctx
-            .system_spine_mut()
-            .set_baseline_pin_mask(pinned_slots);
+        self.ctx.set_baseline_pin_mask(pinned_slots);
         self.begin_turn_spine_policy(false, false);
         self.ctx.reset_telemetry();
         self.ctx.set_probe_baseline(next_probe);

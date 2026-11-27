@@ -4,7 +4,7 @@
 //! End-to-end cross-restart equilibrium persistence benchmark (`--equilibrium-bench`).
 //!
 //! Verifies on live LLM weights:
-//! 1. Session 1: live steered turn + 512 B `RuntimeContext` snapshot export + crystallized FIFO
+//! 1. Session 1: live steered turn + 576 B `RuntimeContext` snapshot export + crystallized FIFO
 //!    drain into `EquilibriumState` + `.lmnkc` persistence (`LMNK_SECTION_RUNTIME_SNAPSHOT`).
 //! 2. 100-generation flat `join` convergence (non-thermal-death, healthy forgetting, non-lock-in
 //!    plasticity, bounded `.lmnkc` size, zero NaN/Inf).
@@ -291,7 +291,7 @@ pub(crate) fn run_equilibrium_benchmark(
 
     let sync_report = session1.sync_equilibrium_state(&mut eq)?;
     let lmnkc_written = eq.save_lmnkc_to_path(&lmnkc_path, 1_774_900_001)?;
-    let s1_pin_mask = session1.system_spine().baseline_pinned_compute_mask;
+    let s1_pin_mask = session1.envelope().baseline_pinned_compute_mask;
     let s1_ego_hash = session1.ego_state().ego_signature_hash;
     let s1_resident_ids: Vec<u32> = eq
         .pager()
@@ -396,7 +396,7 @@ pub(crate) fn run_equilibrium_benchmark(
     let snap_restored = session2.restore_from_equilibrium(&restored_eq)?;
     let _ = session2.calibrate_manifold_probe(&pos_slices, &neg_slices, base_entropies)?;
 
-    let s2_pin_mask = session2.system_spine().baseline_pinned_compute_mask;
+    let s2_pin_mask = session2.envelope().baseline_pinned_compute_mask;
     let pin_floor_intact = (s2_pin_mask & s1_pin_mask) == s1_pin_mask;
     let ego_restored = session2.ego_state().ego_signature_hash == s1_ego_hash;
     let s2_resident_ids: Vec<u32> = restored_eq

@@ -7,37 +7,43 @@
 //! 1. `.lmnkc` deterministic mutation fuzzing (`>= 2,000` mutations), alignment/topology guards,
 //!    strict padding/gap/trailing/flag validation, and `Lacuna::Unobserved` reserved sections.
 //! 2. Cycle & out-of-bounds termination defense for `PointerTrail` and `EgoDifferentialNet`.
-//! 3. Hostile C-ABI `0x0000_0400` calls across all 25 exports (`struct_size` fail-closed,
+//! 3. Hostile C-ABI `0x0000_0400` calls across all 27 exports (`struct_size` fail-closed,
 //!    `num_tokens != 1`, `Rank1Descriptor` `ArenaSpan` overflow, NULL, misalignment, aliasing,
 //!    `usize::MAX`, `NaN`/`Inf`, cross-mode destroy/deinit) + direct Rust API parity.
-//! 4. `SystemSpineState` privilege isolation & transactional `NaN`/`Inf`/corrupt snapshot rejection.
+//! 4. `EnvelopeState` / `SystemSpineState` privilege isolation & transactional corrupt snapshot rejection.
 //! 5. UAF-free `zeroize_volatile` proof for `5,120`-byte `RuntimeContext` buffers.
-//! 6. Spine policy ABI alignment/overlap/monotonic pin-floor guards + `0x0000_0400` version policy.
+//! 6. Spine & Envelope ABI alignment/overlap/monotonic pin-floor guards + `0x0000_0400` version policy.
 
+use std::mem::offset_of;
 use std::ptr;
 
 use liminika_core::abi::{
-    LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE, LMNK_RANK1_FLAG_FUSED,
-    LMNK_ROPE_STEER_FLAG_UNCLAMPED, LMNK_TURN_FLAG_GUARD_ACTIVE, LmnkContextHandle,
-    SPINE_DECODE_FLAG_REWARD_OVERRIDE, lmnk_abi_info, lmnk_abi_info_t, lmnk_abi_version_hex,
-    lmnk_abi_version_string, lmnk_config_init_default, lmnk_config_t, lmnk_config_validate,
+    LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT, LMNK_DECODE_STEP_FLAG_EXTERNAL_GUARD,
+    LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS, LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE,
+    LMNK_RANK1_FLAG_FUSED, LMNK_ROPE_STEER_FLAG_UNCLAMPED, LMNK_TURN_FLAG_GUARD_ACTIVE,
+    LmnkContextHandle, SPINE_DECODE_FLAG_REWARD_OVERRIDE, lmnk_abi_info, lmnk_abi_info_t,
+    lmnk_abi_version_hex, lmnk_abi_version_string, lmnk_boundary_emit_params_t,
+    lmnk_boundary_signal_t, lmnk_config_init_default, lmnk_config_t, lmnk_config_validate,
     lmnk_container_find_section, lmnk_container_section_view_t, lmnk_container_verify,
     lmnk_container_verify_report_t, lmnk_container_write, lmnk_container_write_params_t,
     lmnk_context_begin_turn, lmnk_context_configure_policy, lmnk_context_create,
     lmnk_context_deinit_in_place, lmnk_context_deserialize, lmnk_context_destroy,
-    lmnk_context_get_state, lmnk_context_init_in_place, lmnk_context_reset, lmnk_context_serialize,
-    lmnk_context_step_decode, lmnk_decode_step_params_t, lmnk_decode_step_report_t,
-    lmnk_gateway_steer, lmnk_gateway_steer_params_t, lmnk_lacuna_eval_params_t,
-    lmnk_lacuna_partition_eval, lmnk_pointer_trail_t, lmnk_q7_t, lmnk_rank1_descriptor_t,
-    lmnk_rank1_eval, lmnk_rank1_eval_params_t, lmnk_rope_procrustes_params_t,
-    lmnk_rope_procrustes_q7, lmnk_rope_steer_params_t, lmnk_rope_steer_q, lmnk_runtime_policy_t,
-    lmnk_runtime_state_view_t, lmnk_section_input_t, lmnk_spine_decode_input_t,
-    lmnk_status_to_string, lmnk_turn_begin_params_t,
+    lmnk_context_emit_boundary_signal, lmnk_context_get_state, lmnk_context_init_in_place,
+    lmnk_context_reset, lmnk_context_serialize, lmnk_context_step_decode,
+    lmnk_decode_step_params_t, lmnk_decode_step_report_t, lmnk_envelope_bounds_t,
+    lmnk_envelope_feedback_t, lmnk_envelope_state_t, lmnk_envelope_step,
+    lmnk_envelope_step_params_t, lmnk_gateway_steer, lmnk_gateway_steer_params_t,
+    lmnk_lacuna_eval_params_t, lmnk_lacuna_partition_eval, lmnk_pointer_trail_t, lmnk_q7_t,
+    lmnk_rank1_descriptor_t, lmnk_rank1_eval, lmnk_rank1_eval_params_t,
+    lmnk_rope_procrustes_params_t, lmnk_rope_procrustes_q7, lmnk_rope_steer_params_t,
+    lmnk_rope_steer_q, lmnk_runtime_policy_t, lmnk_runtime_state_view_t, lmnk_section_input_t,
+    lmnk_spine_decode_input_t, lmnk_status_to_string, lmnk_turn_begin_params_t,
 };
 use liminika_core::drivers::{
     DISTORTION_DELTA_FLAG_ACTIVE, DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID, DistortionDelta,
-    DistortionTension, EgoDifferentialNet, EntropyController, EntropyState,
-    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, LiminalEgoPreset, LiminalEgoState, eval_barrier_pitchfork,
+    DistortionTension, EgoDifferentialNet, EntropyController, EntropyState, EnvelopeState,
+    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, LiminalEgoPreset, LiminalEgoState, SystemSpineState,
+    eval_barrier_pitchfork,
 };
 use liminika_core::foundation::{
     ACTION_MODE_PHASE_STEER, AlignedBuffer16, AlignedBuffer32, AlignedBuffer64, ArenaSpan,
@@ -1053,8 +1059,14 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
 
     let mut priv_snap = snap.clone();
     priv_snap[sec_off + 21] = 0;
-    priv_snap[sec_off + 328..sec_off + 336].copy_from_slice(&0u64.to_le_bytes());
-    priv_snap[sec_off + 352..sec_off + 360].copy_from_slice(&0u64.to_le_bytes());
+    // Attempt to strip EnvelopeState @ 352 compute/aperture/slot/action pin floors in raw snapshot.
+    let env_base_off = sec_off + 352 + offset_of!(EnvelopeState, baseline_pinned_compute_mask);
+    let env_pin_off = sec_off + 352 + offset_of!(EnvelopeState, pinned_compute_mask);
+    priv_snap[env_base_off..env_base_off + 8].copy_from_slice(&0u64.to_le_bytes());
+    priv_snap[env_pin_off..env_pin_off + 8].copy_from_slice(&0u64.to_le_bytes());
+    priv_snap[sec_off + 352 + offset_of!(EnvelopeState, pinned_aperture_mask)] = 0;
+    priv_snap[sec_off + 352 + offset_of!(EnvelopeState, pinned_slot_mask)] = 0;
+    priv_snap[sec_off + 352 + offset_of!(EnvelopeState, pinned_action_mode_mask)] = 0;
     restamp_snapshot_crcs(&mut priv_snap);
 
     let mut dst = RuntimeContext::new_boxed(Config::new()).expect("dst ctx");
@@ -1062,23 +1074,35 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
     dst.substrate_mut().slot_pinned_mask = 0x05;
     dst.deserialize_from_bytes(&priv_snap).expect("deserialize");
     assert_ne!(
-        dst.system_spine().baseline_pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+        dst.envelope().baseline_pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
         0
     );
-    assert_eq!(dst.system_spine().baseline_pinned_compute_mask & 0x0E, 0x0E);
-    assert_eq!(dst.system_spine().pinned_compute_mask & 0x0E, 0x0E);
+    assert_eq!(dst.envelope().baseline_pinned_compute_mask & 0x0E, 0x0E);
+    assert_eq!(dst.envelope().pinned_compute_mask & 0x0E, 0x0E);
+    assert_eq!(
+        dst.envelope().pinned_aperture_mask,
+        EnvelopeState::new().pinned_aperture_mask
+    );
+    assert_eq!(
+        dst.envelope().pinned_slot_mask,
+        EnvelopeState::new().pinned_slot_mask
+    );
+    assert_eq!(
+        dst.envelope().pinned_action_mode_mask,
+        EnvelopeState::new().pinned_action_mode_mask
+    );
     assert_eq!(dst.slot_pinned_mask() & 0x05, 0x05);
 
     let active_mask = 0xFFFF_u64;
     dst.compute_pool_mut()
         .set_slot_masks(active_mask, 0x0F, 0, active_mask & !0x0F);
-    dst.system_spine_mut().set_baseline_pin_mask(0x0F);
+    dst.set_baseline_pin_mask(0x0F);
     dst.begin_turn_spine_policy(true, false);
-    assert_eq!(dst.system_spine().pinned_compute_mask, active_mask);
+    assert_eq!(dst.envelope().pinned_compute_mask, active_mask);
     dst.deserialize_from_bytes(&snap)
         .expect("restore unguarded");
-    assert_eq!(dst.system_spine().baseline_pinned_compute_mask, 0x0F);
-    assert_eq!(dst.system_spine().pinned_compute_mask, 0x0F);
+    assert_eq!(dst.envelope().baseline_pinned_compute_mask, 0x0F);
+    assert_eq!(dst.envelope().pinned_compute_mask, 0x0F);
 
     dst.substrate_mut().step_counter = 999;
     dst.substrate_mut().last_entropy_h_tilde = 0.33;
@@ -1128,17 +1152,47 @@ fn suite4_spine_privilege_isolation_and_transactional_snapshot_rejection() {
         ),
         (
             "Invalid SystemSpineState.control_flags",
-            Box::new(|b, off| b[off + 320 + 48] = 0x80),
+            Box::new(|b, off| {
+                b[off + 320 + offset_of!(SystemSpineState, control_flags)] = 0x80;
+            }),
         ),
         (
             "Out-of-range SystemSpineState.last_observed_entropy_q15",
             Box::new(|b, off| {
-                b[off + 320 + 40..off + 320 + 42].copy_from_slice(&40_000u16.to_le_bytes())
+                let pos = off + 320 + offset_of!(SystemSpineState, last_observed_entropy_q15);
+                b[pos..pos + 2].copy_from_slice(&40_000u16.to_le_bytes());
             }),
         ),
         (
             "Invalid SystemSpineState.last_veto_mask",
-            Box::new(|b, off| b[off + 320 + 49] = 0x80),
+            Box::new(|b, off| {
+                b[off + 320 + offset_of!(SystemSpineState, last_veto_mask)] = 0x80;
+            }),
+        ),
+        (
+            "Out-of-range EnvelopeState.contraction_q7",
+            Box::new(|b, off| {
+                b[off + 352 + offset_of!(EnvelopeState, contraction_q7)] = 200;
+            }),
+        ),
+        (
+            "Out-of-range EnvelopeState.baseline_pressure_q15",
+            Box::new(|b, off| {
+                let pos = off + 352 + offset_of!(EnvelopeState, baseline_pressure_q15);
+                b[pos..pos + 2].copy_from_slice(&40_000u16.to_le_bytes());
+            }),
+        ),
+        (
+            "Unknown EnvelopeState.breach_mask bits",
+            Box::new(|b, off| {
+                b[off + 352 + offset_of!(EnvelopeState, breach_mask)] = 0xF0;
+            }),
+        ),
+        (
+            "Unknown EnvelopeState.envelope_flags bits",
+            Box::new(|b, off| {
+                b[off + 352 + offset_of!(EnvelopeState, envelope_flags)] = 0x80;
+            }),
         ),
     ];
 
@@ -1200,6 +1254,7 @@ fn suite5_uaf_free_zeroize_volatile_all_5120_bytes_proof() {
     ctx.apply_host_spine_pin_floor(0xFFFF);
     ctx.zeroize_in_place();
     assert!(ctx.core_layers().as_bytes().iter().all(|&b| b == 0x00));
+    assert!(ctx.envelope().as_bytes().iter().all(|&b| b == 0x00));
     assert!(ctx.system_spine().as_bytes().iter().all(|&b| b == 0x00));
     assert!(ctx.substrate().as_bytes().iter().all(|&b| b == 0x00));
     assert_eq!(ctx.compute_pool().active_mask, 0);
@@ -1361,6 +1416,206 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
             ),
             LMNK_ERR_INVALID_ARGUMENT
         );
+        assert_eq!(
+            lmnk_context_step_decode(
+                ctx_handle,
+                &lmnk_decode_step_params_t {
+                    flags: 1 << 7,
+                    ..step_in
+                },
+                &mut step_rep
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_context_step_decode(
+                ctx_handle,
+                &lmnk_decode_step_params_t {
+                    flags: LMNK_DECODE_STEP_FLAG_EXTERNAL_GUARD,
+                    ..step_in
+                },
+                &mut step_rep
+            ),
+            LMNK_OK
+        );
+
+        // Adversarial checks for #27 lmnk_context_emit_boundary_signal
+        let emit_ok = lmnk_boundary_emit_params_t {
+            flags: LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT,
+            pressure_q15: 12_000,
+            chatter_q7: 16,
+            epoch_id: 9,
+            ..Default::default()
+        };
+        let mut sig_out = lmnk_boundary_signal_t::new();
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(ptr::null_mut(), &emit_ok, &mut sig_out),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(ctx_handle, ptr::null(), &mut sig_out),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(ctx_handle, &emit_ok, ptr::null_mut()),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(misalign_ctx, &emit_ok, &mut sig_out),
+            LMNK_ERR_ALIGNMENT
+        );
+        let overlap_sig = base_ptr.add(320).cast::<lmnk_boundary_signal_t>();
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(ctx_handle, &emit_ok, overlap_sig),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(
+                ctx_handle,
+                &lmnk_boundary_emit_params_t {
+                    struct_size: 0,
+                    ..emit_ok
+                },
+                &mut sig_out
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(
+                ctx_handle,
+                &lmnk_boundary_emit_params_t {
+                    flags: 1 << 9,
+                    ..emit_ok
+                },
+                &mut sig_out
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(
+                ctx_handle,
+                &lmnk_boundary_emit_params_t {
+                    pressure_q15: 32_769,
+                    ..emit_ok
+                },
+                &mut sig_out
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(
+                ctx_handle,
+                &lmnk_boundary_emit_params_t {
+                    chatter_q7: 129,
+                    ..emit_ok
+                },
+                &mut sig_out
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(ctx_handle, &emit_ok, &mut sig_out),
+            LMNK_OK
+        );
+
+        // Adversarial checks for #26 lmnk_envelope_step (NULL, misalignment, alias, size, flags, state, bounds, signal)
+        let mut env_state = lmnk_envelope_state_t::new();
+        let env_ok = lmnk_envelope_step_params_t {
+            flags: LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS,
+            signal: sig_out,
+            ..Default::default()
+        };
+        let mut env_fb = lmnk_envelope_feedback_t::default();
+        assert_eq!(
+            lmnk_envelope_step(ptr::null_mut(), &env_ok, &mut env_fb),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_envelope_step(&mut env_state, ptr::null(), &mut env_fb),
+            LMNK_ERR_NULL_POINTER
+        );
+        assert_eq!(
+            lmnk_envelope_step(&mut env_state, &env_ok, ptr::null_mut()),
+            LMNK_ERR_NULL_POINTER
+        );
+        let mut raw_env_buf = AlignedBuffer64::<u8, 256>::new([0u8; 256]);
+        let misalign_env = raw_env_buf
+            .as_mut_slice()
+            .as_mut_ptr()
+            .add(16)
+            .cast::<lmnk_envelope_state_t>();
+        assert_eq!(
+            lmnk_envelope_step(misalign_env, &env_ok, &mut env_fb),
+            LMNK_ERR_ALIGNMENT
+        );
+        // Aliasing state_inout and feedback_out
+        let alias_fb = ptr::from_mut(&mut env_state).cast::<lmnk_envelope_feedback_t>();
+        assert_eq!(
+            lmnk_envelope_step(&mut env_state, &env_ok, alias_fb),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_envelope_step(
+                &mut env_state,
+                &lmnk_envelope_step_params_t {
+                    struct_size: 0,
+                    ..env_ok
+                },
+                &mut env_fb
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_envelope_step(
+                &mut env_state,
+                &lmnk_envelope_step_params_t {
+                    flags: 1 << 4,
+                    ..env_ok
+                },
+                &mut env_fb
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        let mut bad_state = lmnk_envelope_state_t::new();
+        bad_state.contraction_q7 = 200;
+        assert_eq!(
+            lmnk_envelope_step(&mut bad_state, &env_ok, &mut env_fb),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        let mut bad_sig = sig_out;
+        bad_sig.pressure_q15 = 40_000;
+        assert_eq!(
+            lmnk_envelope_step(
+                &mut env_state,
+                &lmnk_envelope_step_params_t {
+                    signal: bad_sig,
+                    ..env_ok
+                },
+                &mut env_fb
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        let mut bad_bounds = lmnk_envelope_bounds_t::new();
+        bad_bounds.pressure_floor_q15 = 30_000;
+        bad_bounds.pressure_ceiling_q15 = 5_000;
+        assert_eq!(
+            lmnk_envelope_step(
+                &mut env_state,
+                &lmnk_envelope_step_params_t {
+                    flags: 0,
+                    bounds: bad_bounds,
+                    signal: sig_out,
+                    ..Default::default()
+                },
+                &mut env_fb
+            ),
+            LMNK_ERR_INVALID_ARGUMENT
+        );
+        assert_eq!(
+            lmnk_envelope_step(&mut env_state, &env_ok, &mut env_fb),
+            LMNK_OK
+        );
+
         assert_eq!(lmnk_context_deinit_in_place(ctx_handle), LMNK_OK);
     }
 
@@ -1371,6 +1626,7 @@ fn suite6_spine_abi_adversarial_alignment_overlap_and_pin_floor_guards() {
     ctx_ab.configure_spine(0x00A0, 3, 4, true);
     ctx_ba.configure_spine(0x00A0, 3, 4, true);
     ctx_ba.configure_compute_pool(0x00FF, 0x00FF_FFFF, 0xFFFF_FFFF, 50_000);
+    assert_eq!(*ctx_ab.envelope(), *ctx_ba.envelope());
     assert_eq!(*ctx_ab.system_spine(), *ctx_ba.system_spine());
     assert_eq!(*ctx_ab.compute_pool(), *ctx_ba.compute_pool());
     assert_eq!(ctx_ab.compute_pool().baseline_pressure_q15, 32_767);

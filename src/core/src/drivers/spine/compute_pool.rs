@@ -16,12 +16,12 @@
 //! 3. **Zero-`fdiv` EMA + asymmetric hysteresis**: External `+ System` Gauge-Zero pressure surges
 //!    retreat rapidly (`alpha = 1/2`), while recovery decays slowly (`alpha = 1/16`) with dwell
 //!    gating to protect 1% Low frame times.
-//! 4. **Pinned protection & anti-paralysis**: Irreversible slots (`SystemSpineState::pinned_compute_mask`)
+//! 4. **Pinned protection & anti-paralysis**: Irreversible slots (`SpinePinSnapshot::pinned_compute_mask`)
 //!    are never bypassed or migrated, and bypassed slots are excluded from `stationary_evidence_mask`.
 
 use core::mem::{align_of, offset_of, size_of};
 
-use crate::drivers::spine::state::{SPINE_BYPASS_VETO_NONE, SystemSpineState};
+use crate::drivers::spine::state::{SPINE_BYPASS_VETO_NONE, SpinePinSnapshot, SystemSpineState};
 use crate::foundation::{Pod, branchless_argmin_u8_x8_masked};
 use crate::liminal::{
     BitCut8, BitCut64, branchless_select_u8, branchless_select_u16, branchless_select_u64,
@@ -176,8 +176,7 @@ unsafe impl Pod for TokenBypassObservation {}
 ///
 /// Cacheline-packed into 3 exact 64-byte cache lines (`192 B`, `#[repr(C, align(64))]`, 0 splits,
 /// 0 implicit padding): CL0 (`0..64`) scalars & bitmasks, CL1 (`64..128`) `slot_pheromone_q7`,
-/// CL2 (`128..192`) `slot_lane`. Irreversible slot pinning uses [`SystemSpineState::pinned_compute_mask`]
-/// as the single source of truth.
+/// CL2 (`128..192`) `slot_lane`. Irreversible slot pinning is supplied via [`SpinePinSnapshot`].
 #[repr(C, align(64))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnonymousComputePool {
@@ -276,11 +275,13 @@ impl AnonymousComputePool {
         &mut self,
         obs: TokenBypassObservation,
         spine: &mut SystemSpineState,
+        pins: SpinePinSnapshot,
         guard_active: bool,
         dispatch: &mut ComputeDispatchMask,
     ) -> u8 {
         let repulsion_active = obs.repulsion_active != 0;
         let veto_mask = spine.evaluate_pool_bypass_veto_branchless(
+            pins,
             self.reversible_mask,
             guard_active,
             repulsion_active,
@@ -299,10 +300,14 @@ impl AnonymousComputePool {
             self.re_bypass_cooldown = self.re_bypass_cooldown.max(min_cd);
         }
         spine.last_veto_mask = veto_mask;
-        let masked_bypass = spine.mask_layer_bypass_with_pinned(dispatch.bypass_mask, veto_mask);
+        let masked_bypass = spine.mask_layer_bypass_with_pinned(
+            pins.pinned_compute_mask,
+            dispatch.bypass_mask,
+            veto_mask,
+        );
         let restored_slots = BitCut64::split(dispatch.bypass_mask, masked_bypass).outside;
         dispatch.bypass_mask = masked_bypass;
-        dispatch.execute_mask |= restored_slots | spine.pinned_compute_mask;
+        dispatch.execute_mask |= restored_slots | pins.pinned_compute_mask;
         dispatch.stationary_evidence_mask =
             BitCut64::split(dispatch.execute_mask, dispatch.bypass_mask).outside;
         veto_mask
@@ -369,8 +374,7 @@ impl AnonymousComputePool {
     }
 
     /// Configures anonymous slot masks (`active`, `repulsion`, `reversible`), clamping non-active
-    /// and `pinned_compute_mask` slots out of `repulsion` and `reversible` without duplicating
-    /// [`SystemSpineState::pinned_compute_mask`].
+    /// and `pinned_compute_mask` slots out of `repulsion` and `reversible`.
     pub fn set_slot_masks(
         &mut self,
         active_mask: u64,
@@ -522,10 +526,12 @@ impl AnonymousComputePool {
         &mut self,
         mut reading: SystemPressureReading,
         spine: &SystemSpineState,
+        pins: SpinePinSnapshot,
         guard_active: bool,
         repulsion_active: bool,
     ) -> ComputeDispatchMask {
         let veto_mask = spine.evaluate_pool_bypass_veto_branchless(
+            pins,
             self.reversible_mask,
             guard_active,
             repulsion_active,
@@ -533,11 +539,15 @@ impl AnonymousComputePool {
         if veto_mask != SPINE_BYPASS_VETO_NONE {
             reading.irreversible_step = 1;
         }
-        let mut dispatch = self.step_dispatch(reading, spine.pinned_compute_mask);
-        let masked_bypass = spine.mask_layer_bypass_with_pinned(dispatch.bypass_mask, veto_mask);
+        let mut dispatch = self.step_dispatch(reading, pins.pinned_compute_mask);
+        let masked_bypass = spine.mask_layer_bypass_with_pinned(
+            pins.pinned_compute_mask,
+            dispatch.bypass_mask,
+            veto_mask,
+        );
         let restored_slots = BitCut64::split(dispatch.bypass_mask, masked_bypass).outside;
         dispatch.bypass_mask = masked_bypass;
-        dispatch.execute_mask |= restored_slots | spine.pinned_compute_mask;
+        dispatch.execute_mask |= restored_slots | pins.pinned_compute_mask;
         dispatch.stationary_evidence_mask =
             BitCut64::split(dispatch.execute_mask, dispatch.bypass_mask).outside;
         dispatch
@@ -847,9 +857,11 @@ mod tests {
         pool.reanchor_baseline_pressure(8000);
         pool.set_slot_masks(active, pinned_base, 0, rev);
         let mut spine = SystemSpineState::new();
-        let mut d1 = pool.step_dispatch_with_spine(surge, &spine, true, false);
-        let veto1 = pool
-            .evaluate_whole_token_steering_bypass_with_spine(calm_obs, &mut spine, true, &mut d1);
+        let no_pins = SpinePinSnapshot::default();
+        let mut d1 = pool.step_dispatch_with_spine(surge, &spine, no_pins, true, false);
+        let veto1 = pool.evaluate_whole_token_steering_bypass_with_spine(
+            calm_obs, &mut spine, no_pins, true, &mut d1,
+        );
         assert_ne!(veto1 & SPINE_BYPASS_VETO_GUARD_ACTIVE, 0);
         assert_eq!(d1.whole_token_steering_bypass, 0);
         assert_eq!(d1.bypass_mask, 0);
@@ -867,10 +879,11 @@ mod tests {
             repulsion_active: 1,
             ..calm_obs
         };
-        let mut d2 = pool2.step_dispatch_with_spine(surge, &spine2, false, true);
+        let mut d2 = pool2.step_dispatch_with_spine(surge, &spine2, no_pins, false, true);
         let veto2 = pool2.evaluate_whole_token_steering_bypass_with_spine(
             rep_obs,
             &mut spine2,
+            no_pins,
             false,
             &mut d2,
         );
@@ -887,15 +900,23 @@ mod tests {
         pool3.set_slot_masks(active, pinned_base, 0, rev);
         let mut spine3 = SystemSpineState::new();
         let pin_bits = (1_u64 << 8) | (1_u64 << 12);
-        spine3.pin_compute_slots(pinned_base | pin_bits);
+        let mut pins3 = SpinePinSnapshot {
+            pinned_compute_mask: pinned_base | pin_bits,
+            ..Default::default()
+        };
         assert_eq!(
-            spine3.mask_layer_bypass_with_pinned(pin_bits | (1_u64 << 10), SPINE_BYPASS_VETO_NONE),
+            spine3.mask_layer_bypass_with_pinned(
+                pins3.pinned_compute_mask,
+                pin_bits | (1_u64 << 10),
+                SPINE_BYPASS_VETO_NONE,
+            ),
             1_u64 << 10
         );
-        let mut d3 = pool3.step_dispatch_with_spine(surge, &spine3, false, false);
+        let mut d3 = pool3.step_dispatch_with_spine(surge, &spine3, pins3, false, false);
         let veto3 = pool3.evaluate_whole_token_steering_bypass_with_spine(
             calm_obs,
             &mut spine3,
+            pins3,
             false,
             &mut d3,
         );
@@ -906,23 +927,26 @@ mod tests {
         assert_eq!(d3.execute_mask & pin_bits, pin_bits);
 
         // Case 4: unobserved_locked == 1 alone must NOT trigger bypass veto (Lacuna::Unobserved isolation).
-        let mut spine4 = SystemSpineState::new();
-        spine4.unobserved_locked = 1;
+        let spine4 = SystemSpineState::new();
+        let pins4 = SpinePinSnapshot {
+            unobserved_locked: 1,
+            ..Default::default()
+        };
         assert_eq!(
-            spine4.evaluate_whole_token_bypass_veto_branchless(false, false),
+            spine4.evaluate_whole_token_bypass_veto_branchless(pins4, false, false),
             SPINE_BYPASS_VETO_NONE
         );
-        assert!(spine4.should_bypass_whole_token_branchless(true, false, false));
+        assert!(spine4.should_bypass_whole_token_branchless(pins4, true, false, false));
 
         // Case 5: after unpinning dynamic interior slots (keeping permanent `pinned_base`), whole-token bypass resumes.
-        spine3.unpin_compute_slots(pin_bits);
-        assert_eq!(spine3.pinned_compute_mask, pinned_base);
+        pins3.pinned_compute_mask = pinned_base;
         let mut resumed = false;
         for _ in 0..8 {
-            let mut d_rec = pool3.step_dispatch_with_spine(surge, &spine3, false, false);
+            let mut d_rec = pool3.step_dispatch_with_spine(surge, &spine3, pins3, false, false);
             let veto_rec = pool3.evaluate_whole_token_steering_bypass_with_spine(
                 calm_obs,
                 &mut spine3,
+                pins3,
                 false,
                 &mut d_rec,
             );
@@ -987,14 +1011,18 @@ mod tests {
         pool.reanchor_baseline_pressure(8192);
         pool.set_slot_masks(active, pinned_base, 0, rev);
         let mut spine = SystemSpineState::new();
-        spine.pin_compute_slots(active);
+        let mut pins = SpinePinSnapshot {
+            pinned_compute_mask: active,
+            ..Default::default()
+        };
 
         // Under guard veto, bypass_dwell_steps stays 0 while concrete streaks accumulate on SystemSpineState.
         for step in 0..8_u8 {
-            let mut dispatch = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let mut dispatch = pool.step_dispatch_with_spine(pressure, &spine, pins, true, false);
             let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
                 calm_obs,
                 &mut spine,
+                pins,
                 true,
                 &mut dispatch,
             );
@@ -1020,10 +1048,11 @@ mod tests {
             liminal_stationary: 0,
             ..calm_obs
         };
-        let mut d_ns = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+        let mut d_ns = pool.step_dispatch_with_spine(pressure, &spine, pins, true, false);
         let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
             non_stat_obs,
             &mut spine,
+            pins,
             true,
             &mut d_ns,
         );
@@ -1046,15 +1075,15 @@ mod tests {
                 ..calm_obs
             },
         ] {
-            let mut d_cal = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let mut d_cal = pool.step_dispatch_with_spine(pressure, &spine, pins, true, false);
             let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
-                calm_obs, &mut spine, true, &mut d_cal,
+                calm_obs, &mut spine, pins, true, &mut d_cal,
             );
             assert_eq!(spine.calm_concrete_streak, 1);
 
-            let mut d_bad = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let mut d_bad = pool.step_dispatch_with_spine(pressure, &spine, pins, true, false);
             let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
-                bad_obs, &mut spine, true, &mut d_bad,
+                bad_obs, &mut spine, pins, true, &mut d_bad,
             );
             assert_eq!(spine.calm_concrete_streak, 0);
         }
@@ -1062,9 +1091,9 @@ mod tests {
         // Accumulate 2 calm concrete steps -> relaxation unlocks, cooldown lag clears, and next
         // unguarded calm step immediately enters whole-token bypass and resets both counters.
         for _ in 0..2 {
-            let mut d_ok = pool.step_dispatch_with_spine(pressure, &spine, true, false);
+            let mut d_ok = pool.step_dispatch_with_spine(pressure, &spine, pins, true, false);
             let _ = pool.evaluate_whole_token_steering_bypass_with_spine(
-                calm_obs, &mut spine, true, &mut d_ok,
+                calm_obs, &mut spine, pins, true, &mut d_ok,
             );
         }
         assert!(spine.can_relax_transient_guard_pin(8, 1, false, false, 2));
@@ -1072,10 +1101,10 @@ mod tests {
         assert_eq!(spine.bypass_cooldown_steps, 0);
         assert!(spine.bypass_dwell_steps >= 2);
 
-        spine.pinned_compute_mask = pinned_base;
-        let mut d_byp = pool.step_dispatch_with_spine(pressure, &spine, false, false);
+        pins.pinned_compute_mask = pinned_base;
+        let mut d_byp = pool.step_dispatch_with_spine(pressure, &spine, pins, false, false);
         let veto = pool.evaluate_whole_token_steering_bypass_with_spine(
-            calm_obs, &mut spine, false, &mut d_byp,
+            calm_obs, &mut spine, pins, false, &mut d_byp,
         );
         assert_eq!(veto, SPINE_BYPASS_VETO_NONE);
         assert_eq!(d_byp.whole_token_steering_bypass, 1);

@@ -504,9 +504,9 @@ impl ModelSteeringAdapter {
             Self::compute_slot_masks(geometry.num_layers);
         ctx.compute_pool_mut()
             .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
+        ctx.set_baseline_pin_mask(pinned_slots);
         {
             let spine = ctx.system_spine_mut();
-            spine.set_baseline_pin_mask(pinned_slots);
             spine.guard_hold_tokens = Self::DEFAULT_GUARD_HOLD_TOKENS;
             spine.set_max_observe_stride(1);
         }

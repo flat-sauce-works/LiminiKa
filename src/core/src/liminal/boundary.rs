@@ -32,6 +32,12 @@ pub const BOUNDARY_SIGNAL_KNOWN_FLAGS: u8 = BOUNDARY_SIGNAL_FLAG_OBSERVED
     | BOUNDARY_SIGNAL_FLAG_STATIONARY_READY
     | BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT;
 
+/// Canonical `Unobserved` discriminant mirroring `Lacuna::Unobserved.code()` (`0`).
+const LACUNA_CODE_UNOBSERVED: u8 = 0;
+/// Canonical `SelfRef` discriminant mirroring `Lacuna::SelfRef.code()` (`1`).
+const LACUNA_CODE_SELF_REF: u8 = 1;
+/// Canonical `Exterior` discriminant mirroring `Lacuna::Exterior.code()` (`2`).
+const LACUNA_CODE_EXTERIOR: u8 = 2;
 /// Canonical `Undefined` fault discriminant mirroring `Lacuna::Undefined.code()` (`3`).
 const LACUNA_CODE_UNDEFINED: u8 = 3;
 
@@ -48,20 +54,18 @@ pub struct BoundarySignal {
     pub delta_q15: u16,
     /// Packed 3-bit [`AttributionTag`] (`2 Primitives x 3 Drivers`, `0..=5`, `offset 20`).
     pub attribution_tag: u8,
-    /// Encoded 2-bit `Lacuna` state (`0=Unobserved`, `1=SelfRef`, `2=Exterior`, `3=Undefined`, `offset 21`).
-    pub lacuna_code: u8,
-    /// Requested or observed aperture contraction scale in Q0.7 (`0..=128`, `128 = 1.0`, `offset 22`).
+    /// Requested or observed aperture contraction scale in Q0.7 (`0..=128`, `128 = 1.0`, `offset 21`).
     pub contraction_q7: u8,
-    /// Observed boundary chatter intensity in Q0.7 (`0..=127`, `offset 23`).
+    /// Observed boundary chatter intensity in Q0.7 (`0..=128`, `offset 22`).
     pub chatter_q7: u8,
-    /// Bitwise OR of `BOUNDARY_SIGNAL_FLAG_*` summary flags (`offset 24`).
+    /// Bitwise OR of `BOUNDARY_SIGNAL_FLAG_*` summary flags (`offset 23`).
     pub signal_flags: u8,
-    /// Dominant 3-bit working lane index (`0..=7`, `offset 25`).
+    /// Dominant 3-bit working lane index (`0..=7`, `offset 24`).
     pub dominant_lane: u8,
-    /// Primary root-cause classification code (`0` = nominal, `offset 26`).
+    /// Primary root-cause classification code (`0` = nominal, `offset 25`).
     pub root_cause_code: u8,
-    /// Active safety-envelope breach bitmask propagated from or toward constraint drivers (`offset 27`).
-    pub breach_mask: u8,
+    /// Explicit zero-initialized extension space (`offset 26..28`).
+    pub reserved: [u8; 2],
     /// Monotonic logical step/epoch identifier (`offset 28..32`).
     pub epoch_id: u32,
 }
@@ -73,13 +77,12 @@ const _: () = {
     assert!(offset_of!(BoundarySignal, pressure_q15) == 16);
     assert!(offset_of!(BoundarySignal, delta_q15) == 18);
     assert!(offset_of!(BoundarySignal, attribution_tag) == 20);
-    assert!(offset_of!(BoundarySignal, lacuna_code) == 21);
-    assert!(offset_of!(BoundarySignal, contraction_q7) == 22);
-    assert!(offset_of!(BoundarySignal, chatter_q7) == 23);
-    assert!(offset_of!(BoundarySignal, signal_flags) == 24);
-    assert!(offset_of!(BoundarySignal, dominant_lane) == 25);
-    assert!(offset_of!(BoundarySignal, root_cause_code) == 26);
-    assert!(offset_of!(BoundarySignal, breach_mask) == 27);
+    assert!(offset_of!(BoundarySignal, contraction_q7) == 21);
+    assert!(offset_of!(BoundarySignal, chatter_q7) == 22);
+    assert!(offset_of!(BoundarySignal, signal_flags) == 23);
+    assert!(offset_of!(BoundarySignal, dominant_lane) == 24);
+    assert!(offset_of!(BoundarySignal, root_cause_code) == 25);
+    assert!(offset_of!(BoundarySignal, reserved) == 26);
     assert!(offset_of!(BoundarySignal, epoch_id) == 28);
 };
 
@@ -116,13 +119,12 @@ impl BoundarySignal {
             pressure_q15: 0,
             delta_q15: 0,
             attribution_tag: AttributionTag::LIMINAL_SYSTEM.raw(),
-            lacuna_code: 0,
             contraction_q7: 128,
             chatter_q7: 0,
             signal_flags: 0,
             dominant_lane: 0,
             root_cause_code: 0,
-            breach_mask: 0,
+            reserved: [0; 2],
             epoch_id: 0,
         }
     }
@@ -147,27 +149,41 @@ impl BoundarySignal {
             | branchless_select_u8(is_fault, BOUNDARY_SIGNAL_FLAG_FAULT, 0)
             | branchless_select_u8(is_ext, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, 0)
             | branchless_select_u8(is_stat, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, 0);
-        let lacuna_code = branchless_select_u8(
-            is_fault,
-            LACUNA_CODE_UNDEFINED,
-            partition.dominant_lacuna & 0x03,
-        );
-        let clamped_chatter = if chatter_q7 > 127 { 127 } else { chatter_q7 };
+        let clamped_chatter = if chatter_q7 > 128 { 128 } else { chatter_q7 };
 
         Self {
             partition,
             pressure_q15,
             delta_q15,
             attribution_tag: partition.attribution_tag & 0x07,
-            lacuna_code,
             contraction_q7: 128,
             chatter_q7: clamped_chatter,
             signal_flags,
             dominant_lane: 0,
             root_cause_code: 0,
-            breach_mask: 0,
+            reserved: [0; 2],
             epoch_id,
         }
+    }
+
+    /// Branchlessly derives the canonical 2-bit `Lacuna` state code (`0=Unobserved`, `1=SelfRef`,
+    /// `2=Exterior`, `3=Undefined`) directly from `signal_flags` and `partition` (`0` redundancy).
+    #[inline(always)]
+    #[must_use]
+    pub const fn lacuna_code(&self) -> u8 {
+        let dom = self.partition.dominant_lacuna & 0x03;
+        let is_fault = ((self.signal_flags & BOUNDARY_SIGNAL_FLAG_FAULT) != 0)
+            | self.partition.has_undefined_bottom()
+            | (dom == LACUNA_CODE_UNDEFINED);
+        let is_ext = ((self.signal_flags & BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT) != 0)
+            | self.partition.has_exterior_gap()
+            | (dom == LACUNA_CODE_EXTERIOR);
+        let is_self = ((self.signal_flags & BOUNDARY_SIGNAL_FLAG_OBSERVED) != 0)
+            | (self.partition.self_ref_mask != 0)
+            | (dom == LACUNA_CODE_SELF_REF);
+        let c1 = branchless_select_u8(is_self, LACUNA_CODE_SELF_REF, LACUNA_CODE_UNOBSERVED);
+        let c2 = branchless_select_u8(is_ext, LACUNA_CODE_EXTERIOR, c1);
+        branchless_select_u8(is_fault, LACUNA_CODE_UNDEFINED, c2)
     }
 
     /// Returns `true` when [`BOUNDARY_SIGNAL_FLAG_OBSERVED`] is set.
@@ -183,7 +199,7 @@ impl BoundarySignal {
     pub const fn is_fault(&self) -> bool {
         ((self.signal_flags & BOUNDARY_SIGNAL_FLAG_FAULT) != 0)
             | self.partition.has_undefined_bottom()
-            | ((self.lacuna_code & 0x03) == LACUNA_CODE_UNDEFINED)
+            | ((self.partition.dominant_lacuna & 0x03) == LACUNA_CODE_UNDEFINED)
     }
 
     /// Returns `true` when [`BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT`] is set or `partition.has_exterior_gap()`.
@@ -247,19 +263,30 @@ mod tests {
         assert!(!sig.has_exterior_alert());
         assert!(sig.is_stationary_ready());
         assert!(!sig.is_irreversible_intent());
-        assert_eq!(sig.lacuna_code, 1);
+        assert_eq!(sig.lacuna_code(), 1);
         assert_eq!(sig.contraction_q7, 128);
         assert_eq!(sig.chatter_q7, 16);
+        assert_eq!(sig.reserved, [0; 2]);
         assert_eq!(sig.epoch_id, 42);
 
         let irrev = sig.with_irreversible_intent(true);
         assert!(irrev.is_irreversible_intent());
 
+        let ext_obs = [80, 72, 0, 0, 92, 88, 0, 0];
+        let lp_ext = evaluate_lacuna_partition_branchless(0x03, &ext_obs, &tol, 40);
+        let sig_ext = BoundarySignal::from_partition(lp_ext, 15_000, 2_000, 32, 43);
+        assert!(sig_ext.has_exterior_alert());
+        assert_eq!(sig_ext.lacuna_code(), 2);
+
+        let empty_sig = BoundarySignal::new();
+        assert_eq!(empty_sig.lacuna_code(), 0);
+        assert!(!empty_sig.is_fault());
+
         let faulty_obs = [80, 0x80, 0, 0, 0, 0, 0, 0];
         let lp_fault = evaluate_lacuna_partition_branchless(0x03, &faulty_obs, &tol, 40);
-        let sig_fault = BoundarySignal::from_partition(lp_fault, 20_000, 5_000, 99, 43);
+        let sig_fault = BoundarySignal::from_partition(lp_fault, 20_000, 5_000, 99, 44);
         assert!(sig_fault.is_fault());
         assert!(!sig_fault.is_stationary_ready());
-        assert_eq!(sig_fault.lacuna_code, 3);
+        assert_eq!(sig_fault.lacuna_code(), 3);
     }
 }

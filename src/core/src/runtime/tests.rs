@@ -2603,7 +2603,7 @@ fn test_gateway_workbench_bitmask_repulsion_and_sandbox_isolation() {
         overlap: &overlap,
         derivative_alpha_q7: DEFAULT_DERIVATIVE_ALPHA_Q7,
         lacuna_partition: None,
-        spine: None,
+        envelope: None,
         ego_net: None,
         tension: None,
     });
@@ -2874,7 +2874,7 @@ fn test_sandbox_hypothesis_lifecycle_nucleate_settle_and_release() {
 
 #[test]
 fn test_system_spine_physical_pinned_isolation() {
-    let mut spine = SystemSpineState::new();
+    let mut envelope = EnvelopeState::new();
     let baseline = GatewayFrame {
         dominant_slot: ATTRACTOR_SLOT_REPULSION,
         action_mode_flags: ACTION_MODE_PHASE_STEER | ACTION_MODE_PHASE_REPULSE,
@@ -2887,13 +2887,13 @@ fn test_system_spine_physical_pinned_isolation() {
         ..GatewayFrame::default()
     };
     let mut guarded = ego_attempt;
-    spine.enforce_pinned_isolation_branchless(&baseline, &mut guarded);
+    envelope.enforce_pinned_isolation_branchless(&baseline, &mut guarded);
     assert_eq!(guarded.dominant_slot, ATTRACTOR_SLOT_REPULSION);
     assert_ne!(guarded.action_mode_flags & ACTION_MODE_PHASE_REPULSE, 0);
 
-    spine.unobserved_locked = 1;
+    envelope.unobserved_locked = 1;
     let mut locked_frame = ego_attempt;
-    spine.enforce_pinned_isolation_branchless(&baseline, &mut locked_frame);
+    envelope.enforce_pinned_isolation_branchless(&baseline, &mut locked_frame);
     assert_eq!(locked_frame.phase_deltas, baseline.phase_deltas);
 }
 
@@ -2905,7 +2905,7 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
         .with_boundary_crossing_q7(48);
     let mut net_1 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 1);
     let mut net_3 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 3);
-    let spine = SystemSpineState::new();
+    let envelope = EnvelopeState::new();
     let stig = StigmergicGranuleState::new();
     let tension = DistortionTension::new(true);
     let overlap = LacunaPartition8 {
@@ -2918,10 +2918,10 @@ fn test_ego_differential_net_hops_consolidation_and_evaporation() {
     let mut f3 = f1;
 
     let (_n1, h1, mask1) = net_1.evaluate_pframe_chain_with_mask_branchless(
-        &ego, &spine, &overlap, &stig, &tension, &mut f1,
+        &ego, &envelope, &overlap, &stig, &tension, &mut f1,
     );
     let (_n3, h3, mask3) = net_3.evaluate_pframe_chain_with_mask_branchless(
-        &ego, &spine, &overlap, &stig, &tension, &mut f3,
+        &ego, &envelope, &overlap, &stig, &tension, &mut f3,
     );
     let entry = mask3.trailing_zeros() as u8;
     assert_eq!(h1, 1);
@@ -3158,13 +3158,16 @@ fn test_runtime_context_new_boxed_and_zeroize_in_place() {
     boxed.core_layers_mut().liminal.adaptation_epochs = 9;
     boxed.increment_sandbox_settlements();
     assert_eq!(boxed.sandbox_settlements(), 1);
-    assert_eq!(boxed.system_spine().pinned_compute_mask, 0xF0F0);
+    assert_eq!(
+        boxed.envelope().pinned_compute_mask,
+        0xF0F0 | HOST_IMMUTABLE_PINNED_COMPUTE_MASK
+    );
 
     boxed.zeroize_in_place();
     assert_eq!(boxed.substrate().step_counter, 0);
     assert_eq!(boxed.core_layers().liminal.adaptation_epochs, 0);
     assert_eq!(boxed.sandbox_settlements(), 0);
-    assert_eq!(boxed.system_spine().pinned_compute_mask, 0);
+    assert_eq!(boxed.envelope().pinned_compute_mask, 0);
     assert_eq!(boxed.escalated_workbench_lane(), None);
     assert_eq!(boxed.sandbox_workbench_lane(), None);
     assert_eq!(boxed.last_sandbox_event(), SandboxLifecycleEvent::Idle);

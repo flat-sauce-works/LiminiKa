@@ -727,7 +727,7 @@ impl ModelSteeringAdapter {
                 .ego_differential_net()
                 .evaluate_pframe_chain_branchless(
                     &core_layers.ego,
-                    self.ctx.system_spine(),
+                    self.ctx.envelope(),
                     self.ctx.last_lacuna_partition(),
                     &core_layers.stigmergy,
                     self.ctx.distortion_tension(),
@@ -736,7 +736,7 @@ impl ModelSteeringAdapter {
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(self.active_circuit(), &mut frame, &cand_w);
             self.ctx
-                .system_spine()
+                .envelope()
                 .enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
             frame
         } else if core_layers.liminal.adaptation_epochs > 0 {
@@ -773,7 +773,7 @@ impl ModelSteeringAdapter {
         let last_boundary_delta = *self.ctx.last_boundary_delta();
         let last_horizon = *self.ctx.last_horizon();
         let last_overlap = *self.ctx.last_overlap_report();
-        let spine = *self.ctx.system_spine();
+        let envelope = *self.ctx.envelope();
         let frame = if ego_active {
             let mut sys_baseline =
                 signal.synthesize_gateway_with_aperture_from_stack(self.ctx.core_layers());
@@ -791,7 +791,7 @@ impl ModelSteeringAdapter {
             self.ctx.evaluate_ego_pframe_chain_mut(&mut frame);
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(circuit, &mut frame, &cand_w);
-            spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+            envelope.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
             frame
         } else if adapted {
             let mut frame =

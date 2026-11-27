@@ -16,7 +16,7 @@ use crate::foundation::{
 };
 use crate::liminal::{
     AttributionTag, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, BOUNDARY_SIGNAL_FLAG_FAULT,
-    BOUNDARY_SIGNAL_FLAG_OBSERVED, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BoundarySignal, Lacuna,
+    BOUNDARY_SIGNAL_FLAG_OBSERVED, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BoundarySignal,
     LacunaPartition8, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
     branchless_select_u8,
 };
@@ -239,17 +239,6 @@ impl GatewayFrame {
             & (partition.is_self_aligned()
                 | ((self.action_mode_flags & ACTION_MODE_LAYER_SKIP) != 0));
 
-        let non_fault_lacuna = branchless_select_u8(
-            has_ext,
-            Lacuna::Exterior.code(),
-            branchless_select_u8(
-                (partition.self_ref_mask != 0) | has_energy,
-                Lacuna::SelfRef.code(),
-                Lacuna::Unobserved.code(),
-            ),
-        );
-        let lacuna_code =
-            branchless_select_u8(is_fault, Lacuna::Undefined.code(), non_fault_lacuna);
         let signal_flags = branchless_select_u8(is_obs, BOUNDARY_SIGNAL_FLAG_OBSERVED, 0)
             | branchless_select_u8(is_fault, BOUNDARY_SIGNAL_FLAG_FAULT, 0)
             | branchless_select_u8(has_ext, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, 0)
@@ -259,20 +248,19 @@ impl GatewayFrame {
             AttributionTag::STIGMERGY_SYSTEM.raw(),
             AttributionTag::LIMINAL_SYSTEM.raw(),
         );
-        let clamped_chatter = if chatter_q7 > 127 { 127 } else { chatter_q7 };
+        let clamped_chatter = if chatter_q7 > 128 { 128 } else { chatter_q7 };
 
         BoundarySignal {
             partition,
             pressure_q15,
             delta_q15,
             attribution_tag,
-            lacuna_code,
             contraction_q7: 128,
             chatter_q7: clamped_chatter,
             signal_flags,
             dominant_lane: self.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
             root_cause_code: self.root_cause_code,
-            breach_mask: 0,
+            reserved: [0; 2],
             epoch_id,
         }
     }
@@ -474,7 +462,10 @@ mod tests {
         frame.effective_energy = f32::NAN;
         let fault_sig = frame.to_boundary_signal(lp, 9_000, 12, 8);
         assert!(fault_sig.is_fault());
-        assert_eq!(fault_sig.lacuna_code, Lacuna::Undefined.code());
+        assert_eq!(
+            fault_sig.lacuna_code(),
+            crate::liminal::Lacuna::Undefined.code()
+        );
 
         // PhaseAnchorRecord projection preserves 128B layout and projects dispersion.
         let mut anchor = PhaseAnchorRecord::new_empty(11, 1, 0);

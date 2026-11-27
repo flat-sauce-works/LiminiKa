@@ -11,7 +11,7 @@
 
 use crate::drivers::{
     AnonymousComputePool, DistortionTension, EgoDifferentialNet, EntropyController, EntropyState,
-    LiminalEgoState, SystemSpineState,
+    EnvelopeState, LiminalEgoState, SystemSpineState,
 };
 use crate::foundation::{
     DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, Pod, branchless_clamp_f32,
@@ -372,11 +372,46 @@ pub(crate) const CTX_ALLOC_HEAP_BOXED: u8 = 1;
 /// Allocation provenance tag for [`RuntimeContext::allocation_mode`]: caller-owned `in_place` memory.
 pub(crate) const CTX_ALLOC_IN_PLACE: u8 = 2;
 
-/// Exact payload byte size (`384` bytes) of a serialized `RuntimeSnapshot` section.
-pub const LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES: usize = 384;
+/// Exact payload byte size (`448` bytes) of a serialized `RuntimeSnapshot` section.
+pub const LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES: usize = 448;
 
-/// Exact total byte size (`512` bytes) of a serialized single-section `RuntimeContext` container.
-pub const LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES: usize = 512;
+/// Exact total byte size (`576` bytes) of a serialized single-section `RuntimeContext` container.
+pub const LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES: usize = 576;
+
+/// Compact derived configuration fields split out of [`Config`] (`24 B, align(8)`) so
+/// [`RuntimeContext`] embeds [`EnvelopeState`] (`@ 320`) and [`SystemSpineState`] (`@ 384`)
+/// while preserving its exact 5,120-byte L1D footprint.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct DerivedRuntimeConfig {
+    pub(super) slot_coupling_matrix: u64,
+    pub(super) hysteresis_band: f32,
+    pub(super) tau_flux: f32,
+    pub(super) bifurcation_threshold: f32,
+    pub(super) repulsion_threshold: u8,
+    pub(super) repulsion_scale_u7: u8,
+    pub(super) _pad: [u8; 2],
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<DerivedRuntimeConfig>() == 24);
+    assert!(core::mem::align_of::<DerivedRuntimeConfig>() == 8);
+};
+
+impl DerivedRuntimeConfig {
+    #[inline(always)]
+    const fn from_config(config: &Config) -> Self {
+        Self {
+            slot_coupling_matrix: config.slot_coupling_matrix,
+            hysteresis_band: config.hysteresis_band,
+            tau_flux: config.tau_flux,
+            bifurcation_threshold: config.bifurcation_threshold,
+            repulsion_threshold: config.repulsion_threshold,
+            repulsion_scale_u7: config.repulsion_scale_u7,
+            _pad: [0; 2],
+        }
+    }
+}
 
 /// Deterministically scrubs `size_of::<T>()` bytes at `dst` to zero using volatile stores
 /// followed by a `SeqCst` compiler fence to prevent dead-store elimination.
@@ -432,9 +467,10 @@ pub(crate) unsafe fn zeroize_volatile<T>(dst: *mut T) {
 #[derive(Debug)]
 pub struct RuntimeContext {
     // --- Hot (per-token step working set) ---
-    config: Config,
+    raw_config: RuntimeConfig,
     core_layers: CoreStateStack,
     entropy_controller: EntropyController,
+    envelope: EnvelopeState,
     system_spine: SystemSpineState,
     last_horizon: EpistemicHorizonReading,
     last_overlap_report: OverlapDiscoveryReport,
@@ -442,6 +478,7 @@ pub struct RuntimeContext {
     phase_steering: PhaseSteeringEngine,
     last_lacuna_partition: LacunaPartition8,
     last_boundary_delta: LiminalBoundaryDelta,
+    derived_config: DerivedRuntimeConfig,
     probe_baseline: ManifoldProbeBaseline,
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
@@ -461,7 +498,10 @@ pub struct RuntimeContext {
 const _: () = {
     assert!(core::mem::size_of::<RuntimeContext>() == 5120);
     assert!(core::mem::align_of::<RuntimeContext>() == 64);
+    assert!(core::mem::offset_of!(RuntimeContext, raw_config) == 0);
+    assert!(core::mem::offset_of!(RuntimeContext, envelope) == 320);
     assert!(core::mem::offset_of!(RuntimeContext, system_spine) == 384);
+    assert!(core::mem::offset_of!(RuntimeContext, derived_config) == 560);
     assert!(core::mem::offset_of!(RuntimeContext, telemetry) == 4544);
     assert!(!core::mem::needs_drop::<RuntimeContext>());
 };
@@ -489,20 +529,21 @@ impl RuntimeContext {
         entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
         entropy_ctrl.set_tau_flux(config.tau_flux);
 
-        let mut config = config;
-        if config.raw.max_observe_stride == 0 {
-            config.raw.max_observe_stride = 1;
+        let mut raw_config = config.raw;
+        if raw_config.max_observe_stride == 0 {
+            raw_config.max_observe_stride = 1;
         }
+        let derived_config = DerivedRuntimeConfig::from_config(&config);
         let system_spine = SystemSpineState::with_policy(
-            config.raw.guard_hold_tokens,
-            config.raw.max_observe_stride,
+            raw_config.guard_hold_tokens,
+            raw_config.max_observe_stride,
         );
 
         Ok(Self {
-            config,
+            raw_config,
             core_layers: CoreStateStack::new(),
             entropy_controller: entropy_ctrl,
-            probe_baseline: ManifoldProbeBaseline::new(),
+            envelope: EnvelopeState::new(),
             system_spine,
             last_horizon: EpistemicHorizonReading::default(),
             last_overlap_report: OverlapDiscoveryReport::default(),
@@ -510,6 +551,8 @@ impl RuntimeContext {
             phase_steering,
             last_lacuna_partition: LacunaPartition8::default(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
+            derived_config,
+            probe_baseline: ManifoldProbeBaseline::new(),
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
             sandbox_settlements: 0,
@@ -552,19 +595,19 @@ impl RuntimeContext {
         entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
         entropy_ctrl.set_tau_flux(config.tau_flux);
 
-        let mut config = config;
-        if config.raw.max_observe_stride == 0 {
-            config.raw.max_observe_stride = 1;
+        let mut raw_cfg = config.raw;
+        if raw_cfg.max_observe_stride == 0 {
+            raw_cfg.max_observe_stride = 1;
         }
-        let raw_cfg = config.raw;
-        let rep_thresh = config.repulsion_threshold;
-        let rep_scale_u7 = config.repulsion_scale_u7;
-        let coupling = config.slot_coupling_matrix;
+        let derived_cfg = DerivedRuntimeConfig::from_config(&config);
+        let rep_thresh = derived_cfg.repulsion_threshold;
+        let rep_scale_u7 = derived_cfg.repulsion_scale_u7;
+        let coupling = derived_cfg.slot_coupling_matrix;
 
         // SAFETY: Caller guarantees `dst` is valid, writable, non-aliased, and 64-byte aligned.
         unsafe {
             core::ptr::write_bytes(dst, 0u8, 1);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).config), config);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).raw_config), raw_cfg);
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).core_layers),
                 CoreStateStack::new(),
@@ -574,8 +617,8 @@ impl RuntimeContext {
                 entropy_ctrl,
             );
             core::ptr::write(
-                core::ptr::addr_of_mut!((*dst).probe_baseline),
-                ManifoldProbeBaseline::new(),
+                core::ptr::addr_of_mut!((*dst).envelope),
+                EnvelopeState::new(),
             );
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).system_spine),
@@ -607,6 +650,11 @@ impl RuntimeContext {
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).last_boundary_delta),
                 LiminalBoundaryDelta::default(),
+            );
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).derived_config), derived_cfg);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).probe_baseline),
+                ManifoldProbeBaseline::new(),
             );
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).horizon_dwell),

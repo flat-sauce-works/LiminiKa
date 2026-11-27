@@ -37,9 +37,9 @@ pub(super) fn validate_ptr_aligned<T>(ptr: *const T, align: usize) -> LmnkResult
     }
 }
 
-/// Validates a versioned envelope's leading `struct_size` fail-closed (`< MIN || > size_of::<T>()`).
+/// Validates a versioned parameter struct's leading `struct_size` fail-closed (`!= size_of::<T>()`).
 #[inline(always)]
-pub(super) fn validate_envelope_size<T>(actual_size: u32) -> LmnkResult<()> {
+pub(super) fn validate_param_struct_size<T>(actual_size: u32) -> LmnkResult<()> {
     let expected = size_of::<T>() as u32;
     if actual_size != expected {
         Err(LMNK_ERR_INVALID_ARGUMENT)

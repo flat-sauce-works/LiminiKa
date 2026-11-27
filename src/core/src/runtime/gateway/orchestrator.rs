@@ -5,7 +5,7 @@
 //! [`SubstrateGatewayExt`], [`ScaleLayerOrchestrator`], [`HybridScaleCircuit`], and [`StigmergicScaleLayer`]).
 
 use super::*;
-use crate::drivers::{DistortionTension, EgoDifferentialNet, SystemSpineState};
+use crate::drivers::{DistortionTension, EgoDifferentialNet, EnvelopeState};
 use crate::foundation::{
     ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE,
     ATTRACTOR_SLOT_ID_MASK, AlignedBuffer16, AlignedSlice16, AlignedSlice32, AlignedSliceMut32,
@@ -272,7 +272,7 @@ pub(super) fn filter_and_damp_gateway_words(
     }
 }
 
-/// Borrowed read-only core context (`2 Primitives x 2 Drivers`) passed into
+/// Borrowed read-only core context (`2 Primitives x 3 Drivers`) passed into
 /// per-layer Hot-Path RoPE steering and substrate orchestration.
 #[derive(Debug, Clone, Copy)]
 pub struct CoreLayerEvalContext<'a> {
@@ -288,8 +288,8 @@ pub struct CoreLayerEvalContext<'a> {
     pub derivative_alpha_q7: u8,
     /// Optional 4-region branchless [`LacunaPartition8`].
     pub lacuna_partition: Option<&'a LacunaPartition8>,
-    /// Optional [`SystemSpineState`] physical `pinned` isolation barrier.
-    pub spine: Option<&'a SystemSpineState>,
+    /// Optional [`EnvelopeState`] physical `pinned` isolation barrier.
+    pub envelope: Option<&'a EnvelopeState>,
     /// Optional P-Frame differential chain [`EgoDifferentialNet`].
     pub ego_net: Option<&'a EgoDifferentialNet>,
     /// Optional [`DistortionTension`] scaling the P-Frame delta amplitude.
@@ -306,9 +306,8 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
     {
         let mut frame = signal.synthesize_gateway_with_aperture_from_stack(ctx.stack);
         if ctx.stack.ego.is_active() {
-            // Compute the pure `SystemSpine` I-Frame baseline BEFORE `LiminalEgoState` and
-            // `EgoDifferentialNet` mutate the frame so `pinned` isolation always anchors to
-            // pre-Ego state.
+            // Compute the pure I-Frame baseline BEFORE `LiminalEgoState` and `EgoDifferentialNet`
+            // mutate the frame so `pinned` isolation always anchors to pre-Ego state.
             let mut sys_baseline = frame;
             ctx.stack.modulate_gateway_frame_branchless(
                 &mut sys_baseline,
@@ -321,23 +320,23 @@ fn synthesize_signal_with_optional_core_layers<S: ManifoldGatewaySignal + ?Sized
                 ctx.overlap,
                 &mut frame,
             );
-            if let (Some(spine), Some(vp), Some(net), Some(tension)) =
-                (ctx.spine, ctx.lacuna_partition, ctx.ego_net, ctx.tension)
+            if let (Some(envelope), Some(vp), Some(net), Some(tension)) =
+                (ctx.envelope, ctx.lacuna_partition, ctx.ego_net, ctx.tension)
             {
                 let _ = net.evaluate_pframe_chain_branchless(
                     &ctx.stack.ego,
-                    spine,
+                    envelope,
                     vp,
                     &ctx.stack.stigmergy,
                     tension,
                     &mut frame,
                 );
-                spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+                envelope.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
                 let w = *frame.phase_words_ref();
                 return (frame, w);
             }
-            if let Some(spine) = ctx.spine {
-                spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+            if let Some(envelope) = ctx.envelope {
+                envelope.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
                 let w = *frame.phase_words_ref();
                 return (frame, w);
             }

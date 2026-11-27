@@ -1026,6 +1026,7 @@ impl<const N: usize, const P: usize> RamPhaseKvGopCache<N, P> {
             }
             let cur_pframes = self.slot_pframe_count(slot_idx);
             let (directive, _) = SystemSpineState::new().evaluate_frame_transition_branchless(
+                crate::drivers::SpinePinSnapshot::default(),
                 SpineFrameTransitionInput {
                     lacuna_code: Lacuna::SelfRef.code(),
                     phase_delta_q7: 0,

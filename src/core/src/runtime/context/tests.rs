@@ -110,7 +110,7 @@ fn test_runtime_context_lifecycle_and_serialization() {
     assert_eq!(ctx.slot_sandbox_mask(), expected_sb);
     assert!((ctx.slot_weights()[usize::from(ATTRACTOR_SLOT_PERSONA)] - 2.5).abs() < 1e-5);
     assert_eq!(
-        ctx.system_spine().pinned_compute_mask & 0b0101_0000,
+        ctx.envelope().pinned_compute_mask & 0b0101_0000,
         0b0101_0000
     );
 
@@ -553,15 +553,15 @@ fn test_spine_policy_and_decode_control_four_lacunae_and_guard_relaxation() {
     ctx.compute_pool_mut().reanchor_baseline_pressure(8_000);
     ctx.compute_pool_mut()
         .set_slot_masks(active, host_base, 0, rev);
-    ctx.system_spine_mut().set_baseline_pin_mask(host_base);
+    ctx.set_baseline_pin_mask(host_base);
     ctx.system_spine_mut().set_max_observe_stride(4);
     ctx.system_spine_mut().guard_hold_tokens = 2;
 
     // 1. Guarded turn arms active_mask transiently without modifying baseline_pinned_compute_mask.
     ctx.begin_turn_spine_policy(true, false);
     assert!(ctx.system_spine().turn_guard_active());
-    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, host_base);
-    assert_eq!(ctx.system_spine().pinned_compute_mask, active);
+    assert_eq!(ctx.envelope().baseline_pinned_compute_mask, host_base);
+    assert_eq!(ctx.envelope().pinned_compute_mask, active);
     assert_eq!(ctx.system_spine().last_executed_mask, active);
 
     let calm_pressure = SystemPressureReading {
@@ -618,8 +618,8 @@ fn test_spine_policy_and_decode_control_four_lacunae_and_guard_relaxation() {
     );
     assert!(ctx.system_spine().is_transient_guard_relaxed());
     assert!(!ctx.system_spine().turn_guard_active());
-    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, host_base);
-    assert_eq!(ctx.system_spine().pinned_compute_mask, host_base);
+    assert_eq!(ctx.envelope().baseline_pinned_compute_mask, host_base);
+    assert_eq!(ctx.envelope().pinned_compute_mask, host_base);
     assert!(plan2.is_whole_token_bypass());
     assert_eq!(plan2.dispatch.execute_mask, active);
     assert_eq!(
@@ -650,8 +650,8 @@ fn test_spine_policy_and_decode_control_four_lacunae_and_guard_relaxation() {
     assert_ne!(plan4.event_flags & SPINE_STEP_EVENT_INSTABILITY_RECOVERY, 0);
     assert_ne!(plan4.event_flags & SPINE_STEP_EVENT_GUARD_REESCALATED, 0);
     assert!(!plan4.is_whole_token_bypass());
-    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, host_base);
-    assert_eq!(ctx.system_spine().pinned_compute_mask, active);
+    assert_eq!(ctx.envelope().baseline_pinned_compute_mask, host_base);
+    assert_eq!(ctx.envelope().pinned_compute_mask, active);
 
     // 4. Undefined (NaN) rejects reward commit and never overwrites last_observed_entropy_q15.
     let ent_before_nan = ctx.system_spine().last_observed_entropy_q15;
@@ -676,7 +676,7 @@ fn test_spine_policy_and_decode_control_four_lacunae_and_guard_relaxation() {
 
     // 6. Reward uses completed-step `last_executed_mask` rather than unconditionally full active_mask.
     ctx.begin_turn_spine_policy(false, false);
-    assert_eq!(ctx.system_spine().pinned_compute_mask, host_base);
+    assert_eq!(ctx.envelope().pinned_compute_mask, host_base);
     ctx.system_spine_mut().last_executed_mask = 0x0001_u64;
     let slot0_before = ctx.compute_pool().slot_pheromone_q7[0];
     let slot2_before = ctx.compute_pool().slot_pheromone_q7[2];
@@ -701,20 +701,20 @@ fn test_config_spine_policy_propagation_and_configure_spine() {
     assert_eq!(ctx.system_spine().guard_hold_tokens, 5);
     assert_eq!(ctx.system_spine().max_observe_stride, 6);
     ctx.configure_spine(0x0081, 3, 0, false);
-    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, 0x0081);
-    assert_eq!(ctx.system_spine().pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.envelope().baseline_pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.envelope().pinned_compute_mask, 0x0081);
     assert_eq!(ctx.system_spine().guard_hold_tokens, 3);
     assert_eq!(ctx.system_spine().max_observe_stride, 1);
     assert!(!ctx.system_spine().is_pre_bypass_enabled());
     // Passing 0 for baseline_pinned_compute_mask retains existing host floor monotonically.
     ctx.configure_spine(0, 7, 4, true);
-    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.envelope().baseline_pinned_compute_mask, 0x0081);
     assert_eq!(ctx.system_spine().guard_hold_tokens, 7);
     assert_eq!(ctx.system_spine().max_observe_stride, 4);
     assert!(ctx.system_spine().is_pre_bypass_enabled());
 
     ctx.reset().unwrap();
-    assert_eq!(ctx.system_spine().baseline_pinned_compute_mask, 0x0081);
+    assert_eq!(ctx.envelope().baseline_pinned_compute_mask, 0x0081);
     assert_eq!(ctx.system_spine().guard_hold_tokens, 7);
     assert_eq!(ctx.system_spine().max_observe_stride, 4);
 

@@ -2894,7 +2894,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
     let mut adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("init");
     let expected_baseline_pins = 0x0000_000F_u64 | (0x0000_000F_u64 << 28);
     assert_eq!(
-        adapter.system_spine().pinned_compute_mask,
+        adapter.envelope().pinned_compute_mask,
         expected_baseline_pins
     );
 
@@ -2929,7 +2929,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         .sync_core_layers_from_recall(&calm_recall, None)
         .expect("sync calm recall");
     assert_eq!(
-        adapter.system_spine().pinned_compute_mask,
+        adapter.envelope().pinned_compute_mask,
         expected_baseline_pins
     );
 
@@ -2976,7 +2976,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         .sync_core_layers_from_recall(&guard_recall, None)
         .expect("sync guard recall");
     assert_eq!(
-        adapter.system_spine().pinned_compute_mask,
+        adapter.envelope().pinned_compute_mask,
         adapter.compute_pool().active_mask
     );
     let mut d_guard = adapter.step_compute_dispatch(surge);
@@ -2986,7 +2986,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
         .sync_core_layers_from_recall(&calm_recall, None)
         .expect("sync calm recall");
     assert_eq!(
-        adapter.system_spine().pinned_compute_mask,
+        adapter.envelope().pinned_compute_mask,
         expected_baseline_pins
     );
 
@@ -2997,7 +2997,7 @@ fn adapter_preserves_baseline_pins_and_allows_calm_whole_token_bypass() {
     let _ = adapter
         .rebind_geometry_cold_path(small_geom)
         .expect("rebind");
-    assert_eq!(adapter.system_spine().pinned_compute_mask, 0x81_u64);
+    assert_eq!(adapter.envelope().pinned_compute_mask, 0x81_u64);
 }
 
 #[test]
@@ -3014,24 +3014,21 @@ fn adapter_embeds_boxed_runtime_context_with_drop_and_spine_pin_floor() {
 
     // Embedded `RuntimeContext` must mirror adapter initialization parity and pin floor.
     assert_eq!(
-        adapter.runtime_context().system_spine().pinned_compute_mask,
+        adapter.runtime_context().envelope().pinned_compute_mask,
         baseline_pins
     );
     assert_eq!(
-        adapter.system_spine().pinned_compute_mask,
-        adapter.runtime_context().system_spine().pinned_compute_mask
+        adapter.envelope().pinned_compute_mask,
+        adapter.runtime_context().envelope().pinned_compute_mask
     );
 
-    // Verify `apply_host_spine_pin_floor` is enforced on the embedded context.
-    adapter
-        .runtime_context_mut()
-        .system_spine_mut()
-        .pinned_compute_mask = 0;
+    // Verify `apply_host_spine_pin_floor` is enforced monotonically on the embedded context.
+    adapter.runtime_context_mut().set_baseline_pin_mask(0);
     adapter
         .runtime_context_mut()
         .apply_host_spine_pin_floor(baseline_pins);
     assert_eq!(
-        adapter.runtime_context().system_spine().pinned_compute_mask,
+        adapter.runtime_context().envelope().pinned_compute_mask,
         baseline_pins
     );
 
@@ -3207,7 +3204,7 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
         assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
         assert!(!adapter.is_transient_guard_relaxed());
         assert_eq!(
-            adapter.system_spine().pinned_compute_mask,
+            adapter.envelope().pinned_compute_mask,
             adapter.compute_pool().active_mask
         );
         assert!(adapter.effective_spine_guard_and_repulsion(false).0);
@@ -3221,15 +3218,9 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
     assert!(!adapter.evaluate_transient_guard_relaxation(0.72, 1, false, false, 2));
     assert!(!adapter.evaluate_transient_guard_relaxation(f32::NAN, 1, false, false, 2));
     assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, true, false, 2));
-    adapter
-        .runtime_context_mut()
-        .system_spine_mut()
-        .unobserved_locked = 1;
+    adapter.runtime_context_mut().set_unobserved_locked(true);
     assert!(!adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
-    adapter
-        .runtime_context_mut()
-        .system_spine_mut()
-        .unobserved_locked = 0;
+    adapter.runtime_context_mut().set_unobserved_locked(false);
 
     // (c) `guard_hold_tokens == 0` disables relaxation for the entire turn.
     adapter.set_guard_hold_tokens(0);
@@ -3242,11 +3233,11 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
     assert!(adapter.evaluate_transient_guard_relaxation(0.40, 1, false, false, 2));
     assert!(adapter.is_transient_guard_relaxed());
     assert_eq!(
-        adapter.system_spine().pinned_compute_mask,
+        adapter.envelope().pinned_compute_mask,
         expected_baseline_pins
     );
     assert_ne!(
-        adapter.system_spine().pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+        adapter.envelope().pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
         0
     );
     assert!(!adapter.effective_spine_guard_and_repulsion(false).0);
@@ -3259,7 +3250,7 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
     assert!(!adapter.evaluate_transient_guard_relaxation(0.50, 1, false, true, 2));
     assert!(!adapter.is_transient_guard_relaxed());
     assert_eq!(
-        adapter.system_spine().pinned_compute_mask,
+        adapter.envelope().pinned_compute_mask,
         adapter.compute_pool().active_mask
     );
     assert!(adapter.effective_spine_guard_and_repulsion(false).0);
@@ -3306,9 +3297,9 @@ fn adapter_transient_guard_relaxation_and_closed_loop_reescalation() {
 #[test]
 fn snapshot_restore_under_active_transient_guard_does_not_leak_permanent_pins() {
     let mut clean_adapter = ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("adapter");
-    let baseline = clean_adapter.system_spine().baseline_pinned_compute_mask;
+    let baseline = clean_adapter.envelope().baseline_pinned_compute_mask;
     clean_adapter.begin_turn_spine_policy(false, false);
-    assert_eq!(clean_adapter.system_spine().pinned_compute_mask, baseline);
+    assert_eq!(clean_adapter.envelope().pinned_compute_mask, baseline);
 
     let mut req = 0usize;
     clean_adapter
@@ -3326,11 +3317,11 @@ fn snapshot_restore_under_active_transient_guard_does_not_leak_permanent_pins() 
         ModelSteeringAdapter::new(sample_gqa_partial_rope()).expect("guarded adapter");
     guarded_adapter.begin_turn_spine_policy(true, false);
     assert_eq!(
-        guarded_adapter.system_spine().pinned_compute_mask,
+        guarded_adapter.envelope().pinned_compute_mask,
         guarded_adapter.compute_pool().active_mask
     );
     assert_eq!(
-        guarded_adapter.system_spine().baseline_pinned_compute_mask,
+        guarded_adapter.envelope().baseline_pinned_compute_mask,
         baseline
     );
 
@@ -3339,10 +3330,10 @@ fn snapshot_restore_under_active_transient_guard_does_not_leak_permanent_pins() 
         .deserialize_from_bytes(&buf)
         .expect("restore snapshot");
     assert_eq!(
-        guarded_adapter.system_spine().baseline_pinned_compute_mask,
+        guarded_adapter.envelope().baseline_pinned_compute_mask,
         baseline
     );
-    assert_eq!(guarded_adapter.system_spine().pinned_compute_mask, baseline);
+    assert_eq!(guarded_adapter.envelope().pinned_compute_mask, baseline);
     assert!(!guarded_adapter.system_spine().turn_guard_active());
 }
 
@@ -5142,7 +5133,7 @@ fn adapter_equilibrium_sync_restores_snapshot_preserves_host_spine_pin_floor_and
     assert!(eq.runtime_snapshot_payload().is_some());
 
     let lmnkc_bytes = eq.to_lmnkc_bytes(1_774_901_000).expect("to_lmnkc_bytes");
-    let expected_host_pin_floor = session1.system_spine().baseline_pinned_compute_mask;
+    let expected_host_pin_floor = session1.envelope().baseline_pinned_compute_mask;
     drop(session1);
 
     // Restore into a completely fresh session2 instance and verify host Spine pin floor immunity.
@@ -5158,13 +5149,13 @@ fn adapter_equilibrium_sync_restores_snapshot_preserves_host_spine_pin_floor_and
         .expect("restore_from_equilibrium");
     assert!(restored_snap);
     assert_eq!(
-        session2.system_spine().baseline_pinned_compute_mask & expected_host_pin_floor,
+        session2.envelope().baseline_pinned_compute_mask & expected_host_pin_floor,
         expected_host_pin_floor
     );
     assert_ne!(
-        session2.system_spine().baseline_pinned_compute_mask & (1_u64 << 10),
+        session2.envelope().baseline_pinned_compute_mask & (1_u64 << 10),
         0,
-        "deserialized snapshot must never weaken host Spine pin floor"
+        "deserialized snapshot must never weaken host Envelope pin floor"
     );
     assert!(session2.ego_state().is_active());
 }

@@ -924,7 +924,7 @@ pub(crate) fn run_step2_evaluation(
             cp.lane_switch_dwell,
             cp.primary_lane,
             cp.active_mask.count_ones(),
-            adapter.system_spine().pinned_compute_mask.count_ones(),
+            adapter.envelope().pinned_compute_mask.count_ones(),
             cp.reversible_mask.count_ones(),
             step2_steer_bypass_hits,
             step2_steer_eligible_layers,

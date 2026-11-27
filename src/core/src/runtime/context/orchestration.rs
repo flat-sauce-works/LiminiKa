@@ -76,7 +76,7 @@ impl RuntimeContext {
     /// Never fails in the default implementation.
     #[inline(always)]
     pub fn init_default_config(&self, config: &mut RuntimeConfig) -> Result<()> {
-        *config = self.config.raw;
+        *config = self.raw_config;
         Ok(())
     }
 
@@ -91,7 +91,7 @@ impl RuntimeContext {
         self.clear_all_domains()?;
         self.substrate.bloom_filter.clear();
         self.substrate.ledger_slot = LedgerSlot {
-            mode: u32::from(self.config.raw.ledger_mode),
+            mode: u32::from(self.raw_config.ledger_mode),
             ..Default::default()
         };
         self.core_layers = CoreStateStack::new();
@@ -103,15 +103,12 @@ impl RuntimeContext {
         self.last_sandbox_event = SandboxLifecycleEvent::Idle;
         self.sandbox_settlements = 0;
         self.compute_pool.reset_turn_bypass_state();
-        let prev_baseline_pin = self.system_spine.baseline_pinned_compute_mask;
+        self.envelope.reset_preserving_pin_floor();
         let prev_pre_bypass = self.system_spine.is_pre_bypass_enabled();
         let mut reset_spine = SystemSpineState::with_policy(
-            self.config.raw.guard_hold_tokens,
-            self.config.raw.max_observe_stride,
+            self.raw_config.guard_hold_tokens,
+            self.raw_config.max_observe_stride,
         );
-        if prev_baseline_pin != 0 {
-            reset_spine.apply_host_pin_floor(prev_baseline_pin);
-        }
         reset_spine.set_pre_bypass_enabled(prev_pre_bypass);
         self.system_spine = reset_spine;
         self.last_lacuna_partition = LacunaPartition8::default();
@@ -121,8 +118,9 @@ impl RuntimeContext {
     }
 
     /// Updates runtime spine policy parameters (`0 alloc`) while monotonically raising the
-    /// permanent host compute pin floor (`baseline_pinned_compute_mask`) and re-clamping
-    /// [`crate::drivers::AnonymousComputePool`] masks so `configure_spine` and `configure_compute_pool` commute.
+    /// permanent host compute pin floor (`baseline_pinned_compute_mask`) on [`crate::drivers::EnvelopeState`]
+    /// and re-clamping [`crate::drivers::AnonymousComputePool`] masks so `configure_spine` and
+    /// `configure_compute_pool` commute.
     ///
     /// Passing `0` for `baseline_pinned_compute_mask` preserves the active permanent floor while
     /// enforcing [`HOST_IMMUTABLE_PINNED_COMPUTE_MASK`].
@@ -134,16 +132,16 @@ impl RuntimeContext {
         max_observe_stride: u8,
         pre_bypass_enabled: bool,
     ) {
-        self.system_spine.apply_host_pin_floor(
+        self.envelope.apply_host_pin_floor(
             baseline_pinned_compute_mask | HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
         );
         self.system_spine.guard_hold_tokens = guard_hold_tokens;
         self.system_spine.set_max_observe_stride(max_observe_stride);
         self.system_spine.set_pre_bypass_enabled(pre_bypass_enabled);
-        self.config.raw.guard_hold_tokens = guard_hold_tokens;
-        self.config.raw.max_observe_stride = self.system_spine.max_observe_stride;
-        let effective_pinned = self.system_spine.pinned_compute_mask
-            | self.system_spine.baseline_pinned_compute_mask
+        self.raw_config.guard_hold_tokens = guard_hold_tokens;
+        self.raw_config.max_observe_stride = self.system_spine.max_observe_stride;
+        let effective_pinned = self.envelope.pinned_compute_mask
+            | self.envelope.baseline_pinned_compute_mask
             | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
         self.compute_pool.set_slot_masks(
             self.compute_pool.active_mask,
@@ -163,7 +161,7 @@ impl RuntimeContext {
     ///   (default `8192`); any non-zero value calls
     ///   [`crate::drivers::AnonymousComputePool::reanchor_baseline_pressure`] (clamped to `32767`).
     /// - Commutes with [`Self::configure_spine`]: calling either order yields identical
-    ///   `SystemSpineState` and `AnonymousComputePool` masks.
+    ///   `EnvelopeState`, `SystemSpineState`, and `AnonymousComputePool` masks.
     #[inline]
     pub fn configure_compute_pool(
         &mut self,
@@ -172,10 +170,10 @@ impl RuntimeContext {
         reversible_mask: u64,
         baseline_pressure_q15: u16,
     ) {
-        self.system_spine
+        self.envelope
             .apply_host_pin_floor(HOST_IMMUTABLE_PINNED_COMPUTE_MASK);
-        let effective_pinned = self.system_spine.pinned_compute_mask
-            | self.system_spine.baseline_pinned_compute_mask
+        let effective_pinned = self.envelope.pinned_compute_mask
+            | self.envelope.baseline_pinned_compute_mask
             | HOST_IMMUTABLE_PINNED_COMPUTE_MASK;
         self.compute_pool.set_slot_masks(
             active_mask,
@@ -201,12 +199,12 @@ impl RuntimeContext {
         self.system_spine.last_observed_entropy_q15 = 0;
         self.system_spine.set_transient_guard_relaxed(false);
         self.system_spine.set_turn_guard_active(guard_turn);
-        self.system_spine.unobserved_locked = u8::from(unobserved_locked);
+        self.envelope.unobserved_locked = u8::from(unobserved_locked);
         let active_mask = self.compute_pool.active_mask;
         if guard_turn {
-            self.system_spine.arm_transient_guard_pin(active_mask);
+            self.envelope.arm_transient_guard_pin(active_mask);
         } else {
-            self.system_spine.restore_baseline_pin_mask();
+            self.envelope.restore_baseline_pin_mask();
         }
         self.system_spine.last_executed_mask = active_mask;
     }
@@ -340,7 +338,7 @@ impl RuntimeContext {
                 self.system_spine.set_transient_guard_relaxed(false);
                 self.system_spine.set_turn_guard_active(true);
                 let active_mask = self.compute_pool.active_mask;
-                self.system_spine.arm_transient_guard_pin(active_mask);
+                self.envelope.arm_transient_guard_pin(active_mask);
                 self.compute_pool.reset_turn_bypass_state();
                 self.system_spine.reset_turn_bypass_counters_only();
                 self.system_spine.unobserved_bypass_run = 0;
@@ -350,7 +348,7 @@ impl RuntimeContext {
             && (self.system_spine.turn_guard_active() || external_guard_active)
             && self.system_spine.guard_hold_tokens > 0
             && self.system_spine.passive_saturation_probe_steps == 0
-            && self.system_spine.unobserved_locked == 0
+            && self.envelope.unobserved_locked == 0
             && lacuna.is_defined()
             && (self.system_spine.last_observed_entropy_q15 < SPINE_ENTROPY_GUARD_RELAX_MAX_Q15)
             && self.system_spine.can_relax_transient_guard_pin(
@@ -363,7 +361,7 @@ impl RuntimeContext {
         {
             self.system_spine.set_transient_guard_relaxed(true);
             self.system_spine.set_turn_guard_active(false);
-            self.system_spine.restore_baseline_pin_mask();
+            self.envelope.restore_baseline_pin_mask();
             self.compute_pool.re_bypass_cooldown = 0;
             self.system_spine.on_transient_guard_relaxed(min_calm_dwell);
             self.telemetry.record_guard_relaxation();
@@ -380,16 +378,18 @@ impl RuntimeContext {
             .passive_saturation_probe_steps
             .saturating_sub(1);
 
+        let pins = self.spine_pin_snapshot();
         let mut dispatch = self.compute_pool.step_dispatch_with_spine(
             signal.pressure_reading(),
             &self.system_spine,
+            pins,
             eff_guard_active,
             eff_repulsion,
         );
         let veto_mask = if pre_bypass_active {
             let irreversible_step = u8::from(
                 (signal.pressure_reading().irreversible_step != 0)
-                    || (self.system_spine.irreversible_step_lock != 0),
+                    || (self.envelope.irreversible_step_lock != 0),
             );
             let ego_active_boundary = u8::from(self.core_layers.ego.is_active() && sens_q7 >= 80);
             let obs = TokenBypassObservation {
@@ -407,6 +407,7 @@ impl RuntimeContext {
             dispatch.whole_token_steering_bypass = 0;
             self.system_spine.whole_token_bypass_active = 0;
             let veto = self.system_spine.evaluate_pool_bypass_veto_branchless(
+                pins,
                 self.compute_pool.reversible_mask,
                 eff_guard_active,
                 eff_repulsion,
@@ -457,7 +458,7 @@ impl RuntimeContext {
 
         let next_step = self.substrate.step_counter.wrapping_add(1);
         self.substrate.step_counter = next_step;
-        let cap = self.config.raw.substrate_capacity;
+        let cap = self.raw_config.substrate_capacity;
         let cur_active = self.substrate.active_count;
         self.substrate.active_count =
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
@@ -485,8 +486,8 @@ impl RuntimeContext {
                 .bloom_filter
                 .apply_phase_conjugate_repulsion_words(
                     &mut phase_words,
-                    self.config.repulsion_threshold,
-                    self.config.repulsion_scale_u7,
+                    self.derived_config.repulsion_threshold,
+                    self.derived_config.repulsion_scale_u7,
                 );
             repulsion_active = rep_trig;
 
@@ -596,16 +597,15 @@ impl RuntimeContext {
                 &self.last_horizon,
                 &self.last_overlap_report,
             );
-            self.core_layers.liminal.active_aperture_mask =
-                self.system_spine.mask_ego_aperture_edits(
-                    prev_liminal.active_aperture_mask,
-                    self.core_layers.liminal.active_aperture_mask,
-                );
+            self.core_layers.liminal.active_aperture_mask = self.envelope.mask_ego_aperture_edits(
+                prev_liminal.active_aperture_mask,
+                self.core_layers.liminal.active_aperture_mask,
+            );
             let (d_q7, hops, pframe_matched_mask) = self
                 .ego_differential_net
                 .evaluate_pframe_chain_with_mask_branchless(
                     &self.core_layers.ego,
-                    &self.system_spine,
+                    &self.envelope,
                     &self.last_lacuna_partition,
                     &self.core_layers.stigmergy,
                     &self.distortion_tension,
@@ -615,7 +615,7 @@ impl RuntimeContext {
                 self.ego_differential_net
                     .record_matched_activations(pframe_matched_mask);
             }
-            self.system_spine
+            self.envelope
                 .enforce_pinned_isolation_branchless(&sys_baseline, &mut ego_frame);
             (ego_frame, d_q7, hops)
         } else {
@@ -697,8 +697,8 @@ impl RuntimeContext {
                 TaggedPtr(frame.tagged_ptr),
                 &mut ledger_slot,
                 &bloom_snapshot,
-                self.config.repulsion_threshold,
-                self.config.repulsion_scale_u7,
+                self.derived_config.repulsion_threshold,
+                self.derived_config.repulsion_scale_u7,
                 trail_out,
             )?;
         *trail_phase_words_mut(trail_out) = if swar_words_nonzero_64(&frm_w) {

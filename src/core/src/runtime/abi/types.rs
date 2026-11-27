@@ -2,51 +2,60 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! C-ABI constants, status codes, `#[repr(C)]` POD aliases (`lmnk_*_t`),
-//! versioned `struct_size` call envelopes, and compile-time layout assertions
+//! versioned `struct_size` parameter structs, and compile-time layout assertions
 //! for `LiminiKa` `v0.4.0` (`0x0000_0400`).
 //!
 //! # Portable Wire & Device Contract
 //! - **Byte Order**: All multi-byte scalars and `u64` SWAR words use **Canonical Little-Endian**.
 //! - **Portable Device-Ready PODs**: Power-of-two `8 B..=128 B` fixed-width structs with zero
 //!   implicit padding (`ArenaSpan`, `Rank1Descriptor`, `PointerTrail`, `GatewayFrame`,
-//!   `PhaseAnchorRecord`, `LacunaPartition8`, `LmnkContainerHeader`, etc.). These contain zero
+//!   `PhaseAnchorRecord`, `LacunaPartition8`, `BoundarySignal`, `EnvelopeBounds`,
+//!   `EnvelopeFeedback`, `EnvelopeState`, `LmnkContainerHeader`, etc.). These contain zero
 //!   raw pointers and do NOT carry `struct_size`.
-//! - **Versioned Call Envelopes (`struct_size: u32`)**: All `*_params_t`, `*_config_t`,
+//! - **Versioned Parameter & Report Structs (`struct_size: u32`)**: All `*_params_t`, `*_config_t`,
 //!   `*_view_t`, `*_report_t`, `lmnk_abi_info_t`, and `lmnk_runtime_policy_t` descriptors carry
 //!   a leading `struct_size: u32` field validated fail-closed across the C-ABI firewall.
-//! - **Transient Host Envelopes**: Pointer-carrying call envelopes (`lmnk_rope_steer_params_t`,
-//!   `lmnk_rope_procrustes_params_t`, `lmnk_rank1_eval_params_t`, `lmnk_gateway_steer_params_t`,
-//!   `lmnk_section_input_t`, `lmnk_container_write_params_t`, `lmnk_container_section_view_t`)
-//!   are strictly transient in-memory call descriptors and are NEVER persisted or hashed.
+//! - **Transient Host Parameter Structs**: Pointer-carrying call descriptors
+//!   (`lmnk_rope_steer_params_t`, `lmnk_rope_procrustes_params_t`, `lmnk_rank1_eval_params_t`,
+//!   `lmnk_gateway_steer_params_t`, `lmnk_section_input_t`, `lmnk_container_write_params_t`,
+//!   `lmnk_container_section_view_t`) are strictly transient in-memory descriptors and are
+//!   NEVER persisted or hashed.
 
 use super::*;
 
 pub use crate::drivers::{
-    ComputeDispatchMask, DistortionDelta, DistortionTension, EgoIntentAxes, EntropyController,
-    EntropyState, HOST_IMMUTABLE_PINNED_COMPUTE_MASK, LiminalEgoState,
-    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_BYPASS_VETO_NONE,
-    SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
-    SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED, SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID,
-    SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT, SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED,
-    SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE, SPINE_CONTROL_KNOWN_FLAGS,
-    SPINE_DECODE_FLAG_REWARD_OVERRIDE, SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING,
-    SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED, SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE,
-    SPINE_DECODE_INPUT_FLAG_REWARD_OVERRIDE, SPINE_ENTROPY_CALM_THRESH_Q15,
-    SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE, SPINE_ENTROPY_REWARD_LOW_THRESH_Q15,
-    SPINE_ENTROPY_SURGE_THRESH_Q15, SPINE_ENTROPY_TENSION_FLOOR_Q15,
-    SPINE_MIN_DYNAMIC_OBSERVE_STRIDE, SPINE_SENTINEL_AUTO_U8, SPINE_STEP_EVENT_BOUNDARY_CHURN,
-    SPINE_STEP_EVENT_GUARD_REESCALATED, SPINE_STEP_EVENT_INSTABILITY_RECOVERY,
-    SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED, SPINE_STEP_EVENT_NONE,
-    SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED, SpineDecodeInput, SpineStepPlan,
-    SystemPressureReading,
+    ComputeDispatchMask, DistortionDelta, DistortionTension, ENVELOPE_BREACH_CHATTER,
+    ENVELOPE_BREACH_EXTERIOR, ENVELOPE_BREACH_KNOWN_MASK, ENVELOPE_BREACH_NONE,
+    ENVELOPE_BREACH_PRESSURE, ENVELOPE_BREACH_UNDEFINED_FAULT, ENVELOPE_FLAG_CONTRACTED,
+    ENVELOPE_FLAG_KNOWN_MASK, ENVELOPE_FLAG_RECOVERY_ACTIVE, ENVELOPE_LOCK_FAULT_ISOLATED,
+    ENVELOPE_LOCK_IRREVERSIBLE, ENVELOPE_LOCK_UNOBSERVED, EgoIntentAxes, EntropyController,
+    EntropyState, EnvelopeBounds, EnvelopeFeedback, EnvelopeState,
+    HOST_IMMUTABLE_PINNED_COMPUTE_MASK, LiminalEgoState, SPINE_BYPASS_VETO_GUARD_ACTIVE,
+    SPINE_BYPASS_VETO_KNOWN_MASK, SPINE_BYPASS_VETO_NONE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_CONTROL_FLAG_PRE_BYPASS_ENABLED,
+    SPINE_CONTROL_FLAG_PREV_RESIDENCY_VALID, SPINE_CONTROL_FLAG_PREV_WAS_ABSTRACT,
+    SPINE_CONTROL_FLAG_TRANSIENT_GUARD_RELAXED, SPINE_CONTROL_FLAG_TURN_GUARD_ACTIVE,
+    SPINE_CONTROL_KNOWN_FLAGS, SPINE_DECODE_FLAG_REWARD_OVERRIDE,
+    SPINE_DECODE_INPUT_FLAG_GREEDY_SAMPLING, SPINE_DECODE_INPUT_FLAG_PRE_BYPASS_ENABLED,
+    SPINE_DECODE_INPUT_FLAG_REPULSION_ACTIVE, SPINE_DECODE_INPUT_FLAG_REWARD_OVERRIDE,
+    SPINE_ENTROPY_CALM_THRESH_Q15, SPINE_ENTROPY_GUARD_RELAX_MAX_Q15, SPINE_ENTROPY_Q15_ONE,
+    SPINE_ENTROPY_REWARD_LOW_THRESH_Q15, SPINE_ENTROPY_SURGE_THRESH_Q15,
+    SPINE_ENTROPY_TENSION_FLOOR_Q15, SPINE_MIN_DYNAMIC_OBSERVE_STRIDE, SPINE_SENTINEL_AUTO_U8,
+    SPINE_STEP_EVENT_BOUNDARY_CHURN, SPINE_STEP_EVENT_GUARD_REESCALATED,
+    SPINE_STEP_EVENT_INSTABILITY_RECOVERY, SPINE_STEP_EVENT_LOGITS_OBSERVE_SKIPPED,
+    SPINE_STEP_EVENT_NONE, SPINE_STEP_EVENT_TRANSIENT_GUARD_RELAXED, SpineDecodeInput,
+    SpineStepPlan, SystemPressureReading,
 };
 pub use crate::foundation::{
     AlignedSlice, AlignedSliceMut, ArenaSpan, DisjointMutTriple, KvMotionDeltaPacket, PagedBitmask,
     RANK1_GAIN_UNUSED, Rank1Descriptor, SubheadConfig, TaggedPtr,
 };
 pub use crate::liminal::{
-    AttributionTag, LMNK_ABI_COMPAT_MASK, LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_CSTR,
-    LMNK_ABI_VERSION_HEX, LMNK_ABI_VERSION_MAJOR, LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH,
+    AttributionTag, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, BOUNDARY_SIGNAL_FLAG_FAULT,
+    BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT, BOUNDARY_SIGNAL_FLAG_OBSERVED,
+    BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BOUNDARY_SIGNAL_KNOWN_FLAGS, BoundarySignal,
+    LMNK_ABI_COMPAT_MASK, LMNK_ABI_COMPAT_VERSION_HEX, LMNK_ABI_VERSION_CSTR, LMNK_ABI_VERSION_HEX,
+    LMNK_ABI_VERSION_MAJOR, LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH,
     LMNK_ABI_VERSION_STRING, LMNK_CAP_INPLACE_CONTEXT_INIT, LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON,
     LMNK_CAP_SIMD_WASM128, LMNK_CAP_SWAR_BASELINE, LMNK_CAP_ZERO_ALLOC_CORE, LMNK_ERR_ALIGNMENT,
     LMNK_ERR_ANCHOR_NOT_FOUND, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
@@ -91,7 +100,7 @@ pub use crate::stigmergy::{
 };
 
 // ===================================================================
-// Envelope Option Flags (v0.4.0)
+// Versioned Parameter Struct Option Flags (v0.4.0)
 // ===================================================================
 
 /// Apply mechanical spine policy fields in [`lmnk_runtime_policy_t`].
@@ -109,6 +118,11 @@ pub const LMNK_TURN_FLAG_UNOBSERVED_LOCKED: u32 = 1 << 1;
 pub const LMNK_TURN_KNOWN_FLAGS: u32 =
     LMNK_TURN_FLAG_GUARD_ACTIVE | LMNK_TURN_FLAG_UNOBSERVED_LOCKED;
 
+/// Marks external contradiction guard as active for this step in [`lmnk_decode_step_params_t::flags`].
+pub const LMNK_DECODE_STEP_FLAG_EXTERNAL_GUARD: u32 = 1 << 0;
+/// Valid bitmask for [`lmnk_decode_step_params_t::flags`].
+pub const LMNK_DECODE_STEP_KNOWN_FLAGS: u32 = LMNK_DECODE_STEP_FLAG_EXTERNAL_GUARD;
+
 /// Disable soft PhaseClamp and apply direct full-head Interleaved rotation in [`lmnk_rope_steer_params_t::flags`].
 pub const LMNK_ROPE_STEER_FLAG_UNCLAMPED: u32 = 1 << 0;
 /// Valid bitmask for [`lmnk_rope_steer_params_t::flags`].
@@ -118,6 +132,17 @@ pub const LMNK_ROPE_STEER_KNOWN_FLAGS: u32 = LMNK_ROPE_STEER_FLAG_UNCLAMPED;
 pub const LMNK_RANK1_FLAG_FUSED: u32 = 1 << 0;
 /// Valid bitmask for [`lmnk_rank1_eval_params_t::flags`].
 pub const LMNK_RANK1_KNOWN_FLAGS: u32 = LMNK_RANK1_FLAG_FUSED;
+
+/// Ignore `params->bounds` and apply canonical [`EnvelopeBounds::new()`] in [`lmnk_envelope_step_params_t::flags`].
+pub const LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS: u32 = 1 << 0;
+/// Valid bitmask for [`lmnk_envelope_step_params_t::flags`].
+pub const LMNK_ENVELOPE_STEP_KNOWN_FLAGS: u32 = LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS;
+
+/// Stamp irreversible transition intent (`BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT`) in
+/// [`lmnk_boundary_emit_params_t::flags`].
+pub const LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT: u32 = 1 << 0;
+/// Valid bitmask for [`lmnk_boundary_emit_params_t::flags`].
+pub const LMNK_BOUNDARY_EMIT_KNOWN_FLAGS: u32 = LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT;
 
 // ===================================================================
 // Portable POD Type Aliases (`lmnk_*_t`)
@@ -207,16 +232,24 @@ pub type lmnk_system_pressure_reading_t = SystemPressureReading;
 pub type lmnk_compute_dispatch_mask_t = ComputeDispatchMask;
 /// 32-byte Spine Decode Signal Input (`SpineDecodeInput`).
 pub type lmnk_spine_decode_input_t = SpineDecodeInput;
+/// 32-byte Domain-Agnostic Boundary Signal (`BoundarySignal`).
+pub type lmnk_boundary_signal_t = BoundarySignal;
+/// 32-byte Safety-Envelope Constraint Bounds (`EnvelopeBounds`).
+pub type lmnk_envelope_bounds_t = EnvelopeBounds;
+/// 16-byte Safety-Envelope Step Feedback (`EnvelopeFeedback`).
+pub type lmnk_envelope_feedback_t = EnvelopeFeedback;
+/// 64-byte Persistent Safety-Envelope Driver State (`EnvelopeState`).
+pub type lmnk_envelope_state_t = EnvelopeState;
 
 // ===================================================================
-// Versioned v0.4.0 Fixed-Width Envelope & View Structs (Zero Padding)
+// Versioned v0.4.0 Fixed-Width Parameter & View Structs (Zero Padding)
 // ===================================================================
 
 /// 64-byte versioned ABI handshake descriptor returned by [`crate::runtime::abi::lmnk_abi_info`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct lmnk_abi_info_t {
-    /// Envelope byte size (`sizeof(lmnk_abi_info_t)` == `64`, `offset 0..4`).
+    /// Parameter struct byte size (`sizeof(lmnk_abi_info_t)` == `64`, `offset 0..4`).
     pub struct_size: u32,
     /// Packed hexadecimal ABI version (`0x0000_0400`, `offset 4..8`).
     pub abi_version_hex: u32,
@@ -250,11 +283,11 @@ impl Default for lmnk_abi_info_t {
     }
 }
 
-/// 48-byte versioned policy envelope for [`crate::runtime::abi::lmnk_context_configure_policy`].
+/// 64-byte (1 cacheline) versioned policy parameter struct for [`crate::runtime::abi::lmnk_context_configure_policy`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct lmnk_runtime_policy_t {
-    /// Envelope byte size (`sizeof(lmnk_runtime_policy_t)` == `48`, `offset 0..4`).
+    /// Parameter struct byte size (`sizeof(lmnk_runtime_policy_t)` == `64`, `offset 0..4`).
     pub struct_size: u32,
     /// Policy section bitflags (`LMNK_POLICY_FLAG_SPINE | LMNK_POLICY_FLAG_COMPUTE_POOL`, `offset 4..8`).
     pub flags: u32,
@@ -274,8 +307,8 @@ pub struct lmnk_runtime_policy_t {
     pub max_observe_stride: u8,
     /// Non-zero enables pre-bypass scheduling (`offset 44`).
     pub pre_bypass_enabled: u8,
-    /// Explicit zero padding (`offset 45..48`).
-    pub reserved: [u8; 3],
+    /// Explicit zero-initialized extension space (`offset 45..64`).
+    pub reserved: [u8; 19],
 }
 
 impl Default for lmnk_runtime_policy_t {
@@ -292,16 +325,16 @@ impl Default for lmnk_runtime_policy_t {
             guard_hold_tokens: 0,
             max_observe_stride: 1,
             pre_bypass_enabled: 0,
-            reserved: [0; 3],
+            reserved: [0; 19],
         }
     }
 }
 
-/// 16-byte versioned turn-boundary envelope for [`crate::runtime::abi::lmnk_context_begin_turn`].
+/// 16-byte versioned turn-boundary parameter struct for [`crate::runtime::abi::lmnk_context_begin_turn`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct lmnk_turn_begin_params_t {
-    /// Envelope byte size (`sizeof(lmnk_turn_begin_params_t)` == `16`, `offset 0..4`).
+    /// Parameter struct byte size (`sizeof(lmnk_turn_begin_params_t)` == `16`, `offset 0..4`).
     pub struct_size: u32,
     /// Turn policy bitflags (`LMNK_TURN_FLAG_*`, `offset 4..8`).
     pub flags: u32,
@@ -320,16 +353,16 @@ impl Default for lmnk_turn_begin_params_t {
     }
 }
 
-/// 48-byte versioned decode-step input envelope for [`crate::runtime::abi::lmnk_context_step_decode`].
+/// 48-byte versioned decode-step input parameter struct for [`crate::runtime::abi::lmnk_context_step_decode`].
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct lmnk_decode_step_params_t {
-    /// Envelope byte size (`sizeof(lmnk_decode_step_params_t)` == `48`, `offset 0..4`).
+    /// Parameter struct byte size (`sizeof(lmnk_decode_step_params_t)` == `48`, `offset 0..4`).
     pub struct_size: u32,
-    /// Non-zero when external contradiction guard is active for this step (`offset 4`).
-    pub external_guard_active: u8,
-    /// Explicit alignment padding (`offset 5..16`).
-    pub reserved: [u8; 11],
+    /// Step control bitflags (`LMNK_DECODE_STEP_FLAG_*`, unknown bits fail-closed, `offset 4..8`).
+    pub flags: u32,
+    /// Explicit zero-initialized alignment padding (`offset 8..16`).
+    pub reserved: [u8; 8],
     /// 32-byte decode signal input (`offset 16..48`).
     pub decode_input: lmnk_spine_decode_input_t,
 }
@@ -339,18 +372,18 @@ impl Default for lmnk_decode_step_params_t {
     fn default() -> Self {
         Self {
             struct_size: size_of::<Self>() as u32,
-            external_guard_active: 0,
-            reserved: [0; 11],
+            flags: 0,
+            reserved: [0; 8],
             decode_input: lmnk_spine_decode_input_t::default(),
         }
     }
 }
 
-/// 80-byte versioned decode-step report emitted by [`crate::runtime::abi::lmnk_context_step_decode`].
+/// 64-byte (1 cacheline) versioned decode-step report emitted by [`crate::runtime::abi::lmnk_context_step_decode`].
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct lmnk_decode_step_report_t {
-    /// Envelope byte size (`sizeof(lmnk_decode_step_report_t)` == `80`, `offset 0..4`).
+    /// Parameter struct byte size (`sizeof(lmnk_decode_step_report_t)` == `64`, `offset 0..4`).
     pub struct_size: u32,
     /// Next logits observation mode (`0` = Full, `1` = Skip, `offset 4`).
     pub next_observe_mode: u8,
@@ -362,8 +395,8 @@ pub struct lmnk_decode_step_report_t {
     pub effective_observe_stride: u8,
     /// 40-byte pre-execution anonymous compute dispatch mask (`offset 8..48`).
     pub dispatch: lmnk_compute_dispatch_mask_t,
-    /// Reserved zero-padded bytes for future extensions (`offset 48..80`).
-    pub reserved: [u8; 32],
+    /// Reserved zero-padded bytes for future extensions (`offset 48..64`).
+    pub reserved: [u8; 16],
 }
 
 impl Default for lmnk_decode_step_report_t {
@@ -376,18 +409,19 @@ impl Default for lmnk_decode_step_report_t {
             event_flags: 0,
             effective_observe_stride: 1,
             dispatch: lmnk_compute_dispatch_mask_t::default(),
-            reserved: [0; 32],
+            reserved: [0; 16],
         }
     }
 }
 
 /// 64-byte abstracted read-only runtime state view emitted by [`crate::runtime::abi::lmnk_context_get_state`].
 ///
-/// Decouples external callers from internal `SystemSpineState` and `AnonymousComputePool` layouts.
+/// Decouples external callers from internal `SystemSpineState`, `EnvelopeState`, and
+/// `AnonymousComputePool` layouts.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct lmnk_runtime_state_view_t {
-    /// Envelope byte size (`sizeof(lmnk_runtime_state_view_t)` == `64`, `offset 0..4`).
+    /// Parameter struct byte size (`sizeof(lmnk_runtime_state_view_t)` == `64`, `offset 0..4`).
     pub struct_size: u32,
     /// Active spine control flags (`SPINE_CONTROL_FLAG_*`, `offset 4`).
     pub control_flags: u8,
@@ -397,9 +431,9 @@ pub struct lmnk_runtime_state_view_t {
     pub guard_hold_tokens: u8,
     /// Configured maximum dynamic logits observation stride (`offset 7`).
     pub max_observe_stride: u8,
-    /// Permanent monotonic host-pinned compute mask floor (`offset 8..16`).
+    /// Permanent monotonic host-pinned compute mask floor owned by `EnvelopeState` (`offset 8..16`).
     pub baseline_pinned_compute_mask: u64,
-    /// Active effective pinned compute mask (`offset 16..24`).
+    /// Active effective pinned compute mask owned by `EnvelopeState` (`offset 16..24`).
     pub pinned_compute_mask: u64,
     /// Last executed anonymous compute slot mask (`offset 24..32`).
     pub last_executed_mask: u64,
@@ -407,14 +441,27 @@ pub struct lmnk_runtime_state_view_t {
     pub active_compute_mask: u64,
     /// Most recently observed exit entropy in Q0.15 (`offset 40..42`).
     pub last_observed_entropy_q15: u16,
-    /// Current Gauge-Zero baseline pressure in Q0.15 (`offset 42..44`).
+    /// Current `AnonymousComputePool` Gauge-Zero baseline pressure in Q0.15 (`offset 42..44`).
     pub baseline_pressure_q15: u16,
     /// Non-zero when whole-token steering bypass is active (`offset 44`).
     pub whole_token_bypass_active: u8,
-    /// Non-zero when unobserved-lock is engaged for the current turn (`offset 45`).
+    /// Non-zero when unobserved-lock is engaged on `EnvelopeState` (`offset 45`).
     pub unobserved_locked: u8,
-    /// Reserved zero-padded bytes (`offset 46..64`).
-    pub reserved: [u8; 18],
+    /// Current `EnvelopeState` aperture contraction scale in Q0.7 (`0..=128`, `offset 46`).
+    pub envelope_contraction_q7: u8,
+    /// Most recent `EnvelopeState` breach bitmask (`ENVELOPE_BREACH_*`, `offset 47`).
+    pub envelope_breach_mask: u8,
+    /// Cumulative `EnvelopeState` violation epoch counter (`offset 48..52`).
+    pub envelope_violation_epochs: u32,
+    /// Current `EnvelopeState` adaptive baseline pressure in Q0.15
+    /// (`offset 52..54`, distinct from `baseline_pressure_q15`).
+    pub envelope_baseline_pressure_q15: u16,
+    /// Packed `EnvelopeState` lock bitflags (`ENVELOPE_LOCK_*`, `offset 54`).
+    pub envelope_lock_flags: u8,
+    /// Consecutive calm steps accumulated toward `EnvelopeState` baseline EMA resumption (`offset 55`).
+    pub envelope_ema_resume_dwell: u8,
+    /// Reserved zero-padded bytes (`offset 56..64`).
+    pub reserved: [u8; 8],
 }
 
 impl Default for lmnk_runtime_state_view_t {
@@ -434,7 +481,76 @@ impl Default for lmnk_runtime_state_view_t {
             baseline_pressure_q15: 0,
             whole_token_bypass_active: 0,
             unobserved_locked: 0,
-            reserved: [0; 18],
+            envelope_contraction_q7: 128,
+            envelope_breach_mask: 0,
+            envelope_violation_epochs: 0,
+            envelope_baseline_pressure_q15: 0,
+            envelope_lock_flags: 0,
+            envelope_ema_resume_dwell: 0,
+            reserved: [0; 8],
+        }
+    }
+}
+
+/// 96-byte (`#[repr(C, align(32))]`) versioned parameter struct for Tier-1 standalone
+/// [`crate::runtime::abi::lmnk_envelope_step`].
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct lmnk_envelope_step_params_t {
+    /// Parameter struct byte size (`sizeof(lmnk_envelope_step_params_t)` == `96`, `offset 0..4`).
+    pub struct_size: u32,
+    /// Option bitflags (`LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS`, unknown bits fail-closed, `offset 4..8`).
+    pub flags: u32,
+    /// Explicit zero-initialized extension space (`offset 8..32`).
+    pub reserved: [u8; 24],
+    /// 32-byte constraint bounds (ignored when `LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS` is set, `offset 32..64`).
+    pub bounds: lmnk_envelope_bounds_t,
+    /// 32-byte boundary observation signal (`offset 64..96`).
+    pub signal: lmnk_boundary_signal_t,
+}
+
+impl Default for lmnk_envelope_step_params_t {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            flags: 0,
+            reserved: [0; 24],
+            bounds: EnvelopeBounds::new(),
+            signal: BoundarySignal::new(),
+        }
+    }
+}
+
+/// 16-byte (`#[repr(C)]`) versioned parameter struct for
+/// [`crate::runtime::abi::lmnk_context_emit_boundary_signal`].
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct lmnk_boundary_emit_params_t {
+    /// Parameter struct byte size (`sizeof(lmnk_boundary_emit_params_t)` == `16`, `offset 0..4`).
+    pub struct_size: u32,
+    /// Option bitflags (`LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT`, unknown bits fail-closed, `offset 4..8`).
+    pub flags: u32,
+    /// Normalized signal pressure in Q0.15 (`0..=32768`, `offset 8..10`).
+    pub pressure_q15: u16,
+    /// Observed boundary chatter intensity in Q0.7 (`0..=128`, `offset 10`).
+    pub chatter_q7: u8,
+    /// Explicit zero padding (`offset 11`).
+    pub reserved: u8,
+    /// Monotonic logical step/epoch identifier (`offset 12..16`).
+    pub epoch_id: u32,
+}
+
+impl Default for lmnk_boundary_emit_params_t {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            flags: 0,
+            pressure_q15: 0,
+            chatter_q7: 0,
+            reserved: 0,
+            epoch_id: 0,
         }
     }
 }
@@ -890,7 +1006,7 @@ const _: () = {
     assert!(offset_of!(lmnk_abi_info_t, capability_flags) == 24);
     assert!(offset_of!(lmnk_abi_info_t, reserved) == 32);
 
-    assert!(size_of::<lmnk_runtime_policy_t>() == 48 && align_of::<lmnk_runtime_policy_t>() == 8);
+    assert!(size_of::<lmnk_runtime_policy_t>() == 64 && align_of::<lmnk_runtime_policy_t>() == 8);
     assert!(offset_of!(lmnk_runtime_policy_t, struct_size) == 0);
     assert!(offset_of!(lmnk_runtime_policy_t, baseline_pinned_compute_mask) == 8);
     assert!(offset_of!(lmnk_runtime_policy_t, baseline_pressure_q15) == 40);
@@ -903,10 +1019,12 @@ const _: () = {
         size_of::<lmnk_decode_step_params_t>() == 48
             && align_of::<lmnk_decode_step_params_t>() == 16
     );
+    assert!(offset_of!(lmnk_decode_step_params_t, flags) == 4);
+    assert!(offset_of!(lmnk_decode_step_params_t, reserved) == 8);
     assert!(offset_of!(lmnk_decode_step_params_t, decode_input) == 16);
 
     assert!(
-        size_of::<lmnk_decode_step_report_t>() == 80
+        size_of::<lmnk_decode_step_report_t>() == 64
             && align_of::<lmnk_decode_step_report_t>() == 8
     );
     assert!(offset_of!(lmnk_decode_step_report_t, dispatch) == 8);
@@ -918,7 +1036,53 @@ const _: () = {
     );
     assert!(offset_of!(lmnk_runtime_state_view_t, baseline_pinned_compute_mask) == 8);
     assert!(offset_of!(lmnk_runtime_state_view_t, active_compute_mask) == 32);
-    assert!(offset_of!(lmnk_runtime_state_view_t, reserved) == 46);
+    assert!(offset_of!(lmnk_runtime_state_view_t, envelope_contraction_q7) == 46);
+    assert!(offset_of!(lmnk_runtime_state_view_t, envelope_breach_mask) == 47);
+    assert!(offset_of!(lmnk_runtime_state_view_t, envelope_violation_epochs) == 48);
+    assert!(offset_of!(lmnk_runtime_state_view_t, envelope_baseline_pressure_q15) == 52);
+    assert!(offset_of!(lmnk_runtime_state_view_t, envelope_lock_flags) == 54);
+    assert!(offset_of!(lmnk_runtime_state_view_t, envelope_ema_resume_dwell) == 55);
+    assert!(offset_of!(lmnk_runtime_state_view_t, reserved) == 56);
+
+    assert!(
+        size_of::<lmnk_system_pressure_reading_t>() == 8
+            && align_of::<lmnk_system_pressure_reading_t>() == 2
+    );
+    assert!(
+        size_of::<lmnk_compute_dispatch_mask_t>() == 40
+            && align_of::<lmnk_compute_dispatch_mask_t>() == 8
+    );
+    assert!(
+        size_of::<lmnk_spine_decode_input_t>() == 32
+            && align_of::<lmnk_spine_decode_input_t>() == 16
+    );
+
+    assert!(
+        size_of::<lmnk_boundary_signal_t>() == 32 && align_of::<lmnk_boundary_signal_t>() == 32
+    );
+    assert!(offset_of!(lmnk_boundary_signal_t, reserved) == 26);
+    assert!(offset_of!(lmnk_boundary_signal_t, epoch_id) == 28);
+    assert!(
+        size_of::<lmnk_envelope_bounds_t>() == 32 && align_of::<lmnk_envelope_bounds_t>() == 32
+    );
+    assert!(
+        size_of::<lmnk_envelope_feedback_t>() == 16 && align_of::<lmnk_envelope_feedback_t>() == 16
+    );
+    assert!(size_of::<lmnk_envelope_state_t>() == 64 && align_of::<lmnk_envelope_state_t>() == 64);
+    assert!(
+        size_of::<lmnk_envelope_step_params_t>() == 96
+            && align_of::<lmnk_envelope_step_params_t>() == 32
+    );
+    assert!(offset_of!(lmnk_envelope_step_params_t, flags) == 4);
+    assert!(offset_of!(lmnk_envelope_step_params_t, bounds) == 32);
+    assert!(offset_of!(lmnk_envelope_step_params_t, signal) == 64);
+    assert!(
+        size_of::<lmnk_boundary_emit_params_t>() == 16
+            && align_of::<lmnk_boundary_emit_params_t>() == 4
+    );
+    assert!(offset_of!(lmnk_boundary_emit_params_t, pressure_q15) == 8);
+    assert!(offset_of!(lmnk_boundary_emit_params_t, chatter_q7) == 10);
+    assert!(offset_of!(lmnk_boundary_emit_params_t, epoch_id) == 12);
 
     assert!(
         size_of::<lmnk_lacuna_eval_params_t>() == 24

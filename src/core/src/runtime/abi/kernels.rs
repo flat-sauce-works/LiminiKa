@@ -22,7 +22,7 @@ pub unsafe extern "C" fn lmnk_rope_steer_q(params: *const lmnk_rope_steer_params
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment of `params`.
         let p = unsafe { FfiHandleRef::from_raw(params)? };
-        validate_envelope_size::<lmnk_rope_steer_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_rope_steer_params_t>(p.struct_size)?;
         if (p.flags & !LMNK_ROPE_STEER_KNOWN_FLAGS) != 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn lmnk_rope_procrustes_q7(
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment of `params`.
         let p = unsafe { FfiHandleRef::from_raw(params)? };
-        validate_envelope_size::<lmnk_rope_procrustes_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_rope_procrustes_params_t>(p.struct_size)?;
         if p.flags != 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
@@ -142,7 +142,7 @@ pub unsafe extern "C" fn lmnk_rank1_eval(params: *const lmnk_rank1_eval_params_t
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment of `params`.
         let p = unsafe { FfiHandleRef::from_raw(params)? };
-        validate_envelope_size::<lmnk_rank1_eval_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_rank1_eval_params_t>(p.struct_size)?;
         if (p.flags & !LMNK_RANK1_KNOWN_FLAGS) != 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
@@ -205,7 +205,7 @@ pub unsafe extern "C" fn lmnk_gateway_steer(
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment of `params`.
         let p = unsafe { FfiHandleRef::from_raw(params)? };
-        validate_envelope_size::<lmnk_gateway_steer_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_gateway_steer_params_t>(p.struct_size)?;
         if p.flags != 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
@@ -326,7 +326,7 @@ pub unsafe extern "C" fn lmnk_lacuna_partition_eval(
                 FfiHandleMut::from_raw(out)?,
             )
         };
-        validate_envelope_size::<lmnk_lacuna_eval_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_lacuna_eval_params_t>(p.struct_size)?;
 
         *out_ref = evaluate_lacuna_partition_branchless(
             p.self_ref_mask,
@@ -334,6 +334,71 @@ pub unsafe extern "C" fn lmnk_lacuna_partition_eval(
             &p.noise_tolerance_q7,
             p.deadband_q7,
         );
+        Ok(LMNK_OK)
+    })
+}
+
+/// Evaluates one standalone Tier-1 safety-envelope constraint step (`0 alloc`, `0 fdiv`)
+/// directly on a 64-byte [`lmnk_envelope_state_t`] without requiring a 5,120-byte `RuntimeContext`.
+///
+/// Caller must initialize `params->struct_size = sizeof(lmnk_envelope_step_params_t)` (`96`).
+/// When `LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS` is set in `params->flags`, `params->bounds` is
+/// ignored without validation and canonical [`EnvelopeBounds::new()`] is applied instead.
+///
+/// # Safety
+/// `state_inout` (64B aligned), `params` (32B aligned), and `feedback_out` (16B aligned) must be
+/// non-null, naturally aligned, and pairwise disjoint in memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lmnk_envelope_step(
+    state_inout: *mut lmnk_envelope_state_t,
+    params: *const lmnk_envelope_step_params_t,
+    feedback_out: *mut lmnk_envelope_feedback_t,
+) -> LmnkStatus {
+    ffi_boundary!({
+        validate_ptr(state_inout)?;
+        validate_ptr(params)?;
+        validate_ptr(feedback_out)?;
+        check_disjoint_rw(
+            &[
+                (state_inout.addr(), size_of::<lmnk_envelope_state_t>()),
+                (feedback_out.addr(), size_of::<lmnk_envelope_feedback_t>()),
+            ],
+            &[(params.addr(), size_of::<lmnk_envelope_step_params_t>())],
+        )?;
+        // SAFETY: `state_inout`, `params`, and `feedback_out` are verified non-null, aligned, and disjoint.
+        let (mut state, p, mut out) = unsafe {
+            (
+                FfiHandleMut::from_raw(state_inout)?,
+                FfiHandleRef::from_raw(params)?,
+                FfiHandleMut::from_raw(feedback_out)?,
+            )
+        };
+        validate_param_struct_size::<lmnk_envelope_step_params_t>(p.struct_size)?;
+        if (p.flags & !LMNK_ENVELOPE_STEP_KNOWN_FLAGS) != 0 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        if !state.validate_invariants() {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+        if p.signal.pressure_q15 > SPINE_ENTROPY_Q15_ONE
+            || p.signal.delta_q15 > SPINE_ENTROPY_Q15_ONE
+            || p.signal.contraction_q7 > 128
+            || p.signal.chatter_q7 > 128
+            || (p.signal.signal_flags & !BOUNDARY_SIGNAL_KNOWN_FLAGS) != 0
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+
+        let eff_bounds = if (p.flags & LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS) != 0 {
+            EnvelopeBounds::new()
+        } else {
+            if !p.bounds.validate_invariants() {
+                return Err(LMNK_ERR_INVALID_ARGUMENT);
+            }
+            p.bounds
+        };
+
+        *out = state.step(&eff_bounds, &p.signal);
         Ok(LMNK_OK)
     })
 }

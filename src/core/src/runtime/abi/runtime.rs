@@ -50,7 +50,7 @@ pub unsafe extern "C" fn lmnk_abi_info(info_out: *mut lmnk_abi_info_t) -> LmnkSt
     ffi_boundary!({
         // SAFETY: `FfiHandleMut::from_raw` validates non-nullness and alignment.
         let mut out = unsafe { FfiHandleMut::from_raw(info_out)? };
-        validate_envelope_size::<lmnk_abi_info_t>(out.struct_size)?;
+        validate_param_struct_size::<lmnk_abi_info_t>(out.struct_size)?;
 
         let caps = query_capability();
         #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
@@ -103,7 +103,7 @@ pub unsafe extern "C" fn lmnk_config_validate(config: *const lmnk_config_t) -> L
 }
 
 // ===================================================================
-// 2. RuntimeContext Lifecycle, Policy, Decode & Snapshot (11 functions)
+// 2. RuntimeContext Lifecycle, Policy, Decode, State & Snapshot (12 functions)
 // ===================================================================
 
 /// Initializes a `RuntimeContext` in caller-owned memory with zero heap allocation.
@@ -288,7 +288,7 @@ pub unsafe extern "C" fn lmnk_context_configure_policy(
                 FfiHandleRef::from_raw(policy)?,
             )
         };
-        validate_envelope_size::<lmnk_runtime_policy_t>(pol.struct_size)?;
+        validate_param_struct_size::<lmnk_runtime_policy_t>(pol.struct_size)?;
         if (pol.flags & !LMNK_POLICY_KNOWN_FLAGS) != 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
@@ -337,7 +337,7 @@ pub unsafe extern "C" fn lmnk_context_begin_turn(
                 FfiHandleRef::from_raw(params)?,
             )
         };
-        validate_envelope_size::<lmnk_turn_begin_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_turn_begin_params_t>(p.struct_size)?;
         if (p.flags & !LMNK_TURN_KNOWN_FLAGS) != 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
@@ -381,10 +381,14 @@ pub unsafe extern "C" fn lmnk_context_step_decode(
                 FfiHandleMut::from_raw(report_out)?,
             )
         };
-        validate_envelope_size::<lmnk_decode_step_params_t>(p.struct_size)?;
-        validate_envelope_size::<lmnk_decode_step_report_t>(out.struct_size)?;
+        validate_param_struct_size::<lmnk_decode_step_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_decode_step_report_t>(out.struct_size)?;
+        if (p.flags & !LMNK_DECODE_STEP_KNOWN_FLAGS) != 0 {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
 
-        let plan = ctx.step_decode_control(&p.decode_input, p.external_guard_active != 0);
+        let external_guard = (p.flags & LMNK_DECODE_STEP_FLAG_EXTERNAL_GUARD) != 0;
+        let plan = ctx.step_decode_control(&p.decode_input, external_guard);
         *out = lmnk_decode_step_report_t {
             struct_size: size_of::<lmnk_decode_step_report_t>() as u32,
             next_observe_mode: plan.next_observe_mode,
@@ -392,7 +396,7 @@ pub unsafe extern "C" fn lmnk_context_step_decode(
             event_flags: plan.event_flags,
             effective_observe_stride: plan.effective_observe_stride,
             dispatch: plan.dispatch,
-            reserved: [0; 32],
+            reserved: [0; 16],
         };
         Ok(LMNK_OK)
     })
@@ -424,9 +428,10 @@ pub unsafe extern "C" fn lmnk_context_get_state(
                 FfiHandleMut::from_raw(state_out)?,
             )
         };
-        validate_envelope_size::<lmnk_runtime_state_view_t>(out.struct_size)?;
+        validate_param_struct_size::<lmnk_runtime_state_view_t>(out.struct_size)?;
 
         let spine = ctx.system_spine();
+        let envelope = ctx.envelope();
         let pool = ctx.compute_pool();
         *out = lmnk_runtime_state_view_t {
             struct_size: size_of::<lmnk_runtime_state_view_t>() as u32,
@@ -434,16 +439,75 @@ pub unsafe extern "C" fn lmnk_context_get_state(
             last_veto_mask: spine.last_veto_mask,
             guard_hold_tokens: spine.guard_hold_tokens,
             max_observe_stride: spine.max_observe_stride,
-            baseline_pinned_compute_mask: spine.baseline_pinned_compute_mask,
-            pinned_compute_mask: spine.pinned_compute_mask,
+            baseline_pinned_compute_mask: envelope.baseline_pinned_compute_mask,
+            pinned_compute_mask: envelope.pinned_compute_mask,
             last_executed_mask: spine.last_executed_mask,
             active_compute_mask: pool.active_mask,
             last_observed_entropy_q15: spine.last_observed_entropy_q15,
+            // AnonymousComputePool Gauge-Zero baseline pressure (distinct from `envelope_baseline_pressure_q15`).
             baseline_pressure_q15: pool.baseline_pressure_q15,
             whole_token_bypass_active: spine.whole_token_bypass_active,
-            unobserved_locked: spine.unobserved_locked,
-            reserved: [0; 18],
+            unobserved_locked: envelope.unobserved_locked,
+            envelope_contraction_q7: envelope.contraction_q7,
+            envelope_breach_mask: envelope.breach_mask,
+            envelope_violation_epochs: envelope.violation_epochs,
+            envelope_baseline_pressure_q15: envelope.baseline_pressure_q15,
+            envelope_lock_flags: envelope.lock_flags(),
+            envelope_ema_resume_dwell: envelope.ema_resume_dwell,
+            reserved: [0; 8],
         };
+        Ok(LMNK_OK)
+    })
+}
+
+/// Emits a raw 32-byte POD [`lmnk_boundary_signal_t`] from `context` using caller-supplied
+/// pressure, chatter, epoch, and intent flags (`0 alloc`, `0 fdiv`).
+///
+/// Caller must initialize `params->struct_size = sizeof(lmnk_boundary_emit_params_t)`.
+///
+/// # Safety
+/// `context` (64B aligned), `params` (4B aligned), and `signal_out` (32B aligned) must be
+/// non-null, naturally aligned, and pairwise disjoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lmnk_context_emit_boundary_signal(
+    context: LmnkContextHandle,
+    params: *const lmnk_boundary_emit_params_t,
+    signal_out: *mut lmnk_boundary_signal_t,
+) -> LmnkStatus {
+    ffi_boundary!({
+        let typed = context.cast_const().cast::<RuntimeContext>();
+        validate_ptr(typed)?;
+        validate_ptr(params)?;
+        validate_ptr(signal_out)?;
+        check_disjoint_rw(
+            &[(signal_out.addr(), size_of::<lmnk_boundary_signal_t>())],
+            &[
+                (typed.addr(), size_of::<RuntimeContext>()),
+                (params.addr(), size_of::<lmnk_boundary_emit_params_t>()),
+            ],
+        )?;
+        // SAFETY: `typed`, `params`, and `signal_out` are validated non-null, aligned, and disjoint.
+        let (ctx, p, mut out) = unsafe {
+            (
+                FfiHandleRef::from_raw(typed)?,
+                FfiHandleRef::from_raw(params)?,
+                FfiHandleMut::from_raw(signal_out)?,
+            )
+        };
+        validate_param_struct_size::<lmnk_boundary_emit_params_t>(p.struct_size)?;
+        if (p.flags & !LMNK_BOUNDARY_EMIT_KNOWN_FLAGS) != 0
+            || p.pressure_q15 > SPINE_ENTROPY_Q15_ONE
+            || p.chatter_q7 > 128
+        {
+            return Err(LMNK_ERR_INVALID_ARGUMENT);
+        }
+
+        let sig_flags = if (p.flags & LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT) != 0 {
+            BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT
+        } else {
+            0
+        };
+        *out = ctx.emit_boundary_signal(p.pressure_q15, p.chatter_q7, p.epoch_id, sig_flags);
         Ok(LMNK_OK)
     })
 }
@@ -583,7 +647,7 @@ pub unsafe extern "C" fn lmnk_container_write(
     ffi_boundary!({
         // SAFETY: `FfiHandleRef::from_raw` validates non-nullness and alignment of `params`.
         let p = unsafe { FfiHandleRef::from_raw(params)? };
-        validate_envelope_size::<lmnk_container_write_params_t>(p.struct_size)?;
+        validate_param_struct_size::<lmnk_container_write_params_t>(p.struct_size)?;
 
         let sec_count = p.section_count as usize;
         if sec_count > usize::from(LMNK_MAX_CONTAINER_SECTIONS) {
@@ -618,7 +682,7 @@ pub unsafe extern "C" fn lmnk_container_write(
         let mut idx = 0usize;
         while idx < sec_count {
             let entry = &raw_sections[idx];
-            validate_envelope_size::<lmnk_section_input_t>(entry.struct_size)?;
+            validate_param_struct_size::<lmnk_section_input_t>(entry.struct_size)?;
             if entry.flags != 0 || entry.payload_len == 0 {
                 return Err(LMNK_ERR_INVALID_ARGUMENT);
             }
@@ -736,7 +800,7 @@ pub unsafe extern "C" fn lmnk_container_verify(
                 FfiHandleMut::from_raw(report_out)?,
             )
         };
-        validate_envelope_size::<lmnk_container_verify_report_t>(out.struct_size)?;
+        validate_param_struct_size::<lmnk_container_verify_report_t>(out.struct_size)?;
 
         let view = LmnkContainerView::parse(in_bytes)?;
         let hdr = view.header();
@@ -786,7 +850,7 @@ pub unsafe extern "C" fn lmnk_container_find_section(
                 FfiHandleMut::from_raw(view_out)?,
             )
         };
-        validate_envelope_size::<lmnk_container_section_view_t>(out.struct_size)?;
+        validate_param_struct_size::<lmnk_container_section_view_t>(out.struct_size)?;
 
         let view = LmnkContainerView::parse(in_bytes)?;
         let entry = view.find_section(kind).ok_or(LMNK_ERR_ANCHOR_NOT_FOUND)?;

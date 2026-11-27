@@ -1,8 +1,8 @@
 // name: src/core/src/runtime/abi/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! C-ABI interface definitions, FFI safety barriers, versioned envelope layouts, and the
-//! 25-function C11/C++20 public surface for `LiminiKa` `v0.4.0` (`0x0000_0400`).
+//! C-ABI interface definitions, FFI safety barriers, versioned parameter struct layouts, and the
+//! 27-function C11/C++20 public surface for `LiminiKa` `v0.4.0` (`0x0000_0400`).
 
 // C-ABI typedef aliases keep their `lmnk_*_t` spelling to mirror `include/liminika/lmnk_types.h`.
 #![allow(non_camel_case_types)]
@@ -175,6 +175,63 @@ mod tests {
             assert_eq!(view.active_compute_mask, 0x0000_FFFF);
             assert_eq!(view.guard_hold_tokens, 3);
             assert_eq!(view.max_observe_stride, 4);
+            assert_eq!(view.envelope_contraction_q7, 128);
+            assert_eq!(view.envelope_breach_mask, ENVELOPE_BREACH_NONE);
+
+            let emit_in = lmnk_boundary_emit_params_t {
+                flags: LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT,
+                pressure_q15: 9_600,
+                chatter_q7: 12,
+                epoch_id: 5,
+                ..Default::default()
+            };
+            let mut sig_out = lmnk_boundary_signal_t::new();
+            assert_eq!(
+                lmnk_context_emit_boundary_signal(ctx, &emit_in, &mut sig_out),
+                LMNK_OK
+            );
+            assert_eq!(sig_out.pressure_q15, 9_600);
+            assert_eq!(sig_out.chatter_q7, 12);
+            assert_eq!(sig_out.epoch_id, 5);
+            assert_ne!(
+                sig_out.signal_flags & BOUNDARY_SIGNAL_FLAG_IRREVERSIBLE_INTENT,
+                0
+            );
+
+            // Tier-1 standalone envelope step with DEFAULT_BOUNDS ignores zeroed bounds.
+            let mut env_state = lmnk_envelope_state_t::new();
+            let env_params = lmnk_envelope_step_params_t {
+                flags: LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS,
+                bounds: lmnk_envelope_bounds_t {
+                    immutable_compute_pin_mask: 0,
+                    pressure_ceiling_q15: 0,
+                    pressure_floor_q15: 60_000,
+                    min_baseline_pressure_q15: 60_000,
+                    max_baseline_pressure_q15: 0,
+                    immutable_aperture_pin_mask: 0,
+                    immutable_slot_pin_mask: 0,
+                    immutable_action_pin_mask: 0,
+                    max_chatter_q7: 255,
+                    contraction_gain_q7: 0,
+                    recovery_gain_q7: 0,
+                    min_aperture_q7: 255,
+                    ema_resume_dwell_target: 0,
+                    reserved: [0; 8],
+                },
+                signal: sig_out,
+                ..Default::default()
+            };
+            let mut env_fb = lmnk_envelope_feedback_t::default();
+            assert_eq!(
+                lmnk_envelope_step(&mut env_state, &env_params, &mut env_fb),
+                LMNK_OK
+            );
+            assert_eq!(env_fb.contraction_q7, 128);
+            assert_eq!(env_fb.breach_mask, ENVELOPE_BREACH_NONE);
+            assert_ne!(
+                env_state.baseline_pinned_compute_mask & HOST_IMMUTABLE_PINNED_COMPUTE_MASK,
+                0
+            );
 
             let mut snap_len = 0usize;
             assert_eq!(

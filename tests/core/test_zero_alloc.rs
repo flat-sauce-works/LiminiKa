@@ -8,19 +8,21 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use liminika_core::abi::{
-    LMNK_OK, LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE, LmnkContextHandle,
-    lmnk_abi_info, lmnk_abi_info_t, lmnk_config_init_default, lmnk_config_t,
-    lmnk_container_find_section, lmnk_container_section_view_t, lmnk_container_verify,
-    lmnk_container_verify_report_t, lmnk_container_write, lmnk_container_write_params_t,
-    lmnk_context_begin_turn, lmnk_context_configure_policy, lmnk_context_create,
-    lmnk_context_deinit_in_place, lmnk_context_destroy, lmnk_context_get_state,
-    lmnk_context_init_in_place, lmnk_context_reset, lmnk_context_step_decode,
-    lmnk_decode_step_params_t, lmnk_decode_step_report_t, lmnk_gateway_steer,
-    lmnk_gateway_steer_params_t, lmnk_lacuna_eval_params_t, lmnk_lacuna_partition_eval,
-    lmnk_lacuna_partition_t, lmnk_pointer_trail_t, lmnk_rank1_eval, lmnk_rank1_eval_params_t,
-    lmnk_rope_steer_params_t, lmnk_rope_steer_q, lmnk_runtime_policy_t, lmnk_runtime_state_view_t,
-    lmnk_section_input_t, lmnk_spine_decode_input_t, lmnk_system_pressure_reading_t,
-    lmnk_turn_begin_params_t,
+    LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT, LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS, LMNK_OK,
+    LMNK_POLICY_FLAG_COMPUTE_POOL, LMNK_POLICY_FLAG_SPINE, LmnkContextHandle, lmnk_abi_info,
+    lmnk_abi_info_t, lmnk_boundary_emit_params_t, lmnk_boundary_signal_t, lmnk_config_init_default,
+    lmnk_config_t, lmnk_container_find_section, lmnk_container_section_view_t,
+    lmnk_container_verify, lmnk_container_verify_report_t, lmnk_container_write,
+    lmnk_container_write_params_t, lmnk_context_begin_turn, lmnk_context_configure_policy,
+    lmnk_context_create, lmnk_context_deinit_in_place, lmnk_context_destroy,
+    lmnk_context_emit_boundary_signal, lmnk_context_get_state, lmnk_context_init_in_place,
+    lmnk_context_reset, lmnk_context_step_decode, lmnk_decode_step_params_t,
+    lmnk_decode_step_report_t, lmnk_envelope_feedback_t, lmnk_envelope_state_t, lmnk_envelope_step,
+    lmnk_envelope_step_params_t, lmnk_gateway_steer, lmnk_gateway_steer_params_t,
+    lmnk_lacuna_eval_params_t, lmnk_lacuna_partition_eval, lmnk_lacuna_partition_t,
+    lmnk_pointer_trail_t, lmnk_rank1_eval, lmnk_rank1_eval_params_t, lmnk_rope_steer_params_t,
+    lmnk_rope_steer_q, lmnk_runtime_policy_t, lmnk_runtime_state_view_t, lmnk_section_input_t,
+    lmnk_spine_decode_input_t, lmnk_system_pressure_reading_t, lmnk_turn_begin_params_t,
 };
 use liminika_core::foundation::{
     AlignedBuffer16, AlignedBuffer32, ArenaSpan, DEFAULT_PHASE_CLAMP_MAX_RAD, Pod,
@@ -236,6 +238,30 @@ fn test_zero_alloc_in_place_context_lifecycle() {
             lmnk_context_step_decode(ctx_handle, &decode_in, &mut decode_rep),
             LMNK_OK
         );
+        let emit_in = lmnk_boundary_emit_params_t {
+            flags: LMNK_BOUNDARY_EMIT_FLAG_IRREVERSIBLE_INTENT,
+            pressure_q15: 10_000,
+            chatter_q7: 8,
+            epoch_id: 1,
+            ..Default::default()
+        };
+        let mut sig_out = lmnk_boundary_signal_t::new();
+        assert_eq!(
+            lmnk_context_emit_boundary_signal(ctx_handle, &emit_in, &mut sig_out),
+            LMNK_OK
+        );
+        let mut env_state = lmnk_envelope_state_t::new();
+        let env_params = lmnk_envelope_step_params_t {
+            flags: LMNK_ENVELOPE_STEP_FLAG_DEFAULT_BOUNDS,
+            signal: sig_out,
+            ..Default::default()
+        };
+        let mut env_fb = lmnk_envelope_feedback_t::default();
+        assert_eq!(
+            lmnk_envelope_step(&mut env_state, &env_params, &mut env_fb),
+            LMNK_OK
+        );
+        assert_eq!(env_fb.contraction_q7, 128);
         assert_eq!(lmnk_context_reset(ctx_handle), LMNK_OK);
         assert_eq!(lmnk_context_deinit_in_place(ctx_handle), LMNK_OK);
         assert!(backing.0[..req_size].iter().all(|&b| b == 0));
@@ -424,8 +450,8 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     let _ = wb_substrate.apply_horizon_escalation(&esc_req, &mut esc_lane, &mut mock_esc);
 
     // Verify label-free AnonymousComputePool dispatch, whole-token bypass, LacunaPartition8,
-    // SystemSpine isolation, DistortionDelta P-Frame chain, and DistortionTension remain zero-alloc.
-    ctx.system_spine_mut().pin_compute_slots(0b0001);
+    // Envelope isolation, DistortionDelta P-Frame chain, and DistortionTension remain zero-alloc.
+    ctx.pin_compute_slots(0b0001);
     ctx.compute_pool_mut()
         .set_slot_masks(0b1111, 0b0001, 0, 0b1110);
     let mut dispatch = ctx.step_compute_dispatch(liminika_core::drivers::SystemPressureReading {
@@ -489,7 +515,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     assert_eq!(part.exterior_mask, 0b0011_0000);
     let mut tension = liminika_core::DistortionTension::new(true);
     tension.step_hot_path_branchless(40, part.boundary_sensitivity_q7, 32, 16, false);
-    let spine = liminika_core::SystemSpineState::new();
+    let envelope = liminika_core::EnvelopeState::new();
     let ego = liminika_core::LiminalEgoState::from_preset(liminika_core::LiminalEgoPreset::Medium);
     let net = liminika_core::EgoDifferentialNet::from_ego_state_and_axes(
         &ego,
@@ -500,7 +526,7 @@ fn test_runtime_context_pierce_and_slide_in_zero_alloc() {
     let mut pframe_target = liminika_core::GatewayFrame::default();
     let _ = net.evaluate_pframe_chain_branchless(
         &ego,
-        &spine,
+        &envelope,
         &part,
         &stig,
         &tension,
