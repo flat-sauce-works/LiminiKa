@@ -634,6 +634,30 @@ impl TextAttractorCorpus {
         for _ in 0..rank_cap {
             let mut v = sum_x.clone();
             Self::orthogonalize_against_basis(&mut v, &basis);
+            let seed_norm = v
+                .iter()
+                .map(|&x| f64::from(x) * f64::from(x))
+                .sum::<f64>()
+                .sqrt();
+            if seed_norm <= 1e-12 {
+                // Zero-mean or basis-aligned inputs cancel `sum_x`; deterministically seed power
+                // iteration from the sample with maximum squared residual norm orthogonal to `basis`.
+                let mut best_norm_sq = 0.0_f64;
+                let mut best_vec = vec![0.0_f32; dim];
+                for s in sigs {
+                    next.copy_from_slice(s);
+                    Self::orthogonalize_against_basis(&mut next, &basis);
+                    let nsq: f64 = next.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+                    if nsq > best_norm_sq {
+                        best_norm_sq = nsq;
+                        best_vec.copy_from_slice(&next);
+                    }
+                }
+                if best_norm_sq < 1e-12 {
+                    break;
+                }
+                v = best_vec;
+            }
             Self::l2_normalize_in_place(&mut v);
             if v.iter().all(|&x| x == 0.0) {
                 break;

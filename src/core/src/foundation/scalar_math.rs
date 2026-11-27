@@ -109,7 +109,7 @@ pub(crate) const fn branchless_maturity_scale_u32(sample_count: u32) -> f32 {
 
 #[inline(always)]
 pub(crate) const fn fast_inv_len_f32(n: usize) -> f32 {
-    if n > 0 && (n & (n - 1)) == 0 && n <= (1usize << 62) {
+    if n > 0 && (n & (n - 1)) == 0 && n.trailing_zeros() <= 62 {
         f32::from_bits((127u32.wrapping_sub(n.trailing_zeros())) << 23)
     } else if n > 0 && n <= 256 {
         let lut = POPCOUNT_RSQRT_LUT_257_REF;

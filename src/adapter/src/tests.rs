@@ -5477,6 +5477,77 @@ fn adaptive_layer_selection_and_ratio_bands_across_model_depths() {
         );
         assert_eq!(sel_no_prior, expected_selected);
     }
+
+    // Mixed-script prior with a large between-script mean shift on upper layers must NOT inflate
+    // `bg_var` and displace upper semantic layers, and CKA coherence must stay invariant to
+    // per-layer head/coordinate permutations.
+    let num_layers = 26_usize;
+    let top_half = top_half_layer_mask(num_layers);
+    let corpus_en: Vec<TokenSequenceEntry> = (0..6)
+        .map(|i| {
+            let mut per_layer = Vec::with_capacity(num_layers);
+            for l in 0..num_layers {
+                let mut v = vec![0.0_f32; dim];
+                if l >= 13 {
+                    // Permute coordinates per layer (`(i + l) % dim`) while keeping identical
+                    // pairwise Gram structure across upper layers.
+                    v[(i + l) % dim] = 1.0;
+                } else {
+                    v[0] = 1.0;
+                    v[1 + (i % 3)] = 0.05;
+                }
+                per_layer.push(v);
+            }
+            TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: format!("English domain fact {i}"),
+                energy: 2.0,
+                seq_len: 1,
+                per_layer_token_qs: per_layer,
+                token_include_mask: None,
+            }
+        })
+        .collect();
+    let mixed_prior: Vec<TokenSequenceEntry> = (0..8)
+        .map(|i| {
+            let is_ascii = i % 2 == 0;
+            let mut per_layer = Vec::with_capacity(num_layers);
+            for l in 0..num_layers {
+                let mut v = vec![0.0_f32; dim];
+                if l >= 13 {
+                    // Huge between-script separation (+e0 vs -e0) but tiny within-script spread.
+                    v[0] = if is_ascii { 1.0 } else { -1.0 };
+                    v[1] = ((i / 2) as f32) * 0.01;
+                } else {
+                    // Genuine within-script variance on shallow layers.
+                    v[(i / 2) % dim] = 1.0;
+                }
+                per_layer.push(v);
+            }
+            TokenSequenceEntry {
+                role: AttractorRole::Persona,
+                text: if is_ascii {
+                    format!("Neutral English prompt {i}")
+                } else {
+                    format!("中立的な日本語プローブ{i}")
+                },
+                energy: 1.0,
+                seq_len: 1,
+                per_layer_token_qs: per_layer,
+                token_include_mask: None,
+            }
+        })
+        .collect();
+    let sel_mixed = select_adaptive_layer_mask(
+        num_layers,
+        &corpus_en,
+        &mixed_prior,
+        AdaptiveLayerSelectConfig::default(),
+    );
+    assert_eq!(
+        sel_mixed, top_half,
+        "between-script mean shift in mixed prior must not displace upper layers: got 0x{sel_mixed:08X}"
+    );
 }
 
 #[test]
@@ -5662,15 +5733,34 @@ fn boundary_2d_classifies_unobserved_rescue_exterior_self_ref_and_no_prior_fallb
     assert_eq!(ood_dec.region, Boundary2DRegion::Unobserved);
     assert!(ood_dec.foreign_ood_tokens);
 
-    // 3. High unexp rescued by unmistakably strong coherence (`z_c >= 3.0` & high `top1_coh`).
-    let rescue_dec = b2d.classify(&Boundary2DInput {
-        top1_coh: 0.42,
-        unexplained_token_ratio: 0.86,
+    // 3. High `unexp >= u_foreign` (even with strong `top1_coh` / `z_c`) must NOT bypass foreign-OOD
+    //    gating via a 1D loophole into either `SelfRef` or `Exterior`.
+    let high_unexp_ood = b2d.classify(&Boundary2DInput {
+        top1_coh: 0.51,
+        unexplained_token_ratio: 0.98,
         ..base_in
     });
-    assert_eq!(rescue_dec.region, Boundary2DRegion::SelfRef);
-    assert!(!rescue_dec.foreign_ood_tokens);
-    assert!(rescue_dec.z_c >= b2d.z_c_rescue);
+    assert_eq!(high_unexp_ood.region, Boundary2DRegion::Unobserved);
+    assert!(high_unexp_ood.foreign_ood_tokens);
+    let boundary_unexp_ood = b2d.classify(&Boundary2DInput {
+        top1_coh: 0.42,
+        unexplained_token_ratio: b2d.u_foreign,
+        ..base_in
+    });
+    assert_eq!(boundary_unexp_ood.region, Boundary2DRegion::Unobserved);
+    assert!(boundary_unexp_ood.foreign_ood_tokens);
+
+    // 3b. Sub-threshold noise (`top1_coh < calibrated_min_coherence`) must never promote into
+    //     `Exterior` even when `unexp` falls inside the semi-known band.
+    let sub_floor_noise = b2d.classify(&Boundary2DInput {
+        top1_coh: b2d.calibrated_min_coherence * 0.95,
+        top2_coh: 0.05,
+        unexplained_token_ratio: b2d.u_semi + 0.02,
+        has_recalled_facts: false,
+        ..base_in
+    });
+    assert_eq!(sub_floor_noise.region, Boundary2DRegion::Unobserved);
+    assert!(!sub_floor_noise.stage_top1_candidate_to_exterior);
 
     // 4. Narrow OOD median near 0 with floored MAD must NOT falsely rescue a query barely at `min_coh`.
     let narrow_env = NullCalibrationEnvelope {

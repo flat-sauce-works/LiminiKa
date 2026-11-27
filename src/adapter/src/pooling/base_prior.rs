@@ -76,8 +76,43 @@ impl ModelBaseAttractorProfile {
         }
         let n = active_samples.len() as f32;
 
+        let sample_scripts: Vec<ScriptGroup> = active_samples
+            .iter()
+            .map(|s| classify_script_group(&s.text))
+            .collect();
+        let mut ascii_count = 0_usize;
+        let mut non_ascii_count = 0_usize;
+        for &g in &sample_scripts {
+            match g {
+                ScriptGroup::AsciiDominant => ascii_count += 1,
+                ScriptGroup::NonAsciiDominant => non_ascii_count += 1,
+            }
+        }
+        let split_script_refs = ascii_count >= 2 && non_ascii_count >= 2;
+
         let mut novelty_reference_per_layer = vec![vec![0.0_f32; dim]; num_layers];
-        for s in &active_samples {
+        let mut ascii_ref_per_layer = if split_script_refs {
+            vec![vec![0.0_f32; dim]; num_layers]
+        } else {
+            Vec::new()
+        };
+        let mut non_ascii_ref_per_layer = if split_script_refs {
+            vec![vec![0.0_f32; dim]; num_layers]
+        } else {
+            Vec::new()
+        };
+        let inv_ascii = if ascii_count > 0 {
+            1.0_f32 / (ascii_count as f32)
+        } else {
+            0.0
+        };
+        let inv_non_ascii = if non_ascii_count > 0 {
+            1.0_f32 / (non_ascii_count as f32)
+        } else {
+            0.0
+        };
+
+        for (s, &group) in active_samples.iter().zip(sample_scripts.iter()) {
             let mask = s.token_include_mask.as_deref();
             for (l, flat) in s.per_layer_token_qs.iter().enumerate() {
                 let u =
@@ -85,43 +120,74 @@ impl ModelBaseAttractorProfile {
                 for (dst, &src) in novelty_reference_per_layer[l].iter_mut().zip(u.iter()) {
                     *dst += src / n;
                 }
+                if split_script_refs {
+                    match group {
+                        ScriptGroup::AsciiDominant => {
+                            for (dst, &src) in ascii_ref_per_layer[l].iter_mut().zip(u.iter()) {
+                                *dst += src * inv_ascii;
+                            }
+                        }
+                        ScriptGroup::NonAsciiDominant => {
+                            for (dst, &src) in non_ascii_ref_per_layer[l].iter_mut().zip(u.iter()) {
+                                *dst += src * inv_non_ascii;
+                            }
+                        }
+                    }
+                }
             }
         }
 
-        let ref_slices: Vec<&[f32]> = novelty_reference_per_layer
+        let grand_ref_slices: Vec<&[f32]> = novelty_reference_per_layer
             .iter()
             .map(Vec::as_slice)
             .collect();
+        let ascii_ref_slices: Vec<&[f32]> = ascii_ref_per_layer.iter().map(Vec::as_slice).collect();
+        let non_ascii_ref_slices: Vec<&[f32]> =
+            non_ascii_ref_per_layer.iter().map(Vec::as_slice).collect();
+
         let mut pooled_sigs: Vec<Vec<f32>> = Vec::with_capacity(active_samples.len());
         let mut raw_tok_sigs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(active_samples.len());
-        let mut sample_scripts: Vec<ScriptGroup> = Vec::with_capacity(active_samples.len());
-        for s in &active_samples {
+        for (s, &group) in active_samples.iter().zip(sample_scripts.iter()) {
             let mask = s.token_include_mask.as_deref();
+            let (layer_ref, ref_slices) = if split_script_refs {
+                match group {
+                    ScriptGroup::AsciiDominant => (&ascii_ref_per_layer, &ascii_ref_slices),
+                    ScriptGroup::NonAsciiDominant => {
+                        (&non_ascii_ref_per_layer, &non_ascii_ref_slices)
+                    }
+                }
+            } else {
+                (&novelty_reference_per_layer, &grand_ref_slices)
+            };
             let pooled = pooler.pool_sequence_masked(
                 &s.per_layer_token_qs,
                 s.seq_len,
                 dim,
-                Some(&novelty_reference_per_layer),
+                Some(layer_ref),
                 mask,
             )?;
             let p_refs: Vec<&[f32]> = pooled.iter().map(Vec::as_slice).collect();
             pooled_sigs.push(TextAttractorCorpus::build_steered_residual_sig(
-                geom,
-                &p_refs,
-                &ref_slices,
+                geom, &p_refs, ref_slices,
             ));
             let indexed_toks = CompiledTokenCorpus::build_raw_token_sigs_for_entry(
                 adapter,
                 &s.per_layer_token_qs,
                 s.seq_len,
-                &novelty_reference_per_layer,
+                layer_ref,
                 mask,
             )?;
             raw_tok_sigs.push(indexed_toks.into_iter().map(|(_, sig)| sig).collect());
-            sample_scripts.push(classify_script_group(&s.text));
         }
 
-        let pooled_sig_refs: Vec<&[f32]> = pooled_sigs.iter().map(Vec::as_slice).collect();
+        // Remove residual within-script group means before pooled PCA whenever multiple scripts are
+        // present so cross-script mean offsets never masquerade as global common-mode directions.
+        let pca_pooled_sigs: Vec<Vec<f32>> = if split_script_refs {
+            center_pooled_sigs_within_script(&pooled_sigs, &sample_scripts)
+        } else {
+            pooled_sigs.clone()
+        };
+        let pooled_sig_refs: Vec<&[f32]> = pca_pooled_sigs.iter().map(Vec::as_slice).collect();
         let pooled_common_mode_basis =
             TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&pooled_sig_refs, 3);
         let token_common_mode_basis =
@@ -172,6 +238,69 @@ impl ModelBaseAttractorProfile {
             calibration_samples: active_samples.into_iter().cloned().collect(),
         })
     }
+}
+
+/// Subtracts each [`ScriptGroup`]'s own mean signature from its members so cross-script mean
+/// offsets never inject a rank-1 between-language spike into pooled common-mode PCA.
+fn center_pooled_sigs_within_script(
+    pooled_sigs: &[Vec<f32>],
+    scripts: &[ScriptGroup],
+) -> Vec<Vec<f32>> {
+    let Some(dim) = pooled_sigs.first().map(Vec::len) else {
+        return Vec::new();
+    };
+    if dim == 0 || pooled_sigs.len() != scripts.len() {
+        return pooled_sigs.to_vec();
+    }
+    let mut ascii_sum = vec![0.0_f64; dim];
+    let mut non_ascii_sum = vec![0.0_f64; dim];
+    let mut ascii_n = 0_usize;
+    let mut non_ascii_n = 0_usize;
+    for (sig, &group) in pooled_sigs.iter().zip(scripts.iter()) {
+        if sig.len() != dim {
+            continue;
+        }
+        match group {
+            ScriptGroup::AsciiDominant => {
+                ascii_n += 1;
+                for (dst, &src) in ascii_sum.iter_mut().zip(sig.iter()) {
+                    *dst += f64::from(src);
+                }
+            }
+            ScriptGroup::NonAsciiDominant => {
+                non_ascii_n += 1;
+                for (dst, &src) in non_ascii_sum.iter_mut().zip(sig.iter()) {
+                    *dst += f64::from(src);
+                }
+            }
+        }
+    }
+    let ascii_mean: Option<Vec<f32>> = (ascii_n >= 2).then(|| {
+        let inv = 1.0 / (ascii_n as f64);
+        ascii_sum.iter().map(|&v| (v * inv) as f32).collect()
+    });
+    let non_ascii_mean: Option<Vec<f32>> = (non_ascii_n >= 2).then(|| {
+        let inv = 1.0 / (non_ascii_n as f64);
+        non_ascii_sum.iter().map(|&v| (v * inv) as f32).collect()
+    });
+
+    pooled_sigs
+        .iter()
+        .zip(scripts.iter())
+        .map(|(sig, &group)| {
+            let mean = match group {
+                ScriptGroup::AsciiDominant => ascii_mean.as_deref(),
+                ScriptGroup::NonAsciiDominant => non_ascii_mean.as_deref(),
+            };
+            if let Some(mu) = mean
+                && sig.len() == dim
+            {
+                sig.iter().zip(mu.iter()).map(|(&x, &m)| x - m).collect()
+            } else {
+                sig.clone()
+            }
+        })
+        .collect()
 }
 
 /// Fits cross-entry token-space common-mode directions using strict-majority entry support
@@ -254,18 +383,20 @@ pub(super) fn fit_cross_entry_token_common_mode_with_scripts(
                 if let Some(tok) = best_tok {
                     total_support += 1;
                     if let Some(groups) = script_groups {
-                        let sign = if best_c >= 0.0 { 1.0_f32 } else { -1.0_f32 };
+                        // Accumulate unflipped token vectors so antipodal cross-script offsets
+                        // (`+Delta` vs `-Delta`) yield negative centroid cosine and are rejected,
+                        // whereas genuinely shared framing directions yield positive cosine.
                         match groups[i] {
                             ScriptGroup::AsciiDominant => {
                                 ascii_support += 1;
                                 for (dst, &src) in ascii_sum.iter_mut().zip(tok.iter()) {
-                                    *dst += sign * src;
+                                    *dst += src;
                                 }
                             }
                             ScriptGroup::NonAsciiDominant => {
                                 non_ascii_support += 1;
                                 for (dst, &src) in non_ascii_sum.iter_mut().zip(tok.iter()) {
-                                    *dst += sign * src;
+                                    *dst += src;
                                 }
                             }
                         }

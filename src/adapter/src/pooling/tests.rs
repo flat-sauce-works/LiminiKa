@@ -1328,6 +1328,87 @@ fn multilingual_startup_prior_probes_and_bimodal_null_envelope_defense() {
         "extracted basis must align with shared dim 0: {:?}",
         basis[0]
     );
+
+    // 4. Antipodal cross-script offset (`+e3` in ASCII vs `-e3` in non-ASCII) must be rejected
+    //    by token common-mode filtering and never absorbed into `pooled_common_mode_basis`.
+    let mut antipodal_toks = Vec::with_capacity(24);
+    for i in 0..24 {
+        let is_ascii = i % 2 == 0;
+        let mut t_shared = vec![0.0_f32; dim];
+        t_shared[0] = 1.0;
+        let mut t_antipodal = vec![0.0_f32; dim];
+        t_antipodal[3] = if is_ascii { 1.0 } else { -1.0 };
+        antipodal_toks.push(vec![t_shared, t_antipodal]);
+    }
+    let anti_basis =
+        fit_cross_entry_token_common_mode_with_scripts(&antipodal_toks, Some(&scripts), 4);
+    assert_eq!(
+        anti_basis.len(),
+        1,
+        "antipodal between-script axis must be rejected, got {} dirs",
+        anti_basis.len()
+    );
+    assert!(
+        anti_basis[0][0].abs() > 0.95 && anti_basis[0][3].abs() < 0.05,
+        "antipodal axis leaked into token_common_mode_basis: {:?}",
+        anti_basis[0]
+    );
+
+    let mut geom = sample_gqa_partial_rope();
+    geom.num_layers = 2;
+    geom.num_q_heads = 4;
+    geom.num_kv_heads = 2;
+    geom.head_dim = 8;
+    geom.rotary_dim = 8;
+    geom.layer_rope_mask = 0x3;
+    let adapter = ModelSteeringAdapter::new(geom).expect("compact adapter");
+    let q_dim = adapter.geometry().q_rot_len();
+    let mut mixed_samples = Vec::with_capacity(12);
+    for i in 0..12 {
+        let is_ascii = i % 2 == 0;
+        let intra = (i / 2) as f32;
+        let mut flat = vec![0.0_f32; 2 * q_dim];
+        for t in 0..2 {
+            // Pure between-script mean shift on dim 0 (`+1.0` EN vs `-1.0` JA).
+            flat[t * q_dim] = if is_ascii { 1.0 } else { -1.0 };
+            // Genuine shared within-script variation on dim 1.
+            flat[t * q_dim + 1] = (intra - 2.5) * 0.25 + (t as f32) * 0.15;
+            // Per-sample semantic diversity on dim 2 + (i % 6).
+            flat[t * q_dim + 2 + (i % 6)] = 0.20;
+        }
+        mixed_samples.push(TokenSequenceEntry {
+            role: AttractorRole::Persona,
+            text: if is_ascii {
+                format!("Neutral ASCII sample {i}")
+            } else {
+                format!("中立的な日本語標本{i}")
+            },
+            energy: 1.0,
+            seq_len: 2,
+            per_layer_token_qs: vec![flat; 2],
+            token_include_mask: None,
+        });
+    }
+    let mixed_prior = ModelBaseAttractorProfile::extract(
+        &adapter,
+        &mixed_samples,
+        SequenceActivationPooler::default(),
+        0.55,
+    )
+    .expect("extract mixed prior");
+    assert!(
+        !mixed_prior.pooled_common_mode_basis.is_empty(),
+        "within-script centered PCA must still recover shared within-script variance"
+    );
+    for dir in &mixed_prior.pooled_common_mode_basis {
+        // Layer 0 dim 0 and layer 1 dim 0 carry the pure between-script shift; within-script
+        // residualization must prevent that shift axis from dominating any pooled basis vector.
+        let shift_energy = dir[0] * dir[0] + dir[q_dim] * dir[q_dim];
+        assert!(
+            shift_energy < 0.05,
+            "between-script mean shift leaked into pooled_common_mode_basis (energy={shift_energy:.4})"
+        );
+    }
 }
 
 #[test]

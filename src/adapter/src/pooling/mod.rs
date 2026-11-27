@@ -31,6 +31,7 @@ pub use null_calibration::{
     DEFAULT_TOKEN_EXPLAIN_THRESHOLD, NullCalibrationEnvelope, OOD_COH_MAD_FLOOR,
     OOD_UNEXP_MAD_FLOOR,
 };
+pub(crate) use null_calibration::{ScriptGroup, classify_script_group};
 pub use streaming::{
     DEFAULT_STREAMING_SALIENT_TOKENS, STREAMING_PCA_SAMPLE_BUDGET, StreamingCorpusDistiller,
     StreamingDistillConfig, StreamingDistillReport, split_raw_document_chunks,

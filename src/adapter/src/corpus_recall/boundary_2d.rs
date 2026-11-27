@@ -367,7 +367,7 @@ impl Boundary2DThresholds {
             }
             if bridge_eligible {
                 let sub_threshold_bridged = !input.has_recalled_facts
-                    && input.top1_coh >= self.calibrated_min_coherence * 0.90
+                    && input.top1_coh >= self.calibrated_min_coherence
                     && (self.u_semi..self.u_foreign).contains(&input.unexplained_token_ratio);
                 let semi_known_cutoff = if sharp_unimodal_lock {
                     self.u_semi + self.sharp_unimodal_semi_margin
@@ -432,12 +432,14 @@ impl Boundary2DThresholds {
             };
         }
 
-        // Calibrated 2D `(top1_coh, unexp)` classification.
-        let rescue_coh_floor = (self.calibrated_min_coherence * 1.45).max(0.30);
-        let high_coh_rescue = z_c >= self.z_c_rescue && input.top1_coh >= rescue_coh_floor;
-        let foreign_ood_tokens =
-            input.unexplained_token_ratio >= self.u_foreign && !high_coh_rescue;
-        if foreign_ood_tokens || s_2d < self.tau_unobs {
+        // Calibrated 2D `(top1_coh, unexp)` classification: both axes must satisfy their
+        // respective admissibility bounds (`unexp < u_foreign`, `top1_coh >= min_coherence`,
+        // and `s_2d >= tau_unobs`) with no 1D bypass around foreign-OOD tokens or below-floor noise.
+        let foreign_ood_tokens = input.unexplained_token_ratio >= self.u_foreign;
+        if foreign_ood_tokens
+            || input.top1_coh < self.calibrated_min_coherence
+            || s_2d < self.tau_unobs
+        {
             return Boundary2DDecision {
                 region: Boundary2DRegion::Unobserved,
                 foreign_ood_tokens,
@@ -459,7 +461,7 @@ impl Boundary2DThresholds {
             s_2d < self.tau_self && input.unexplained_token_ratio >= eff_u_semi * 0.85;
 
         if bridge_eligible && (in_semi_unexp_band || in_mid_s2d_unexp_dom) {
-            if !input.has_recalled_facts && input.top1_coh >= self.calibrated_min_coherence * 0.90 {
+            if !input.has_recalled_facts {
                 return Boundary2DDecision {
                     region: Boundary2DRegion::Exterior,
                     foreign_ood_tokens: false,
@@ -469,7 +471,7 @@ impl Boundary2DThresholds {
                     stage_top1_candidate_to_exterior: true,
                 };
             }
-            if input.has_recalled_facts && input.top1_coh < 0.90 {
+            if input.top1_coh < 0.90 {
                 return Boundary2DDecision {
                     region: Boundary2DRegion::Exterior,
                     foreign_ood_tokens: false,

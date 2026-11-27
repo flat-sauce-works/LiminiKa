@@ -30,7 +30,7 @@ pub const DEFAULT_TOKEN_EXPLAIN_THRESHOLD: f32 = 0.40;
 
 /// Coarse script-family bucket used solely for deterministic bimodal null-calibration defense.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ScriptGroup {
+pub(crate) enum ScriptGroup {
     /// Predominantly ASCII text (`< 25%` non-ASCII non-whitespace characters).
     AsciiDominant,
     /// Non-ASCII script text (CJK, Japanese, Cyrillic, etc.; `>= 25%` non-ASCII chars).
@@ -39,7 +39,7 @@ pub(super) enum ScriptGroup {
 
 /// Classifies `text` deterministically into [`ScriptGroup`] without external language detectors.
 #[must_use]
-pub(super) fn classify_script_group(text: &str) -> ScriptGroup {
+pub(crate) fn classify_script_group(text: &str) -> ScriptGroup {
     let mut total = 0_usize;
     let mut non_ascii = 0_usize;
     for ch in text.chars() {
