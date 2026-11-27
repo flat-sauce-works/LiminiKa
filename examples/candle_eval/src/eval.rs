@@ -35,17 +35,23 @@ use crate::model::{
     clip_layer_mask, top_half_layer_mask,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum LayerMaskSpec {
+    #[default]
+    Auto,
     TopHalf,
     All,
     Fixed(u64),
 }
 
 impl LayerMaskSpec {
+    pub(crate) const fn is_auto(self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
     pub(crate) const fn resolve(self, num_layers: usize) -> u64 {
         match self {
-            Self::TopHalf => top_half_layer_mask(num_layers),
+            Self::Auto | Self::TopHalf => top_half_layer_mask(num_layers),
             Self::All => active_layers_mask(num_layers),
             Self::Fixed(mask) => clip_layer_mask(mask, num_layers),
         }
@@ -300,7 +306,6 @@ pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64
 
 pub(crate) const DEFAULT_LOGITS_OBSERVE_STRIDE: usize = 1;
 pub(crate) const DEFAULT_GUARD_HOLD_TOKENS: u8 = ModelSteeringAdapter::DEFAULT_GUARD_HOLD_TOKENS;
-pub(crate) const DEFAULT_LAYER_STEER_MASK: u64 = 0xFFFF_0000;
 pub(crate) const DEFAULT_MAX_GEN_TOKENS: usize = 64;
 pub(crate) const DEFAULT_PREFILL_CHUNK_SIZE: usize = crate::model::DEFAULT_PREFILL_CHUNK_SIZE;
 
@@ -335,6 +340,9 @@ pub(crate) fn parse_layer_mask_spec<'a>(
     for arg in args {
         if let Some(raw) = arg.strip_prefix("--layer-mask=") {
             let val = raw.trim();
+            if val.eq_ignore_ascii_case("auto") {
+                return Some(LayerMaskSpec::Auto);
+            }
             if val.eq_ignore_ascii_case("top-half") || val.eq_ignore_ascii_case("top_half") {
                 return Some(LayerMaskSpec::TopHalf);
             }
@@ -1633,6 +1641,18 @@ mod tests {
         );
 
         assert_eq!(parse_layer_mask_spec(["candle_eval"]), None);
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=auto"]),
+            Some(LayerMaskSpec::Auto)
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=auto"]).map(|s| (
+                s.is_auto(),
+                s.resolve(32),
+                s.resolve(26)
+            )),
+            Some((true, 0xFFFF_0000, 0x03FF_E000))
+        );
         assert_eq!(
             parse_layer_mask_spec(["candle_eval", "--layer-mask=top-half"])
                 .map(|s| (s.resolve(32), s.resolve(26))),

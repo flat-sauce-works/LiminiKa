@@ -598,6 +598,21 @@ pub(crate) fn build_raw_multimodal_probe_tokens(
     Ok((ids, img_tok_count))
 }
 
+/// Builds a per-token inclusion mask for multimodal probes (`true` for natural-language tokens,
+/// `false` for image patch placeholders `[IMG]` and visual layout delimiters `[IMG_BREAK]` /
+/// `[IMG_END]`) so visual patch activations never contaminate `liminika-adapter` pooling or
+/// `unexplained_token_ratio` denominators.
+pub(crate) fn build_visual_exclusion_mask(token_ids: &[u32], cfg: &VisionConfig) -> Vec<bool> {
+    token_ids
+        .iter()
+        .map(|&id| {
+            id != cfg.image_token_id
+                && id != cfg.image_break_token_id
+                && id != cfg.image_end_token_id
+        })
+        .collect()
+}
+
 /// Splices projected `vision_embeds` (`[N_img, hidden]`) into embedded `token_ids` (`[1, L, hidden]`)
 /// at every `image_token_id` slot. Returns an explicit error if the `[IMG]` count does not exactly
 /// match `vision_embeds.dim(0)` (never pads or truncates).
@@ -1192,5 +1207,24 @@ mod tests {
         let err = VisionConfig::from_json_strs(phi4_json, None, "Phi-4-mini-instruct", None)
             .expect_err("non-VLM must return error");
         assert!(err.to_string().contains("has no vision_config"));
+    }
+
+    #[test]
+    fn visual_exclusion_mask_excludes_img_and_delimiters_while_keeping_text_tokens() {
+        let cfg = sample_vision_cfg();
+        // Token IDs: [IMG]=10, [IMG_BREAK]=12, [IMG_END]=13; text tokens = 100, 200, 300.
+        let tok_ids = vec![10_u32, 10, 12, 10, 10, 13, 100, 200, 300];
+        let mask = build_visual_exclusion_mask(&tok_ids, &cfg);
+        assert_eq!(
+            mask,
+            vec![false, false, false, false, false, false, true, true, true]
+        );
+
+        // Plain text token stream stays 100% included (symmetric with text-only path).
+        let text_only = vec![42_u32, 101, 202, 303];
+        assert_eq!(
+            build_visual_exclusion_mask(&text_only, &cfg),
+            vec![true, true, true, true]
+        );
     }
 }

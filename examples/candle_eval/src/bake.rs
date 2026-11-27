@@ -9,14 +9,16 @@ use std::time::Instant;
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device};
 use liminika_adapter::{
-    AttractorRole, CapturedTokenSequence, CompiledTokenCorpus, ContrastiveAnchorBank,
-    ContrastiveAnchorEntry, DEFAULT_STARTUP_PRIOR_PROBES, ModelBaseAttractorProfile,
+    AdaptiveLayerSelectConfig, AttractorRole, CapturedTokenSequence, CompiledTokenCorpus,
+    ContrastiveAnchorBank, ContrastiveAnchorEntry, DEFAULT_CANDIDATE_BAND_END_RATIO,
+    DEFAULT_CANDIDATE_BAND_START_RATIO, DEFAULT_STARTUP_PRIOR_PROBES, ModelBaseAttractorProfile,
     ModelSteeringAdapter, PrefixAliasProbe, SequenceActivationPooler, TokenSequenceEncoder,
-    TokenSequenceEntry,
+    TokenSequenceEntry, ratio_band_layer_mask, select_adaptive_layer_mask,
 };
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
 
+use crate::eval::LayerMaskSpec;
 use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, ModelConfig};
 
 pub(crate) type BakedModelProfile = ContrastiveAnchorBank;
@@ -91,39 +93,101 @@ impl TokenSequenceEncoder for LmTokenEncoder<'_> {
     }
 }
 
+/// Detects whether a UTF-8 leading span `span` diverges in its leading `1..=3` token IDs when
+/// tokenized after a minimal script-appropriate continuation prefix (`": "` for ASCII-only spans,
+/// `"、"` when non-ASCII characters are present) compared to standalone start-of-sequence encoding.
+///
+/// Returns `Ok(Some((full_ids, slice_start, slice_len)))` when continuation tokenization differs,
+/// where `full_ids[slice_start..slice_start + slice_len]` are the leading `1..=3` continuation
+/// alias tokens ready for an `IsolatedProbe` forward pass.
+pub(crate) fn detect_leading_alias_continuation(
+    tokenizer: &Tokenizer,
+    span: &str,
+) -> Result<Option<(Vec<u32>, usize, usize)>, String> {
+    const MAX_ALIAS_HEAD_TOKENS: usize = 3;
+
+    let ids_raw = tokenizer
+        .encode(span, false)
+        .map_err(|e| format!("alias raw encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    if ids_raw.is_empty() {
+        return Ok(None);
+    }
+
+    let has_non_ascii = !span.is_ascii();
+    let (prefix_str, combined_str) = if has_non_ascii {
+        ("\u{3001}", format!("\u{3001}{span}"))
+    } else {
+        (":", format!(": {span}"))
+    };
+    let prefix_ids = tokenizer
+        .encode(prefix_str, false)
+        .map_err(|e| format!("alias prefix encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    let combined_ids = tokenizer
+        .encode(combined_str.as_str(), false)
+        .map_err(|e| format!("alias context encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+
+    let (full_ids_all, slice_start) =
+        if !prefix_ids.is_empty() && combined_ids.starts_with(&prefix_ids) {
+            (combined_ids, prefix_ids.len())
+        } else {
+            let common = prefix_ids
+                .iter()
+                .zip(combined_ids.iter())
+                .take_while(|(a, b)| a == b)
+                .count();
+            if common > 0 && common < combined_ids.len() {
+                (combined_ids, common)
+            } else if !has_non_ascii {
+                let spaced = format!(" {span}");
+                let ids_spaced = tokenizer
+                    .encode(spaced.as_str(), false)
+                    .map_err(|e| format!("alias spaced encode error: {e}"))?
+                    .get_ids()
+                    .to_vec();
+                let mut joined = prefix_ids.clone();
+                let start = joined.len();
+                joined.extend_from_slice(&ids_spaced);
+                (joined, start)
+            } else {
+                return Ok(None);
+            }
+        };
+
+    if slice_start >= full_ids_all.len() {
+        return Ok(None);
+    }
+    let ctx_tail = &full_ids_all[slice_start..];
+    let head_len = ctx_tail.len().min(MAX_ALIAS_HEAD_TOKENS);
+    if head_len == 0 {
+        return Ok(None);
+    }
+    let raw_head = &ids_raw[..ids_raw.len().min(MAX_ALIAS_HEAD_TOKENS)];
+    let ctx_head = &ctx_tail[..head_len];
+    if raw_head == ctx_head {
+        return Ok(None);
+    }
+
+    let full_ids = full_ids_all[..slice_start + head_len].to_vec();
+    Ok(Some((full_ids, slice_start, head_len)))
+}
+
 impl PrefixAliasProbe for LmTokenEncoder<'_> {
     fn probe_leading_alias(
         &mut self,
         word: &str,
         q_rot_len: usize,
     ) -> Result<Option<CapturedTokenSequence>, String> {
-        let prefix_ids = self
-            .tokenizer
-            .encode("Item:", false)
-            .map_err(|e| format!("alias prefix encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let ids_raw = self
-            .tokenizer
-            .encode(word, false)
-            .map_err(|e| format!("alias raw encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let spaced_word = format!(" {word}");
-        let ids_spaced = self
-            .tokenizer
-            .encode(spaced_word.as_str(), false)
-            .map_err(|e| format!("alias spaced encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let disjoint_bpe_split = !ids_raw.is_empty()
-            && !ids_spaced.is_empty()
-            && ids_raw.iter().all(|id| !ids_spaced.contains(id));
-        if !disjoint_bpe_split {
+        let Some((full_ids, slice_start, slice_len)) =
+            detect_leading_alias_continuation(self.tokenizer, word)?
+        else {
             return Ok(None);
-        }
-        let mut full_ids = prefix_ids.clone();
-        full_ids.extend_from_slice(&ids_spaced);
+        };
         let (_, alias_tok_qs, _) = self
             .model
             .forward_tokens(
@@ -136,16 +200,13 @@ impl PrefixAliasProbe for LmTokenEncoder<'_> {
                 KvCacheMode::IsolatedProbe,
             )
             .map_err(|e| format!("alias forward error: {e}"))?;
-        let start = prefix_ids.len() * q_rot_len;
-        let end = full_ids.len() * q_rot_len;
+        let start = slice_start * q_rot_len;
+        let end = (slice_start + slice_len) * q_rot_len;
         let sliced_qs: Vec<Vec<f32>> = alias_tok_qs
             .into_iter()
             .map(|layer| layer[start..end].to_vec())
             .collect();
-        Ok(Some(CapturedTokenSequence::new(
-            ids_spaced.len(),
-            sliced_qs,
-        )))
+        Ok(Some(CapturedTokenSequence::new(slice_len, sliced_qs)))
     }
 }
 
@@ -364,12 +425,11 @@ pub(crate) fn print_runtime_profile(
     }
 }
 
-pub(crate) fn sample_startup_base_prior(
+pub(crate) fn capture_startup_prior_entries(
     model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
     chat: &ChatTemplate,
-    adapter: &ModelSteeringAdapter,
-) -> Result<ModelBaseAttractorProfile, Box<dyn std::error::Error>> {
+) -> Result<Vec<TokenSequenceEntry>, Box<dyn std::error::Error>> {
     // Generation-free 1-pass IsolatedProbe capture across neutral startup prompts matching the
     // raw query tokenization frame used by `CompiledTokenCorpus` and `TurnOrchestrator`.
     let mut encoder = LmTokenEncoder::new(model, tokenizer, chat);
@@ -378,18 +438,13 @@ pub(crate) fn sample_startup_base_prior(
         let captured = encoder.encode_token_sequence(prompt)?;
         base_entries.push(captured.into_token_sequence_entry(AttractorRole::Persona, prompt, 1.0));
     }
-    ModelBaseAttractorProfile::extract(
-        adapter,
-        &base_entries,
-        SequenceActivationPooler::default(),
-        0.55,
-    )
-    .map_err(|e| e.into())
+    Ok(base_entries)
 }
 
 pub(crate) struct SharedFixtureArtifacts {
     pub(crate) baked_opt: Option<BakedModelProfile>,
     pub(crate) compiled: CompiledTokenCorpus,
+    pub(crate) active_layer_mask: u64,
     pub(crate) bake_elapsed: std::time::Duration,
     pub(crate) compile_ms: f64,
     pub(crate) prior_ms: f64,
@@ -399,6 +454,10 @@ pub(crate) struct SharedFixtureArtifacts {
 /// Captures the fixture entries in a single model forward pass and builds both the optional
 /// [`ContrastiveAnchorBank`] (when `!recall_only`) and the shared [`CompiledTokenCorpus`],
 /// dropping raw token activation buffers immediately after compilation to keep peak RAM low.
+///
+/// When `layer_mask_spec` is [`LayerMaskSpec::Auto`], resolves the adaptive RoPE steering layer
+/// mask from the full-layer pre-RoPE Q captures of corpus + startup prior probes before fitting
+/// `ModelBaseAttractorProfile` and `CompiledTokenCorpus` (zero redundant forward passes).
 // Evaluation-harness corpus baking entrypoint keeps explicit flat parameters for call-site clarity.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn capture_and_build_shared_corpus(
@@ -407,27 +466,20 @@ pub(crate) fn capture_and_build_shared_corpus(
     chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
     suite: &FixtureSuite,
-    layer_mask: u64,
+    layer_mask_spec: LayerMaskSpec,
     recall_only: bool,
     use_base_prior: bool,
 ) -> Result<SharedFixtureArtifacts, Box<dyn std::error::Error>> {
-    adapter.set_layer_rope_mask(layer_mask);
-    let (base_prior, prior_ms) = if use_base_prior {
-        let t_prior = Instant::now();
-        let profile = sample_startup_base_prior(model, tokenizer, chat, adapter)?;
-        let elapsed_ms = t_prior.elapsed().as_secs_f64() * 1000.0;
-        println!(
-            "[BasePrior] 1-pass IsolatedProbe samples={} sub_attractors={} pooled_basis={} token_basis={} elapsed={:.1}ms",
-            profile.sample_count,
-            profile.sub_attractors.len(),
-            profile.pooled_common_mode_basis.len(),
-            profile.token_common_mode_basis.len(),
-            elapsed_ms
-        );
-        (Some(profile), elapsed_ms)
+    let num_layers = adapter.geometry().num_layers;
+
+    // Stage 1: capture full-layer pre-RoPE Q activations in one pass (prior + corpus).
+    let t_prior = Instant::now();
+    let prior_entries = if use_base_prior {
+        capture_startup_prior_entries(model, tokenizer, chat)?
     } else {
-        (None, 0.0)
+        Vec::new()
     };
+    let prior_capture_elapsed = t_prior.elapsed();
 
     let t_capture = Instant::now();
     let total = suite.facts.len() + suite.persona.len() + suite.guards.len();
@@ -459,7 +511,6 @@ pub(crate) fn capture_and_build_shared_corpus(
     };
     let bake_elapsed = t_capture.elapsed();
 
-    let t_compile = Instant::now();
     // Move captured per-layer Q buffers without cloning and drop `final_hidden` immediately.
     let staged_entries: Vec<TokenSequenceEntry> = contrastive_entries
         .into_iter()
@@ -467,6 +518,59 @@ pub(crate) fn capture_and_build_shared_corpus(
         .map(|(ce, (text, energy))| ce.captured.into_token_sequence_entry(ce.role, text, energy))
         .collect();
 
+    // Stage 2: finalize layer steering mask (adaptive ratio-band + relative EnvProbe when Auto),
+    // then extract BasePrior profile and compile corpus under the exact finalized mask.
+    let active_layer_mask = if layer_mask_spec.is_auto() {
+        let band_mask = ratio_band_layer_mask(
+            num_layers,
+            DEFAULT_CANDIDATE_BAND_START_RATIO,
+            DEFAULT_CANDIDATE_BAND_END_RATIO,
+        );
+        let selected = select_adaptive_layer_mask(
+            num_layers,
+            &staged_entries,
+            &prior_entries,
+            AdaptiveLayerSelectConfig::default(),
+        );
+        println!(
+            "[LayerSelect] mode=auto band=0x{:08X}({}) selected=0x{:08X}({}/{})",
+            band_mask,
+            band_mask.count_ones(),
+            selected,
+            selected.count_ones(),
+            num_layers,
+        );
+        selected
+    } else {
+        layer_mask_spec.resolve(num_layers)
+    };
+    adapter.set_layer_rope_mask(active_layer_mask);
+
+    let (base_prior, prior_ms) = if use_base_prior {
+        let t_extract = Instant::now();
+        let profile = ModelBaseAttractorProfile::extract(
+            adapter,
+            &prior_entries,
+            SequenceActivationPooler::default(),
+            0.55,
+        )?;
+        let elapsed_ms = (prior_capture_elapsed + t_extract.elapsed()).as_secs_f64() * 1000.0;
+        println!(
+            "[BasePrior] 1-pass IsolatedProbe samples={} sub_attractors={} \
+             pooled_basis={} token_basis={} elapsed={:.1}ms",
+            profile.sample_count,
+            profile.sub_attractors.len(),
+            profile.pooled_common_mode_basis.len(),
+            profile.token_common_mode_basis.len(),
+            elapsed_ms
+        );
+        (Some(profile), elapsed_ms)
+    } else {
+        (None, 0.0)
+    };
+    drop(prior_entries);
+
+    let t_compile = Instant::now();
     let mut compiled = CompiledTokenCorpus::compile_with_base_prior(
         adapter,
         &staged_entries,
@@ -485,6 +589,7 @@ pub(crate) fn capture_and_build_shared_corpus(
     Ok(SharedFixtureArtifacts {
         baked_opt,
         compiled,
+        active_layer_mask,
         bake_elapsed,
         compile_ms,
         prior_ms,

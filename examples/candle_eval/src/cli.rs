@@ -7,17 +7,17 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::eval::{
-    CircuitProfileMode, DEFAULT_LAYER_STEER_MASK, EgoProfileMode, FairBenchCondition,
-    HorizonAblationMode, LayerMaskSpec, PressureSimMode, ReflectMode, parse_bench_trials,
-    parse_chat_template, parse_circuit_mode, parse_ego_max_hops, parse_ego_mode,
-    parse_fair_bench_conditions, parse_fixture_path, parse_guard_hold_tokens, parse_horizon_mode,
-    parse_kv_min_res, parse_layer_mask_spec, parse_logits_observe_stride,
-    parse_long_doc_bench_path, parse_max_tokens, parse_model_arch, parse_model_path,
-    parse_phase_clamp_rad, parse_prefill_chunk_size, parse_pressure_sim_mode, parse_probe_frame,
-    parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature, parse_tokenizer_path,
+    CircuitProfileMode, EgoProfileMode, FairBenchCondition, HorizonAblationMode, LayerMaskSpec,
+    PressureSimMode, ReflectMode, parse_bench_trials, parse_chat_template, parse_circuit_mode,
+    parse_ego_max_hops, parse_ego_mode, parse_fair_bench_conditions, parse_fixture_path,
+    parse_guard_hold_tokens, parse_horizon_mode, parse_kv_min_res, parse_layer_mask_spec,
+    parse_logits_observe_stride, parse_long_doc_bench_path, parse_max_tokens, parse_model_arch,
+    parse_model_path, parse_phase_clamp_rad, parse_prefill_chunk_size, parse_pressure_sim_mode,
+    parse_probe_frame, parse_quant_mode, parse_reflect_mode, parse_rng_seed, parse_temperature,
+    parse_tokenizer_path,
 };
 use crate::model::{
-    ChatTemplate, ChatTemplateArg, ModelArchArg, ModelConfig, ProbeCoordinateFrame, clip_layer_mask,
+    ChatTemplate, ChatTemplateArg, ModelArchArg, ModelConfig, ProbeCoordinateFrame,
 };
 use candle_core::quantized::GgmlDType;
 use liminika_core::abi::lmnk_q7_t;
@@ -70,15 +70,24 @@ pub(crate) struct EvalCliConfig {
 }
 
 impl EvalCliConfig {
-    pub(crate) fn resolve_layer_mask(&self, num_layers: usize) -> u64 {
+    pub(crate) const fn effective_layer_mask_spec(&self) -> LayerMaskSpec {
         match self.layer_mask_spec {
-            Some(spec) => spec.resolve(num_layers),
-            None => clip_layer_mask(DEFAULT_LAYER_STEER_MASK, num_layers),
+            Some(spec) => spec,
+            None => LayerMaskSpec::Auto,
         }
     }
 
+    pub(crate) fn resolve_layer_mask(&self, num_layers: usize) -> u64 {
+        self.effective_layer_mask_spec().resolve(num_layers)
+    }
+
     pub(crate) fn resolve_layer_mask_override(&self, num_layers: usize) -> Option<u64> {
-        self.layer_mask_spec.map(|spec| spec.resolve(num_layers))
+        let spec = self.effective_layer_mask_spec();
+        if spec.is_auto() {
+            None
+        } else {
+            Some(spec.resolve(num_layers))
+        }
     }
 }
 
@@ -143,7 +152,8 @@ pub(crate) fn print_help() {
         "  --probe-frame=<pre-rope|post-rope> Procrustes probe coordinate frame (default: pre-rope)"
     );
     println!(
-        "  --layer-mask=<preset|0xHEX>        RoPE steering layer window: top16, top-half, mid12, mid16, upper-mid12, all, or 0xHEX (default: top16)"
+        "  --layer-mask=<preset|0xHEX>        RoPE steering layer window: auto, top16, top-half, \
+         mid12, mid16, upper-mid12, all, or 0xHEX (default: auto)"
     );
     println!(
         "  --phase-clamp-rad=<f32>            Override eval-harness PhaseClamp arc in (0, pi/2] rad (default: core GatewayFrame default)"
@@ -1059,8 +1069,26 @@ mod tests {
         assert!(defaults.use_base_prior);
         assert_eq!(defaults.probe_frame, ProbeCoordinateFrame::PreRope);
         assert_eq!(defaults.layer_mask_spec, None);
+        assert_eq!(defaults.effective_layer_mask_spec(), LayerMaskSpec::Auto);
+        assert_eq!(defaults.resolve_layer_mask_override(32), None);
         assert_eq!(defaults.resolve_layer_mask(32), 0xFFFF_0000);
-        assert_eq!(defaults.resolve_layer_mask(26), 0x03FF_0000);
+        assert_eq!(defaults.resolve_layer_mask(26), 0x03FF_E000);
+
+        let auto_args = vec!["candle_eval".to_string(), "--layer-mask=auto".to_string()];
+        let parsed_auto = EvalCliConfig::parse_from_args(&auto_args);
+        assert_eq!(parsed_auto.layer_mask_spec, Some(LayerMaskSpec::Auto));
+        assert_eq!(parsed_auto.resolve_layer_mask_override(32), None);
+        assert_eq!(parsed_auto.resolve_layer_mask(32), 0xFFFF_0000);
+        assert_eq!(parsed_auto.resolve_layer_mask(26), 0x03FF_E000);
+
+        let top16_args = vec!["candle_eval".to_string(), "--layer-mask=top16".to_string()];
+        let parsed_top16 = EvalCliConfig::parse_from_args(&top16_args);
+        assert_eq!(parsed_top16.resolve_layer_mask(32), 0xFFFF_0000);
+        assert_eq!(parsed_top16.resolve_layer_mask(26), 0x03FF_0000);
+        assert_eq!(
+            parsed_top16.resolve_layer_mask_override(32),
+            Some(0xFFFF_0000)
+        );
         assert_eq!(defaults.phase_clamp_rad, None);
         assert!(!defaults.random_push_control);
         assert_eq!(defaults.max_tokens, 64);

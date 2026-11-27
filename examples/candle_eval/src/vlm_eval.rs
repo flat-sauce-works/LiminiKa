@@ -42,8 +42,8 @@ use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, Mo
 use crate::physics_eval::PartitionClass;
 use crate::vision::{
     RgbImage, VisionConfig, VisionModel, build_mistral3_image_turn_tokens,
-    build_multimodal_inputs_embeds, build_raw_multimodal_probe_tokens, make_image_a_red_circle,
-    make_image_b_blue_left_yellow_right, make_image_c_dark_ui_layout,
+    build_multimodal_inputs_embeds, build_raw_multimodal_probe_tokens, build_visual_exclusion_mask,
+    make_image_a_red_circle, make_image_b_blue_left_yellow_right, make_image_c_dark_ui_layout,
 };
 use crate::{
     build_persona_bank, calibrate_trial_adapter, configure_trial_adapter, resolve_fixture_path,
@@ -160,6 +160,7 @@ impl VlmEvalCtx<'_> {
             &TurnPrepareInput {
                 query_token_qs: &query_tok_qs,
                 query_seq_len: q_ids.len(),
+                token_include_mask: None,
                 turn_index,
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: self.cli.kv_min_res,
@@ -1005,6 +1006,7 @@ fn run_visual_non_interference_audit(
             LogitsFetchMode::FullLogits,
             KvCacheMode::IsolatedProbe,
         )?;
+        let mm_token_mask = build_visual_exclusion_mask(&mm_probe_ids, &ctx.vision.cfg);
         let plan_mm = TurnOrchestrator::prepare_turn(
             ctx.compiled,
             ctx.adapter,
@@ -1012,6 +1014,7 @@ fn run_visual_non_interference_audit(
             &TurnPrepareInput {
                 query_token_qs: &mm_tok_qs,
                 query_seq_len: mm_probe_ids.len(),
+                token_include_mask: Some(mm_token_mask),
                 turn_index: 1,
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: ctx.cli.kv_min_res,
@@ -1348,10 +1351,11 @@ pub(crate) fn run_vlm_eval(args: VlmEvalRunArgs<'_>) -> Result<(), Box<dyn std::
         chat,
         &mut adapter,
         &corpus_fixture,
-        active_layer_mask,
+        cli.effective_layer_mask_spec(),
         false,
         cli.use_base_prior,
     )?;
+    let active_layer_mask = shared.active_layer_mask;
     let Some(ref baked) = shared.baked_opt else {
         return Err("VLM corpus baking unexpectedly produced no ContrastiveAnchorBank".into());
     };

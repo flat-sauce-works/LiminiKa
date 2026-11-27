@@ -286,6 +286,7 @@ fn run_axis1_persistent_kv_drift(
             &TurnPrepareInput {
                 query_token_qs: &query_tok_qs,
                 query_seq_len: q_ids.len(),
+                token_include_mask: None,
                 turn_index: (t_idx + 1) as u32,
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,
@@ -638,6 +639,7 @@ mod tests {
 
     #[test]
     fn startup_prior_probes_have_zero_overlap_with_all_eval_fixtures() {
+        use crate::extended_eval::{load_extended_boundary_probes, load_ja_multilingual_suite};
         use liminika_adapter::DEFAULT_STARTUP_PRIOR_PROBES;
 
         let root = repo_root();
@@ -648,10 +650,18 @@ mod tests {
         let phys =
             load_steering_physics_probes(&root.join("tests/fixtures/steering_physics_probes.txt"))
                 .expect("load steering physics fixture");
+        let ext = load_extended_boundary_probes(
+            &root.join("tests/fixtures/extended_boundary_probes.txt"),
+        )
+        .expect("load extended boundary fixture");
+        let ja =
+            load_ja_multilingual_suite(&root.join("tests/fixtures/ja_multilingual_probes.txt"))
+                .expect("load ja multilingual fixture");
 
-        assert!(
-            (10..=12).contains(&DEFAULT_STARTUP_PRIOR_PROBES.len()),
-            "expected 10..=12 neutral startup prior probes, got {}",
+        assert_eq!(
+            DEFAULT_STARTUP_PRIOR_PROBES.len(),
+            24,
+            "expected 24 multilingual neutral startup prior probes, got {}",
             DEFAULT_STARTUP_PRIOR_PROBES.len()
         );
 
@@ -661,25 +671,40 @@ mod tests {
             .iter()
             .chain(archive_fixture.persona.iter())
             .chain(archive_fixture.guards.iter())
+            .chain(ja.corpus_fixture.facts.iter())
+            .chain(ja.corpus_fixture.persona.iter())
+            .chain(ja.corpus_fixture.guards.iter())
         {
-            fixture_lines.insert(s.trim().to_ascii_lowercase());
+            fixture_lines.insert(s.trim().to_lowercase());
         }
         for (_, prompt, _, _) in &archive_fixture.probes {
-            fixture_lines.insert(prompt.trim().to_ascii_lowercase());
+            fixture_lines.insert(prompt.trim().to_lowercase());
         }
         for p in &ood {
-            fixture_lines.insert(p.prompt.trim().to_ascii_lowercase());
+            fixture_lines.insert(p.prompt.trim().to_lowercase());
         }
         for rp in &phys.repulsion_probes {
-            fixture_lines.insert(rp.prompt.trim().to_ascii_lowercase());
+            fixture_lines.insert(rp.prompt.trim().to_lowercase());
         }
         for pp in &phys.partition_probes {
-            fixture_lines.insert(pp.prompt.trim().to_ascii_lowercase());
+            fixture_lines.insert(pp.prompt.trim().to_lowercase());
+        }
+        for ep in &ext.partition_probes {
+            fixture_lines.insert(ep.prompt.trim().to_lowercase());
+        }
+        for er in &ext.repulsion_probes {
+            fixture_lines.insert(er.prompt.trim().to_lowercase());
+        }
+        for jp in &ja.partition_probes {
+            fixture_lines.insert(jp.prompt.trim().to_lowercase());
+        }
+        for jr in &ja.repulsion_probes {
+            fixture_lines.insert(jr.prompt.trim().to_lowercase());
         }
 
         let mut unique_prior: HashSet<String> = HashSet::new();
         for prompt in DEFAULT_STARTUP_PRIOR_PROBES {
-            let norm = prompt.trim().to_ascii_lowercase();
+            let norm = prompt.trim().to_lowercase();
             assert!(!norm.is_empty());
             assert!(
                 unique_prior.insert(norm.clone()),
@@ -689,7 +714,22 @@ mod tests {
                 !fixture_lines.contains(&norm),
                 "startup prior probe overlaps eval fixture: {prompt}"
             );
-            for term in ["gcso", "liminika", "zimms", "cstl", "ripa", "edbc", "pprc"] {
+            for term in [
+                "gcso",
+                "liminika",
+                "zimms",
+                "cstl",
+                "ripa",
+                "edbc",
+                "pprc",
+                "翠紋",
+                "瑠璃環",
+                "霧鐘",
+                "紅玉",
+                "銀糸",
+                "白磁",
+                "碧波",
+            ] {
                 assert!(
                     !norm.contains(term),
                     "startup prior probe contains domain term `{term}`: {prompt}"

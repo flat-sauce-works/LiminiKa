@@ -130,6 +130,7 @@ fn run_single_empty_kv_probe(
         &TurnPrepareInput {
             query_token_qs: &query_tok_qs,
             query_seq_len: q_ids.len(),
+            token_include_mask: None,
             turn_index: 1,
             kv_policy: &kv_policy,
             kv_min_resonance_override: cli.kv_min_res,

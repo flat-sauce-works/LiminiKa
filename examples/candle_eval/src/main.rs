@@ -312,10 +312,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &chat,
         &mut adapter,
         &suite,
-        active_layer_mask,
+        cli.effective_layer_mask_spec(),
         recall_only,
         cli.use_base_prior,
     )?;
+    let active_layer_mask = shared.active_layer_mask;
     if let Some(ref baked) = shared.baked_opt {
         println!(
             "Baked {} x {} Q7 phase deltas + {}-dim Rank-1 residual vectors via ModelSteeringAdapter in {:.2?}.",

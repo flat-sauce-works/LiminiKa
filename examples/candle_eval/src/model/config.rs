@@ -496,36 +496,7 @@ impl ModelConfig {
     }
 }
 
-/// Bitmask covering layers `0..num_layers.min(64)`.
-pub(crate) const fn active_layers_mask(num_layers: usize) -> u64 {
-    if num_layers == 0 {
-        0
-    } else if num_layers >= 64 {
-        u64::MAX
-    } else {
-        (1_u64 << num_layers) - 1
-    }
-}
-
-/// Proportional upper-half layer mask covering layers `L/2..L` (`0xFFFF_0000` for 32 layers,
-/// `0x03FF_E000` for 26 layers).
-pub(crate) const fn top_half_layer_mask(num_layers: usize) -> u64 {
-    let n = if num_layers > 64 { 64 } else { num_layers };
-    let start = n / 2;
-    let count = n - start;
-    if count == 0 {
-        0
-    } else if count >= 64 {
-        u64::MAX
-    } else {
-        ((1_u64 << count) - 1) << start
-    }
-}
-
-/// Clips `mask` to valid layer indices `0..num_layers.min(64)`.
-pub(crate) const fn clip_layer_mask(mask: u64, num_layers: usize) -> u64 {
-    mask & active_layers_mask(num_layers)
-}
+pub(crate) use liminika_adapter::{active_layers_mask, clip_layer_mask, top_half_layer_mask};
 
 /// Resolves Hugging Face safetensors weight shards inside `model_dir`, preferring
 /// `model.safetensors.index.json` so duplicate `consolidated.safetensors` files are never loaded.

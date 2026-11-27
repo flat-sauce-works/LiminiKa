@@ -17,7 +17,8 @@ use liminika_core::stigmergy::CognitiveTrajectoryLedger;
 use tokenizers::Tokenizer;
 
 use crate::bake::{
-    FixtureSuite, capture_and_build_shared_corpus, load_fixture, query_nvidia_smi_vram,
+    FixtureSuite, capture_and_build_shared_corpus, detect_leading_alias_continuation, load_fixture,
+    query_nvidia_smi_vram,
 };
 use crate::cli::{EvalCliConfig, EvalRuntime};
 use crate::eval::{CircuitProfileMode, count_semantic_forbid_hits};
@@ -334,19 +335,10 @@ fn log_null_calibration_and_tokenizer_diag(
             if word.chars().count() >= text.trim().chars().count().saturating_sub(1) {
                 alias_full_line_words += 1;
             }
-            let ids_raw = tokenizer
-                .encode(word, false)
-                .map(|e| e.get_ids().to_vec())
-                .unwrap_or_default();
-            let spaced = format!(" {word}");
-            let ids_spaced = tokenizer
-                .encode(spaced.as_str(), false)
-                .map(|e| e.get_ids().to_vec())
-                .unwrap_or_default();
-            if !ids_raw.is_empty()
-                && !ids_spaced.is_empty()
-                && ids_raw.iter().all(|id| !ids_spaced.contains(id))
-            {
+            if matches!(
+                detect_leading_alias_continuation(tokenizer, word),
+                Ok(Some(_))
+            ) {
                 alias_disjoint_hits += 1;
             }
         }
@@ -495,10 +487,11 @@ fn run_isolated_extended_suite(
         ctx.chat,
         &mut adapter,
         spec.corpus_fixture,
-        ctx.active_layer_mask,
+        ctx.cli.effective_layer_mask_spec(),
         ctx.cli.recall_only,
         ctx.cli.use_base_prior,
     )?;
+    let active_layer_mask = shared.active_layer_mask;
 
     log_null_calibration_and_tokenizer_diag(
         spec.suite_tag,
@@ -519,7 +512,7 @@ fn run_isolated_extended_suite(
             &spec.baseline_prompts,
         )?;
         let probe_res =
-            calibrate_trial_adapter(&mut adapter, baked, &base_entropies, ctx.active_layer_mask)?;
+            calibrate_trial_adapter(&mut adapter, baked, &base_entropies, active_layer_mask)?;
         println!(
             "[{} EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => \
              dyn_gain={:.3} skip_H={:.3} rank1_rho={:.3}",
@@ -539,7 +532,7 @@ fn run_isolated_extended_suite(
     let mut rt = EvalRuntime {
         cfg: ctx.cfg,
         chat: ctx.chat,
-        active_layer_mask: ctx.active_layer_mask,
+        active_layer_mask,
         tokenizer: ctx.tokenizer,
         model: ctx.model,
         adapter: &mut adapter,
@@ -826,6 +819,34 @@ mod tests {
         for rp in &ja.repulsion_probes {
             assert!(unique.insert(rp.prompt.clone()));
             assert!(!rp.forbidden.is_empty());
+        }
+
+        // Verify zero overlap between 24 multilingual startup probes and JA fixture lines,
+        // and confirm whitespace-free alias extraction produces zero whole-line spans.
+        let prior_norm: HashSet<String> = DEFAULT_STARTUP_PRIOR_PROBES
+            .iter()
+            .map(|p| p.trim().to_lowercase())
+            .collect();
+        assert_eq!(prior_norm.len(), 24);
+        for line in ja
+            .corpus_fixture
+            .facts
+            .iter()
+            .chain(ja.corpus_fixture.persona.iter())
+            .chain(ja.corpus_fixture.guards.iter())
+        {
+            assert!(!prior_norm.contains(&line.trim().to_lowercase()));
+            let span = extract_leading_alias_word(line).expect("leading JA span");
+            assert!(
+                span.chars().count() < line.trim().chars().count().saturating_sub(1),
+                "unexpected whole-line alias span `{span}` for `{line}`"
+            );
+        }
+        for p in &ja.partition_probes {
+            assert!(!prior_norm.contains(&p.prompt.trim().to_lowercase()));
+        }
+        for rp in &ja.repulsion_probes {
+            assert!(!prior_norm.contains(&rp.prompt.trim().to_lowercase()));
         }
     }
 

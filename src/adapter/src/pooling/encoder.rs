@@ -15,27 +15,54 @@ use liminika_core::abi::lmnk_q7_t;
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
 
-/// Default neutral prompts spanning six general domains (technical, arithmetic, factual, code,
-/// daily conversation, and summarization; two per category interleaved for balanced 2-fold
-/// cross-fitting) used to sample a host model's unsteered background gravity prior before
-/// compiling external attractor corpora.
-pub const DEFAULT_STARTUP_PRIOR_PROBES: [&str; 12] = [
+/// Maximum character count for a leading alias span extracted from ASCII-only text.
+const MAX_ASCII_LEADING_ALIAS_CHARS: usize = 24;
+
+/// Maximum character count for a leading alias span containing non-ASCII characters (preventing
+/// unspaced CJK/Japanese sentences from collapsing into whole-line alias probes).
+const MAX_NON_ASCII_LEADING_ALIAS_CHARS: usize = 8;
+
+/// Default neutral multilingual prompts spanning six general domains (technical, arithmetic,
+/// factual, code, daily conversation, and summarization) across English (12 original prompts
+/// preserved verbatim) and Japanese/CJK/symbol-numeric prompts (12 added prompts), interleaved in
+/// parity-balanced pairs so 2-fold cross-fitting receives 6 English + 6 non-ASCII prompts and all
+/// 6 domains in each fold.
+pub const DEFAULT_STARTUP_PRIOR_PROBES: [&str; 24] = [
+    // Domain 0: Technical / Architecture (EN even/odd, JA/symbol even/odd)
     "Explain the basic design trade-offs of a modular systems architecture.",
     "Summarize how memory alignment affects hardware cache performance.",
+    "分散システムでキャッシュ整合性を保つための基本的な設計手法を簡潔に説明してください。",
+    "HTTP/2とTCP接続の多重化がレイテンシに与える影響を2文で要約してください。",
+    // Domain 1: Arithmetic / Numeric + Symbols (EN even/odd, JA/numeric even/odd)
     "What is 23 multiplied by 4?",
     "Calculate the remainder when 50 is divided by 7.",
+    "37 × 6 + 14 の計算結果と途中の手順を簡潔に示してください。",
+    "時速45kmで2時間20分移動したときの合計距離（km）を求めてください。",
+    // Domain 2: General Factual / Geography & Units (EN even/odd, JA/CJK even/odd)
     "Which ocean lies between Europe and North America?",
     "How many seconds are in a single hour?",
+    "地球上で最も深い海溝の名称と、それが位置する海域を教えてください。",
+    "標準大気圧のもとで純水が沸騰する温度は摂氏何度ですか。",
+    // Domain 3: Code / Data Structures (EN even/odd, JA + ASCII symbols even/odd)
     "Write a short function signature in C that returns the square of an integer.",
     "What does a hash table use to map keys to array slots?",
+    "整数配列から最大値を返す関数 `max_val(a[], n)` の時間計算量は何ですか。",
+    "二分探索木で要素を探索するとき、平均計算量がO(log n)になる理由を述べてください。",
+    // Domain 4: Daily Conversation / Practical (EN even/odd, JA/CJK even/odd)
     "Suggest two quick ways to keep fresh herbs crisp in the refrigerator.",
     "How can someone politely follow up on an unanswered email?",
+    "湿気の多い季節に革靴のカビを防ぐための簡単な保管方法を2つ挙げてください。",
+    "会議の日程変更を社外の関係者へ丁寧に伝える短い案内文の要点を示してください。",
+    // Domain 5: Science & Definitions (EN even/odd, JA/CJK even/odd)
     "Briefly explain how evaporation cools a liquid surface.",
     "Define the term algorithm in one clear sentence.",
+    "冬に窓ガラスの内側へ結露が生じる物理的な仕組みを一文で説明してください。",
+    "データ圧縮における可逆圧縮と非可逆圧縮の決定的な違いを簡潔に述べてください。",
 ];
 
 /// Raw per-token, per-layer pre-RoPE query activations captured from one text sequence,
-/// optionally paired with a final-layer hidden state for contrastive Rank-1 residual vectors.
+/// optionally paired with a final-layer hidden state for contrastive Rank-1 residual vectors
+/// and an abstract per-token inclusion mask (`None` includes every token).
 #[derive(Debug, Clone)]
 pub struct CapturedTokenSequence {
     /// Number of tokens in this captured sequence (`S`).
@@ -44,16 +71,20 @@ pub struct CapturedTokenSequence {
     pub per_layer_token_qs: Vec<Vec<f32>>,
     /// Optional final-layer hidden representation `[hidden_size]` for Rank-1 residual distillation.
     pub final_hidden: Option<Vec<f32>>,
+    /// Optional per-token inclusion mask (`len == seq_len`, `true` = include, `false` = exclude).
+    /// `None` preserves full-sequence pooling with zero overhead for plain text inputs.
+    pub token_include_mask: Option<Vec<bool>>,
 }
 
 impl CapturedTokenSequence {
-    /// Creates a [`CapturedTokenSequence`] without a final-layer hidden state.
+    /// Creates a [`CapturedTokenSequence`] without a final-layer hidden state or exclusion mask.
     #[must_use]
     pub const fn new(seq_len: usize, per_layer_token_qs: Vec<Vec<f32>>) -> Self {
         Self {
             seq_len,
             per_layer_token_qs,
             final_hidden: None,
+            token_include_mask: None,
         }
     }
 
@@ -61,6 +92,13 @@ impl CapturedTokenSequence {
     #[must_use]
     pub fn with_final_hidden(mut self, hidden: Vec<f32>) -> Self {
         self.final_hidden = Some(hidden);
+        self
+    }
+
+    /// Attaches an abstract per-token inclusion mask (`true` = keep, `false` = exclude).
+    #[must_use]
+    pub fn with_token_include_mask(mut self, mask: Vec<bool>) -> Self {
+        self.token_include_mask = Some(mask);
         self
     }
 
@@ -78,6 +116,7 @@ impl CapturedTokenSequence {
             energy,
             seq_len: self.seq_len,
             per_layer_token_qs: self.per_layer_token_qs,
+            token_include_mask: self.token_include_mask,
         }
     }
 }
@@ -126,12 +165,14 @@ impl<E: TokenSequenceEncoder> SubtitleActivationEncoder for PooledSubtitleEncode
         record: &SourceTextRecord,
     ) -> Result<Vec<Vec<f32>>, String> {
         let captured = self.encoder.encode_token_sequence(&record.text)?;
+        let mask = captured.token_include_mask.as_deref();
         let mut out = Vec::with_capacity(captured.per_layer_token_qs.len());
         for tok_flat in captured.per_layer_token_qs {
-            let mut layer_q = SequenceActivationPooler::uniform_unit_mean(
+            let mut layer_q = SequenceActivationPooler::uniform_unit_mean_masked(
                 &tok_flat,
                 captured.seq_len,
                 self.model_rotary_dim,
+                mask,
             )?;
             layer_q.resize(self.target_rotary_dim, 0.0);
             out.push(layer_q);
@@ -140,26 +181,114 @@ impl<E: TokenSequenceEncoder> SubtitleActivationEncoder for PooledSubtitleEncode
     }
 }
 
-/// Extracts the leading non-punctuation word (`len >= 2`) from `text` for subword-prefix alias
-/// probing, returning `None` when no eligible leading word exists.
+#[inline]
+fn is_alias_span_boundary(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            ',' | '.'
+                | ':'
+                | ';'
+                | '!'
+                | '?'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | '"'
+                | '\''
+                | '\u{3001}' // 、
+                | '\u{3002}' // 。
+                | '\u{300C}' // 「
+                | '\u{300D}' // 」
+                | '\u{300E}' // 『
+                | '\u{300F}' // 』
+                | '\u{FF08}' // （
+                | '\u{FF09}' // ）
+                | '\u{3010}' // 【
+                | '\u{3011}' // 】
+                | '\u{3008}' // 〈
+                | '\u{3009}' // 〉
+                | '\u{300A}' // 《
+                | '\u{300B}' // 》
+                | '\u{30FB}' // ・
+                | '\u{FF1A}' // ：
+                | '\u{FF1B}' // ；
+                | '\u{FF01}' // ！
+                | '\u{FF1F}' // ？
+                | '\u{FF0C}' // ，
+                | '\u{FF0E}' // ．
+                | '\u{201C}' // “
+                | '\u{201D}' // ”
+                | '\u{2018}' // ‘
+                | '\u{2019}' // ’
+                | '\u{2014}' // —
+                | '\u{2026}' // …
+        )
+}
+
+#[inline]
+fn is_leading_alias_skip(ch: char) -> bool {
+    is_alias_span_boundary(ch) || matches!(ch, '-' | '/' | '\\' | '#' | '*')
+}
+
+/// Extracts a UTF-8-safe leading non-punctuation span (`>= 2` Unicode scalar values) from `text`
+/// for subword-prefix alias probing without assuming ASCII whitespace word segmentation.
+///
+/// Leading whitespace, brackets, quotes, and punctuation are skipped so bracketed terms such as
+/// `「東京」` still yield `"東京"`. Spans terminate at ASCII or Unicode clause/bracket boundaries
+/// and are bounded at the character boundary (`<= 24` chars for ASCII-only spans, `<= 8` chars
+/// once any non-ASCII character appears) so unspaced CJK/Japanese sentences never collapse into
+/// whole-line probes while preserving exact first-word extraction on space-delimited English text.
 #[must_use]
 pub fn extract_leading_alias_word(text: &str) -> Option<&str> {
-    let first_word = text
-        .split_whitespace()
-        .next()?
-        .trim_end_matches([',', '.', ':', ';']);
-    if first_word.len() >= 2 {
-        Some(first_word)
+    let start_byte = text
+        .char_indices()
+        .find(|&(_, ch)| !is_leading_alias_skip(ch))
+        .map(|(idx, _)| idx)?;
+    let tail = &text[start_byte..];
+
+    let mut end_byte = tail.len();
+    let mut has_non_ascii = false;
+    for (char_count, (rel_byte, ch)) in tail.char_indices().enumerate() {
+        if is_alias_span_boundary(ch) {
+            end_byte = rel_byte;
+            break;
+        }
+        if !ch.is_ascii() {
+            has_non_ascii = true;
+        }
+        let max_chars = if has_non_ascii {
+            MAX_NON_ASCII_LEADING_ALIAS_CHARS
+        } else {
+            MAX_ASCII_LEADING_ALIAS_CHARS
+        };
+        if char_count >= max_chars {
+            end_byte = rel_byte;
+            break;
+        }
+    }
+
+    let span = &tail[..end_byte];
+    if span.chars().count() >= 2 {
+        Some(span)
     } else {
         None
     }
 }
 
-/// Optional tokenizer-aware probe capturing prefix-conditioned token activations when a leading
-/// word splits into disjoint subword token IDs after a leading space (e.g., BPE mid-sentence split).
+/// Optional tokenizer-aware probe capturing continuation-conditioned token activations when a
+/// leading span tokenizes differently in mid-sentence context than at sequence start (e.g., BPE
+/// space-prefix splits or SentencePiece word-initial marker divergence across scripts).
 pub trait PrefixAliasProbe {
-    /// Probes whether `word` exhibits a disjoint space-prefixed subword split and, if so, returns
-    /// the sliced per-layer activations for the prefixed alias tokens (`Ok(None)` otherwise).
+    /// Probes whether `word` (a UTF-8-safe leading span extracted by
+    /// [`extract_leading_alias_word`]) diverges in continuation tokenization context and, if so,
+    /// returns the sliced per-layer activations for the continuation alias tokens (`Ok(None)`
+    /// otherwise).
     ///
     /// # Errors
     /// Returns an error if tokenization or model forward capture fails.
@@ -222,8 +351,9 @@ impl ContrastiveAnchorBank {
     /// via [`ModelSteeringAdapter::bake_layer_procrustes_q7`].
     ///
     /// # Errors
-    /// Returns an error if `entries` is empty, layer counts or `q_rot_len` slices disagree with
-    /// `adapter.geometry()`, or provided `final_hidden` vectors have inconsistent dimensions.
+    /// Returns an error if `entries` is empty, layer counts, `q_rot_len` slices, or optional
+    /// `token_include_mask` lengths disagree with `adapter.geometry()`, or provided `final_hidden`
+    /// vectors have inconsistent dimensions.
     pub fn from_entries(
         adapter: &ModelSteeringAdapter,
         entries: &[ContrastiveAnchorEntry],
@@ -287,13 +417,15 @@ impl ContrastiveAnchorBank {
             vec![Vec::with_capacity(guard_n); num_layers];
 
         for entry in entries {
+            let mask = entry.captured.token_include_mask.as_deref();
             match entry.role {
                 AttractorRole::Fact => {
                     for (l, tok_flat) in entry.captured.per_layer_token_qs.iter().enumerate() {
-                        let q = SequenceActivationPooler::uniform_raw_mean(
+                        let q = SequenceActivationPooler::uniform_raw_mean_masked(
                             tok_flat,
                             entry.captured.seq_len,
                             q_len,
+                            mask,
                         )?;
                         for ((f_dst, p_dst), &src) in fact_sum[l]
                             .iter_mut()
@@ -313,10 +445,11 @@ impl ContrastiveAnchorBank {
                 }
                 AttractorRole::Persona => {
                     for (l, tok_flat) in entry.captured.per_layer_token_qs.iter().enumerate() {
-                        let q = SequenceActivationPooler::uniform_raw_mean(
+                        let q = SequenceActivationPooler::uniform_raw_mean_masked(
                             tok_flat,
                             entry.captured.seq_len,
                             q_len,
+                            mask,
                         )?;
                         for ((per_dst, p_dst), &src) in persona_sum[l]
                             .iter_mut()
@@ -336,10 +469,11 @@ impl ContrastiveAnchorBank {
                 }
                 AttractorRole::Guard => {
                     for (l, tok_flat) in entry.captured.per_layer_token_qs.iter().enumerate() {
-                        let q = SequenceActivationPooler::uniform_raw_mean(
+                        let q = SequenceActivationPooler::uniform_raw_mean_masked(
                             tok_flat,
                             entry.captured.seq_len,
                             q_len,
+                            mask,
                         )?;
                         for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
                             *dst += src / neg_count;

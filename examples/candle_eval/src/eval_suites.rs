@@ -77,6 +77,7 @@ pub(crate) fn run_ood_selectivity_eval(
             &TurnPrepareInput {
                 query_token_qs: &query_tok_qs,
                 query_seq_len: q_ids.len(),
+                token_include_mask: None,
                 turn_index: (idx + 1) as u32,
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,
@@ -298,6 +299,7 @@ pub(crate) fn run_partition_eval(
             &TurnPrepareInput {
                 query_token_qs: &query_tok_qs,
                 query_seq_len: q_ids.len(),
+                token_include_mask: None,
                 turn_index: (idx + 1) as u32,
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,
@@ -596,6 +598,7 @@ pub(crate) fn run_repulsion_eval(
             &TurnPrepareInput {
                 query_token_qs: &query_tok_qs,
                 query_seq_len: q_ids.len(),
+                token_include_mask: None,
                 turn_index: (idx + 1) as u32,
                 kv_policy: &kv_policy,
                 kv_min_resonance_override: cli.kv_min_res,

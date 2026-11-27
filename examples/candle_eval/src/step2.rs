@@ -209,6 +209,7 @@ pub(crate) fn run_step2_evaluation(
                 &TurnPrepareInput {
                     query_token_qs: &query_tok_qs,
                     query_seq_len: q_ids.len(),
+                    token_include_mask: None,
                     turn_index: (idx + 1) as u32,
                     kv_policy: &kv_policy,
                     kv_min_resonance_override: kv_min_res,

@@ -9,12 +9,15 @@
 //! BOS/attention-sink normalization, and zero-overfitting unsupervised novelty weighting across all
 //! backends and CLI entrypoints.
 
+mod base_prior;
 mod calibrator;
 mod encoder;
+mod null_calibration;
 mod streaming;
 #[cfg(test)]
 mod tests;
 
+pub use base_prior::ModelBaseAttractorProfile;
 pub use calibrator::{
     AdaptiveTokenSpecificityCalibrator, EXACT_TOKEN_STATS_LIMIT, TokenCalibrationStats,
     TokenSpecificityCalibrator,
@@ -24,18 +27,45 @@ pub use encoder::{
     DEFAULT_STARTUP_PRIOR_PROBES, PooledSubtitleEncoder, PrefixAliasProbe, TokenSequenceEncoder,
     extract_leading_alias_word,
 };
+pub use null_calibration::NullCalibrationEnvelope;
 pub use streaming::{
     DEFAULT_STREAMING_SALIENT_TOKENS, STREAMING_PCA_SAMPLE_BUDGET, StreamingCorpusDistiller,
     StreamingDistillConfig, StreamingDistillReport, split_raw_document_chunks,
 };
 
 use crate::{
-    AttractorRole, DynamicAttractorRecall, LocalChannelObservation, ModelSteeringAdapter,
-    RecallPolicy, StratumPipeline, TextAttractorCorpus, TokenResonanceDeposit,
+    AttractorRole, DynamicAttractorRecall, LacunaBoundaryState, LocalChannelObservation,
+    ModelSteeringAdapter, RecallPolicy, StratumPipeline, StratumProbeTelemetry,
+    TextAttractorCorpus, TokenResonanceDeposit,
+};
+use base_prior::{
+    fit_cross_entry_token_common_mode_with_scripts, merge_orthonormal_basis,
+    token_orthogonal_residual_norm,
 };
 use liminika_core::foundation::load_q7_words_64;
-use liminika_core::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
-use liminika_core::runtime::ManifoldProbeBaseline;
+use liminika_core::liminal::{LacunaPartition8, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use liminika_core::runtime::{GatewayFrame, ManifoldProbeBaseline};
+use liminika_core::stigmergy::StigmergicActionDecision;
+use null_calibration::{NullCalibrationContext, calibrate_null_envelope_2fold};
+
+/// Validates an optional per-token inclusion mask against `seq_len` (fail-closed on mismatch) and
+/// returns the count of included (`true`) tokens.
+pub(crate) fn validate_token_include_mask(
+    seq_len: usize,
+    token_include_mask: Option<&[bool]>,
+) -> Result<usize, String> {
+    if let Some(mask) = token_include_mask {
+        if mask.len() != seq_len {
+            return Err(format!(
+                "token_include_mask length mismatch: expected {seq_len}, got {}",
+                mask.len()
+            ));
+        }
+        Ok(mask.iter().filter(|&&keep| keep).count())
+    } else {
+        Ok(seq_len)
+    }
+}
 
 /// Unsupervised strategy collapsing per-token Q activations (`[seq_len, dim]`) into `[dim]`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -88,6 +118,24 @@ impl SequenceActivationPooler {
         seq_len: usize,
         dim: usize,
     ) -> Result<Vec<f32>, String> {
+        Self::uniform_raw_mean_masked(token_flat, seq_len, dim, None)
+    }
+
+    /// Computes uniform average over raw (unnormalized) token vectors for one layer, completely
+    /// excluding tokens where `token_include_mask[t] == false`.
+    ///
+    /// When `token_include_mask` is `Some` and masks out every token, returns a zero vector
+    /// `[0.0; dim]` without division by zero or NaN.
+    ///
+    /// # Errors
+    /// Returns an error if `seq_len == 0`, `dim == 0`, `token_flat.len() != seq_len * dim`, or
+    /// `token_include_mask` length disagrees with `seq_len`.
+    pub fn uniform_raw_mean_masked(
+        token_flat: &[f32],
+        seq_len: usize,
+        dim: usize,
+        token_include_mask: Option<&[bool]>,
+    ) -> Result<Vec<f32>, String> {
         if seq_len == 0 || dim == 0 {
             return Err("seq_len and dim must be > 0 for sequence pooling".to_string());
         }
@@ -101,9 +149,16 @@ impl SequenceActivationPooler {
                 token_flat.len()
             ));
         }
-        let inv = 1.0 / (seq_len as f32);
+        let included = validate_token_include_mask(seq_len, token_include_mask)?;
+        if included == 0 {
+            return Ok(vec![0.0_f32; dim]);
+        }
+        let inv = 1.0 / (included as f32);
         let mut out = vec![0.0_f32; dim];
         for t in 0..seq_len {
+            if token_include_mask.is_some_and(|m| !m[t]) {
+                continue;
+            }
             let slice = &token_flat[t * dim..(t + 1) * dim];
             for (dst, &src) in out.iter_mut().zip(slice.iter()) {
                 *dst += src * inv;
@@ -121,12 +176,28 @@ impl SequenceActivationPooler {
         seq_len: usize,
         dim: usize,
     ) -> Result<Vec<f32>, String> {
+        Self::uniform_unit_mean_masked(token_flat, seq_len, dim, None)
+    }
+
+    /// Computes uniform average over unit-normalized token vectors for one layer, completely
+    /// excluding tokens where `token_include_mask[t] == false`.
+    ///
+    /// # Errors
+    /// Returns an error if `seq_len == 0`, `dim == 0`, `token_flat.len() != seq_len * dim`, or
+    /// `token_include_mask` length disagrees with `seq_len`.
+    pub fn uniform_unit_mean_masked(
+        token_flat: &[f32],
+        seq_len: usize,
+        dim: usize,
+        token_include_mask: Option<&[bool]>,
+    ) -> Result<Vec<f32>, String> {
         Self::pool_layer_with_mode(
             SequencePoolingMode::UniformMean,
             token_flat,
             seq_len,
             dim,
             None,
+            token_include_mask,
         )
     }
 
@@ -141,7 +212,33 @@ impl SequenceActivationPooler {
         dim: usize,
         reference: Option<&[f32]>,
     ) -> Result<Vec<f32>, String> {
-        Self::pool_layer_with_mode(self.mode, token_flat, seq_len, dim, reference)
+        Self::pool_layer_with_mode(self.mode, token_flat, seq_len, dim, reference, None)
+    }
+
+    /// Pools one layer's flattened `[seq_len, dim]` activations into `[dim]` using `self.mode`
+    /// while excluding any token with `token_include_mask[t] == false`.
+    ///
+    /// When `token_include_mask` excludes all tokens, returns a zero vector `[0.0; dim]` without
+    /// NaN or division by zero.
+    ///
+    /// # Errors
+    /// Returns an error on empty shapes, mismatched slice/mask length, or invalid reference length.
+    pub fn pool_layer_masked(
+        &self,
+        token_flat: &[f32],
+        seq_len: usize,
+        dim: usize,
+        reference: Option<&[f32]>,
+        token_include_mask: Option<&[bool]>,
+    ) -> Result<Vec<f32>, String> {
+        Self::pool_layer_with_mode(
+            self.mode,
+            token_flat,
+            seq_len,
+            dim,
+            reference,
+            token_include_mask,
+        )
     }
 
     fn pool_layer_with_mode(
@@ -150,6 +247,7 @@ impl SequenceActivationPooler {
         seq_len: usize,
         dim: usize,
         reference: Option<&[f32]>,
+        token_include_mask: Option<&[bool]>,
     ) -> Result<Vec<f32>, String> {
         if seq_len == 0 || dim == 0 {
             return Err("seq_len and dim must be > 0 for sequence pooling".to_string());
@@ -172,13 +270,19 @@ impl SequenceActivationPooler {
                 r.len()
             ));
         }
+        let included = validate_token_include_mask(seq_len, token_include_mask)?;
+        if included == 0 {
+            return Ok(vec![0.0_f32; dim]);
+        }
 
-        // Two-pass streaming over `token_flat` avoids materializing `[seq_len][dim]` unit copies
+        // Two-pass streaming over included tokens avoids materializing `[seq_len][dim]` unit copies
         // while preserving exact per-token normalization rounding order (`(w * inv_sum) * (src * inv)`).
-        let mut weights = Vec::with_capacity(seq_len);
-        let mut invs = Vec::with_capacity(seq_len);
+        let mut active: Vec<(usize, f32, f32)> = Vec::with_capacity(included);
         let mut weight_sum = 0.0_f64;
         for t in 0..seq_len {
+            if token_include_mask.is_some_and(|m| !m[t]) {
+                continue;
+            }
             let slice = &token_flat[t * dim..(t + 1) * dim];
             let norm_sq: f64 = slice.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
             let norm = norm_sq.sqrt();
@@ -207,17 +311,16 @@ impl SequenceActivationPooler {
                 }
             };
             weight_sum += f64::from(w);
-            weights.push(w);
-            invs.push(inv);
+            active.push((t, w, inv));
         }
 
         let inv_sum = if weight_sum > 1e-12 {
             (1.0 / weight_sum) as f32
         } else {
-            1.0 / (seq_len as f32)
+            1.0 / (included as f32)
         };
         let mut out = vec![0.0_f32; dim];
-        for (t, (&w, &inv)) in weights.iter().zip(invs.iter()).enumerate() {
+        for (t, w, inv) in active {
             if inv == 0.0 {
                 continue;
             }
@@ -241,6 +344,23 @@ impl SequenceActivationPooler {
         dim: usize,
         ref_per_layer: Option<&[Vec<f32>]>,
     ) -> Result<Vec<Vec<f32>>, String> {
+        self.pool_sequence_masked(per_layer_token_qs, seq_len, dim, ref_per_layer, None)
+    }
+
+    /// Pools every transformer layer's `[seq_len, dim]` activations into `[num_layers][dim]`
+    /// while excluding tokens where `token_include_mask[t] == false`.
+    ///
+    /// # Errors
+    /// Returns an error if any layer buffer, optional reference slice, or mask length mismatches.
+    pub fn pool_sequence_masked(
+        &self,
+        per_layer_token_qs: &[Vec<f32>],
+        seq_len: usize,
+        dim: usize,
+        ref_per_layer: Option<&[Vec<f32>]>,
+        token_include_mask: Option<&[bool]>,
+    ) -> Result<Vec<Vec<f32>>, String> {
+        let _ = validate_token_include_mask(seq_len, token_include_mask)?;
         if let Some(refs) = ref_per_layer
             && refs.len() != per_layer_token_qs.len()
         {
@@ -255,7 +375,13 @@ impl SequenceActivationPooler {
             let ref_slice = ref_per_layer
                 .and_then(|refs| refs.get(l))
                 .map(Vec::as_slice);
-            out.push(self.pool_layer(token_flat, seq_len, dim, ref_slice)?);
+            out.push(self.pool_layer_masked(
+                token_flat,
+                seq_len,
+                dim,
+                ref_slice,
+                token_include_mask,
+            )?);
         }
         Ok(out)
     }
@@ -274,6 +400,8 @@ pub struct TokenSequenceEntry {
     pub seq_len: usize,
     /// Per-layer flattened row-major token activations `[seq_len * q_rot_len]`.
     pub per_layer_token_qs: Vec<Vec<f32>>,
+    /// Optional per-token inclusion mask (`len == seq_len`, `true` = include, `false` = exclude).
+    pub token_include_mask: Option<Vec<bool>>,
 }
 
 /// Auxiliary per-token Q activation observation to append into an existing compiled corpus entry.
@@ -285,167 +413,6 @@ pub struct EntryTokenObservation {
     pub seq_len: usize,
     /// Per-layer flattened row-major token activations `[seq_len * q_rot_len]`.
     pub per_layer_token_qs: Vec<Vec<f32>>,
-}
-
-/// Non-leaking out-of-sample OOD null distribution envelope calibrated from startup base-prior
-/// probes via 2-fold cross-fitting.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NullCalibrationEnvelope {
-    /// Number of strictly held-out OOD probes evaluated across cross-fitted folds.
-    pub sample_count: usize,
-    /// Empirical off-diagonal corpus floor (`mean + 1.25 * std`).
-    pub corpus_offdiag_floor: f32,
-    /// Mean out-of-sample OOD null peak score across held-out probes.
-    pub ood_null_mean: f32,
-    /// Standard deviation of out-of-sample OOD null peak scores.
-    pub ood_null_std: f32,
-    /// Empirical maximum out-of-sample OOD null peak score.
-    pub ood_null_max: f32,
-    /// Calibrated high-quantile OOD null threshold (`ood_null_high`).
-    pub ood_null_high: f32,
-    /// Final auto-calibrated coherence floor `max(corpus_offdiag_floor, ood_null_high)`.
-    pub calibrated_min_coherence: f32,
-    /// Median orthogonal residual norm ratio `rho_perp` observed on held-out OOD probes.
-    pub ood_null_median_ortho_ratio: f32,
-    /// Calibrated token-level corpus explanation threshold derived from held-out OOD tokens.
-    pub token_explain_threshold: f32,
-}
-
-/// Startup base-model attractor profile distilled from unsteered baseline generations/prompts.
-///
-/// Captures the host model's own background linguistic gravity (layer-wise mean direction, global
-/// and token-level common-mode framing subspaces, and online cosine-clustered sub-basins) so
-/// external knowledge compilation can orthogonalize against the model's default priors.
-#[derive(Debug, Clone)]
-pub struct ModelBaseAttractorProfile {
-    /// Mean unsteered Q direction per transformer layer.
-    pub novelty_reference_per_layer: Vec<Vec<f32>>,
-    /// Orthonormal global framing/prior directions extracted from unsteered model sequences.
-    pub pooled_common_mode_basis: Vec<Vec<f32>>,
-    /// Orthonormal token-level framing/sink directions extracted from unsteered model tokens.
-    pub token_common_mode_basis: Vec<Vec<f32>>,
-    /// Distinct regime sub-attractors (`[cluster_k][steered_dim]`) partitioned from the base model.
-    pub sub_attractors: Vec<Vec<f32>>,
-    /// Number of unsteered startup sequences processed to construct this profile.
-    pub sample_count: usize,
-    /// Raw startup probe sequences retained transiently for non-leaking 2-fold OOD null calibration.
-    pub(crate) calibration_samples: Vec<TokenSequenceEntry>,
-}
-
-impl ModelBaseAttractorProfile {
-    /// Extracts a [`ModelBaseAttractorProfile`] from unsteered startup sequences via two-pass
-    /// pooling, PCA common-mode fitting, and cosine-threshold online sub-basin partitioning.
-    ///
-    /// # Errors
-    /// Returns an error if `samples` is empty or any sample's tensor shape disagrees with `adapter`.
-    pub fn extract(
-        adapter: &ModelSteeringAdapter,
-        samples: &[TokenSequenceEntry],
-        pooler: SequenceActivationPooler,
-        merge_cosine_thresh: f32,
-    ) -> Result<Self, String> {
-        if samples.is_empty() {
-            return Err("cannot extract ModelBaseAttractorProfile from empty samples".to_string());
-        }
-        let geom = adapter.geometry();
-        let num_layers = geom.num_layers;
-        let dim = geom.q_rot_len();
-        let n = samples.len() as f32;
-
-        let mut novelty_reference_per_layer = vec![vec![0.0_f32; dim]; num_layers];
-        for s in samples {
-            if s.per_layer_token_qs.len() != num_layers {
-                return Err(format!(
-                    "sample layer count mismatch: expected {num_layers}, got {}",
-                    s.per_layer_token_qs.len()
-                ));
-            }
-            for (l, flat) in s.per_layer_token_qs.iter().enumerate() {
-                let u = SequenceActivationPooler::uniform_unit_mean(flat, s.seq_len, dim)?;
-                for (dst, &src) in novelty_reference_per_layer[l].iter_mut().zip(u.iter()) {
-                    *dst += src / n;
-                }
-            }
-        }
-
-        let ref_slices: Vec<&[f32]> = novelty_reference_per_layer
-            .iter()
-            .map(Vec::as_slice)
-            .collect();
-        let mut pooled_sigs: Vec<Vec<f32>> = Vec::with_capacity(samples.len());
-        let mut raw_tok_sigs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(samples.len());
-        for s in samples {
-            let pooled = pooler.pool_sequence(
-                &s.per_layer_token_qs,
-                s.seq_len,
-                dim,
-                Some(&novelty_reference_per_layer),
-            )?;
-            let p_refs: Vec<&[f32]> = pooled.iter().map(Vec::as_slice).collect();
-            pooled_sigs.push(TextAttractorCorpus::build_steered_residual_sig(
-                geom,
-                &p_refs,
-                &ref_slices,
-            ));
-            raw_tok_sigs.push(CompiledTokenCorpus::build_raw_token_sigs_for_entry(
-                adapter,
-                &s.per_layer_token_qs,
-                s.seq_len,
-                &novelty_reference_per_layer,
-            )?);
-        }
-
-        let pooled_sig_refs: Vec<&[f32]> = pooled_sigs.iter().map(Vec::as_slice).collect();
-        let pooled_common_mode_basis =
-            TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&pooled_sig_refs, 3);
-        let token_common_mode_basis =
-            CompiledTokenCorpus::fit_cross_entry_token_common_mode(&raw_tok_sigs, 6);
-
-        // Partition the base model's unsteered responses into coherent regime sub-attractors.
-        let thresh = merge_cosine_thresh.clamp(0.10, 0.99);
-        let mut sub_attractors: Vec<Vec<f32>> = Vec::new();
-        let mut cluster_counts: Vec<usize> = Vec::new();
-        for sig in &pooled_sigs {
-            let norm: f32 = sig.iter().map(|&v| v * v).sum::<f32>().sqrt();
-            if norm <= 1e-6 {
-                continue;
-            }
-            let best = sub_attractors
-                .iter()
-                .enumerate()
-                .map(|(idx, c)| (idx, TextAttractorCorpus::cosine_f32(sig, c)))
-                .max_by(|a, b| a.1.total_cmp(&b.1));
-            match best {
-                Some((best_idx, sim)) if sim >= thresh => {
-                    let count = cluster_counts[best_idx] as f32;
-                    let lr = 1.0 / (count + 1.0);
-                    let mut sum_sq = 0.0_f64;
-                    for (dst, &src) in sub_attractors[best_idx].iter_mut().zip(sig.iter()) {
-                        *dst = (1.0 - lr) * *dst + lr * src;
-                        sum_sq += f64::from(*dst) * f64::from(*dst);
-                    }
-                    let inv = (1.0 / sum_sq.sqrt().max(1e-12)) as f32;
-                    for v in &mut sub_attractors[best_idx] {
-                        *v *= inv;
-                    }
-                    cluster_counts[best_idx] += 1;
-                }
-                _ => {
-                    sub_attractors.push(sig.clone());
-                    cluster_counts.push(1);
-                }
-            }
-        }
-
-        Ok(Self {
-            novelty_reference_per_layer,
-            pooled_common_mode_basis,
-            token_common_mode_basis,
-            sub_attractors,
-            sample_count: samples.len(),
-            calibration_samples: samples.to_vec(),
-        })
-    }
 }
 
 /// Self-contained Cold-Path corpus compiled from raw multi-token Q activations via two-pass
@@ -488,85 +455,43 @@ impl CompiledTokenCorpus {
         per_entry_tok_sigs: &[Vec<Vec<f32>>],
         max_components: usize,
     ) -> Vec<Vec<f32>> {
-        if per_entry_tok_sigs.len() < 3 || max_components == 0 {
-            return Vec::new();
-        }
-        let sampled_indices: Vec<usize> = if per_entry_tok_sigs.len() <= STREAMING_PCA_SAMPLE_BUDGET
-        {
-            (0..per_entry_tok_sigs.len()).collect()
-        } else {
-            (0..STREAMING_PCA_SAMPLE_BUDGET)
-                .map(|s| (s * per_entry_tok_sigs.len()) / STREAMING_PCA_SAMPLE_BUDGET)
-                .collect()
-        };
-        let total_toks: usize = sampled_indices
-            .iter()
-            .map(|&i| per_entry_tok_sigs[i].len())
-            .sum();
-        let mut flat_refs: Vec<&[f32]> = Vec::with_capacity(total_toks);
-        for &i in &sampled_indices {
-            for tok in &per_entry_tok_sigs[i] {
-                flat_refs.push(tok.as_slice());
-            }
-        }
-        let candidates =
-            TextAttractorCorpus::fit_common_mode_subspace_from_sigs(&flat_refs, max_components);
-        let min_entry_support = (sampled_indices.len() / 2).max(2);
-        candidates
-            .into_iter()
-            .filter(|dir| {
-                let supporting_entries = sampled_indices
-                    .iter()
-                    .filter(|&&i| {
-                        per_entry_tok_sigs[i].iter().any(|tok| {
-                            let c = TextAttractorCorpus::cosine_f32(tok, dir);
-                            c * c > 0.08
-                        })
-                    })
-                    .count();
-                supporting_entries >= min_entry_support
-            })
-            .collect()
+        fit_cross_entry_token_common_mode_with_scripts(per_entry_tok_sigs, None, max_components)
     }
 
     pub(super) fn token_orthogonal_residual_norm(raw_tok_sig: &[f32], basis: &[Vec<f32>]) -> f32 {
-        if basis.is_empty() || raw_tok_sig.is_empty() {
-            return 1.0;
-        }
-        let mut work = raw_tok_sig.to_vec();
-        for dir in basis {
-            if dir.len() != work.len() {
-                continue;
-            }
-            let dot: f64 = work
-                .iter()
-                .zip(dir.iter())
-                .map(|(&a, &b)| f64::from(a) * f64::from(b))
-                .sum();
-            let d = dot as f32;
-            for (x, &c) in work.iter_mut().zip(dir.iter()) {
-                *x -= d * c;
-            }
-        }
-        let norm_sq: f64 = work.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
-        norm_sq.sqrt().clamp(0.0, 1.0) as f32
+        token_orthogonal_residual_norm(raw_tok_sig, basis)
     }
 
-    fn build_raw_token_sigs_for_entry(
+    pub(super) fn merge_orthonormal_basis(
+        base: &[Vec<f32>],
+        extra: &[Vec<f32>],
+        max_total: usize,
+    ) -> Vec<Vec<f32>> {
+        merge_orthonormal_basis(base, extra, max_total)
+    }
+
+    /// Builds raw steered residual signatures `(orig_token_idx, sig)` strictly for included tokens
+    /// (`token_include_mask[t] == true`, or all tokens when `None`).
+    pub(super) fn build_raw_token_sigs_for_entry(
         adapter: &ModelSteeringAdapter,
         per_layer_token_qs: &[Vec<f32>],
         seq_len: usize,
         novelty_reference_per_layer: &[Vec<f32>],
-    ) -> Result<Vec<Vec<f32>>, String> {
+        token_include_mask: Option<&[bool]>,
+    ) -> Result<Vec<(usize, Vec<f32>)>, String> {
+        let included = validate_token_include_mask(seq_len, token_include_mask)?;
         let geom = adapter.geometry();
         let dim = geom.q_rot_len();
         let ref_slices: Vec<&[f32]> = novelty_reference_per_layer
             .iter()
             .map(Vec::as_slice)
             .collect();
-        let mut out = Vec::with_capacity(seq_len);
+        let mut out = Vec::with_capacity(included);
         let mut unit_tok_layers: Vec<Vec<f32>> = vec![vec![0.0_f32; dim]; per_layer_token_qs.len()];
         for t in 0..seq_len {
+            if token_include_mask.is_some_and(|m| !m[t]) {
+                continue;
+            }
             for (l, layer_flat) in per_layer_token_qs.iter().enumerate() {
                 let start = t * dim;
                 let end = start + dim;
@@ -589,10 +514,9 @@ impl CompiledTokenCorpus {
                 }
             }
             let tok_refs: Vec<&[f32]> = unit_tok_layers.iter().map(Vec::as_slice).collect();
-            out.push(TextAttractorCorpus::build_steered_residual_sig(
-                geom,
-                &tok_refs,
-                &ref_slices,
+            out.push((
+                t,
+                TextAttractorCorpus::build_steered_residual_sig(geom, &tok_refs, &ref_slices),
             ));
         }
         Ok(out)
@@ -601,7 +525,7 @@ impl CompiledTokenCorpus {
     fn extract_salient_token_sigs_from_raw(
         adapter: &ModelSteeringAdapter,
         per_layer_token_qs: &[Vec<f32>],
-        raw_tok_sigs: &[Vec<f32>],
+        raw_tok_sigs: &[(usize, Vec<f32>)],
         novelty_reference_per_layer: &[Vec<f32>],
         token_common_mode_basis: &[Vec<f32>],
         max_tokens: usize,
@@ -609,11 +533,11 @@ impl CompiledTokenCorpus {
     ) -> Vec<(usize, Vec<f32>, f32)> {
         let geom = adapter.geometry();
         let dim = geom.q_rot_len();
-        let seq_len = raw_tok_sigs.len();
-        if seq_len == 0 || max_tokens == 0 {
+        let n_active = raw_tok_sigs.len();
+        if n_active == 0 || max_tokens == 0 {
             return Vec::new();
         }
-        let mut token_scores: Vec<(usize, f32)> = Vec::with_capacity(seq_len);
+        let mut token_scores: Vec<(usize, usize, f32)> = Vec::with_capacity(n_active);
         let (power, floor) = match pooler.mode {
             SequencePoolingMode::UniformMean => (0.0_f32, 1.0_f32),
             SequencePoolingMode::CorpusNoveltySif {
@@ -622,14 +546,14 @@ impl CompiledTokenCorpus {
             } => (novelty_power.max(0.0), weight_floor.clamp(1e-3, 1.0)),
         };
 
-        for (t, raw_sig) in raw_tok_sigs.iter().enumerate() {
+        for (raw_pos, (orig_t, raw_sig)) in raw_tok_sigs.iter().enumerate() {
             let mut sum_w = 0.0_f32;
             let mut count = 0_usize;
             for (l, layer_flat) in per_layer_token_qs.iter().enumerate() {
                 if !geom.is_rope_layer(l) {
                     continue;
                 }
-                let start = t * dim;
+                let start = orig_t * dim;
                 let end = start + dim;
                 let slice = &layer_flat[start..end];
                 let cos_pos =
@@ -649,24 +573,25 @@ impl CompiledTokenCorpus {
             // Suppress tokens whose energy lies mostly inside the cross-entry common-mode subspace
             // before re-normalization amplifies small residual noise.
             let salience = mean_w * ortho_ratio * ortho_ratio;
-            token_scores.push((t, salience));
+            token_scores.push((raw_pos, *orig_t, salience));
         }
 
-        token_scores.sort_by(|a, b| b.1.total_cmp(&a.1));
-        token_scores.truncate(max_tokens.min(seq_len));
+        token_scores.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
+        token_scores.truncate(max_tokens.min(n_active));
 
         let mut out = Vec::with_capacity(token_scores.len());
-        for (t, w) in token_scores {
+        for (raw_pos, orig_t, w) in token_scores {
             let proj_tok_sig = TextAttractorCorpus::project_and_normalize(
-                &raw_tok_sigs[t],
+                &raw_tok_sigs[raw_pos].1,
                 token_common_mode_basis,
             );
-            out.push((t, proj_tok_sig, w));
+            out.push((orig_t, proj_tok_sig, w));
         }
         out
     }
 
-    pub(super) fn extract_salient_token_sigs_indexed(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn extract_salient_token_sigs_indexed_masked(
         adapter: &ModelSteeringAdapter,
         per_layer_token_qs: &[Vec<f32>],
         seq_len: usize,
@@ -674,8 +599,10 @@ impl CompiledTokenCorpus {
         token_common_mode_basis: &[Vec<f32>],
         max_tokens: usize,
         pooler: SequenceActivationPooler,
+        token_include_mask: Option<&[bool]>,
     ) -> Result<Vec<(usize, Vec<f32>, f32)>, String> {
-        if seq_len == 0 || max_tokens == 0 {
+        let included = validate_token_include_mask(seq_len, token_include_mask)?;
+        if included == 0 || max_tokens == 0 {
             return Ok(Vec::new());
         }
         let raw_tok_sigs = Self::build_raw_token_sigs_for_entry(
@@ -683,6 +610,7 @@ impl CompiledTokenCorpus {
             per_layer_token_qs,
             seq_len,
             novelty_reference_per_layer,
+            token_include_mask,
         )?;
         Ok(Self::extract_salient_token_sigs_from_raw(
             adapter,
@@ -693,46 +621,6 @@ impl CompiledTokenCorpus {
             max_tokens,
             pooler,
         ))
-    }
-
-    pub(super) fn merge_orthonormal_basis(
-        base: &[Vec<f32>],
-        extra: &[Vec<f32>],
-        max_total: usize,
-    ) -> Vec<Vec<f32>> {
-        let mut out = base.to_vec();
-        let Some(expected_dim) = out.first().or_else(|| extra.first()).map(Vec::len) else {
-            return out;
-        };
-        for dir in extra {
-            if out.len() >= max_total {
-                break;
-            }
-            if dir.len() != expected_dim {
-                continue;
-            }
-            let mut orth = dir.clone();
-            for existing in &out {
-                let dot: f64 = orth
-                    .iter()
-                    .zip(existing.iter())
-                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
-                    .sum();
-                let d = dot as f32;
-                for (dst, &c) in orth.iter_mut().zip(existing.iter()) {
-                    *dst -= d * c;
-                }
-            }
-            let norm_sq: f64 = orth.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
-            if norm_sq >= 0.25 {
-                let inv = (1.0 / norm_sq.sqrt()) as f32;
-                for v in &mut orth {
-                    *v *= inv;
-                }
-                out.push(orth);
-            }
-        }
-        out
     }
 
     /// Compiles a list of raw token-sequence captures into a calibrated [`CompiledTokenCorpus`].
@@ -759,7 +647,8 @@ impl CompiledTokenCorpus {
     /// directions are orthogonalized before calibrating recall boundaries.
     ///
     /// # Errors
-    /// Returns an error if `entries` is empty or any layer tensor shape disagrees with `adapter`.
+    /// Returns an error if `entries` is empty or any layer tensor shape or mask length disagrees
+    /// with `adapter`.
     pub fn compile_with_base_prior(
         adapter: &ModelSteeringAdapter,
         entries: &[TokenSequenceEntry],
@@ -775,7 +664,7 @@ impl CompiledTokenCorpus {
         let dim = adapter.geometry().q_rot_len();
         let n = entries.len() as f32;
 
-        // Pass 1: unsupervised uniform centroid over unit-normalized token vectors of the corpus.
+        // Pass 1: unsupervised uniform centroid over unit-normalized included token vectors.
         // Keeping the SIF novelty reference pure to the corpus preserves sharp in-domain Fact and
         // Guard separation; `base_prior` is applied strictly to out-of-sample null calibration and
         // common-mode subspace projection without shifting the corpus centroid.
@@ -787,8 +676,14 @@ impl CompiledTokenCorpus {
                     entry.per_layer_token_qs.len()
                 ));
             }
+            let mask = entry.token_include_mask.as_deref();
             for (l, flat) in entry.per_layer_token_qs.iter().enumerate() {
-                let u = SequenceActivationPooler::uniform_unit_mean(flat, entry.seq_len, dim)?;
+                let u = SequenceActivationPooler::uniform_unit_mean_masked(
+                    flat,
+                    entry.seq_len,
+                    dim,
+                    mask,
+                )?;
                 for (dst, &src) in novelty_reference_per_layer[l].iter_mut().zip(u.iter()) {
                     *dst += src / n;
                 }
@@ -803,11 +698,12 @@ impl CompiledTokenCorpus {
         let mut non_guard_sum_per_layer = vec![vec![0.0_f32; dim]; num_layers];
         let mut non_guard_count = 0_usize;
         for entry in entries {
-            let pooled = pooler.pool_sequence(
+            let pooled = pooler.pool_sequence_masked(
                 &entry.per_layer_token_qs,
                 entry.seq_len,
                 dim,
                 Some(&novelty_reference_per_layer),
+                entry.token_include_mask.as_deref(),
             )?;
             let is_non_guard = entry.role != AttractorRole::Guard;
             if is_non_guard {
@@ -871,38 +767,49 @@ impl CompiledTokenCorpus {
         let mut recall_policy = corpus.calibrate_recall_policy(top_k_facts, top_k_personas);
         let corpus_offdiag_floor = recall_policy.min_coherence;
 
-        // Estimate unsupervised token-space common mode across entries (distinct from pooled
-        // document PCA) so BOS/attention-sink/template token directions are removed before MaxSim,
-        // then reuse `per_entry_raw_toks` directly during salient token extraction (zero rebuild).
-        let mut per_entry_raw_toks: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
+        // Estimate unsupervised token-space common mode across included entry tokens only.
+        let mut per_entry_raw_toks: Vec<Vec<(usize, Vec<f32>)>> = Vec::with_capacity(entries.len());
+        let mut per_entry_tok_vecs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
         for entry in entries {
-            per_entry_raw_toks.push(Self::build_raw_token_sigs_for_entry(
+            let raw_indexed = Self::build_raw_token_sigs_for_entry(
                 adapter,
                 &entry.per_layer_token_qs,
                 entry.seq_len,
                 &novelty_reference_per_layer,
-            )?);
+                entry.token_include_mask.as_deref(),
+            )?;
+            per_entry_tok_vecs.push(raw_indexed.iter().map(|(_, s)| s.clone()).collect());
+            per_entry_raw_toks.push(raw_indexed);
         }
-        let corpus_tok_basis = Self::fit_cross_entry_token_common_mode(&per_entry_raw_toks, 10);
+        let corpus_tok_basis = Self::fit_cross_entry_token_common_mode(&per_entry_tok_vecs, 10);
         let token_common_mode_basis = if let Some(prior) = base_prior {
             Self::merge_orthonormal_basis(&corpus_tok_basis, &prior.token_common_mode_basis, 12)
         } else {
             corpus_tok_basis.clone()
         };
 
-        let mut entry_token_sigs: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
-        for (entry, raw_toks) in entries.iter().zip(per_entry_raw_toks.iter()) {
-            let salient = Self::extract_salient_token_sigs_from_raw(
-                adapter,
-                &entry.per_layer_token_qs,
-                raw_toks,
-                &novelty_reference_per_layer,
-                &token_common_mode_basis,
-                24,
-                pooler,
-            );
-            entry_token_sigs.push(salient.into_iter().map(|(_, sig, _)| sig).collect());
-        }
+        let extract_all_entries = |basis: &[Vec<f32>]| -> Vec<Vec<Vec<f32>>> {
+            entries
+                .iter()
+                .zip(per_entry_raw_toks.iter())
+                .map(|(entry, raw_toks)| {
+                    Self::extract_salient_token_sigs_from_raw(
+                        adapter,
+                        &entry.per_layer_token_qs,
+                        raw_toks,
+                        &novelty_reference_per_layer,
+                        basis,
+                        24,
+                        pooler,
+                    )
+                    .into_iter()
+                    .map(|(_, sig, _)| sig)
+                    .collect()
+                })
+                .collect()
+        };
+
+        let entry_token_sigs = extract_all_entries(&token_common_mode_basis);
 
         let TokenCalibrationStats {
             entry_token_weights,
@@ -911,174 +818,28 @@ impl CompiledTokenCorpus {
         } = AdaptiveTokenSpecificityCalibrator::default()
             .calibrate_token_stats(&entry_token_sigs, corpus.entries());
 
-        // Non-leaking 2-fold cross-fitted OOD null calibration: fit prior bases on one half of
-        // startup probes and score the strictly held-out half through the full Stratum pipeline.
+        // Non-leaking 2-fold cross-fitted OOD null calibration with script-group bimodal defense.
         let mut null_calibration: Option<NullCalibrationEnvelope> = None;
         let mut token_explain_threshold = 0.40_f32;
         if let Some(prior) = base_prior
-            && prior.calibration_samples.len() >= 4
-        {
-            let mut ood_null_peaks: Vec<f32> = Vec::with_capacity(prior.calibration_samples.len());
-            let mut ood_ortho_ratios: Vec<f32> =
-                Vec::with_capacity(prior.calibration_samples.len());
-            let mut ood_tok_max_cos: Vec<f32> = Vec::new();
-            for fold in 0..2_usize {
-                let fit_samples: Vec<TokenSequenceEntry> = prior
-                    .calibration_samples
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| idx % 2 != fold)
-                    .map(|(_, s)| s.clone())
-                    .collect();
-                let eval_samples: Vec<&TokenSequenceEntry> = prior
-                    .calibration_samples
-                    .iter()
-                    .enumerate()
-                    .filter(|(idx, _)| idx % 2 == fold)
-                    .map(|(_, s)| s)
-                    .collect();
-                if fit_samples.is_empty() || eval_samples.is_empty() {
-                    continue;
-                }
-                let Ok(fold_prior) =
-                    ModelBaseAttractorProfile::extract(adapter, &fit_samples, pooler, 0.55)
-                else {
-                    continue;
-                };
-                let mut fold_corpus = corpus_pre_prior.clone();
-                fold_corpus.extend_common_mode_basis(&fold_prior.pooled_common_mode_basis, 3);
-                let fold_tok_basis = Self::merge_orthonormal_basis(
-                    &corpus_tok_basis,
-                    &fold_prior.token_common_mode_basis,
-                    12,
-                );
-                let mut fold_entry_toks: Vec<Vec<Vec<f32>>> = Vec::with_capacity(entries.len());
-                for (entry, raw_toks) in entries.iter().zip(per_entry_raw_toks.iter()) {
-                    let salient = Self::extract_salient_token_sigs_from_raw(
-                        adapter,
-                        &entry.per_layer_token_qs,
-                        raw_toks,
-                        &novelty_reference_per_layer,
-                        &fold_tok_basis,
-                        24,
-                        pooler,
-                    );
-                    fold_entry_toks.push(salient.into_iter().map(|(_, sig, _)| sig).collect());
-                }
-                let fold_stats = AdaptiveTokenSpecificityCalibrator::default()
-                    .calibrate_token_stats(&fold_entry_toks, fold_corpus.entries());
-                let fold_compiled = Self {
-                    corpus: fold_corpus,
-                    novelty_reference_per_layer: novelty_reference_per_layer.clone(),
-                    corpus_centroid_per_layer: corpus_centroid_per_layer.clone(),
-                    token_common_mode_basis: fold_tok_basis.clone(),
-                    entry_token_sigs: fold_entry_toks,
-                    entry_token_weights: fold_stats.entry_token_weights,
-                    entry_token_hub_bias: fold_stats.entry_token_hub_bias,
-                    global_token_hub_mean: fold_stats.global_token_hub_mean,
-                    probe_baseline: ManifoldProbeBaseline::default(),
+            && let Some((env, tok_thresh)) = calibrate_null_envelope_2fold(
+                &NullCalibrationContext {
+                    adapter,
+                    prior,
+                    corpus_pre_prior: &corpus_pre_prior,
+                    corpus_tok_basis: &corpus_tok_basis,
+                    novelty_reference_per_layer: &novelty_reference_per_layer,
+                    corpus_centroid_per_layer: &corpus_centroid_per_layer,
                     recall_policy,
-                    null_calibration: None,
-                    token_explain_threshold: 0.40,
-                    pooler,
-                };
-                for sample in eval_samples {
-                    if let Ok(rec) = fold_compiled.recall_token_sequence(
-                        adapter,
-                        &sample.per_layer_token_qs,
-                        sample.seq_len,
-                    ) {
-                        // Calibrate factual OOD floor strictly from Fact resonance (excluding
-                        // broad stylistic Persona attractors so style hubs never inflate the
-                        // factual `min_coherence` threshold).
-                        let peak = rec.top1_fact_score;
-                        if peak.is_finite() {
-                            ood_null_peaks.push(peak);
-                        }
-                        if rec.telemetry.query_ortho_ratio.is_finite() {
-                            ood_ortho_ratios.push(rec.telemetry.query_ortho_ratio);
-                        }
-                    }
-                    if let Ok(q_salient) = Self::extract_salient_token_sigs_indexed(
-                        adapter,
-                        &sample.per_layer_token_qs,
-                        sample.seq_len,
-                        &novelty_reference_per_layer,
-                        &fold_tok_basis,
-                        16,
-                        pooler,
-                    ) {
-                        for (_, q_tok, _) in &q_salient {
-                            let mut best_fact_c = 0.0_f32;
-                            for (idx, d_toks) in fold_compiled.entry_token_sigs.iter().enumerate() {
-                                if fold_compiled
-                                    .corpus
-                                    .entries()
-                                    .get(idx)
-                                    .is_none_or(|e| e.role != AttractorRole::Fact)
-                                {
-                                    continue;
-                                }
-                                for d_tok in d_toks {
-                                    let c = TextAttractorCorpus::cosine_f32(q_tok, d_tok);
-                                    if c > best_fact_c {
-                                        best_fact_c = c;
-                                    }
-                                }
-                            }
-                            ood_tok_max_cos.push(best_fact_c);
-                        }
-                    }
-                }
-            }
-            if !ood_null_peaks.is_empty() {
-                let m = ood_null_peaks.len() as f64;
-                let ood_null_mean =
-                    (ood_null_peaks.iter().map(|&v| f64::from(v)).sum::<f64>() / m) as f32;
-                let var = ood_null_peaks
-                    .iter()
-                    .map(|&v| {
-                        let d = f64::from(v - ood_null_mean);
-                        d * d
-                    })
-                    .sum::<f64>()
-                    / m;
-                let ood_null_std = var.sqrt() as f32;
-                ood_null_peaks.sort_by(f32::total_cmp);
-                let ood_null_max = *ood_null_peaks.last().unwrap_or(&0.0);
-                let p90_idx = ((ood_null_peaks.len().saturating_sub(1) * 9).div_ceil(10))
-                    .min(ood_null_peaks.len() - 1);
-                let ood_null_p90 = ood_null_peaks[p90_idx];
-                let ood_null_high = (ood_null_mean + 1.50 * ood_null_std)
-                    .max(ood_null_p90 + 0.015)
-                    .clamp(0.15, 0.36);
-                let calibrated_min_coherence = corpus_offdiag_floor.max(ood_null_high);
-                recall_policy.min_coherence = calibrated_min_coherence;
-
-                let ood_null_median_ortho_ratio = if ood_ortho_ratios.is_empty() {
-                    1.0
-                } else {
-                    ood_ortho_ratios.sort_by(f32::total_cmp);
-                    ood_ortho_ratios[ood_ortho_ratios.len() / 2]
-                };
-                if !ood_tok_max_cos.is_empty() {
-                    ood_tok_max_cos.sort_by(f32::total_cmp);
-                    let p85_idx = (ood_tok_max_cos.len() * 85) / 100;
-                    let p85 = ood_tok_max_cos[p85_idx.min(ood_tok_max_cos.len() - 1)];
-                    token_explain_threshold = (p85 + 0.05).clamp(0.35, 0.56);
-                }
-                null_calibration = Some(NullCalibrationEnvelope {
-                    sample_count: ood_null_peaks.len(),
                     corpus_offdiag_floor,
-                    ood_null_mean,
-                    ood_null_std,
-                    ood_null_max,
-                    ood_null_high,
-                    calibrated_min_coherence,
-                    ood_null_median_ortho_ratio,
-                    token_explain_threshold,
-                });
-            }
+                    pooler,
+                },
+                extract_all_entries,
+            )
+        {
+            recall_policy.min_coherence = env.calibrated_min_coherence;
+            token_explain_threshold = tok_thresh;
+            null_calibration = Some(env);
         }
 
         let geom = adapter.geometry();
@@ -1160,7 +921,7 @@ impl CompiledTokenCorpus {
             if obs.seq_len == 0 {
                 continue;
             }
-            let salient = Self::extract_salient_token_sigs_indexed(
+            let salient = Self::extract_salient_token_sigs_indexed_masked(
                 adapter,
                 &obs.per_layer_token_qs,
                 obs.seq_len,
@@ -1168,6 +929,7 @@ impl CompiledTokenCorpus {
                 &self.token_common_mode_basis,
                 obs.seq_len,
                 self.pooler,
+                None,
             )?;
             let sigs: Vec<Vec<f32>> = salient.into_iter().map(|(_, sig, _)| sig).collect();
             if !sigs.is_empty() {
@@ -1204,9 +966,9 @@ impl CompiledTokenCorpus {
         Ok(staged)
     }
 
-    /// Probes every [`AttractorRole::Fact`] entry's leading word via `probe` for disjoint
-    /// space-prefixed subword aliases and atomically appends all discovered observations into this
-    /// compiled corpus, returning the number of alias observations appended.
+    /// Probes every [`AttractorRole::Fact`] entry's leading span via `probe` for continuation-context
+    /// subword aliases and atomically appends all discovered observations into this compiled corpus,
+    /// returning the number of alias observations appended.
     ///
     /// # Errors
     /// Returns an error if `probe` fails or any captured observation disagrees with `adapter`.
@@ -1249,10 +1011,33 @@ impl CompiledTokenCorpus {
         query_token_qs: &[Vec<f32>],
         query_seq_len: usize,
     ) -> Result<DynamicAttractorRecall<'a>, String> {
-        self.recall_token_sequence_with_strata_and_circuit(
+        self.recall_token_sequence_with_mask_strata_and_circuit(
             adapter,
             query_token_qs,
             query_seq_len,
+            None,
+            &StratumPipeline::default(),
+            None,
+        )
+    }
+
+    /// Pools a raw query token sequence while excluding tokens where
+    /// `token_include_mask[t] == false` and recalls via the default [`StratumPipeline`].
+    ///
+    /// # Errors
+    /// Returns an error if layer count, token length, mask length, or stratum inference fails.
+    pub fn recall_token_sequence_with_mask<'a>(
+        &'a self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        token_include_mask: Option<&[bool]>,
+    ) -> Result<DynamicAttractorRecall<'a>, String> {
+        self.recall_token_sequence_with_mask_strata_and_circuit(
+            adapter,
+            query_token_qs,
+            query_seq_len,
+            token_include_mask,
             &StratumPipeline::default(),
             None,
         )
@@ -1269,10 +1054,11 @@ impl CompiledTokenCorpus {
         query_seq_len: usize,
         prior_circuit: Option<liminika_core::stigmergy::CognitiveTrajectoryLedger>,
     ) -> Result<DynamicAttractorRecall<'a>, String> {
-        self.recall_token_sequence_with_strata_and_circuit(
+        self.recall_token_sequence_with_mask_strata_and_circuit(
             adapter,
             query_token_qs,
             query_seq_len,
+            None,
             &StratumPipeline::default(),
             prior_circuit,
         )
@@ -1289,6 +1075,25 @@ impl CompiledTokenCorpus {
         query_token_qs: &[Vec<f32>],
         query_seq_len: usize,
     ) -> Result<LocalChannelObservation, String> {
+        self.build_local_observation_masked(adapter, query_token_qs, query_seq_len, None)
+    }
+
+    /// Builds an uncollapsed [`LocalChannelObservation`] strictly over tokens where
+    /// `token_include_mask[t] == true` (excluding masked tokens from MaxSim, deposits, and the
+    /// `unexplained_token_ratio` denominator).
+    ///
+    /// When `token_include_mask` excludes all tokens, returns a fail-closed empty observation with
+    /// `unexplained_token_ratio = 1.0` and `query_seq_len = 0` without NaN or division by zero.
+    ///
+    /// # Errors
+    /// Returns an error if layer count, token slice dimensions, or mask length mismatch `adapter`.
+    pub fn build_local_observation_masked(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        token_include_mask: Option<&[bool]>,
+    ) -> Result<LocalChannelObservation, String> {
         let num_layers = adapter.geometry().num_layers;
         let dim = adapter.geometry().q_rot_len();
         if query_token_qs.len() != num_layers {
@@ -1297,7 +1102,19 @@ impl CompiledTokenCorpus {
                 query_token_qs.len()
             ));
         }
-        let query_salient = Self::extract_salient_token_sigs_indexed(
+        let effective_seq_len = validate_token_include_mask(query_seq_len, token_include_mask)?;
+        let n_docs = self.entry_token_sigs.len();
+        if effective_seq_len == 0 {
+            return Ok(LocalChannelObservation {
+                combined_scores: vec![0.0_f32; n_docs],
+                q_to_d_scores: vec![0.0_f32; n_docs],
+                d_to_q_scores: vec![0.0_f32; n_docs],
+                token_deposits: Vec::new(),
+                unexplained_token_ratio: 1.0_f32,
+                query_seq_len: 0,
+            });
+        }
+        let query_salient = Self::extract_salient_token_sigs_indexed_masked(
             adapter,
             query_token_qs,
             query_seq_len,
@@ -1305,8 +1122,8 @@ impl CompiledTokenCorpus {
             &self.token_common_mode_basis,
             24,
             self.pooler,
+            token_include_mask,
         )?;
-        let n_docs = self.entry_token_sigs.len();
         let mut combined_scores = vec![0.0_f32; n_docs];
         let mut q_to_d_scores = vec![0.0_f32; n_docs];
         let mut d_to_q_scores = vec![0.0_f32; n_docs];
@@ -1487,7 +1304,7 @@ impl CompiledTokenCorpus {
             d_to_q_scores,
             token_deposits,
             unexplained_token_ratio,
-            query_seq_len,
+            query_seq_len: effective_seq_len,
         })
     }
 
@@ -1504,6 +1321,34 @@ impl CompiledTokenCorpus {
         pipeline: &StratumPipeline<'_>,
         prior_circuit: Option<liminika_core::stigmergy::CognitiveTrajectoryLedger>,
     ) -> Result<DynamicAttractorRecall<'a>, String> {
+        self.recall_token_sequence_with_mask_strata_and_circuit(
+            adapter,
+            query_token_qs,
+            query_seq_len,
+            None,
+            pipeline,
+            prior_circuit,
+        )
+    }
+
+    /// Scores a raw query token sequence while excluding masked tokens (`mask[t] == false`) using
+    /// a custom [`StratumPipeline`] and optional prior
+    /// [`CognitiveTrajectoryLedger`](liminika_core::stigmergy::CognitiveTrajectoryLedger).
+    ///
+    /// When `token_include_mask` excludes every token in the sequence, fails closed directly into
+    /// an unobserved `LiminalExterior` recall outcome with zero NaN/Inf values.
+    ///
+    /// # Errors
+    /// Returns an error if layer count, token length, mask length, or stratum inference fails.
+    pub fn recall_token_sequence_with_mask_strata_and_circuit<'a>(
+        &'a self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        token_include_mask: Option<&[bool]>,
+        pipeline: &StratumPipeline<'_>,
+        prior_circuit: Option<liminika_core::stigmergy::CognitiveTrajectoryLedger>,
+    ) -> Result<DynamicAttractorRecall<'a>, String> {
         let num_layers = adapter.geometry().num_layers;
         let dim = adapter.geometry().q_rot_len();
         if query_token_qs.len() != num_layers {
@@ -1512,13 +1357,46 @@ impl CompiledTokenCorpus {
                 query_token_qs.len()
             ));
         }
-        let pooled_q = self.pooler.pool_sequence(
+        let effective_seq_len = validate_token_include_mask(query_seq_len, token_include_mask)?;
+        if effective_seq_len == 0 {
+            // Fail-closed unobserved degradation when every token was masked out (zero NaN/Inf).
+            return Ok(DynamicAttractorRecall {
+                lacuna_state: LacunaBoundaryState::LiminalExterior,
+                top1_fact_score: 0.0,
+                top2_fact_score: 0.0,
+                top1_persona_score: 0.0,
+                min_local_lacuna_depth: self.recall_policy.min_coherence,
+                guard_conflict_margin: 0.0,
+                action_decision: StigmergicActionDecision::PassiveSidecar,
+                gateway_frame: GatewayFrame::default(),
+                telemetry: StratumProbeTelemetry {
+                    cognitive_trajectory: prior_circuit.unwrap_or_default(),
+                    query_ortho_ratio: 0.0,
+                    unexplained_token_ratio: 1.0,
+                    ..StratumProbeTelemetry::default()
+                },
+                recalled_facts: Vec::new(),
+                recalled_personas: Vec::new(),
+                top_guard: None,
+                lacuna_partition: LacunaPartition8::default(),
+                exterior_sandbox_facts: Vec::new(),
+                is_known_unknown_exterior: false,
+            });
+        }
+
+        let pooled_q = self.pooler.pool_sequence_masked(
             query_token_qs,
             query_seq_len,
             dim,
             Some(&self.novelty_reference_per_layer),
+            token_include_mask,
         )?;
-        let obs = self.build_local_observation(adapter, query_token_qs, query_seq_len)?;
+        let obs = self.build_local_observation_masked(
+            adapter,
+            query_token_qs,
+            query_seq_len,
+            token_include_mask,
+        )?;
         let q_refs: Vec<&[f32]> = pooled_q.iter().map(Vec::as_slice).collect();
         let centroid_refs: Vec<&[f32]> = self
             .corpus_centroid_per_layer

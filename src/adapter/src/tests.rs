@@ -4143,6 +4143,7 @@ fn turn_orchestrator_mock_source_separates_self_ref_and_exterior_and_syncs_circu
         &TurnPrepareInput {
             query_token_qs: &[],
             query_seq_len: 4,
+            token_include_mask: None,
             turn_index: 1,
             kv_policy: &kv_policy,
             kv_min_resonance_override: None,
@@ -4196,6 +4197,7 @@ fn turn_orchestrator_mock_source_separates_self_ref_and_exterior_and_syncs_circu
         &TurnPrepareInput {
             query_token_qs: &[],
             query_seq_len: 4,
+            token_include_mask: None,
             turn_index: 2,
             kv_policy: &kv_policy,
             kv_min_resonance_override: None,
@@ -4262,6 +4264,7 @@ fn turn_steering_plan_reflection_gate_input_respects_live_entropy_and_lacuna_reg
         &TurnPrepareInput {
             query_token_qs: &[],
             query_seq_len: 3,
+            token_include_mask: None,
             turn_index: 1,
             kv_policy: &kv_policy,
             kv_min_resonance_override: None,
@@ -4325,6 +4328,7 @@ fn turn_steering_plan_reflection_gate_input_respects_live_entropy_and_lacuna_reg
         &TurnPrepareInput {
             query_token_qs: &[],
             query_seq_len: 3,
+            token_include_mask: None,
             turn_index: 2,
             kv_policy: &kv_policy,
             kv_min_resonance_override: None,
@@ -4364,7 +4368,7 @@ fn input_distillation_boundary_encoders_alias_probe_and_contrastive_bank() {
     let q_len = adapter.geometry().q_rot_len();
     let num_layers = adapter.geometry().num_layers;
 
-    assert_eq!(DEFAULT_STARTUP_PRIOR_PROBES.len(), 12);
+    assert_eq!(DEFAULT_STARTUP_PRIOR_PROBES.len(), 24);
     assert_eq!(
         extract_leading_alias_word("Alpha, beta gamma"),
         Some("Alpha")
@@ -4749,6 +4753,7 @@ fn guard_centroid_stays_uncontaminated_and_duplicate_repulsion_escalation_is_sup
         energy: 2.5,
         seq_len: 1,
         per_layer_token_qs: make_angle_seq(0.0),
+        token_include_mask: None,
     };
     let guard_entry = TokenSequenceEntry {
         role: AttractorRole::Guard,
@@ -4756,6 +4761,7 @@ fn guard_centroid_stays_uncontaminated_and_duplicate_repulsion_escalation_is_sup
         energy: 2.0,
         seq_len: 1,
         per_layer_token_qs: make_angle_seq(0.40),
+        token_include_mask: None,
     };
 
     // Compile with 1 Guard vs 6 identical Guards; Guard Q7 phase angle must stay invariant because
@@ -4813,6 +4819,7 @@ fn guard_centroid_stays_uncontaminated_and_duplicate_repulsion_escalation_is_sup
         &TurnPrepareInput::<AdaptiveThresholdPolicy, StandardCognitiveBank> {
             query_token_qs: &guard_query,
             query_seq_len: 1,
+            token_include_mask: None,
             turn_index: 1,
             kv_policy: &kv_policy,
             kv_min_resonance_override: None,
@@ -4868,6 +4875,7 @@ fn guard_centroid_stays_uncontaminated_and_duplicate_repulsion_escalation_is_sup
         &TurnPrepareInput::<AdaptiveThresholdPolicy, StandardCognitiveBank> {
             query_token_qs: &fact_query,
             query_seq_len: 1,
+            token_include_mask: None,
             turn_index: 2,
             kv_policy: &kv_policy,
             kv_min_resonance_override: None,
@@ -5331,4 +5339,271 @@ fn lmnkp_immutable_source_discipline_survives_multi_gen_equilibrium_and_topology
     assert_eq!(after_view.source_lmnk(), Some(source_dsl.as_bytes()));
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
+}
+
+#[test]
+fn adaptive_layer_selection_and_ratio_bands_across_model_depths() {
+    let dim = 8;
+    for &(num_layers, expected_top_half, expected_band_start) in &[
+        (24_usize, 0x00FF_F000_u64, 8_usize),
+        (26_usize, 0x03FF_E000_u64, 9_usize),
+        (28_usize, 0x0FFF_C000_u64, 9_usize),
+        (32_usize, 0xFFFF_0000_u64, 11_usize),
+        (40_usize, 0x0000_00FF_FFF0_0000_u64, 14_usize),
+    ] {
+        assert_eq!(top_half_layer_mask(num_layers), expected_top_half);
+        let band = ratio_band_layer_mask(
+            num_layers,
+            DEFAULT_CANDIDATE_BAND_START_RATIO,
+            DEFAULT_CANDIDATE_BAND_END_RATIO,
+        );
+        let expected_band =
+            ((1_u64 << (num_layers - expected_band_start)) - 1) << expected_band_start;
+        assert_eq!(band, expected_band, "ratio band mismatch at L={num_layers}");
+
+        // Fallback to top_half when probes are empty or zero-variance.
+        assert_eq!(
+            select_adaptive_layer_mask(num_layers, &[], &[], AdaptiveLayerSelectConfig::default()),
+            expected_top_half
+        );
+        let constant_entries: Vec<TokenSequenceEntry> = (0..3)
+            .map(|i| TokenSequenceEntry {
+                role: AttractorRole::Fact,
+                text: format!("Const {i}"),
+                energy: 2.0,
+                seq_len: 1,
+                per_layer_token_qs: vec![vec![1.0_f32; dim]; num_layers],
+                token_include_mask: None,
+            })
+            .collect();
+        assert_eq!(
+            select_adaptive_layer_mask(
+                num_layers,
+                &constant_entries,
+                &[],
+                AdaptiveLayerSelectConfig::default()
+            ),
+            expected_top_half
+        );
+
+        // Construct a contiguous block of `K = L / 2` high-gain, phase-coherent layers starting at
+        // `expected_band_start` (distinct from `top_half`) while all other layers have high
+        // background variance and low corpus discriminative variance.
+        let k = num_layers / 2;
+        let target_start = expected_band_start;
+        let target_end = target_start + k;
+        let mut expected_selected = 0_u64;
+        for l in target_start..target_end {
+            expected_selected |= 1_u64 << l;
+        }
+        assert_ne!(expected_selected, expected_top_half);
+
+        let corpus_entries: Vec<TokenSequenceEntry> = (0..4)
+            .map(|i| {
+                let mut per_layer = Vec::with_capacity(num_layers);
+                for l in 0..num_layers {
+                    let mut v = vec![0.0_f32; dim];
+                    if (target_start..target_end).contains(&l) {
+                        // Coherent high-discriminative corpus direction across all target layers.
+                        v[i % dim] = 1.0;
+                    } else {
+                        // Nearly identical vectors across entries -> tiny corpus variance.
+                        v[0] = 1.0;
+                        v[1 + (i % 3)] = 0.02;
+                    }
+                    per_layer.push(v);
+                }
+                TokenSequenceEntry {
+                    role: AttractorRole::Fact,
+                    text: format!("Fact {i}"),
+                    energy: 2.0,
+                    seq_len: 1,
+                    per_layer_token_qs: per_layer,
+                    token_include_mask: None,
+                }
+            })
+            .collect();
+        let prior_entries: Vec<TokenSequenceEntry> = (0..4)
+            .map(|i| {
+                let mut per_layer = Vec::with_capacity(num_layers);
+                for l in 0..num_layers {
+                    let mut v = vec![0.0_f32; dim];
+                    if (target_start..target_end).contains(&l) {
+                        // Low background variance on target layers -> high relative SNR.
+                        v[7] = 1.0;
+                        v[6] = (i as f32) * 0.01;
+                    } else {
+                        // High background variance on non-target layers -> low relative SNR.
+                        v[i % dim] = 1.0;
+                    }
+                    per_layer.push(v);
+                }
+                TokenSequenceEntry {
+                    role: AttractorRole::Persona,
+                    text: format!("Prior {i}"),
+                    energy: 1.0,
+                    seq_len: 1,
+                    per_layer_token_qs: per_layer,
+                    token_include_mask: None,
+                }
+            })
+            .collect();
+
+        let sel1 = select_adaptive_layer_mask(
+            num_layers,
+            &corpus_entries,
+            &prior_entries,
+            AdaptiveLayerSelectConfig::default(),
+        );
+        let sel2 = select_adaptive_layer_mask(
+            num_layers,
+            &corpus_entries,
+            &prior_entries,
+            AdaptiveLayerSelectConfig::default(),
+        );
+        assert_eq!(sel1, sel2, "adaptive layer selection must be deterministic");
+        assert_eq!(sel1.count_ones() as usize, k);
+        assert_eq!(
+            sel1, expected_selected,
+            "expected high-gain block 0x{expected_selected:010X} at L={num_layers}, got 0x{sel1:010X}"
+        );
+        // Must also work cleanly under `--no-base-prior` (empty prior slice).
+        let sel_no_prior = select_adaptive_layer_mask(
+            num_layers,
+            &corpus_entries,
+            &[],
+            AdaptiveLayerSelectConfig::default(),
+        );
+        assert_eq!(sel_no_prior, expected_selected);
+    }
+}
+
+#[test]
+fn compute_slot_masks_preserves_32l_exact_and_generalizes_arbitrary_depths() {
+    // 32 layers: bit-exact head-4 + tail-4 parity (`0xF000_000F`).
+    let (active32, pinned32, rev32) = ModelSteeringAdapter::compute_slot_masks(32);
+    assert_eq!(active32, 0xFFFF_FFFF);
+    assert_eq!(pinned32, 0xF000_000F);
+    assert_eq!(rev32, 0x0FFF_FFF0);
+
+    // 26 layers: `pin_width = 26 / 8 = 3` -> head 0..3 + tail 23..26 (6 pinned, 20 reversible).
+    let (active26, pinned26, rev26) = ModelSteeringAdapter::compute_slot_masks(26);
+    assert_eq!(active26, 0x03FF_FFFF);
+    assert_eq!(pinned26, 0x0380_0007);
+    assert_eq!(pinned26.count_ones(), 6);
+    assert_eq!(rev26.count_ones(), 20);
+
+    // 24 layers: `pin_width = 24 / 8 = 3` -> head 0..3 + tail 21..24 (6 pinned, 18 reversible).
+    let (active24, pinned24, rev24) = ModelSteeringAdapter::compute_slot_masks(24);
+    assert_eq!(active24, 0x00FF_FFFF);
+    assert_eq!(pinned24, 0x00E0_0007);
+    assert_eq!(pinned24.count_ones(), 6);
+    assert_eq!(rev24.count_ones(), 18);
+
+    // 40 layers: `pin_width = (40 / 8).clamp(2, 4) = 4` -> 8 pinned, 32 reversible.
+    let (active40, pinned40, rev40) = ModelSteeringAdapter::compute_slot_masks(40);
+    assert_eq!(active40, (1_u64 << 40) - 1);
+    assert_eq!(pinned40, 0x0000_00F0_0000_000F);
+    assert_eq!(rev40.count_ones(), 32);
+
+    // Small depth `< 8`: safe 1+1 endpoint pin.
+    let (active6, pinned6, rev6) = ModelSteeringAdapter::compute_slot_masks(6);
+    assert_eq!(active6, 0x3F);
+    assert_eq!(pinned6, 0x21);
+    assert_eq!(rev6, 0x1E);
+}
+
+#[test]
+fn turn_orchestrator_token_include_mask_mismatch_and_all_false_fail_closed() {
+    use liminika_core::runtime::StandardPhaseKvGopCache;
+    use liminika_core::stigmergy::StandardCognitiveBank;
+
+    let mut geom = sample_gqa_partial_rope();
+    geom.num_layers = 2;
+    geom.num_q_heads = 4;
+    geom.num_kv_heads = 2;
+    geom.head_dim = 8;
+    geom.rotary_dim = 8;
+    geom.layer_rope_mask = 0x3;
+    let mut adapter = ModelSteeringAdapter::new(geom).expect("init");
+    let dim = adapter.geometry().q_rot_len();
+
+    let mut q_a = vec![0.0_f32; 2 * dim];
+    q_a[0] = 1.0;
+    q_a[dim + 1] = 1.0;
+    let mut q_b = vec![0.0_f32; 2 * dim];
+    q_b[4] = 1.0;
+    q_b[dim + 5] = 1.0;
+
+    let entries = vec![
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Alpha anchor".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: vec![q_a.clone(); 2],
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Beta anchor".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: vec![q_b; 2],
+            token_include_mask: None,
+        },
+    ];
+    let compiled = CompiledTokenCorpus::compile(
+        &adapter,
+        &entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+    )
+    .expect("compile");
+
+    let mut kv_cache = StandardPhaseKvGopCache::new();
+    let kv_policy = AdaptiveThresholdPolicy::default();
+    let query_qs = vec![q_a; 2];
+
+    // Mismatched mask length must fail closed with Err (never panic).
+    let mismatch_err = TurnOrchestrator::prepare_turn(
+        &compiled,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput::<AdaptiveThresholdPolicy, StandardCognitiveBank> {
+            query_token_qs: &query_qs,
+            query_seq_len: 2,
+            token_include_mask: Some(vec![true]),
+            turn_index: 1,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: None,
+            layer_steer_mask_override: None,
+        },
+    );
+    assert!(mismatch_err.is_err());
+
+    // All-false mask must fail closed into unobserved LiminalExterior with steering disabled.
+    let empty_plan = TurnOrchestrator::prepare_turn(
+        &compiled,
+        &mut adapter,
+        &mut kv_cache,
+        &TurnPrepareInput::<AdaptiveThresholdPolicy, StandardCognitiveBank> {
+            query_token_qs: &query_qs,
+            query_seq_len: 2,
+            token_include_mask: Some(vec![false, false]),
+            turn_index: 2,
+            kv_policy: &kv_policy,
+            kv_min_resonance_override: None,
+            persona_bank: None,
+            layer_steer_mask_override: None,
+        },
+    )
+    .expect("all-false prepare_turn");
+    assert!(empty_plan.is_unobserved_lacuna());
+    assert!(!empty_plan.steering_eligible());
+    assert!(!empty_plan.has_self_ref_anchors());
+    assert!(!empty_plan.is_guard_trap());
+    assert!(empty_plan.top1_fact_score().is_finite());
 }

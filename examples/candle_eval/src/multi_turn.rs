@@ -173,6 +173,7 @@ pub(crate) fn run_multi_turn_and_step3(
                     &TurnPrepareInput {
                         query_token_qs: &query_tok_qs,
                         query_seq_len: q_ids.len(),
+                        token_include_mask: None,
                         turn_index: (t_idx + 1) as u32,
                         kv_policy,
                         kv_min_resonance_override: kv_min_res,

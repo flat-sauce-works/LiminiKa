@@ -6,10 +6,16 @@
 
 use super::*;
 
+mod layer_selection;
 mod recall_sync;
 mod steering;
 mod telemetry;
 
+pub use layer_selection::{
+    AdaptiveLayerSelectConfig, DEFAULT_CANDIDATE_BAND_END_RATIO,
+    DEFAULT_CANDIDATE_BAND_START_RATIO, DEFAULT_TARGET_LAYER_RATIO, active_layers_mask,
+    clip_layer_mask, ratio_band_layer_mask, select_adaptive_layer_mask, top_half_layer_mask,
+};
 pub use telemetry::LiminalBoundaryFlowSummary;
 
 /// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).
@@ -459,11 +465,23 @@ impl ModelSteeringAdapter {
         };
         let pinned_slots = if n_slots == 0 {
             0
-        } else if n_slots >= 12 {
-            // Protect head (0..4) and tail ((n-4)..n) layers as irreversible boundary anchors.
-            0x0000_000F_u64 | (0x0000_000F_u64 << (n_slots - 4))
-        } else {
+        } else if n_slots == 1 {
+            1
+        } else if n_slots < 12 {
             1_u64 | (1_u64 << (n_slots - 1))
+        } else {
+            // Proportionally protect head (`0..w`) and tail (`(n-w)..n`) boundary anchors with
+            // `w = clamp(n / 8, 2, 4)` (exact head-4 + tail-4 parity at 32 layers).
+            let raw = n_slots / 8;
+            let pin_width = if raw < 2 {
+                2
+            } else if raw > 4 {
+                4
+            } else {
+                raw
+            };
+            let low = (1_u64 << pin_width) - 1;
+            low | (low << (n_slots - pin_width))
         };
         let reversible_slots = active_slots & !pinned_slots;
         (active_slots, pinned_slots, reversible_slots)

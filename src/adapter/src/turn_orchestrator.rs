@@ -216,6 +216,24 @@ pub trait AttractorRecallSource {
         query_seq_len: usize,
         prior_circuit: Option<CognitiveTrajectoryLedger>,
     ) -> Result<OwnedAttractorRecall, String>;
+
+    /// Evaluates `query_token_qs` while optionally excluding tokens where
+    /// `token_include_mask[t] == false` (`None` includes every token).
+    ///
+    /// # Errors
+    /// Returns an error if `token_include_mask` length mismatches `query_seq_len`, query shapes
+    /// disagree with `adapter`, or recall fails.
+    fn recall_query_with_mask(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        token_include_mask: Option<&[bool]>,
+        prior_circuit: Option<CognitiveTrajectoryLedger>,
+    ) -> Result<OwnedAttractorRecall, String> {
+        let _ = crate::pooling::validate_token_include_mask(query_seq_len, token_include_mask)?;
+        self.recall_query(adapter, query_token_qs, query_seq_len, prior_circuit)
+    }
 }
 
 impl AttractorRecallSource for CompiledTokenCorpus {
@@ -234,6 +252,25 @@ impl AttractorRecallSource for CompiledTokenCorpus {
         )
         .map(|recall| recall.to_owned_recall())
     }
+
+    fn recall_query_with_mask(
+        &self,
+        adapter: &ModelSteeringAdapter,
+        query_token_qs: &[Vec<f32>],
+        query_seq_len: usize,
+        token_include_mask: Option<&[bool]>,
+        prior_circuit: Option<CognitiveTrajectoryLedger>,
+    ) -> Result<OwnedAttractorRecall, String> {
+        self.recall_token_sequence_with_mask_strata_and_circuit(
+            adapter,
+            query_token_qs,
+            query_seq_len,
+            token_include_mask,
+            &crate::StratumPipeline::default(),
+            prior_circuit,
+        )
+        .map(|recall| recall.to_owned_recall())
+    }
 }
 
 /// Per-turn inputs passed into [`TurnOrchestrator::prepare_turn`].
@@ -246,6 +283,9 @@ pub struct TurnPrepareInput<
     pub query_token_qs: &'a [Vec<f32>],
     /// Number of tokens in the raw query sequence (`seq_len`).
     pub query_seq_len: usize,
+    /// Optional per-token inclusion mask (`len == query_seq_len`, `true` = include,
+    /// `false` = exclude). `None` preserves bit-identical full-sequence text behavior.
+    pub token_include_mask: Option<Vec<bool>>,
     /// Monotonic 1-based turn index for KV-cache recency tracking.
     pub turn_index: u32,
     /// Threshold policy governing KV-cache circuit blending and resonance gating.
@@ -620,13 +660,18 @@ impl TurnOrchestrator {
         P: CognitiveCircuitThresholdPolicy + ?Sized,
         B: CognitiveCircuitBankOps,
     {
+        let _ = crate::pooling::validate_token_include_mask(
+            input.query_seq_len,
+            input.token_include_mask.as_deref(),
+        )?;
         let prior_circuit = input
             .persona_bank
             .map(CognitiveCircuitBankOps::to_consolidated_ledger);
-        let recall = source.recall_query(
+        let recall = source.recall_query_with_mask(
             adapter,
             input.query_token_qs,
             input.query_seq_len,
+            input.token_include_mask.as_deref(),
             prior_circuit,
         )?;
 

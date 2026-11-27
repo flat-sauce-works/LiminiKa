@@ -90,6 +90,7 @@ fn compiled_token_corpus_recovers_diluted_entity_while_rejecting_ood() {
             energy: 2.0,
             seq_len: 7,
             per_layer_token_qs: make_seq(6, 1),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -97,6 +98,7 @@ fn compiled_token_corpus_recovers_diluted_entity_while_rejecting_ood() {
             energy: 2.0,
             seq_len: 7,
             per_layer_token_qs: make_seq(6, 2),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -104,6 +106,7 @@ fn compiled_token_corpus_recovers_diluted_entity_while_rejecting_ood() {
             energy: 2.0,
             seq_len: 7,
             per_layer_token_qs: make_seq(6, 3),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -111,6 +114,7 @@ fn compiled_token_corpus_recovers_diluted_entity_while_rejecting_ood() {
             energy: 2.0,
             seq_len: 7,
             per_layer_token_qs: make_seq(6, 4),
+            token_include_mask: None,
         },
     ];
 
@@ -232,6 +236,7 @@ fn compiled_token_corpus_assigns_lower_specificity_to_shared_tokens() {
         energy: 2.0,
         seq_len: 2,
         per_layer_token_qs: make_seq_with_tokens(&[10, 25]),
+        token_include_mask: None,
     };
     let e1 = TokenSequenceEntry {
         role: AttractorRole::Fact,
@@ -239,6 +244,7 @@ fn compiled_token_corpus_assigns_lower_specificity_to_shared_tokens() {
         energy: 2.0,
         seq_len: 2,
         per_layer_token_qs: make_seq_with_tokens(&[10, 40]),
+        token_include_mask: None,
     };
     let e2 = TokenSequenceEntry {
         role: AttractorRole::Fact,
@@ -246,6 +252,7 @@ fn compiled_token_corpus_assigns_lower_specificity_to_shared_tokens() {
         energy: 2.0,
         seq_len: 2,
         per_layer_token_qs: make_seq_with_tokens(&[10, 55]),
+        token_include_mask: None,
     };
     let compiled = CompiledTokenCorpus::compile(
         &adapter,
@@ -298,6 +305,7 @@ fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
             energy: 2.0,
             seq_len: 3,
             per_layer_token_qs: make_seq_with_tokens(&[10, 12, 14]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -305,6 +313,7 @@ fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq_with_tokens(&[10, 20]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -312,6 +321,7 @@ fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq_with_tokens(&[35, 39]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -319,6 +329,7 @@ fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq_with_tokens(&[55, 59]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Guard,
@@ -326,6 +337,7 @@ fn compiled_token_corpus_decomposes_bimodal_compound_query_end_to_end() {
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq_with_tokens(&[75, 79]),
+            token_include_mask: None,
         },
     ];
 
@@ -384,6 +396,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 1.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(20, 0.85), (21, 0.70)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Persona,
@@ -391,6 +404,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 1.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(20, 0.80), (21, 0.65)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Persona,
@@ -398,6 +412,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 1.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(20, 0.90), (21, 0.75)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Persona,
@@ -405,6 +420,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 1.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(60, 0.85), (61, 0.70)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Persona,
@@ -412,6 +428,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 1.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(60, 0.80), (61, 0.65)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Persona,
@@ -419,6 +436,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 1.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(60, 0.90), (61, 0.75)]),
+            token_include_mask: None,
         },
     ];
 
@@ -449,6 +467,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(30, 0.85), (31, 0.65)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -456,6 +475,7 @@ fn model_base_attractor_profile_partitions_sub_basins_and_orthogonalizes_corpus_
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(80, 0.85), (81, 0.65)]),
+            token_include_mask: None,
         },
     ];
     let compiled = CompiledTokenCorpus::compile_with_base_prior(
@@ -502,6 +522,7 @@ fn append_entry_token_observations_preserves_pooled_sigs_matches_sequential_and_
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(10, 0.9), (12, 0.7)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -509,6 +530,7 @@ fn append_entry_token_observations_preserves_pooled_sigs_matches_sequential_and_
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(40, 0.9), (12, 0.7)]),
+            token_include_mask: None,
         },
     ];
 
@@ -619,6 +641,7 @@ fn same_role_token_specificity_ignores_contrastive_guard_echoes() {
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(30, 0.95), (70, 0.85)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -626,6 +649,7 @@ fn same_role_token_specificity_ignores_contrastive_guard_echoes() {
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(50, 0.95), (90, 0.85)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Guard,
@@ -633,6 +657,7 @@ fn same_role_token_specificity_ignores_contrastive_guard_echoes() {
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(30, 0.95), (110, 0.85)]),
+            token_include_mask: None,
         },
     ];
 
@@ -856,6 +881,7 @@ fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mo
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(0, 0.30), (10, 1.0)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -863,6 +889,7 @@ fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mo
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(0, 0.30), (20, 1.0)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -870,6 +897,7 @@ fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mo
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(0, 0.30), (30, 1.0)]),
+            token_include_mask: None,
         },
         TokenSequenceEntry {
             role: AttractorRole::Fact,
@@ -877,6 +905,7 @@ fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mo
             energy: 2.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(0, 0.30), (40, 1.0)]),
+            token_include_mask: None,
         },
     ];
 
@@ -889,6 +918,7 @@ fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mo
             energy: 1.0,
             seq_len: 2,
             per_layer_token_qs: make_seq(&[(0, 0.90), (60 + 4 * i, 0.45)]),
+            token_include_mask: None,
         })
         .collect();
     let base_prior = ModelBaseAttractorProfile::extract(
@@ -947,4 +977,376 @@ fn non_leaking_base_prior_null_calibration_raises_floor_and_attenuates_common_mo
         recall.recalled_facts.is_empty(),
         "common-mode OOD query must not recall domain facts"
     );
+}
+
+#[test]
+fn token_include_mask_completely_excludes_outlier_patches_and_fails_closed() {
+    let mut geom = sample_gqa_partial_rope();
+    geom.num_layers = 4;
+    geom.num_q_heads = 4;
+    geom.num_kv_heads = 2;
+    geom.head_dim = 8;
+    geom.rotary_dim = 8;
+    geom.layer_rope_mask = 0xF;
+    let adapter = ModelSteeringAdapter::new(geom).expect("init compact");
+    let num_layers = adapter.geometry().num_layers;
+    let dim = adapter.geometry().q_rot_len();
+
+    let make_clean_and_padded =
+        |active_dims: &[usize]| -> (Vec<Vec<f32>>, Vec<Vec<f32>>, Vec<bool>) {
+            let mut clean_layers = Vec::with_capacity(num_layers);
+            let mut padded_layers = Vec::with_capacity(num_layers);
+            for l in 0..num_layers {
+                let mut clean = vec![0.0_f32; active_dims.len() * dim];
+                let mut padded = vec![0.0_f32; (active_dims.len() + 3) * dim];
+                // Prefix 2 huge outlier patch tokens (including huge values) at slots 0..2.
+                for patch_t in 0..2 {
+                    for d in 0..dim {
+                        padded[patch_t * dim + d] = 1_000_000.0 * ((d + l + 1) as f32);
+                    }
+                }
+                for (idx, &slot) in active_dims.iter().enumerate() {
+                    let pos = (slot + l) % dim;
+                    clean[idx * dim + pos] = 1.0;
+                    clean[idx * dim + ((pos + 1) % dim)] = 0.25;
+                    let dst_t = idx + 2;
+                    padded[dst_t * dim + pos] = 1.0;
+                    padded[dst_t * dim + ((pos + 1) % dim)] = 0.25;
+                }
+                // Trailing excluded delimiter token with extreme negative spike.
+                let end_t = active_dims.len() + 2;
+                for d in 0..dim {
+                    padded[end_t * dim + d] = -500_000.0;
+                }
+                clean_layers.push(clean);
+                padded_layers.push(padded);
+            }
+            let mut mask = vec![false, false];
+            mask.extend(std::iter::repeat_n(true, active_dims.len()));
+            mask.push(false);
+            (clean_layers, padded_layers, mask)
+        };
+
+    let (clean_a, pad_a, mask_a) = make_clean_and_padded(&[2, 5]);
+    let (clean_b, pad_b, mask_b) = make_clean_and_padded(&[10, 13]);
+    let (clean_c, pad_c, mask_c) = make_clean_and_padded(&[18, 21]);
+
+    // 1. Direct pooler exact equivalence & None == all-true parity.
+    let pooler = SequenceActivationPooler::default();
+    let ref_vec = vec![0.1_f32; dim];
+    let raw_clean = SequenceActivationPooler::uniform_raw_mean(&clean_a[0], 2, dim).expect("raw");
+    let raw_masked =
+        SequenceActivationPooler::uniform_raw_mean_masked(&pad_a[0], 5, dim, Some(&mask_a))
+            .expect("raw masked");
+    assert_eq!(raw_clean, raw_masked);
+
+    let sif_clean = pooler
+        .pool_layer(&clean_a[0], 2, dim, Some(&ref_vec))
+        .expect("sif");
+    let sif_all_true = pooler
+        .pool_layer_masked(&clean_a[0], 2, dim, Some(&ref_vec), Some(&[true, true]))
+        .expect("sif all true");
+    let sif_masked = pooler
+        .pool_layer_masked(&pad_a[0], 5, dim, Some(&ref_vec), Some(&mask_a))
+        .expect("sif masked");
+    assert_eq!(sif_clean, sif_all_true);
+    assert_eq!(sif_clean, sif_masked);
+
+    // 2. BasePrior + Corpus compilation + LocalObservation + Recall exact invariance.
+    let clean_entries = vec![
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Clean Fact A".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: clean_a.clone(),
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Clean Fact B".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: clean_b.clone(),
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Clean Fact C".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: clean_c.clone(),
+            token_include_mask: None,
+        },
+    ];
+    let padded_entries = vec![
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Clean Fact A".to_string(),
+            energy: 2.0,
+            seq_len: 5,
+            per_layer_token_qs: pad_a.clone(),
+            token_include_mask: Some(mask_a.clone()),
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Clean Fact B".to_string(),
+            energy: 2.0,
+            seq_len: 5,
+            per_layer_token_qs: pad_b,
+            token_include_mask: Some(mask_b),
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Clean Fact C".to_string(),
+            energy: 2.0,
+            seq_len: 5,
+            per_layer_token_qs: pad_c,
+            token_include_mask: Some(mask_c),
+        },
+    ];
+
+    let prior_clean =
+        ModelBaseAttractorProfile::extract(&adapter, &clean_entries, pooler, 0.55).expect("p1");
+    let prior_masked =
+        ModelBaseAttractorProfile::extract(&adapter, &padded_entries, pooler, 0.55).expect("p2");
+    assert_eq!(
+        prior_clean.novelty_reference_per_layer,
+        prior_masked.novelty_reference_per_layer
+    );
+    assert_eq!(
+        prior_clean.token_common_mode_basis,
+        prior_masked.token_common_mode_basis
+    );
+
+    let comp_clean = CompiledTokenCorpus::compile(&adapter, &clean_entries, pooler, 2, 1)
+        .expect("compile clean");
+    let comp_masked = CompiledTokenCorpus::compile(&adapter, &padded_entries, pooler, 2, 1)
+        .expect("compile masked");
+    assert_eq!(
+        comp_clean.corpus_centroid_per_layer,
+        comp_masked.corpus_centroid_per_layer
+    );
+    assert_eq!(comp_clean.entry_token_sigs, comp_masked.entry_token_sigs);
+
+    let obs_clean = comp_clean
+        .build_local_observation(&adapter, &clean_a, 2)
+        .expect("obs clean");
+    let obs_masked = comp_clean
+        .build_local_observation_masked(&adapter, &pad_a, 5, Some(&mask_a))
+        .expect("obs masked");
+    assert_eq!(obs_clean.query_seq_len, obs_masked.query_seq_len);
+    assert_eq!(
+        obs_clean.unexplained_token_ratio.to_bits(),
+        obs_masked.unexplained_token_ratio.to_bits()
+    );
+    assert_eq!(obs_clean.combined_scores, obs_masked.combined_scores);
+
+    let rec_clean = comp_clean
+        .recall_token_sequence(&adapter, &clean_a, 2)
+        .expect("rec clean");
+    let rec_masked = comp_clean
+        .recall_token_sequence_with_mask(&adapter, &pad_a, 5, Some(&mask_a))
+        .expect("rec masked");
+    assert_eq!(rec_clean.lacuna_state, rec_masked.lacuna_state);
+    assert_eq!(
+        rec_clean.top1_fact_score.to_bits(),
+        rec_masked.top1_fact_score.to_bits()
+    );
+
+    // 3. All-false mask fails closed without NaN/div0 into LiminalExterior / Unobserved.
+    let all_false = vec![false; 5];
+    let zero_pool = pooler
+        .pool_layer_masked(&pad_a[0], 5, dim, Some(&ref_vec), Some(&all_false))
+        .expect("all-false pool");
+    assert!(zero_pool.iter().all(|&v| v == 0.0 && v.is_finite()));
+    let all_false_rec = comp_clean
+        .recall_token_sequence_with_mask(&adapter, &pad_a, 5, Some(&all_false))
+        .expect("all-false recall");
+    assert_eq!(
+        all_false_rec.lacuna_state,
+        LacunaBoundaryState::LiminalExterior
+    );
+    assert!(all_false_rec.recalled_facts.is_empty());
+    assert!(!all_false_rec.is_known_unknown_exterior);
+    assert!(all_false_rec.top1_fact_score.is_finite());
+    assert_eq!(all_false_rec.telemetry.unexplained_token_ratio, 1.0);
+
+    // 4. Length mismatch fails closed with Err (never panics).
+    let wrong_len = vec![true; 3];
+    assert!(
+        pooler
+            .pool_layer_masked(&pad_a[0], 5, dim, Some(&ref_vec), Some(&wrong_len))
+            .is_err()
+    );
+    assert!(
+        comp_clean
+            .recall_token_sequence_with_mask(&adapter, &pad_a, 5, Some(&wrong_len))
+            .is_err()
+    );
+}
+
+#[test]
+fn multilingual_startup_prior_probes_and_bimodal_null_envelope_defense() {
+    use super::base_prior::fit_cross_entry_token_common_mode_with_scripts;
+    use super::null_calibration::{ScriptGroup, aggregate_null_envelope, classify_script_group};
+
+    // 1. 24 startup probes: 12 AsciiDominant + 12 NonAsciiDominant, 6+6 in even/odd folds.
+    assert_eq!(DEFAULT_STARTUP_PRIOR_PROBES.len(), 24);
+    let mut fold0_ascii = 0_usize;
+    let mut fold0_non_ascii = 0_usize;
+    let mut fold1_ascii = 0_usize;
+    let mut fold1_non_ascii = 0_usize;
+    for (idx, prompt) in DEFAULT_STARTUP_PRIOR_PROBES.iter().enumerate() {
+        match (idx % 2, classify_script_group(prompt)) {
+            (0, ScriptGroup::AsciiDominant) => fold0_ascii += 1,
+            (0, ScriptGroup::NonAsciiDominant) => fold0_non_ascii += 1,
+            (1, ScriptGroup::AsciiDominant) => fold1_ascii += 1,
+            (1, ScriptGroup::NonAsciiDominant) => fold1_non_ascii += 1,
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!((fold0_ascii, fold0_non_ascii), (6, 6));
+    assert_eq!((fold1_ascii, fold1_non_ascii), (6, 6));
+
+    // Original 12 English prompts must all be preserved verbatim.
+    let original_en = [
+        "Explain the basic design trade-offs of a modular systems architecture.",
+        "Summarize how memory alignment affects hardware cache performance.",
+        "What is 23 multiplied by 4?",
+        "Calculate the remainder when 50 is divided by 7.",
+        "Which ocean lies between Europe and North America?",
+        "How many seconds are in a single hour?",
+        "Write a short function signature in C that returns the square of an integer.",
+        "What does a hash table use to map keys to array slots?",
+        "Suggest two quick ways to keep fresh herbs crisp in the refrigerator.",
+        "How can someone politely follow up on an unanswered email?",
+        "Briefly explain how evaporation cools a liquid surface.",
+        "Define the term algorithm in one clear sentence.",
+    ];
+    for en in original_en {
+        assert!(
+            DEFAULT_STARTUP_PRIOR_PROBES.contains(&en),
+            "missing preserved English probe: {en}"
+        );
+    }
+
+    // 2. Bimodal English+Japanese distribution must NOT suffer inter-script variance blow-up
+    //    nor p85 quantile dilution relative to monolingual English calibration.
+    let en_peaks: Vec<(ScriptGroup, f32)> = (0..12)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.23 + (i as f32) * 0.004))
+        .collect();
+    let mut mixed_peaks = en_peaks.clone();
+    for i in 0..12 {
+        mixed_peaks.push((ScriptGroup::NonAsciiDominant, 0.03 + (i as f32) * 0.003));
+    }
+    let en_toks: Vec<(ScriptGroup, f32)> = (0..12)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.36 + (i as f32) * 0.006))
+        .collect();
+    let mut mixed_toks = en_toks.clone();
+    for i in 0..12 {
+        mixed_toks.push((ScriptGroup::NonAsciiDominant, 0.10 + (i as f32) * 0.004));
+    }
+    let en_orthos: Vec<(ScriptGroup, f32)> = (0..12)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.45 + (i as f32) * 0.01))
+        .collect();
+    let mut mixed_orthos = en_orthos.clone();
+    for i in 0..12 {
+        mixed_orthos.push((ScriptGroup::NonAsciiDominant, 0.25 + (i as f32) * 0.01));
+    }
+
+    let (env_en, tok_en) =
+        aggregate_null_envelope(0.18, &en_peaks, &en_orthos, &en_toks).expect("en env");
+    let (env_mixed, tok_mixed) =
+        aggregate_null_envelope(0.18, &mixed_peaks, &mixed_orthos, &mixed_toks).expect("mixed env");
+    let (env_mixed_2, tok_mixed_2) =
+        aggregate_null_envelope(0.18, &mixed_peaks, &mixed_orthos, &mixed_toks)
+            .expect("mixed env det");
+    assert_eq!(env_mixed, env_mixed_2);
+    assert_eq!(tok_mixed.to_bits(), tok_mixed_2.to_bits());
+    assert!(
+        (env_mixed.ood_null_high - env_en.ood_null_high).abs() < 1e-6,
+        "bimodal mixed probes distorted ood_null_high: en={} mixed={}",
+        env_en.ood_null_high,
+        env_mixed.ood_null_high
+    );
+    assert!(
+        (tok_mixed - tok_en).abs() < 1e-6,
+        "bimodal mixed probes diluted token_explain_threshold: en={tok_en} mixed={tok_mixed}"
+    );
+
+    // 3. Cross-script token common-mode support filter keeps shared directions and rejects
+    //    single-language-only directions in a 12+12 balanced pool.
+    let dim = 16;
+    let mut per_entry_toks = Vec::with_capacity(24);
+    let mut scripts = Vec::with_capacity(24);
+    for i in 0..24 {
+        let is_ascii = i % 2 == 0;
+        let mut t_shared = vec![0.0_f32; dim];
+        t_shared[0] = 1.0; // Shared across all 24 EN+JA probes.
+        let mut t_lang_only = vec![0.0_f32; dim];
+        if is_ascii {
+            t_lang_only[1] = 1.0; // Strictly English-only (12/24).
+        } else {
+            t_lang_only[2] = 1.0; // Strictly Japanese-only (12/24).
+        }
+        per_entry_toks.push(vec![t_shared, t_lang_only]);
+        scripts.push(if is_ascii {
+            ScriptGroup::AsciiDominant
+        } else {
+            ScriptGroup::NonAsciiDominant
+        });
+    }
+    let basis = fit_cross_entry_token_common_mode_with_scripts(&per_entry_toks, Some(&scripts), 4);
+    assert_eq!(
+        basis.len(),
+        1,
+        "only the cross-lingual shared direction should survive, got {} dirs",
+        basis.len()
+    );
+    assert!(
+        basis[0][0].abs() > 0.95,
+        "extracted basis must align with shared dim 0: {:?}",
+        basis[0]
+    );
+}
+
+#[test]
+fn extract_leading_alias_word_is_whitespace_free_and_utf8_safe() {
+    // English non-regression.
+    assert_eq!(
+        extract_leading_alias_word("Alpha, beta gamma"),
+        Some("Alpha")
+    );
+    assert_eq!(
+        extract_leading_alias_word("Phi-4-mini runs locally."),
+        Some("Phi-4-mini")
+    );
+    assert_eq!(extract_leading_alias_word("A: short"), None);
+    assert_eq!(extract_leading_alias_word("   "), None);
+
+    // Non-spaced Japanese sentence must never collapse into whole-line alias.
+    let ja_sentence = "翠紋解析器は蒼穹観測塔の地下第4層に設置された無電力の光学位相計である。";
+    let ja_span = extract_leading_alias_word(ja_sentence).expect("ja span");
+    assert_eq!(ja_span.chars().count(), 8);
+    assert_eq!(ja_span, "翠紋解析器は蒼穹");
+    assert!(ja_span.chars().count() < ja_sentence.chars().count() / 2);
+
+    // Leading CJK brackets/quotes and punctuation delimiters.
+    assert_eq!(
+        extract_leading_alias_word("「東京」は日本の首都です。"),
+        Some("東京")
+    );
+    assert_eq!(
+        extract_leading_alias_word("（設計）方針を確認する"),
+        Some("設計")
+    );
+    assert_eq!(extract_leading_alias_word("紅玉、翠紋、白磁"), Some("紅玉"));
+    assert_eq!(extract_leading_alias_word("「」"), None);
+
+    // Mixed ASCII + CJK without spaces stays bounded on UTF-8 char boundaries.
+    let mixed = "HTTP通信プロトコルの仕様概要";
+    let mixed_span = extract_leading_alias_word(mixed).expect("mixed span");
+    assert_eq!(mixed_span.chars().count(), 8);
+    assert_eq!(mixed_span, "HTTP通信プロ");
 }
