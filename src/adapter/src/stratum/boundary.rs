@@ -7,7 +7,7 @@
 use super::{RecallStratum, StratumContext, StratumDirective, StratumSignal};
 use crate::{
     AttractorRole, LacunaBoundaryState, RecallBoundaryGate, RecallBoundaryMetrics,
-    TextAttractorEntry,
+    TextAttractorEntry, effective_guard_hard_margin,
 };
 use liminika_core::abi::lmnk_pointer_trail_t;
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
@@ -64,6 +64,13 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
             raw_guard_margin.min(0.0)
         };
 
+        let hard_margin = effective_guard_hard_margin(
+            ctx.policy.guard_suppress_margin,
+            ctx.coalition_thresholds.coherence_scale,
+        );
+        let mut eval_policy = *ctx.policy;
+        eval_policy.guard_suppress_margin = hard_margin;
+
         let metrics = RecallBoundaryMetrics {
             top1_fact_score,
             top2_fact_score,
@@ -71,12 +78,12 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
             max_guard_score,
             guard_conflict_margin,
         };
-        let decision = self.gate.evaluate(&metrics, ctx.policy);
+        let decision = self.gate.evaluate(&metrics, &eval_policy);
         signal.boundary_metrics = metrics;
         signal.gate_decision = decision;
 
-        let repulsed_by_guard = max_guard_score >= guard_floor
-            && guard_conflict_margin > ctx.policy.guard_suppress_margin;
+        let repulsed_by_guard =
+            max_guard_score >= guard_floor && guard_conflict_margin > hard_margin;
         if repulsed_by_guard {
             signal.action_decision = StigmergicActionDecision::RepulsionEscape;
         }

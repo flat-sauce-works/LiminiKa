@@ -559,6 +559,7 @@ impl StreamingCorpusDistiller {
         {
             recall_policy.min_coherence = env.calibrated_min_coherence;
             token_explain_threshold = tok_thresh;
+            corpus.set_null_calibration(Some(env));
             null_calibration = Some(env);
         }
 

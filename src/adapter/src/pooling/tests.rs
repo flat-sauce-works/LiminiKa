@@ -1255,13 +1255,32 @@ fn multilingual_startup_prior_probes_and_bimodal_null_envelope_defense() {
         mixed_orthos.push((ScriptGroup::NonAsciiDominant, 0.25 + (i as f32) * 0.01));
     }
 
+    let en_unexps: Vec<(ScriptGroup, f32)> = (0..12)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.80 + (i as f32) * 0.015))
+        .collect();
+    let mut mixed_unexps = en_unexps.clone();
+    for i in 0..12 {
+        mixed_unexps.push((ScriptGroup::NonAsciiDominant, 0.92 + (i as f32) * 0.005));
+    }
+
     let (env_en, tok_en) =
-        aggregate_null_envelope(0.18, &en_peaks, &en_orthos, &en_toks).expect("en env");
-    let (env_mixed, tok_mixed) =
-        aggregate_null_envelope(0.18, &mixed_peaks, &mixed_orthos, &mixed_toks).expect("mixed env");
-    let (env_mixed_2, tok_mixed_2) =
-        aggregate_null_envelope(0.18, &mixed_peaks, &mixed_orthos, &mixed_toks)
-            .expect("mixed env det");
+        aggregate_null_envelope(0.18, &en_peaks, &en_orthos, &en_toks, &en_unexps).expect("en env");
+    let (env_mixed, tok_mixed) = aggregate_null_envelope(
+        0.18,
+        &mixed_peaks,
+        &mixed_orthos,
+        &mixed_toks,
+        &mixed_unexps,
+    )
+    .expect("mixed env");
+    let (env_mixed_2, tok_mixed_2) = aggregate_null_envelope(
+        0.18,
+        &mixed_peaks,
+        &mixed_orthos,
+        &mixed_toks,
+        &mixed_unexps,
+    )
+    .expect("mixed env det");
     assert_eq!(env_mixed, env_mixed_2);
     assert_eq!(tok_mixed.to_bits(), tok_mixed_2.to_bits());
     assert!(
@@ -1349,4 +1368,183 @@ fn extract_leading_alias_word_is_whitespace_free_and_utf8_safe() {
     let mixed_span = extract_leading_alias_word(mixed).expect("mixed span");
     assert_eq!(mixed_span.chars().count(), 8);
     assert_eq!(mixed_span, "HTTP通信プロ");
+}
+
+#[test]
+fn null_calibration_2pass_2d_stats_cross_script_envelope_relaxed_clamp_and_determinism() {
+    use super::null_calibration::{
+        ScriptGroup, aggregate_null_envelope, resolve_token_explain_threshold,
+    };
+
+    // 1. Relaxed `token_explain_threshold` clamp (`0.22..=0.62`, fallback `0.40`).
+    let low_cos: Vec<(ScriptGroup, f32)> = (0..8)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.16 + (i as f32) * 0.005))
+        .collect();
+    let low_thresh = resolve_token_explain_threshold(&low_cos);
+    assert!(
+        (0.22..0.35).contains(&low_thresh),
+        "low-cosine model should relax below legacy 0.35 floor, got {low_thresh}"
+    );
+    let very_low: Vec<(ScriptGroup, f32)> = vec![(ScriptGroup::AsciiDominant, 0.05); 8];
+    assert!((resolve_token_explain_threshold(&very_low) - 0.22).abs() < 1e-6);
+
+    let high_cos: Vec<(ScriptGroup, f32)> = vec![(ScriptGroup::AsciiDominant, 0.56); 8];
+    let high_thresh = resolve_token_explain_threshold(&high_cos);
+    assert!(
+        (high_thresh - 0.60).abs() < 1e-6,
+        "high-cosine model should expand above legacy 0.56 ceiling, got {high_thresh}"
+    );
+    assert!((resolve_token_explain_threshold(&[]) - DEFAULT_TOKEN_EXPLAIN_THRESHOLD).abs() < 1e-6);
+
+    // 2. Conservative cross-script 2D envelopes:
+    //    - `ood_coh_median` takes higher script (upper bound preventing OOD leakage)
+    //    - `ood_unexp_median` / `ood_unexp_p15` take lower script (lower bound preventing OOD false pass)
+    let peaks: Vec<(ScriptGroup, f32)> = (0..6)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.20 + (i as f32) * 0.01))
+        .chain((0..6).map(|i| (ScriptGroup::NonAsciiDominant, 0.04 + (i as f32) * 0.005)))
+        .collect();
+    let orthos: Vec<(ScriptGroup, f32)> = vec![(ScriptGroup::AsciiDominant, 0.50); 6]
+        .into_iter()
+        .chain(vec![(ScriptGroup::NonAsciiDominant, 0.30); 6])
+        .collect();
+    let toks: Vec<(ScriptGroup, f32)> = vec![(ScriptGroup::AsciiDominant, 0.28); 6]
+        .into_iter()
+        .chain(vec![(ScriptGroup::NonAsciiDominant, 0.14); 6])
+        .collect();
+    let unexps: Vec<(ScriptGroup, f32)> = (0..6)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.78 + (i as f32) * 0.02))
+        .chain((0..6).map(|i| (ScriptGroup::NonAsciiDominant, 0.94 + (i as f32) * 0.01)))
+        .collect();
+
+    let (env1, t1) = aggregate_null_envelope(0.16, &peaks, &orthos, &toks, &unexps).expect("env1");
+    let (env2, t2) = aggregate_null_envelope(0.16, &peaks, &orthos, &toks, &unexps).expect("env2");
+    assert_eq!(env1, env2);
+    assert_eq!(t1.to_bits(), t2.to_bits());
+    assert!(
+        env1.ood_coh_median >= 0.22,
+        "ood_coh_median should adopt conservative upper script (ASCII ~0.225), got {}",
+        env1.ood_coh_median
+    );
+    assert!(env1.ood_coh_mad >= OOD_COH_MAD_FLOOR);
+    assert!(
+        env1.ood_unexp_median <= 0.85,
+        "ood_unexp_median should adopt conservative lower script (ASCII ~0.83), got {}",
+        env1.ood_unexp_median
+    );
+    assert!(
+        env1.ood_unexp_p15 <= 0.80,
+        "ood_unexp_p15 should adopt conservative lower script (ASCII 0.78), got {}",
+        env1.ood_unexp_p15
+    );
+    assert!(env1.ood_unexp_mad >= OOD_UNEXP_MAD_FLOOR);
+
+    // 3. Empty `unexp_samples` falls back to safe OOD defaults `(1.0, 0.04, 0.80)`.
+    let (env_empty_u, _) =
+        aggregate_null_envelope(0.16, &peaks, &orthos, &toks, &[]).expect("empty unexp");
+    assert!((env_empty_u.ood_unexp_median - 1.0).abs() < 1e-6);
+    assert!((env_empty_u.ood_unexp_mad - OOD_UNEXP_MAD_FLOOR).abs() < 1e-6);
+    assert!((env_empty_u.ood_unexp_p15 - 0.80).abs() < 1e-6);
+
+    // 4. End-to-end 2-pass cross-fitting populates corpus.null_calibration() deterministically
+    //    while `--no-base-prior` keeps `null_calibration == None` and `tok_exp == 0.40`.
+    let mut geom = sample_gqa_partial_rope();
+    geom.num_layers = 4;
+    geom.num_q_heads = 4;
+    geom.num_kv_heads = 2;
+    geom.head_dim = 8;
+    geom.rotary_dim = 8;
+    geom.layer_rope_mask = 0xF;
+    let adapter = ModelSteeringAdapter::new(geom).expect("compact adapter");
+    let dim = adapter.geometry().q_rot_len();
+    let make_seq = |slots: &[usize]| -> Vec<Vec<f32>> {
+        let mut flat = vec![0.0_f32; slots.len() * dim];
+        for (t, &s) in slots.iter().enumerate() {
+            flat[t * dim + (s % dim)] = 1.0;
+            flat[t * dim + ((s + 1) % dim)] = 0.25;
+        }
+        vec![flat; 4]
+    };
+    let facts = vec![
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Fact one".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[0, 2]),
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Fact two".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[4, 6]),
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Fact three".to_string(),
+            energy: 2.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[8, 10]),
+            token_include_mask: None,
+        },
+    ];
+    let prior_samples: Vec<TokenSequenceEntry> = (0..8)
+        .map(|i| TokenSequenceEntry {
+            role: AttractorRole::Persona,
+            text: if i % 2 == 0 {
+                format!("Neutral ASCII probe {i}")
+            } else {
+                format!("中立プローブ標本{i}")
+            },
+            energy: 1.0,
+            seq_len: 2,
+            per_layer_token_qs: make_seq(&[14 + i, 20 + i]),
+            token_include_mask: None,
+        })
+        .collect();
+    let prior = ModelBaseAttractorProfile::extract(
+        &adapter,
+        &prior_samples,
+        SequenceActivationPooler::default(),
+        0.55,
+    )
+    .expect("prior");
+
+    let no_prior =
+        CompiledTokenCorpus::compile(&adapter, &facts, SequenceActivationPooler::default(), 2, 1)
+            .expect("no prior");
+    assert!(no_prior.null_calibration.is_none());
+    assert!(no_prior.corpus.null_calibration().is_none());
+    assert!((no_prior.token_explain_threshold - DEFAULT_TOKEN_EXPLAIN_THRESHOLD).abs() < 1e-6);
+
+    let run_a = CompiledTokenCorpus::compile_with_base_prior(
+        &adapter,
+        &facts,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+        Some(&prior),
+    )
+    .expect("with prior A");
+    let run_b = CompiledTokenCorpus::compile_with_base_prior(
+        &adapter,
+        &facts,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+        Some(&prior),
+    )
+    .expect("with prior B");
+    let env_a = run_a.null_calibration.expect("env_a");
+    let env_b = run_b.null_calibration.expect("env_b");
+    assert_eq!(env_a, env_b);
+    assert_eq!(run_a.corpus.null_calibration(), Some(env_a));
+    assert_eq!(env_a.sample_count, 8);
+    assert!(env_a.ood_coh_mad >= OOD_COH_MAD_FLOOR);
+    assert!(env_a.ood_unexp_mad >= OOD_UNEXP_MAD_FLOOR);
+    assert!((0.0..=1.0).contains(&env_a.ood_unexp_median));
+    assert!((0.0..=1.0).contains(&env_a.ood_unexp_p15));
+    assert!((0.22..=0.62).contains(&env_a.token_explain_threshold));
 }

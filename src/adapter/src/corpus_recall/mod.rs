@@ -1,11 +1,33 @@
-// name: src/adapter/src/corpus_recall.rs
+// name: src/adapter/src/corpus_recall/mod.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Dynamic natural-language attractor corpus indexing, Liminal boundary gates,
+//! Dynamic natural-language attractor corpus indexing, Liminal 2D boundary gates,
 //! and persistent token-sequence recall ([`TextAttractorCorpus`]).
+
+mod boundary_2d;
+mod projection;
+
+pub use boundary_2d::{
+    Boundary2DDecision, Boundary2DInput, Boundary2DRegion, Boundary2DThresholds,
+    CoherenceGuardGate, DEFAULT_GUARD_HARD_MARGIN, DEFAULT_GUARD_OBSTRUCTION_THRESHOLD,
+    DEFAULT_SOFT_GUARD_Q7_SCALE, GuardLayerClassification, GuardLayerMode, RecallBoundaryGate,
+    RecallBoundaryMetrics, RecallGateDecision, classify_guard_tier, effective_guard_hard_margin,
+};
+pub use projection::attenuate_guard_q7_soft;
+pub(crate) use projection::{
+    AttractorRecallProjection, RecalledAnchorRef,
+    build_exterior_sandbox_anchors_per_layer_from_projection,
+    build_fact_anchors_per_layer_from_projection, build_guard_anchors_per_layer_from_projection,
+    build_persona_anchors_per_layer_from_projection, classify_guard_tier_from_projection,
+    compute_lacuna_partition_8, context_fingerprint_from_projection,
+    join_exterior_context_from_projection, join_fact_context_from_projection,
+    join_persona_context_from_projection,
+};
 
 use super::*;
 use crate::corpus_recall_cache::{CorpusRecallCache, LazyRecallCache};
+use crate::pooling::NullCalibrationEnvelope;
+use crate::stratum::CoalitionThresholds;
 
 /// Semantic origin role of a natural-language text attractor inside [`TextAttractorCorpus`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +155,7 @@ pub struct DynamicAttractorRecall<'a> {
     pub telemetry: StratumProbeTelemetry,
     /// Top-K recalled Fact entries (empty when `lacuna_state == LiminalExterior`).
     pub recalled_facts: Vec<(&'a TextAttractorEntry, f32)>,
-    /// Top-K recalled Persona entries (suppressed only on Guard repulsion).
+    /// Top-K recalled Persona entries (suppressed only on Guard repulsion or foreign OOD tokens).
     pub recalled_personas: Vec<(&'a TextAttractorEntry, f32)>,
     /// Strongest observed Guard attractor in the corpus for this query, if any Guard exists.
     pub top_guard: Option<(&'a TextAttractorEntry, f32)>,
@@ -145,298 +167,7 @@ pub struct DynamicAttractorRecall<'a> {
     pub is_known_unknown_exterior: bool,
 }
 
-/// Lightweight zero-copy view over a recalled attractor anchor shared by borrowed
-/// ([`DynamicAttractorRecall`]) and owned ([`OwnedAttractorRecall`]) recall paths.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RecalledAnchorRef<'a> {
-    pub(crate) anchor_id: u32,
-    pub(crate) text: &'a str,
-    pub(crate) per_layer_q7: &'a [[lmnk_q7_t; MAX_ATTENTION_HEADS]],
-    pub(crate) energy: f32,
-    pub(crate) score: f32,
-}
-
-/// Crate-internal projection unifying borrowed [`DynamicAttractorRecall`] and owned
-/// [`OwnedAttractorRecall`] so core-layer sync, snapshot capture, and anchor materialization
-/// share a single implementation without cloning or dual APIs.
-pub(crate) trait AttractorRecallProjection {
-    fn lacuna_state(&self) -> LacunaBoundaryState;
-    fn top1_fact_score(&self) -> f32;
-    fn top2_fact_score(&self) -> f32;
-    fn top1_persona_score(&self) -> f32;
-    fn guard_conflict_margin(&self) -> f32;
-    fn action_decision(&self) -> StigmergicActionDecision;
-    fn gateway_frame(&self) -> &GatewayFrame;
-    fn telemetry(&self) -> &StratumProbeTelemetry;
-    fn lacuna_partition(&self) -> LacunaPartition8;
-    fn is_known_unknown_exterior(&self) -> bool;
-    fn recalled_fact_len(&self) -> usize;
-    fn recalled_fact_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>>;
-    fn recalled_persona_len(&self) -> usize;
-    fn recalled_persona_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>>;
-    fn exterior_sandbox_len(&self) -> usize;
-    fn exterior_sandbox_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>>;
-    fn top_guard_ref(&self) -> Option<RecalledAnchorRef<'_>>;
-}
-
-pub(crate) fn build_fact_anchors_per_layer_from_projection<
-    R: AttractorRecallProjection + ?Sized,
->(
-    recall: &R,
-    num_layers: usize,
-) -> Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
-    let n_facts = recall.recalled_fact_len();
-    (0..num_layers)
-        .map(|l| {
-            (0..n_facts)
-                .filter_map(|i| recall.recalled_fact_at(i))
-                .filter_map(|anchor| {
-                    anchor.per_layer_q7.get(l).map(|&arr| {
-                        let scaled_e = (anchor.energy * anchor.score.clamp(0.25, 1.25)).max(0.25);
-                        ObjectiveFact::new(arr, scaled_e, 0, anchor.anchor_id)
-                    })
-                })
-                .collect()
-        })
-        .collect()
-}
-
-pub(crate) fn build_exterior_sandbox_anchors_per_layer_from_projection<
-    R: AttractorRecallProjection + ?Sized,
->(
-    recall: &R,
-    num_layers: usize,
-) -> Vec<Vec<ObjectiveFact<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
-    if !recall.is_known_unknown_exterior() || recall.exterior_sandbox_len() == 0 {
-        return vec![Vec::new(); num_layers];
-    }
-    let n_ext = recall.exterior_sandbox_len();
-    (0..num_layers)
-        .map(|l| {
-            (0..n_ext)
-                .filter_map(|i| recall.exterior_sandbox_at(i))
-                .filter_map(|anchor| {
-                    anchor.per_layer_q7.get(l).map(|&arr| {
-                        let scaled_e =
-                            (anchor.energy * anchor.score.clamp(0.25, 0.90) * 0.5).max(0.20);
-                        ObjectiveFact::new(arr, scaled_e, 0, anchor.anchor_id)
-                    })
-                })
-                .collect()
-        })
-        .collect()
-}
-
-pub(crate) fn build_persona_anchors_per_layer_from_projection<
-    R: AttractorRecallProjection + ?Sized,
->(
-    recall: &R,
-    num_layers: usize,
-) -> Vec<Vec<SubjectivePersona<[lmnk_q7_t; MAX_ATTENTION_HEADS]>>> {
-    let n_personas = recall.recalled_persona_len();
-    (0..num_layers)
-        .map(|l| {
-            (0..n_personas)
-                .filter_map(|i| recall.recalled_persona_at(i))
-                .filter_map(|anchor| {
-                    anchor.per_layer_q7.get(l).map(|&arr| {
-                        let scaled_e = (anchor.energy * anchor.score.clamp(0.25, 1.25)).max(0.25);
-                        SubjectivePersona::new(arr, scaled_e, 0, anchor.anchor_id)
-                    })
-                })
-                .collect()
-        })
-        .collect()
-}
-
-pub(crate) fn build_guard_anchors_per_layer_from_projection<
-    R: AttractorRecallProjection + ?Sized,
->(
-    recall: &R,
-    num_layers: usize,
-    is_guard_trap: bool,
-) -> Vec<Vec<GuardPhaseAnchor>> {
-    let margin = recall.guard_conflict_margin();
-    if !(is_guard_trap || margin > 0.0) {
-        return vec![Vec::new(); num_layers];
-    }
-    let Some(guard) = recall.top_guard_ref() else {
-        return vec![Vec::new(); num_layers];
-    };
-    let obstruction = (0.55 + margin.max(0.0)).clamp(0.55, 1.0);
-    const OBSTRUCTION_THRESHOLD: f32 = 0.50;
-    (0..num_layers)
-        .map(|l| match guard.per_layer_q7.get(l) {
-            Some(&arr) => vec![GuardPhaseAnchor::new(
-                arr,
-                obstruction,
-                OBSTRUCTION_THRESHOLD,
-            )],
-            None => Vec::new(),
-        })
-        .collect()
-}
-
-pub(crate) fn join_fact_context_from_projection<R: AttractorRecallProjection + ?Sized>(
-    recall: &R,
-) -> String {
-    (0..recall.recalled_fact_len())
-        .filter_map(|i| recall.recalled_fact_at(i).map(|a| a.text))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-pub(crate) fn join_persona_context_from_projection<R: AttractorRecallProjection + ?Sized>(
-    recall: &R,
-) -> String {
-    (0..recall.recalled_persona_len())
-        .filter_map(|i| recall.recalled_persona_at(i).map(|a| a.text))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-pub(crate) fn join_exterior_context_from_projection<R: AttractorRecallProjection + ?Sized>(
-    recall: &R,
-) -> String {
-    (0..recall.exterior_sandbox_len())
-        .filter_map(|i| recall.exterior_sandbox_at(i).map(|a| a.text))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-pub(crate) fn context_fingerprint_from_projection<R: AttractorRecallProjection + ?Sized>(
-    recall: &R,
-) -> u64 {
-    if matches!(recall.lacuna_state(), LacunaBoundaryState::LiminalExterior)
-        && !recall.is_known_unknown_exterior()
-    {
-        return 0;
-    }
-    let main_ctx = (0..recall.recalled_fact_len())
-        .filter_map(|i| recall.recalled_fact_at(i).map(|a| a.text))
-        .chain(
-            (0..recall.recalled_persona_len())
-                .filter_map(|i| recall.recalled_persona_at(i).map(|a| a.text)),
-        )
-        .collect::<Vec<_>>()
-        .join(" ");
-    let ctx = if main_ctx.is_empty() && recall.is_known_unknown_exterior() {
-        join_exterior_context_from_projection(recall)
-    } else {
-        main_ctx
-    };
-    if ctx.is_empty() {
-        return 0;
-    }
-    ctx.as_bytes()
-        .iter()
-        .fold(0xCBF2_9CE4_8422_2325_u64, |h, &b| {
-            (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01B3)
-        })
-}
-
-impl AttractorRecallProjection for DynamicAttractorRecall<'_> {
-    #[inline]
-    fn lacuna_state(&self) -> LacunaBoundaryState {
-        self.lacuna_state
-    }
-    #[inline]
-    fn top1_fact_score(&self) -> f32 {
-        self.top1_fact_score
-    }
-    #[inline]
-    fn top2_fact_score(&self) -> f32 {
-        self.top2_fact_score
-    }
-    #[inline]
-    fn top1_persona_score(&self) -> f32 {
-        self.top1_persona_score
-    }
-    #[inline]
-    fn guard_conflict_margin(&self) -> f32 {
-        self.guard_conflict_margin
-    }
-    #[inline]
-    fn action_decision(&self) -> StigmergicActionDecision {
-        self.action_decision
-    }
-    #[inline]
-    fn gateway_frame(&self) -> &GatewayFrame {
-        &self.gateway_frame
-    }
-    #[inline]
-    fn telemetry(&self) -> &StratumProbeTelemetry {
-        &self.telemetry
-    }
-    #[inline]
-    fn lacuna_partition(&self) -> LacunaPartition8 {
-        self.lacuna_partition
-    }
-    #[inline]
-    fn is_known_unknown_exterior(&self) -> bool {
-        self.is_known_unknown_exterior
-    }
-    #[inline]
-    fn recalled_fact_len(&self) -> usize {
-        self.recalled_facts.len()
-    }
-    #[inline]
-    fn recalled_fact_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>> {
-        self.recalled_facts
-            .get(idx)
-            .map(|&(e, score)| RecalledAnchorRef {
-                anchor_id: e.anchor_id,
-                text: e.text.as_str(),
-                per_layer_q7: &e.per_layer_q7,
-                energy: e.energy,
-                score,
-            })
-    }
-    #[inline]
-    fn recalled_persona_len(&self) -> usize {
-        self.recalled_personas.len()
-    }
-    #[inline]
-    fn recalled_persona_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>> {
-        self.recalled_personas
-            .get(idx)
-            .map(|&(e, score)| RecalledAnchorRef {
-                anchor_id: e.anchor_id,
-                text: e.text.as_str(),
-                per_layer_q7: &e.per_layer_q7,
-                energy: e.energy,
-                score,
-            })
-    }
-    #[inline]
-    fn exterior_sandbox_len(&self) -> usize {
-        self.exterior_sandbox_facts.len()
-    }
-    #[inline]
-    fn exterior_sandbox_at(&self, idx: usize) -> Option<RecalledAnchorRef<'_>> {
-        self.exterior_sandbox_facts
-            .get(idx)
-            .map(|&(e, score)| RecalledAnchorRef {
-                anchor_id: e.anchor_id,
-                text: e.text.as_str(),
-                per_layer_q7: &e.per_layer_q7,
-                energy: e.energy,
-                score,
-            })
-    }
-    #[inline]
-    fn top_guard_ref(&self) -> Option<RecalledAnchorRef<'_>> {
-        self.top_guard.map(|(e, score)| RecalledAnchorRef {
-            anchor_id: e.anchor_id,
-            text: e.text.as_str(),
-            per_layer_q7: &e.per_layer_q7,
-            energy: e.energy,
-            score,
-        })
-    }
-}
-
-impl<'a> DynamicAttractorRecall<'a> {
+impl DynamicAttractorRecall<'_> {
     /// Converts this borrowed recall outcome into a lifetime-free [`OwnedAttractorRecall`]
     /// without copying un-recalled corpus entries or full-resolution residual signatures.
     #[must_use]
@@ -536,7 +267,7 @@ pub struct RecallPolicy {
     pub min_coherence: f32,
     /// Minimum top-1 minus top-2 score gap to avoid `LiminalBoundary`.
     pub boundary_margin: f32,
-    /// Guard conflict margin (`max_guard_score - top1_fact_score`) above which fact injection is suppressed.
+    /// Guard conflict margin (`max_guard_score - top1_fact_score`) above which Layer 1 suppression applies.
     pub guard_suppress_margin: f32,
 }
 
@@ -550,40 +281,6 @@ impl Default for RecallPolicy {
             guard_suppress_margin: 0.0,
         }
     }
-}
-
-/// Geometric boundary measurements evaluated by a [`RecallBoundaryGate`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RecallBoundaryMetrics {
-    /// Highest geometric resonance score among Fact attractors.
-    pub top1_fact_score: f32,
-    /// Second-highest geometric resonance score among Fact attractors.
-    pub top2_fact_score: f32,
-    /// Highest geometric resonance score among Persona attractors.
-    pub top1_persona_score: f32,
-    /// Highest geometric resonance score among Guard attractors.
-    pub max_guard_score: f32,
-    /// `max_guard_score - max(top1_fact_score, top1_persona_score)`.
-    pub guard_conflict_margin: f32,
-}
-
-/// Decision produced by a [`RecallBoundaryGate`] for a query.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RecallGateDecision {
-    /// Classified boundary state (`InsideBasin`, `LiminalBoundary`, or `LiminalExterior`).
-    pub lacuna_state: LacunaBoundaryState,
-    /// Whether forced Fact/Persona attractor injection should be suppressed (e.g., `LiminalExterior` or Guard dominance).
-    pub suppress_fact_injection: bool,
-}
-
-/// Trait abstracting `Liminal` boundary classification and Guard-conflict suppression policies.
-pub trait RecallBoundaryGate {
-    /// Evaluates boundary metrics under the active [`RecallPolicy`].
-    fn evaluate(
-        &self,
-        metrics: &RecallBoundaryMetrics,
-        policy: &RecallPolicy,
-    ) -> RecallGateDecision;
 }
 
 /// Relational neighborhood context observed from a single attractor's vantage point, enabling
@@ -725,52 +422,14 @@ impl AttractorBoundaryPerspective for AsymmetricHubnessPerspective {
     }
 }
 
-/// Default [`RecallBoundaryGate`] enforcing both `Liminal` coherence floor and Guard dominance suppression.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CoherenceGuardGate;
-
-impl RecallBoundaryGate for CoherenceGuardGate {
-    fn evaluate(
-        &self,
-        metrics: &RecallBoundaryMetrics,
-        policy: &RecallPolicy,
-    ) -> RecallGateDecision {
-        let guard_floor = policy.min_coherence * 0.70;
-        if metrics.max_guard_score >= guard_floor
-            && metrics.guard_conflict_margin > policy.guard_suppress_margin
-        {
-            return RecallGateDecision {
-                lacuna_state: LacunaBoundaryState::LiminalExterior,
-                suppress_fact_injection: true,
-            };
-        }
-        let margin = metrics.top1_fact_score - metrics.top2_fact_score;
-        if metrics.top1_fact_score < policy.min_coherence {
-            RecallGateDecision {
-                lacuna_state: LacunaBoundaryState::LiminalExterior,
-                suppress_fact_injection: true,
-            }
-        } else if margin < policy.boundary_margin {
-            RecallGateDecision {
-                lacuna_state: LacunaBoundaryState::LiminalBoundary,
-                suppress_fact_injection: false,
-            }
-        } else {
-            RecallGateDecision {
-                lacuna_state: LacunaBoundaryState::InsideBasin,
-                suppress_fact_injection: false,
-            }
-        }
-    }
-}
-
 /// Model-agnostic Cold-Path corpus that compiles natural-language logs, facts, personas, and
-/// contrastive guards into a dynamic attractor manifold with explicit `Liminal` boundary detection.
+/// contrastive guards into a dynamic attractor manifold with explicit `Liminal` 2D boundary detection.
 #[derive(Debug, Default, Clone)]
 pub struct TextAttractorCorpus {
     entries: Vec<TextAttractorEntry>,
     next_anchor_id: u32,
     common_mode_basis: Vec<Vec<f32>>,
+    null_calibration: Option<Box<NullCalibrationEnvelope>>,
     recall_cache: LazyRecallCache,
 }
 
@@ -782,6 +441,7 @@ impl TextAttractorCorpus {
             entries: Vec::new(),
             next_anchor_id: 1,
             common_mode_basis: Vec::new(),
+            null_calibration: None,
             recall_cache: LazyRecallCache::new(),
         }
     }
@@ -790,6 +450,28 @@ impl TextAttractorCorpus {
     #[must_use]
     pub fn entries(&self) -> &[TextAttractorEntry] {
         &self.entries
+    }
+
+    /// Attaches or clears an in-memory 2-fold OOD [`NullCalibrationEnvelope`] powering calibrated
+    /// 2D `(top1_coh, unexp)` decision boundaries and relative-scale coalition thresholds.
+    pub fn set_null_calibration(&mut self, envelope: Option<NullCalibrationEnvelope>) {
+        self.null_calibration = envelope.map(Box::new);
+    }
+
+    /// Returns the currently attached [`NullCalibrationEnvelope`], or `None` under `--no-base-prior`.
+    #[must_use]
+    pub fn null_calibration(&self) -> Option<NullCalibrationEnvelope> {
+        self.null_calibration.as_deref().copied()
+    }
+
+    /// Derives active [`Boundary2DThresholds`] for `min_coherence` (calibrated when
+    /// [`Self::null_calibration`] is present, or exact 1D fallback under `--no-base-prior`).
+    #[must_use]
+    pub fn boundary_2d_thresholds(&self, min_coherence: f32) -> Boundary2DThresholds {
+        Boundary2DThresholds::from_optional_envelope(
+            self.null_calibration.as_deref(),
+            min_coherence,
+        )
     }
 
     #[inline]
@@ -1380,12 +1062,14 @@ impl TextAttractorCorpus {
         let (query_sig, query_ortho_ratio) =
             Self::project_and_normalize_with_ratio(&raw_sig, &self.common_mode_basis);
         let cache = self.recall_cache();
+        let boundary_2d = self.boundary_2d_thresholds(policy.min_coherence);
+        let coalition_thresholds = CoalitionThresholds::from_boundary_2d(&boundary_2d);
         let ortho_gate = if self.common_mode_basis.is_empty() {
             1.0_f32
         } else {
             // Only attenuate degenerate near-pure-common-mode queries (`query_ortho_ratio` below
-            // ~0.25, i.e. >93.75% squared energy in the removed common-mode subspace) so legitimate
-            // question prompts (`rho ~ 0.30..0.45`) preserve full cosine sensitivity.
+            // `corpus_ortho_ref * 0.45`, clamped to `[0.15, 0.25]`) so legitimate queries keep
+            // full sensitivity while common-mode-heavy OOD probes never weaken the knee.
             let ortho_knee = (cache.corpus_ortho_ref * 0.45).clamp(0.15, 0.25);
             (query_ortho_ratio / ortho_knee).clamp(0.0, 1.0)
         };
@@ -1470,8 +1154,9 @@ impl TextAttractorCorpus {
             query_seq_len,
             query_ortho_ratio,
             policy,
+            coalition_thresholds,
         };
-        let (signal, directive) = pipeline.evaluate(&stratum_ctx, initial_signal)?;
+        let (mut signal, directive) = pipeline.evaluate(&stratum_ctx, initial_signal)?;
 
         let mut fact_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
         let mut persona_scores: Vec<(&TextAttractorEntry, f32)> = Vec::new();
@@ -1492,112 +1177,39 @@ impl TextAttractorCorpus {
         let top1_fact_candidate = fact_scores.first().copied();
         let top_any_entry = top1_fact_candidate.or_else(|| persona_scores.first().copied());
 
-        // Compute 8-granule 4-region lacuna partition (`S & O`, `S \ O`, `O \ S`, Unobserved).
-        let self_mask = {
-            let mut g_abs = [0u32; NUM_STIGMERGIC_GRANULES];
-            let heads = geom.num_q_heads.max(1);
-            if let Some((entry, _)) = top_any_entry
-                && let Some(q7) = entry.per_layer_q7.last()
-            {
-                let per_g = (heads / NUM_STIGMERGIC_GRANULES).max(1);
-                for (g, g_slot) in g_abs.iter_mut().enumerate().take(NUM_STIGMERGIC_GRANULES) {
-                    let start = (g * per_g) % heads;
-                    let mut sum = 0u32;
-                    for off in 0..per_g {
-                        let h = (start + off) % heads;
-                        sum += u32::from(q7[h.min(MAX_ATTENTION_HEADS - 1)].unsigned_abs());
-                    }
-                    *g_slot = sum / (per_g as u32);
-                }
-            }
-            let min_v = *g_abs.iter().min().unwrap_or(&0);
-            let max_v = *g_abs.iter().max().unwrap_or(&0);
-            if max_v == min_v {
-                0x55u8
-            } else {
-                let sum_v: u32 = g_abs.iter().sum();
-                let thresh = (sum_v * 9) / (NUM_STIGMERGIC_GRANULES as u32 * 10);
-                let mut mask = 0u8;
-                for (g, &val) in g_abs.iter().enumerate() {
-                    if val >= thresh {
-                        mask |= 1u8 << g;
-                    }
-                }
-                if mask == 0 || mask == 0xFF {
-                    0x55u8
-                } else {
-                    mask
-                }
-            }
-        };
-
-        let mut other_granule_density_q7 = [0u8; NUM_STIGMERGIC_GRANULES];
-        {
-            let align_num = signal
-                .boundary_metrics
-                .top1_fact_score
-                .max(signal.boundary_metrics.top1_persona_score)
-                .max(signal.telemetry.local_top1_score * 0.90)
-                .max(0.0);
-            let align_ratio = (align_num / policy.min_coherence.max(0.20)).clamp(0.0, 1.35);
-            let excess_align = (align_ratio - 0.35).max(0.0);
-            if excess_align > 0.0 {
-                let last_rope_layer = (0..query_per_layer_q.len())
-                    .rfind(|&l| geom.is_rope_layer(l))
-                    .unwrap_or(0);
-                let mut rel_energy = [1.0_f32; NUM_STIGMERGIC_GRANULES];
-                if let (Some(ql), Some(rl)) = (
-                    query_per_layer_q.get(last_rope_layer),
-                    baseline_ref_per_layer.get(last_rope_layer),
-                ) {
-                    let heads = geom.num_q_heads.max(1);
-                    let rdim = geom.rotary_dim.max(1);
-                    if ql.len() >= heads * rdim && rl.len() >= heads * rdim {
-                        let per_g = (heads / NUM_STIGMERGIC_GRANULES).max(1);
-                        let mut raw_e = [0.0_f32; NUM_STIGMERGIC_GRANULES];
-                        for (g, raw_slot) in
-                            raw_e.iter_mut().enumerate().take(NUM_STIGMERGIC_GRANULES)
-                        {
-                            let start_h = (g * per_g) % heads;
-                            let mut acc = 0.0_f64;
-                            for off in 0..per_g {
-                                let h = (start_h + off) % heads;
-                                let base = h * rdim;
-                                for d in 0..rdim {
-                                    let diff = f64::from(ql[base + d] - rl[base + d]);
-                                    acc += diff * diff;
-                                }
-                            }
-                            *raw_slot = (acc / ((per_g * rdim) as f64)).sqrt() as f32;
-                        }
-                        let mean_e =
-                            (raw_e.iter().sum::<f32>() / NUM_STIGMERGIC_GRANULES as f32).max(1e-6);
-                        for g in 0..NUM_STIGMERGIC_GRANULES {
-                            rel_energy[g] = (raw_e[g] / mean_e).clamp(0.25, 1.80);
-                        }
-                    }
-                }
-                for g in 0..NUM_STIGMERGIC_GRANULES {
-                    other_granule_density_q7[g] =
-                        ((excess_align * rel_energy[g] * 96.0).clamp(0.0, 127.0)) as u8;
-                }
-            }
-        }
-        let substrate_tol = adapter
-            .core_primitive_state()
-            .stigmergy
-            .granule_noise_tolerance_q7;
-        let lacuna_partition = evaluate_lacuna_partition_branchless(
-            self_mask,
-            &other_granule_density_q7,
-            &substrate_tol,
-            28,
+        let align_num = signal
+            .boundary_metrics
+            .top1_fact_score
+            .max(signal.boundary_metrics.top1_persona_score)
+            .max(signal.telemetry.local_top1_score * 0.90)
+            .max(0.0);
+        let lacuna_partition = compute_lacuna_partition_8(
+            adapter,
+            top_any_entry,
+            align_num,
+            boundary_2d.calibrated_min_coherence,
+            query_per_layer_q,
+            baseline_ref_per_layer,
         );
 
-        let suppress_facts = directive.repulse_guard
+        let hard_margin =
+            effective_guard_hard_margin(policy.guard_suppress_margin, boundary_2d.coherence_scale);
+        let guard_floor = policy.min_coherence * 0.70;
+        let guard_tier = classify_guard_tier(
+            signal.boundary_metrics.max_guard_score,
+            guard_floor,
+            signal.boundary_metrics.guard_conflict_margin,
+            hard_margin,
+            directive.repulse_guard,
+        );
+        signal.telemetry.guard_hard_margin = guard_tier.hard_margin;
+        signal.telemetry.is_soft_guard_caution = guard_tier.is_soft_guard_caution;
+
+        let hard_guard_block = guard_tier.mode == GuardLayerMode::HardBlock;
+        let suppress_facts = hard_guard_block
             || directive.suppress_injection
             || signal.gate_decision.suppress_fact_injection;
-        let has_grounded_counter_fact = directive.repulse_guard
+        let has_grounded_counter_fact = hard_guard_block
             && signal.boundary_metrics.top1_fact_score >= policy.min_coherence * 0.65;
         let mut recalled_facts = if has_grounded_counter_fact {
             // Surface the strongest grounded counter-fact so downstream generation and reflection
@@ -1628,60 +1240,55 @@ impl TextAttractorCorpus {
                 .collect()
         };
 
-        // Foreign OOD token guard + Two-axis `SelfRef` (`S & O`) vs `Exterior` (`O \ S`) partition:
-        // - If `unexplained_token_ratio >= 0.80` (4/5 of salient tokens unexplained by corpus
-        //   Facts, calibrated from out-of-sample base-prior probes), the query lies strictly in
-        //   unobserved space (`LiminalExterior`, empty `recalled_facts` & `exterior_sandbox_facts`).
-        // - Otherwise, Axis 1 (`bridge_count >= 2`, `is_sandbox_eligible()`) + Axis 2
-        //   (`unexplained_token_ratio` in `[0.59, 0.80)` or sub-threshold bridge) isolates
-        //   semi-known queries into `exterior_sandbox_facts` without conflation into `recalled_facts`.
         let mut final_lacuna_state = signal.gate_decision.lacuna_state;
         let mut final_action_decision = signal.action_decision;
         let mut exterior_sandbox_facts = Vec::new();
-        let foreign_ood_tokens =
-            !directive.repulse_guard && query_seq_len > 0 && unexplained_token_ratio >= 0.80;
-        if foreign_ood_tokens {
-            recalled_facts.clear();
-            final_lacuna_state = LacunaBoundaryState::LiminalExterior;
-            if matches!(
-                final_action_decision,
-                StigmergicActionDecision::SubHeadRoute
-                    | StigmergicActionDecision::CrystallizeMacroBasin
-                    | StigmergicActionDecision::FullOrchestration
-            ) {
-                final_action_decision = StigmergicActionDecision::PassiveSidecar;
-            }
-        } else {
-            let bridge_eligible = !directive.repulse_guard
-                && signal.boundary_metrics.guard_conflict_margin <= 0.0
-                && lacuna_partition.is_sandbox_eligible()
-                && lacuna_partition.bridge_count >= 2;
-            if bridge_eligible && let Some((entry, score)) = top1_fact_candidate {
-                let top1_s = signal.boundary_metrics.top1_fact_score;
-                let top2_s = signal.boundary_metrics.top2_fact_score;
-                let unimodal_margin = (top1_s - top2_s).max(0.0);
-                let sharp_unimodal_lock = unimodal_margin >= policy.boundary_margin * 2.0
-                    && top1_s >= policy.min_coherence * 1.20;
-                let sub_threshold_bridged = recalled_facts.is_empty()
-                    && top1_s >= policy.min_coherence * 0.90
-                    && (0.59..0.80).contains(&unexplained_token_ratio);
-                let semi_known_cutoff = if sharp_unimodal_lock { 0.72 } else { 0.59 };
-                let semi_known_high_unexplained = !recalled_facts.is_empty()
-                    && unexplained_token_ratio >= semi_known_cutoff
-                    && top1_s < 0.90;
-                if sub_threshold_bridged {
+        let decision_2d = boundary_2d.classify(&Boundary2DInput {
+            top1_coh: signal.boundary_metrics.top1_fact_score,
+            top2_coh: signal.boundary_metrics.top2_fact_score,
+            boundary_margin: policy.boundary_margin,
+            unexplained_token_ratio,
+            query_seq_len,
+            has_recalled_facts: !recalled_facts.is_empty(),
+            has_top1_fact_candidate: top1_fact_candidate.is_some(),
+            repulse_guard: hard_guard_block,
+            guard_conflict_margin: signal.boundary_metrics.guard_conflict_margin,
+            is_sandbox_eligible: lacuna_partition.is_sandbox_eligible(),
+            bridge_count: lacuna_partition.bridge_count,
+        });
+
+        if !hard_guard_block {
+            match decision_2d.region {
+                Boundary2DRegion::Unobserved => {
+                    recalled_facts.clear();
                     final_lacuna_state = LacunaBoundaryState::LiminalExterior;
-                    exterior_sandbox_facts.push((entry, score));
-                } else if semi_known_high_unexplained {
-                    final_lacuna_state = LacunaBoundaryState::LiminalExterior;
-                    exterior_sandbox_facts.append(&mut recalled_facts);
+                    if matches!(
+                        final_action_decision,
+                        StigmergicActionDecision::SubHeadRoute
+                            | StigmergicActionDecision::CrystallizeMacroBasin
+                            | StigmergicActionDecision::FullOrchestration
+                    ) {
+                        final_action_decision = StigmergicActionDecision::PassiveSidecar;
+                    }
                 }
+                Boundary2DRegion::Exterior => {
+                    final_lacuna_state = LacunaBoundaryState::LiminalExterior;
+                    if decision_2d.stage_top1_candidate_to_exterior {
+                        if let Some(cand) = top1_fact_candidate {
+                            exterior_sandbox_facts.push(cand);
+                        }
+                    } else {
+                        exterior_sandbox_facts.append(&mut recalled_facts);
+                    }
+                }
+                Boundary2DRegion::SelfRef => {}
             }
         }
         let is_known_unknown_exterior = !exterior_sandbox_facts.is_empty();
 
-        // Persona grounding operates orthogonally to factual `Liminal` gating and is suppressed only on Guard repulsion.
-        let recalled_personas = if directive.repulse_guard || foreign_ood_tokens {
+        // Persona grounding operates orthogonally to factual `Liminal` gating and is suppressed
+        // only on Layer 1 hard-block Guard repulsion or foreign-OOD token gating.
+        let recalled_personas = if hard_guard_block || decision_2d.foreign_ood_tokens {
             Vec::new()
         } else {
             persona_scores

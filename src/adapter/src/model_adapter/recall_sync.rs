@@ -5,7 +5,10 @@
 
 use super::super::*;
 use super::{ModelSteeringAdapter, RopeGeometry};
-use crate::corpus_recall::AttractorRecallProjection;
+use crate::corpus_recall::{
+    AttractorRecallProjection, DEFAULT_SOFT_GUARD_Q7_SCALE, GuardLayerMode,
+    attenuate_guard_q7_soft, classify_guard_tier_from_projection,
+};
 
 impl ModelSteeringAdapter {
     /// Updates Core Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and Layer 2 (`Ego`)
@@ -81,30 +84,30 @@ impl ModelSteeringAdapter {
     )> {
         let guard_margin = recall.guard_conflict_margin();
         let lacuna_state = recall.lacuna_state();
-        let action_decision = recall.action_decision();
         let is_known_unknown = recall.is_known_unknown_exterior();
         let top1_fact = recall.top1_fact_score();
         let top2_fact = recall.top2_fact_score();
         let gateway_frame = *recall.gateway_frame();
 
-        let has_guard_conflict = guard_margin > 0.0;
-        let guard_turn = has_guard_conflict
-            || matches!(
-                action_decision,
-                liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape
-            );
+        let guard_tier = classify_guard_tier_from_projection(recall);
+        let is_hard_guard = guard_tier.is_guard_trap;
+        let is_soft_guard = guard_tier.is_soft_guard_caution;
+        let has_guard_conflict = is_hard_guard || is_soft_guard;
+        // Layer 1 hard-block engages `guard_turn = true`; Layer 2 soft-caution keeps
+        // `guard_turn = false` to avoid full bypass lock while preserving Fact grounding.
+        let guard_turn = is_hard_guard;
         let unobserved_locked = matches!(lacuna_state, LacunaBoundaryState::LiminalExterior)
             && !is_known_unknown
-            && guard_margin <= 0.05;
+            && guard_tier.mode == GuardLayerMode::None;
         self.begin_turn_spine_policy(guard_turn, unobserved_locked);
         *self.ctx.last_lacuna_partition_mut() = recall.lacuna_partition();
-        if !has_guard_conflict && self.configured_ego.is_active() {
+        if !is_hard_guard && self.configured_ego.is_active() {
             let tension = self.ctx.distortion_tension_mut();
             tension.effective_ego_scale_q7 = tension.effective_ego_scale_q7.max(48);
             tension.suppression_cooldown_steps = 0;
         }
         let regime_code =
-            if has_guard_conflict || matches!(lacuna_state, LacunaBoundaryState::LiminalBoundary) {
+            if is_hard_guard || matches!(lacuna_state, LacunaBoundaryState::LiminalBoundary) {
                 EpistemicRegime::InternalConflict as u8
             } else if matches!(lacuna_state, LacunaBoundaryState::LiminalExterior) {
                 EpistemicRegime::Liminal as u8
@@ -212,25 +215,36 @@ impl ModelSteeringAdapter {
         let repulsion_spec = (has_guard_conflict || gateway_frame.is_repulsed())
             .then_some(())
             .and_then(|()| {
-                let rep_phases = if gateway_frame.is_repulsed() {
+                let (rep_phases, rep_weight) = if gateway_frame.is_repulsed() {
                     // Repulsed frames already carry saturating anti-phase (`-guard`); avoid double negation.
-                    Some(gateway_frame.phase_deltas)
+                    (
+                        Some(gateway_frame.phase_deltas),
+                        guard_margin.clamp(0.35, 1.0),
+                    )
                 } else {
-                    recall
+                    let phases = recall
                         .top_guard_ref()
                         .and_then(|anchor| anchor.per_layer_q7.last().copied())
                         .map(|guard_q7| {
+                            let pole = if is_soft_guard {
+                                attenuate_guard_q7_soft(guard_q7, DEFAULT_SOFT_GUARD_Q7_SCALE)
+                            } else {
+                                guard_q7
+                            };
                             let mut negated = [0_i8; MAX_ATTENTION_HEADS];
-                            for (dst, &src) in negated.iter_mut().zip(guard_q7.iter()) {
+                            for (dst, &src) in negated.iter_mut().zip(pole.iter()) {
                                 *dst = src.saturating_neg();
                             }
                             negated
-                        })
-                }?;
-                Some(WorkbenchSlotSpec::auto_repulsion(
-                    guard_margin.clamp(0.35, 1.0),
-                    rep_phases,
-                ))
+                        });
+                    let weight = if is_soft_guard {
+                        (0.25 + guard_margin.max(0.0)).clamp(0.25, 0.35)
+                    } else {
+                        guard_margin.clamp(0.35, 1.0)
+                    };
+                    (phases, weight)
+                };
+                rep_phases.map(|phases| WorkbenchSlotSpec::auto_repulsion(rep_weight, phases))
             });
         if preset.prioritizes_repulsion()
             && let Some(spec) = repulsion_spec

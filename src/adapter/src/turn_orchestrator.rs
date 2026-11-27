@@ -12,9 +12,9 @@ use crate::corpus_recall::{
     AttractorRecallProjection, RecalledAnchorRef,
     build_exterior_sandbox_anchors_per_layer_from_projection,
     build_fact_anchors_per_layer_from_projection, build_guard_anchors_per_layer_from_projection,
-    build_persona_anchors_per_layer_from_projection, context_fingerprint_from_projection,
-    join_exterior_context_from_projection, join_fact_context_from_projection,
-    join_persona_context_from_projection,
+    build_persona_anchors_per_layer_from_projection, classify_guard_tier_from_projection,
+    context_fingerprint_from_projection, join_exterior_context_from_projection,
+    join_fact_context_from_projection, join_persona_context_from_projection,
 };
 use crate::{
     AttractorRole, CompiledTokenCorpus, DynamicAttractorRecall, LacunaBoundaryState,
@@ -316,6 +316,7 @@ pub struct TurnSteeringPlan {
     kv_outcome: RamPhaseKvStepOutcome,
     is_known_unknown_exterior: bool,
     is_guard_trap: bool,
+    is_soft_guard_caution: bool,
     context_fingerprint: u64,
     layer_steer_mask_override: Option<u64>,
     self_ref_context: String,
@@ -440,11 +441,21 @@ impl TurnSteeringPlan {
         self.is_known_unknown_exterior
     }
 
-    /// Returns `true` when Guard dominance or `RepulsionEscape` requires defensive steering.
+    /// Returns `true` when Layer 1 hard-block Guard dominance or `RepulsionEscape` requires
+    /// defensive steering and bypass lock.
     #[inline]
     #[must_use]
     pub const fn is_guard_trap(&self) -> bool {
         self.is_guard_trap
+    }
+
+    /// Returns `true` when Layer 2 soft-caution Guard (`0 < margin <= hard_margin`) emitted
+    /// an adapter-attenuated `+R_soft` anchor while preserving Fact grounding and signaling
+    /// contextual reflection audit without engaging full `guard_turn` bypass lock.
+    #[inline]
+    #[must_use]
+    pub const fn is_soft_guard_caution(&self) -> bool {
+        self.is_soft_guard_caution
     }
 
     /// Returns `true` when the query lies strictly inside unobserved space ($\overline{S \cup O}$)
@@ -459,11 +470,12 @@ impl TurnSteeringPlan {
     }
 
     /// Returns `true` when RoPE/Rank-1 steering is authorized for this turn (any Guard trap,
-    /// `SelfRef` basin/boundary match, or staged $O \setminus S$ exterior pointer).
+    /// Layer 2 soft-caution Guard, `SelfRef` basin/boundary match, or staged $O \setminus S$
+    /// exterior pointer).
     #[inline]
     #[must_use]
     pub const fn steering_eligible(&self) -> bool {
-        self.is_guard_trap || !self.is_unobserved_lacuna()
+        self.is_guard_trap || self.is_soft_guard_caution || !self.is_unobserved_lacuna()
     }
 
     /// Returns the deterministic 64-bit FNV-1a context fingerprint used for KV-cache lookup.
@@ -577,6 +589,7 @@ impl TurnSteeringPlan {
         ReflectionGateInput {
             boundary_sensitivity_q7: self.lacuna_partition.boundary_sensitivity_q7,
             has_undigested_known_unknown: self.is_known_unknown_exterior,
+            is_soft_guard_caution: self.is_soft_guard_caution,
             exit_entropy_h_tilde,
             guard_conflict_margin: self.guard_conflict_margin(),
             is_unobserved_lacuna: self.is_unobserved_lacuna(),
@@ -719,13 +732,11 @@ impl TurnOrchestrator {
             .sync_core_layers_from_recall(&recall, None)
             .map_err(|e| format!("sync_core_layers_from_recall error: {e}"))?;
 
-        let is_guard_trap = recall.guard_conflict_margin > 0.05
-            || matches!(
-                recall.action_decision,
-                StigmergicActionDecision::RepulsionEscape
-            );
+        let guard_tier = classify_guard_tier_from_projection(&recall);
+        let is_guard_trap = guard_tier.is_guard_trap;
+        let is_soft_guard_caution = guard_tier.is_soft_guard_caution;
         let guard_anchors_per_layer =
-            build_guard_anchors_per_layer_from_projection(&recall, num_layers, is_guard_trap);
+            build_guard_anchors_per_layer_from_projection(&recall, num_layers, guard_tier);
 
         Ok(TurnSteeringPlan {
             query_snapshot,
@@ -738,6 +749,7 @@ impl TurnOrchestrator {
             kv_outcome,
             is_known_unknown_exterior: recall.is_known_unknown_exterior,
             is_guard_trap,
+            is_soft_guard_caution,
             context_fingerprint,
             layer_steer_mask_override: input.layer_steer_mask_override,
             self_ref_context,

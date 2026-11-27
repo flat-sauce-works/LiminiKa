@@ -9,7 +9,7 @@ use super::{
     RecallStratum, StratumContext, StratumDirective, StratumSignal, TokenResonanceDeposit,
     TrailEmergenceReceptor,
 };
-use crate::AttractorRole;
+use crate::{AttractorRole, Boundary2DThresholds, effective_guard_hard_margin};
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_tagged_ptr_t};
 use liminika_core::foundation::load_q7_words_64;
 use liminika_core::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
@@ -18,6 +18,125 @@ use liminika_core::stigmergy::{
     CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, SUBSTRATE_INLINE_TRAILS,
     StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
 };
+
+/// Lightweight `Copy` coalition and local-channel arbitration thresholds carried inside
+/// [`StratumContext`], replacing fixed absolute floors with OOD-calibrated cutoffs and
+/// relative cosine-dispersion scaling while preserving exact 1D fallback under `--no-base-prior`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoalitionThresholds {
+    /// Unexplained-token ratio ceiling above which Fact/Guard multi-hop coalitions are blocked.
+    /// Derived from `(u_foreign - 0.08).clamp(0.55, 0.82)` (`0.72` when uncalibrated).
+    pub u_coalition_cutoff: f32,
+    /// Stricter unexplained-token ceiling for the secondary token-only `basin_supported` branch
+    /// (`0.68` when uncalibrated).
+    pub u_basin_support_cutoff: f32,
+    /// Relative cosine-dispersion scale `(ood_coh_mad / 0.05).clamp(0.60, 1.60)` (`1.0` fallback).
+    pub coherence_scale: f32,
+    /// Minimum single-entry gain in `evaluate_role_coalition_pair` (`0.004 * scale`).
+    pub min_single_gain: f32,
+    /// Minimum pair pre-filter `second_contrib` (`0.012 * scale`).
+    pub min_pair_second_contrib: f32,
+    /// Minimum bimodal `joint_excl` floor (`0.040 * scale`).
+    pub min_joint_excl: f32,
+    /// Minimum bimodal `second_contrib` floor (`0.015 * scale`).
+    pub min_second_contrib: f32,
+    /// Minimum pair-Chamfer improvement over global top-1 hub (`0.020 * scale`).
+    pub min_pair_chamfer_margin: f32,
+    /// Minimum local per-role top-1 minus top-2 margin (`0.025 * scale`).
+    pub min_local_role_margin: f32,
+    /// Minimum global-sharper local top-1 floor (`0.040 * scale`).
+    pub min_local_role_top1: f32,
+    /// Minimum `raw_joint_q_to_d` for token-only basin support when `query_seq_len > 0` (`0.080 * scale`).
+    pub min_raw_joint_support_seq: f32,
+    /// Minimum `raw_joint_q_to_d` for token-only basin support when `query_seq_len == 0` (`0.065 * scale`).
+    pub min_raw_joint_support_vec: f32,
+    /// Minimum Guard coalition pair-Chamfer floor when `query_seq_len > 0` (`0.045 * scale`).
+    pub min_guard_chamfer_floor: f32,
+    /// Minimum Guard coalition pair-Chamfer advantage over best Fact (`0.010 * scale`).
+    pub min_guard_chamfer_margin: f32,
+    /// Minimum 3rd-hop specialist peak excess (`0.080 * scale`).
+    pub min_third_hop_excess: f32,
+    /// Minimum 3rd-hop specialist delta over top-2 pair (`0.025 * scale`).
+    pub min_third_hop_delta: f32,
+    /// Minimum 3rd-hop aggregate residual gain (`0.004 * scale`).
+    pub min_third_hop_gain: f32,
+}
+
+impl Default for CoalitionThresholds {
+    #[inline]
+    fn default() -> Self {
+        Self::fallback_without_prior()
+    }
+}
+
+impl CoalitionThresholds {
+    /// Strict `--no-base-prior` fallback preserving exact legacy 1D thresholds (`u = 0.72 / 0.68`,
+    /// `coherence_scale = 1.0`).
+    #[inline]
+    #[must_use]
+    pub const fn fallback_without_prior() -> Self {
+        Self {
+            u_coalition_cutoff: 0.72,
+            u_basin_support_cutoff: 0.68,
+            coherence_scale: 1.0,
+            min_single_gain: 0.004,
+            min_pair_second_contrib: 0.012,
+            min_joint_excl: 0.040,
+            min_second_contrib: 0.015,
+            min_pair_chamfer_margin: 0.020,
+            min_local_role_margin: 0.025,
+            min_local_role_top1: 0.040,
+            min_raw_joint_support_seq: 0.080,
+            min_raw_joint_support_vec: 0.065,
+            min_guard_chamfer_floor: 0.045,
+            min_guard_chamfer_margin: 0.010,
+            min_third_hop_excess: 0.080,
+            min_third_hop_delta: 0.025,
+            min_third_hop_gain: 0.004,
+        }
+    }
+
+    /// Derives relative-scaled coalition thresholds from `u_foreign` and `coherence_scale`.
+    #[must_use]
+    pub fn from_u_foreign_and_scale(u_foreign: f32, coherence_scale: f32) -> Self {
+        let u_coalition_cutoff = (u_foreign - 0.08).clamp(0.55, 0.82);
+        let u_basin_support_cutoff = (u_coalition_cutoff - 0.04).clamp(0.50, 0.78);
+        let scale = if coherence_scale.is_finite() {
+            coherence_scale.clamp(0.60, 1.60)
+        } else {
+            1.0
+        };
+        Self {
+            u_coalition_cutoff,
+            u_basin_support_cutoff,
+            coherence_scale: scale,
+            min_single_gain: 0.004 * scale,
+            min_pair_second_contrib: 0.012 * scale,
+            min_joint_excl: 0.040 * scale,
+            min_second_contrib: 0.015 * scale,
+            min_pair_chamfer_margin: 0.020 * scale,
+            min_local_role_margin: 0.025 * scale,
+            min_local_role_top1: 0.040 * scale,
+            min_raw_joint_support_seq: 0.080 * scale,
+            min_raw_joint_support_vec: 0.065 * scale,
+            min_guard_chamfer_floor: 0.045 * scale,
+            min_guard_chamfer_margin: 0.010 * scale,
+            min_third_hop_excess: 0.080 * scale,
+            min_third_hop_delta: 0.025 * scale,
+            min_third_hop_gain: 0.004 * scale,
+        }
+    }
+
+    /// Derives coalition thresholds from [`Boundary2DThresholds`], falling back strictly to
+    /// [`Self::fallback_without_prior`] when `!boundary.is_calibrated`.
+    #[must_use]
+    pub fn from_boundary_2d(boundary: &Boundary2DThresholds) -> Self {
+        if !boundary.is_calibrated {
+            return Self::fallback_without_prior();
+        }
+        Self::from_u_foreign_and_scale(boundary.u_foreign, boundary.coherence_scale)
+    }
+}
 
 /// Trait abstracting multi-point stigmergic coalition decomposition over token resonance
 /// deposits and 8-cell Micro-Swarm phase consensus (`StigmergicSubstrate`).
@@ -292,6 +411,7 @@ fn evaluate_role_coalition_pair(
     token_deposits: &[TokenResonanceDeposit],
     d_to_q_scores: &[f32],
     role_idxs: &[usize],
+    thresholds: CoalitionThresholds,
 ) -> Option<(RoleCoalitionPair, Vec<(usize, f32)>)> {
     if role_idxs.len() < 2 || token_deposits.is_empty() {
         return None;
@@ -367,12 +487,12 @@ fn evaluate_role_coalition_pair(
     for a in 0..pair_candidates.len() {
         let (i, gain_i) = pair_candidates[a];
         let gain_i_pos = gain_i.max(0.0);
-        if gain_i_pos <= 0.004 {
+        if gain_i_pos <= thresholds.min_single_gain {
             continue;
         }
         for &(j, gain_j) in &pair_candidates[(a + 1)..] {
             let gain_j_pos = gain_j.max(0.0);
-            if gain_j_pos <= 0.004 {
+            if gain_j_pos <= thresholds.min_single_gain {
                 continue;
             }
             let joint_excl = token_deposits
@@ -384,7 +504,7 @@ fn evaluate_role_coalition_pair(
             let second_contrib = (joint_excl - gain_i_pos)
                 .min(joint_excl - gain_j_pos)
                 .max(0.0);
-            if second_contrib <= 0.012 {
+            if second_contrib <= thresholds.min_pair_second_contrib {
                 continue;
             }
             let pair_d_to_q = 0.5 * (d_to_q_scores[i] + d_to_q_scores[j]);
@@ -450,9 +570,12 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         {
             return;
         }
+        let thresholds = ctx.coalition_thresholds;
         // Foreign OOD queries whose salient tokens are overwhelmingly unexplained by corpus Facts
         // must never fabricate multi-hop Fact coalitions (`floor_score >= min_coherence * 1.15`).
-        if ctx.query_seq_len > 0 && signal.telemetry.unexplained_token_ratio >= 0.72 {
+        if ctx.query_seq_len > 0
+            && signal.telemetry.unexplained_token_ratio >= thresholds.u_coalition_cutoff
+        {
             return;
         }
 
@@ -470,9 +593,13 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             .filter(|(e, _)| e.role != AttractorRole::Guard)
             .map(|(_, &s)| s)
             .fold(f32::NEG_INFINITY, f32::max);
+        let hard_guard_margin = effective_guard_hard_margin(
+            ctx.policy.guard_suppress_margin,
+            thresholds.coherence_scale,
+        );
         if max_guard_raw.is_finite()
             && max_non_guard_raw.is_finite()
-            && (max_guard_raw - max_non_guard_raw) > ctx.policy.guard_suppress_margin
+            && (max_guard_raw - max_non_guard_raw) > hard_guard_margin
         {
             return;
         }
@@ -491,9 +618,12 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             return;
         }
 
-        let Some((pair, excl_single_scores)) =
-            evaluate_role_coalition_pair(&signal.token_deposits, &signal.d_to_q_scores, fact_idxs)
-        else {
+        let Some((pair, excl_single_scores)) = evaluate_role_coalition_pair(
+            &signal.token_deposits,
+            &signal.d_to_q_scores,
+            fact_idxs,
+            thresholds,
+        ) else {
             return;
         };
         let RoleCoalitionPair {
@@ -529,17 +659,20 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             / total_disc_w;
         let basin_supported = if ctx.query_seq_len > 0 {
             g_fact_top1_score >= ctx.policy.min_coherence * 0.50
-                || (raw_joint_q_to_d >= 0.080 && signal.telemetry.unexplained_token_ratio < 0.68)
+                || (raw_joint_q_to_d >= thresholds.min_raw_joint_support_seq
+                    && signal.telemetry.unexplained_token_ratio < thresholds.u_basin_support_cutoff)
         } else {
-            g_fact_top1_score >= ctx.policy.min_coherence * 0.55 || raw_joint_q_to_d >= 0.065
+            g_fact_top1_score >= ctx.policy.min_coherence * 0.55
+                || raw_joint_q_to_d >= thresholds.min_raw_joint_support_vec
         };
-        let strictly_bimodal = joint_excl >= 0.040
-            && second_contrib >= 0.015
+        let strictly_bimodal = joint_excl >= thresholds.min_joint_excl
+            && second_contrib >= thresholds.min_second_contrib
             && second_contrib >= 0.25 * joint_excl
             && (joint_excl - max_subsumption) >= 0.22 * joint_excl;
         let global_chamfer_top1 =
             0.70 * g_top1_excl.max(0.0) + 0.20 * signal.d_to_q_scores[g_fact_top1];
-        let outperforms_global_hub = pair_chamfer > global_chamfer_top1 + 0.020
+        let outperforms_global_hub = pair_chamfer
+            > global_chamfer_top1 + thresholds.min_pair_chamfer_margin
             || signal.candidate_scores[cand_a] < ctx.policy.min_coherence * 0.75
             || signal.candidate_scores[cand_b] < ctx.policy.min_coherence * 0.75;
 
@@ -619,12 +752,15 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                     let delta = ex_k - pair_ex;
                     let eff_w = w + 0.0015 * rem_excl;
                     res_gain += eff_w * delta;
-                    if ex_k >= 0.08 && delta >= 0.025 && rem_excl >= 0.40 {
+                    if ex_k >= thresholds.min_third_hop_excess
+                        && delta >= thresholds.min_third_hop_delta
+                        && rem_excl >= 0.40
+                    {
                         has_specialist_peak = true;
                     }
                 }
                 res_gain /= total_decomp_w;
-                if res_gain >= 0.004 && has_specialist_peak {
+                if res_gain >= thresholds.min_third_hop_gain && has_specialist_peak {
                     let score = res_gain
                         + 0.20 * signal.q_to_d_scores[k].max(0.0)
                         + 0.15 * signal.d_to_q_scores[k].max(0.0);
@@ -855,16 +991,18 @@ impl RecallStratum for LocalTokenResonanceStratum {
                 continue;
             }
 
+            let thresholds = ctx.coalition_thresholds;
             let l_r_margin = (l_r_top1 - l_r_top2).max(0.0);
             let agree_floor = ctx.policy.min_coherence * 0.65;
-            let role_local_sharper =
-                (global_local_sharper && g_r_idx != l_r_idx && l_r_top1 > 0.04)
-                    || (l_r_margin >= 0.025
-                        && l_r_sharp > g_r_sharp * 1.15
-                        && ((g_r_idx != l_r_idx && l_r_top1 >= energy_floor)
-                            || (g_r_idx == l_r_idx
-                                && g_r_top1 >= agree_floor
-                                && l_r_top1 >= agree_floor)));
+            let role_local_sharper = (global_local_sharper
+                && g_r_idx != l_r_idx
+                && l_r_top1 > thresholds.min_local_role_top1)
+                || (l_r_margin >= thresholds.min_local_role_margin
+                    && l_r_sharp > g_r_sharp * 1.15
+                    && ((g_r_idx != l_r_idx && l_r_top1 >= energy_floor)
+                        || (g_r_idx == l_r_idx
+                            && g_r_top1 >= agree_floor
+                            && l_r_top1 >= agree_floor)));
 
             if g_r_idx == l_r_idx && l_r_top1 > 0.0 {
                 signal.stigmergic_weights[g_r_idx] = (signal.stigmergic_weights[g_r_idx]
@@ -910,14 +1048,16 @@ impl RecallStratum for LocalTokenResonanceStratum {
             && signal.d_to_q_scores.len() == n_entries
             && signal.q_to_d_scores.len() == n_entries
         {
+            let thresholds = ctx.coalition_thresholds;
             let guard_idxs = ctx.neighborhood_stats.role_indices(AttractorRole::Guard);
             if let Some((g_pair, _)) = evaluate_role_coalition_pair(
                 &signal.token_deposits,
                 &signal.d_to_q_scores,
                 guard_idxs,
+                thresholds,
             ) {
-                let g_bimodal = g_pair.joint_excl >= 0.040
-                    && g_pair.second_contrib >= 0.015
+                let g_bimodal = g_pair.joint_excl >= thresholds.min_joint_excl
+                    && g_pair.second_contrib >= thresholds.min_second_contrib
                     && g_pair.second_contrib >= 0.25 * g_pair.joint_excl
                     && (g_pair.joint_excl - g_pair.max_subsumption) >= 0.22 * g_pair.joint_excl;
                 let best_fact_chamfer = ctx
@@ -929,14 +1069,20 @@ impl RecallStratum for LocalTokenResonanceStratum {
                         0.70 * signal.q_to_d_scores[i].max(0.0) + 0.20 * signal.d_to_q_scores[i]
                     })
                     .fold(0.0_f32, f32::max);
-                let guard_chamfer_floor = if ctx.query_seq_len > 0 { 0.045 } else { 0.0 };
+                let guard_chamfer_floor = if ctx.query_seq_len > 0 {
+                    thresholds.min_guard_chamfer_floor
+                } else {
+                    0.0
+                };
                 let guard_tok_support = signal.q_to_d_scores[g_pair.cand_a] > 0.0
                     && signal.q_to_d_scores[g_pair.cand_b] > 0.0
-                    && (ctx.query_seq_len == 0 || signal.telemetry.unexplained_token_ratio < 0.72);
+                    && (ctx.query_seq_len == 0
+                        || signal.telemetry.unexplained_token_ratio
+                            < thresholds.u_coalition_cutoff);
                 if g_bimodal
                     && guard_tok_support
                     && g_pair.pair_chamfer >= guard_chamfer_floor
-                    && g_pair.pair_chamfer > best_fact_chamfer + 0.010
+                    && g_pair.pair_chamfer > best_fact_chamfer + thresholds.min_guard_chamfer_margin
                 {
                     let max_fact_score = ctx
                         .entries

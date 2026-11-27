@@ -389,6 +389,8 @@ pub struct ReflectionGateInput {
     pub boundary_sensitivity_q7: u8,
     /// True when the query contains an undigested Known Unknown ($O \setminus S$) exterior pointer.
     pub has_undigested_known_unknown: bool,
+    /// True when Layer 2 soft-caution Guard (`0 < margin <= hard_margin`) requests contextual audit.
+    pub is_soft_guard_caution: bool,
     /// Exit `EntropyController` / top-k entropy (`0.0..=1.0`).
     pub exit_entropy_h_tilde: f32,
     /// Guard conflict margin (`max_guard_score - top1_fact_score`).
@@ -408,6 +410,7 @@ impl Default for ReflectionGateInput {
         Self {
             boundary_sensitivity_q7: 0,
             has_undigested_known_unknown: false,
+            is_soft_guard_caution: false,
             exit_entropy_h_tilde: 0.0,
             guard_conflict_margin: -0.25,
             is_unobserved_lacuna: false,
@@ -430,6 +433,7 @@ impl ManifoldReflectionEvaluator {
     #[must_use]
     pub fn should_trigger_reflection(&self, input: &ReflectionGateInput) -> bool {
         if input.is_unobserved_lacuna
+            && !input.is_soft_guard_caution
             && input.guard_conflict_margin <= input.guard_trigger_margin
             && input.exit_entropy_h_tilde < input.entropy_trigger_thresh
         {
@@ -437,6 +441,7 @@ impl ManifoldReflectionEvaluator {
         }
         input.boundary_sensitivity_q7 >= input.min_boundary_sensitivity_q7
             || input.has_undigested_known_unknown
+            || input.is_soft_guard_caution
             || input.exit_entropy_h_tilde >= input.entropy_trigger_thresh
             || input.guard_conflict_margin > input.guard_trigger_margin
     }

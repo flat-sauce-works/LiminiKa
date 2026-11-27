@@ -27,7 +27,10 @@ pub use encoder::{
     DEFAULT_STARTUP_PRIOR_PROBES, PooledSubtitleEncoder, PrefixAliasProbe, TokenSequenceEncoder,
     extract_leading_alias_word,
 };
-pub use null_calibration::NullCalibrationEnvelope;
+pub use null_calibration::{
+    DEFAULT_TOKEN_EXPLAIN_THRESHOLD, NullCalibrationEnvelope, OOD_COH_MAD_FLOOR,
+    OOD_UNEXP_MAD_FLOOR,
+};
 pub use streaming::{
     DEFAULT_STREAMING_SALIENT_TOKENS, STREAMING_PCA_SAMPLE_BUDGET, StreamingCorpusDistiller,
     StreamingDistillConfig, StreamingDistillReport, split_raw_document_chunks,
@@ -839,6 +842,7 @@ impl CompiledTokenCorpus {
         {
             recall_policy.min_coherence = env.calibrated_min_coherence;
             token_explain_threshold = tok_thresh;
+            corpus.set_null_calibration(Some(env));
             null_calibration = Some(env);
         }
 

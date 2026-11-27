@@ -14,7 +14,8 @@ mod workers;
 
 pub use boundary::{StratumGatewayMapping, SubstrateBoundaryStratum};
 pub use coalition::{
-    LocalTokenResonanceStratum, ResidualPeelingStigmergicDecomposer, StigmergicCoalitionDecomposer,
+    CoalitionThresholds, LocalTokenResonanceStratum, ResidualPeelingStigmergicDecomposer,
+    StigmergicCoalitionDecomposer,
 };
 pub use workers::{HeadAngleWorkerStratum, LocalFeatureWorkerStratum, PerspectiveHubnessStratum};
 
@@ -121,6 +122,10 @@ pub struct StratumProbeTelemetry {
     pub query_ortho_ratio: f32,
     /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens unexplained by corpus Facts.
     pub unexplained_token_ratio: f32,
+    /// Effective Layer 1 hard-block Guard conflict margin resolved for this turn (`0.0` = default `0.05`).
+    pub guard_hard_margin: f32,
+    /// True when Layer 2 soft-caution Guard mode (`0 < margin <= hard_margin`) activated on this turn.
+    pub is_soft_guard_caution: bool,
 }
 
 /// Bottom-up and top-down signal flowing across a hierarchical [`StratumPipeline`].
@@ -218,6 +223,8 @@ pub struct StratumContext<'a> {
     pub query_ortho_ratio: f32,
     /// Active recall policy thresholds.
     pub policy: &'a RecallPolicy,
+    /// Calibrated coalition-peeling and relative-scale thresholds (defaults to 1D fallback when uncalibrated).
+    pub coalition_thresholds: CoalitionThresholds,
 }
 
 impl<'a> StratumContext<'a> {
