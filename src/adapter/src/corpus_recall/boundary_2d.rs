@@ -4,7 +4,7 @@
 //! Two-dimensional `(top1_coh, unexp)` recall decision boundaries, `--no-base-prior`
 //! 1D compatibility fallbacks, and adapter-side two-tier Guard classification.
 
-use super::{LacunaBoundaryState, RecallPolicy};
+use super::{LacunaBoundaryState, RecallEnvelopeBounds, RecallPolicy};
 use crate::pooling::NullCalibrationEnvelope;
 
 /// Default hard-block Guard conflict margin above which Layer 1 repulsion suppresses Fact
@@ -138,7 +138,11 @@ pub struct GuardLayerClassification {
 #[inline]
 #[must_use]
 pub fn effective_guard_hard_margin(policy_guard_suppress_margin: f32, coherence_scale: f32) -> f32 {
-    let base = (DEFAULT_GUARD_HARD_MARGIN * coherence_scale).clamp(0.03, 0.08);
+    let bounds = RecallEnvelopeBounds::standard();
+    let base = (DEFAULT_GUARD_HARD_MARGIN * coherence_scale).clamp(
+        bounds.guard_hard_margin_floor,
+        bounds.guard_hard_margin_ceiling,
+    );
     if policy_guard_suppress_margin.is_finite() {
         policy_guard_suppress_margin.max(base)
     } else {
@@ -247,11 +251,13 @@ pub struct Boundary2DThresholds {
 }
 
 impl Boundary2DThresholds {
-    /// Derives calibrated 2D decision thresholds from a 2-fold [`NullCalibrationEnvelope`].
+    /// Derives calibrated 2D decision thresholds from a 2-fold [`NullCalibrationEnvelope`]
+    /// bounded by [`RecallEnvelopeBounds::standard`].
     #[must_use]
     pub fn from_null_calibration(env: &NullCalibrationEnvelope, min_coherence: f32) -> Self {
-        let coh_mad = env.ood_coh_mad.max(0.025);
-        let unexp_mad = env.ood_unexp_mad.max(0.04);
+        let bounds = RecallEnvelopeBounds::standard();
+        let coh_mad = env.ood_coh_mad.max(bounds.ood_coh_mad_floor);
+        let unexp_mad = env.ood_unexp_mad.max(bounds.ood_unexp_mad_floor);
         // Anchor `sigma_c` so `top1_coh == min_coherence` never exceeds `z_c = 1.50` (`tau_unobs`),
         // preventing narrow/clamped OOD medians from falsely triggering `z_c >= 3.0` rescue.
         let floor_gap_sigma_c = (min_coherence - env.ood_coh_median).max(0.0) / 1.50;
@@ -260,9 +266,13 @@ impl Boundary2DThresholds {
         let u_foreign = env
             .ood_unexp_p15
             .min(env.ood_unexp_median - 0.5 * sigma_u)
-            .clamp(0.65, 0.90);
-        let u_semi = (env.ood_unexp_median - 1.5 * sigma_u).clamp(0.45, u_foreign - 0.12);
-        let coherence_scale = (coh_mad / 0.05).clamp(0.60, 1.60);
+            .clamp(bounds.u_foreign_floor, bounds.u_foreign_ceiling);
+        let u_semi = (env.ood_unexp_median - 1.5 * sigma_u).clamp(
+            bounds.u_semi_floor,
+            u_foreign - bounds.u_semi_foreign_min_gap,
+        );
+        let coherence_scale =
+            (coh_mad / 0.05).clamp(bounds.coherence_scale_floor, bounds.coherence_scale_ceiling);
         Self {
             is_calibrated: true,
             calibrated_min_coherence: min_coherence,
@@ -286,17 +296,18 @@ impl Boundary2DThresholds {
     /// (`u_foreign = 0.80`, `u_semi = 0.59`, `sharp_unimodal_cutoff = 0.72`, `tok_exp = 0.40`).
     #[must_use]
     pub fn fallback_without_prior(min_coherence: f32) -> Self {
+        let bounds = RecallEnvelopeBounds::standard();
         Self {
             is_calibrated: false,
             calibrated_min_coherence: min_coherence,
             ood_coh_median: (min_coherence * 0.50).max(0.05),
             ood_coh_sigma: 1.4826_f32 * 0.05,
             ood_unexp_median: 1.0,
-            ood_unexp_sigma: 1.4826_f32 * 0.04,
-            ood_unexp_p15: 0.80,
-            u_foreign: 0.80,
+            ood_unexp_sigma: 1.4826_f32 * bounds.ood_unexp_mad_floor,
+            ood_unexp_p15: bounds.u_foreign_ceiling,
+            u_foreign: bounds.u_foreign_ceiling,
             u_semi: 0.59,
-            token_explain_threshold: 0.40,
+            token_explain_threshold: bounds.default_token_explain_threshold,
             tau_unobs: 1.50,
             tau_self: 2.00,
             z_c_rescue: 3.0,

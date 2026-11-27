@@ -43,7 +43,9 @@ use crate::{
     TextAttractorCorpus, TokenResonanceDeposit,
 };
 use base_prior::{
-    fit_cross_entry_token_common_mode_with_scripts, merge_orthonormal_basis,
+    build_corpus_discriminative_subspace, collect_corpus_pooled_sigs,
+    compute_entry_token_centroids, fit_cross_entry_token_common_mode_with_scripts,
+    merge_orthonormal_basis, orthogonalize_prior_basis_against_discriminative,
     token_orthogonal_residual_norm,
 };
 use liminika_core::foundation::load_q7_words_64;
@@ -765,8 +767,16 @@ impl CompiledTokenCorpus {
         }
         corpus.fit_common_mode_subspace(3);
         let corpus_pre_prior = corpus.clone();
+        let pooled_disc_basis = build_corpus_discriminative_subspace(
+            &collect_corpus_pooled_sigs(&corpus_pre_prior),
+            corpus_pre_prior.common_mode_basis(),
+        );
         if let Some(prior) = base_prior {
-            corpus.extend_common_mode_basis(&prior.pooled_common_mode_basis, 3);
+            let safe_prior_pooled = orthogonalize_prior_basis_against_discriminative(
+                &prior.pooled_common_mode_basis,
+                &pooled_disc_basis,
+            );
+            corpus.extend_common_mode_basis(&safe_prior_pooled, 3);
         }
         let mut recall_policy = corpus.calibrate_recall_policy(top_k_facts, top_k_personas);
         let corpus_offdiag_floor = recall_policy.min_coherence;
@@ -786,8 +796,16 @@ impl CompiledTokenCorpus {
             per_entry_raw_toks.push(raw_indexed);
         }
         let corpus_tok_basis = Self::fit_cross_entry_token_common_mode(&per_entry_tok_vecs, 10);
+        let tok_disc_basis = build_corpus_discriminative_subspace(
+            &compute_entry_token_centroids(&per_entry_tok_vecs),
+            &corpus_tok_basis,
+        );
         let token_common_mode_basis = if let Some(prior) = base_prior {
-            Self::merge_orthonormal_basis(&corpus_tok_basis, &prior.token_common_mode_basis, 12)
+            let safe_prior_tok = orthogonalize_prior_basis_against_discriminative(
+                &prior.token_common_mode_basis,
+                &tok_disc_basis,
+            );
+            Self::merge_orthonormal_basis(&corpus_tok_basis, &safe_prior_tok, 12)
         } else {
             corpus_tok_basis.clone()
         };
@@ -824,7 +842,7 @@ impl CompiledTokenCorpus {
 
         // Non-leaking 2-fold cross-fitted OOD null calibration with script-group bimodal defense.
         let mut null_calibration: Option<NullCalibrationEnvelope> = None;
-        let mut token_explain_threshold = 0.40_f32;
+        let mut token_explain_threshold = DEFAULT_TOKEN_EXPLAIN_THRESHOLD;
         if let Some(prior) = base_prior
             && let Some((env, tok_thresh)) = calibrate_null_envelope_2fold(
                 &NullCalibrationContext {
@@ -832,6 +850,8 @@ impl CompiledTokenCorpus {
                     prior,
                     corpus_pre_prior: &corpus_pre_prior,
                     corpus_tok_basis: &corpus_tok_basis,
+                    pooled_disc_basis: &pooled_disc_basis,
+                    tok_disc_basis: &tok_disc_basis,
                     novelty_reference_per_layer: &novelty_reference_per_layer,
                     corpus_centroid_per_layer: &corpus_centroid_per_layer,
                     recall_policy,
@@ -1116,6 +1136,7 @@ impl CompiledTokenCorpus {
                 d_to_q_scores: vec![0.0_f32; n_docs],
                 token_deposits: Vec::new(),
                 unexplained_token_ratio: 1.0_f32,
+                unexplained_corpus_token_ratio: 1.0_f32,
                 query_seq_len: 0,
             });
         }
@@ -1138,6 +1159,7 @@ impl CompiledTokenCorpus {
             .unwrap_or(0);
 
         let mut unexplained_token_ratio = 0.0_f32;
+        let mut unexplained_corpus_token_ratio = 0.0_f32;
         if n_docs > 0 && !query_salient.is_empty() {
             // Unsupervised token-level discriminative centering (ColBERT-IDF equivalent):
             // down-weight query tokens that respond uniformly across all corpus entries and
@@ -1147,9 +1169,15 @@ impl CompiledTokenCorpus {
             let mut raw_weighted_sums = vec![0.0_f32; n_docs];
             let mut total_raw_weight = 0.0_f32;
             let mut unexplained_w_sum = 0.0_f32;
+            let mut unexplained_corpus_w_sum = 0.0_f32;
             let mut explain_w_total = 0.0_f32;
+            let mut explain_corpus_w_total = 0.0_f32;
             let has_fact_docs = self.corpus.entries().iter().enumerate().any(|(i, e)| {
                 e.role == AttractorRole::Fact && !self.entry_token_sigs[i].is_empty()
+            });
+            let has_fact_or_guard_docs = self.corpus.entries().iter().enumerate().any(|(i, e)| {
+                matches!(e.role, AttractorRole::Fact | AttractorRole::Guard)
+                    && !self.entry_token_sigs[i].is_empty()
             });
 
             for (tok_idx, q_tok, w_t) in &query_salient {
@@ -1157,22 +1185,25 @@ impl CompiledTokenCorpus {
                 let mut sum_row = 0.0_f32;
                 let mut max_row = f32::NEG_INFINITY;
                 let mut best_fact_raw_cos = 0.0_f32;
+                let mut best_fact_or_guard_raw_cos = 0.0_f32;
                 let mut valid_docs = 0_usize;
                 for (i, doc_tokens) in self.entry_token_sigs.iter().enumerate() {
                     if doc_tokens.is_empty() {
                         continue;
                     }
-                    let is_fact_doc = self
-                        .corpus
-                        .entries()
-                        .get(i)
-                        .is_some_and(|e| e.role == AttractorRole::Fact);
+                    let role = self.corpus.entries().get(i).map(|e| e.role);
+                    let is_fact_doc = role == Some(AttractorRole::Fact);
+                    let is_fact_or_guard_doc =
+                        matches!(role, Some(AttractorRole::Fact | AttractorRole::Guard));
                     let doc_weights = self.entry_token_weights.get(i);
                     let mut max_sim = f32::NEG_INFINITY;
                     for (k, d_tok) in doc_tokens.iter().enumerate() {
                         let c = TextAttractorCorpus::cosine_f32(q_tok, d_tok);
                         if is_fact_doc && c > best_fact_raw_cos {
                             best_fact_raw_cos = c;
+                        }
+                        if is_fact_or_guard_doc && c > best_fact_or_guard_raw_cos {
+                            best_fact_or_guard_raw_cos = c;
                         }
                         let weighted_c = if c > 0.0 {
                             let spec = doc_weights.and_then(|ws| ws.get(k).copied()).unwrap_or(1.0);
@@ -1197,6 +1228,12 @@ impl CompiledTokenCorpus {
                     explain_w_total += *w_t;
                     if best_fact_raw_cos < self.token_explain_threshold {
                         unexplained_w_sum += *w_t;
+                    }
+                }
+                if has_fact_or_guard_docs && *w_t > 0.0 {
+                    explain_corpus_w_total += *w_t;
+                    if best_fact_or_guard_raw_cos < self.token_explain_threshold {
+                        unexplained_corpus_w_sum += *w_t;
                     }
                 }
                 if valid_docs == 0 {
@@ -1301,6 +1338,10 @@ impl CompiledTokenCorpus {
             if explain_w_total > 1e-8 {
                 unexplained_token_ratio = (unexplained_w_sum / explain_w_total).clamp(0.0, 1.0);
             }
+            if explain_corpus_w_total > 1e-8 {
+                unexplained_corpus_token_ratio =
+                    (unexplained_corpus_w_sum / explain_corpus_w_total).clamp(0.0, 1.0);
+            }
         }
 
         Ok(LocalChannelObservation {
@@ -1309,6 +1350,7 @@ impl CompiledTokenCorpus {
             d_to_q_scores,
             token_deposits,
             unexplained_token_ratio,
+            unexplained_corpus_token_ratio,
             query_seq_len: effective_seq_len,
         })
     }
@@ -1378,6 +1420,7 @@ impl CompiledTokenCorpus {
                     cognitive_trajectory: prior_circuit.unwrap_or_default(),
                     query_ortho_ratio: 0.0,
                     unexplained_token_ratio: 1.0,
+                    unexplained_corpus_token_ratio: 1.0,
                     ..StratumProbeTelemetry::default()
                 },
                 recalled_facts: Vec::new(),

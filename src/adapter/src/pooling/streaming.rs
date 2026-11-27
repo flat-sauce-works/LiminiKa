@@ -4,7 +4,13 @@
 //! Single-pass streaming raw-document distillation ([`StreamingCorpusDistiller`]) eliminating
 //! full-corpus raw activation retention and $O(N^2)$ pairwise compilation bottlenecks.
 
-use super::null_calibration::{NullCalibrationContext, calibrate_null_envelope_2fold};
+use super::base_prior::{
+    build_corpus_discriminative_subspace, collect_corpus_pooled_sigs,
+    compute_entry_token_centroids, orthogonalize_prior_basis_against_discriminative,
+};
+use super::null_calibration::{
+    DEFAULT_TOKEN_EXPLAIN_THRESHOLD, NullCalibrationContext, calibrate_null_envelope_2fold,
+};
 use super::{
     AdaptiveTokenSpecificityCalibrator, CapturedTokenSequence, CompiledTokenCorpus,
     ModelBaseAttractorProfile, NullCalibrationEnvelope, SequenceActivationPooler,
@@ -468,13 +474,21 @@ impl StreamingCorpusDistiller {
 
         // Fit pooled common-mode subspace in O(min(N, 64) * D) using deterministic stride sampling.
         corpus.fit_common_mode_subspace(3);
+        let pooled_disc_basis = build_corpus_discriminative_subspace(
+            &collect_corpus_pooled_sigs(&corpus),
+            corpus.common_mode_basis(),
+        );
         let corpus_pre_prior = if base_prior.is_some_and(|p| p.calibration_samples.len() >= 4) {
             Some(corpus.clone())
         } else {
             None
         };
         if let Some(prior) = base_prior {
-            corpus.extend_common_mode_basis(&prior.pooled_common_mode_basis, 3);
+            let safe_prior_pooled = orthogonalize_prior_basis_against_discriminative(
+                &prior.pooled_common_mode_basis,
+                &pooled_disc_basis,
+            );
+            corpus.extend_common_mode_basis(&safe_prior_pooled, 3);
         }
         let mut recall_policy =
             corpus.calibrate_recall_policy(self.config.top_k_facts, self.config.top_k_personas);
@@ -488,12 +502,16 @@ impl StreamingCorpusDistiller {
             .collect();
         let corpus_tok_basis =
             CompiledTokenCorpus::fit_cross_entry_token_common_mode(&sampled_toks, 10);
+        let tok_disc_basis = build_corpus_discriminative_subspace(
+            &compute_entry_token_centroids(&sampled_toks),
+            &corpus_tok_basis,
+        );
         let token_common_mode_basis = if let Some(prior) = base_prior {
-            CompiledTokenCorpus::merge_orthonormal_basis(
-                &corpus_tok_basis,
+            let safe_prior_tok = orthogonalize_prior_basis_against_discriminative(
                 &prior.token_common_mode_basis,
-                12,
-            )
+                &tok_disc_basis,
+            );
+            CompiledTokenCorpus::merge_orthonormal_basis(&corpus_tok_basis, &safe_prior_tok, 12)
         } else {
             corpus_tok_basis.clone()
         };
@@ -540,7 +558,7 @@ impl StreamingCorpusDistiller {
 
         // Non-leaking 2-fold cross-fitted OOD null calibration over compact streamed entries.
         let mut null_calibration: Option<NullCalibrationEnvelope> = None;
-        let mut token_explain_threshold = 0.40_f32;
+        let mut token_explain_threshold = DEFAULT_TOKEN_EXPLAIN_THRESHOLD;
         if let (Some(prior), Some(pre_prior_corpus)) = (base_prior, corpus_pre_prior)
             && let Some((env, tok_thresh)) = calibrate_null_envelope_2fold(
                 &NullCalibrationContext {
@@ -548,6 +566,8 @@ impl StreamingCorpusDistiller {
                     prior,
                     corpus_pre_prior: &pre_prior_corpus,
                     corpus_tok_basis: &corpus_tok_basis,
+                    pooled_disc_basis: &pooled_disc_basis,
+                    tok_disc_basis: &tok_disc_basis,
                     novelty_reference_per_layer: &novelty_reference_per_layer,
                     corpus_centroid_per_layer: &corpus_centroid_per_layer,
                     recall_policy,

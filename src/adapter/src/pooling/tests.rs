@@ -1628,4 +1628,244 @@ fn null_calibration_2pass_2d_stats_cross_script_envelope_relaxed_clamp_and_deter
     assert!((0.0..=1.0).contains(&env_a.ood_unexp_median));
     assert!((0.0..=1.0).contains(&env_a.ood_unexp_p15));
     assert!((0.22..=0.62).contains(&env_a.token_explain_threshold));
+
+    // 5. `ood_null_high` removes the legacy `0.36` cap for high-cosine models (`~0.42..0.44`)
+    //    while honoring `RecallEnvelopeBounds::standard().ood_null_coherence_ceiling` (`0.50`)
+    //    so extreme anisotropic distributions (`0.60+`) never collapse 2D `SELF_REF` recall.
+    let high_cos_peaks: Vec<(ScriptGroup, f32)> = (0..12)
+        .map(|i| (ScriptGroup::AsciiDominant, 0.34 + (i as f32) * 0.008))
+        .collect();
+    let (env_high, _) = aggregate_null_envelope(0.18, &high_cos_peaks, &orthos, &toks, &unexps)
+        .expect("high cos env");
+    assert!(
+        env_high.ood_null_high > 0.40 && env_high.ood_null_high <= 0.50,
+        "high-cosine OOD tail must exceed legacy 0.36 cap without exceeding 0.50 ceiling, got {}",
+        env_high.ood_null_high
+    );
+    let extreme_aniso_peaks: Vec<(ScriptGroup, f32)> = (0..12)
+        .map(|i| (ScriptGroup::NonAsciiDominant, 0.50 + (i as f32) * 0.012))
+        .collect();
+    let (env_aniso, _) =
+        aggregate_null_envelope(0.20, &extreme_aniso_peaks, &orthos, &toks, &unexps)
+            .expect("aniso env");
+    assert!(
+        (env_aniso.ood_null_high
+            - crate::RecallEnvelopeBounds::standard().ood_null_coherence_ceiling)
+            .abs()
+            < 1e-6,
+        "extreme anisotropic OOD tail must clamp at 0.50 viability ceiling, got {}",
+        env_aniso.ood_null_high
+    );
+}
+
+#[test]
+fn base_prior_discriminative_orthogonalization_protects_corpus_signals_across_all_three_paths() {
+    use super::base_prior::{
+        build_corpus_discriminative_subspace, orthogonalize_prior_basis_against_discriminative,
+    };
+
+    // 1. Direct linear-algebra invariants on discriminative subspace & noise-amplification guard.
+    let dim = 16;
+    // All 4 corpus entries share BOS/sink energy on dim 0 (`0.80`), while differing on dims 1..=4.
+    let mut centroids = Vec::new();
+    for i in 0..4_usize {
+        let mut c = vec![0.0_f32; dim];
+        c[0] = 0.80;
+        c[1 + i] = 0.60;
+        centroids.push(c);
+    }
+    let disc = build_corpus_discriminative_subspace(&centroids, &[]);
+    assert_eq!(disc.len(), 3, "4 entries span rank-3 inter-entry subspace");
+    // Shared BOS/sink dim 0 must cancel identically in centered inter-entry differences.
+    for u in &disc {
+        assert!(
+            u[0].abs() < 1e-5,
+            "shared BOS/sink dim 0 leaked into discriminative subspace: {}",
+            u[0]
+        );
+    }
+
+    // (a) Pure BOS/sink prior along dim 0 passes through untouched (`cos > 0.99`).
+    let mut bos_prior = vec![0.0_f32; dim];
+    bos_prior[0] = 1.0;
+    // (b) Topical prior aligned with corpus discrimination (`(e1 - e2)/sqrt(2)`) has 0% energy
+    //     outside `disc` -> MUST be discarded (never re-normalized from noise).
+    let mut overlap_prior = vec![0.0_f32; dim];
+    overlap_prior[1] = std::f32::consts::FRAC_1_SQRT_2;
+    overlap_prior[2] = -std::f32::consts::FRAC_1_SQRT_2;
+    // (c) Mixed prior: 75% orthogonal framing (dim 10) + 25% corpus discrimination (`e1 - e2`):
+    //     discriminative component must be stripped while retaining orthogonal framing on dim 10.
+    let mut mixed_prior = vec![0.0_f32; dim];
+    mixed_prior[10] = 0.75_f32.sqrt();
+    mixed_prior[1] = 0.5 * std::f32::consts::FRAC_1_SQRT_2;
+    mixed_prior[2] = -0.5 * std::f32::consts::FRAC_1_SQRT_2;
+
+    let filtered = orthogonalize_prior_basis_against_discriminative(
+        &[bos_prior.clone(), overlap_prior, mixed_prior],
+        &disc,
+    );
+    assert_eq!(
+        filtered.len(),
+        2,
+        "fully overlapping topical prior must be discarded; BOS and mixed-orthogonal must survive"
+    );
+    assert!(filtered[0][0].abs() > 0.99);
+    assert!(filtered[1][10].abs() > 0.99);
+    for u in &disc {
+        let dot: f32 = filtered[1].iter().zip(u.iter()).map(|(&a, &b)| a * b).sum();
+        assert!(
+            dot.abs() < 1e-5,
+            "filtered prior must be strictly orthogonal to discriminative subspace: dot={dot}"
+        );
+    }
+
+    // Single-entry and empty corpora must safely skip without NaN.
+    assert!(build_corpus_discriminative_subspace(&centroids[..1], &[]).is_empty());
+    assert!(build_corpus_discriminative_subspace(&[], &[]).is_empty());
+    let single_pass =
+        orthogonalize_prior_basis_against_discriminative(std::slice::from_ref(&bos_prior), &[]);
+    assert_eq!(single_pass.len(), 1);
+    assert!(single_pass[0].iter().all(|v| v.is_finite()));
+
+    // 2. End-to-end 3-path check (batch + 2-fold calibration + streaming) with a base_prior whose
+    //    token common-mode overlaps corpus Fact discrimination alongside a shared BOS/sink axis.
+    let mut geom = sample_gqa_partial_rope();
+    geom.num_layers = 4;
+    geom.num_q_heads = 4;
+    geom.num_kv_heads = 2;
+    geom.head_dim = 8;
+    geom.rotary_dim = 8;
+    geom.layer_rope_mask = 0xF;
+    let adapter = ModelSteeringAdapter::new(geom).expect("compact adapter");
+    let q_dim = adapter.geometry().q_rot_len();
+    let make_seq = |toks: &[(usize, f32)]| -> Vec<Vec<f32>> {
+        let mut flat = vec![0.0_f32; toks.len() * q_dim];
+        for (t, &(slot, amp)) in toks.iter().enumerate() {
+            flat[t * q_dim] += 0.65; // Shared BOS/sink framing on dim 0.
+            flat[t * q_dim + (slot % q_dim)] += amp;
+        }
+        vec![flat; 4]
+    };
+
+    let entries = vec![
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Fact Alpha memory alignment".to_string(),
+            energy: 2.0,
+            seq_len: 3,
+            per_layer_token_qs: make_seq(&[(2, 1.0), (3, 0.9), (4, 0.8)]),
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Fact Beta cache budget".to_string(),
+            energy: 2.0,
+            seq_len: 3,
+            per_layer_token_qs: make_seq(&[(6, 1.0), (7, 0.9), (8, 0.8)]),
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Fact Gamma phase clamp".to_string(),
+            energy: 2.0,
+            seq_len: 3,
+            per_layer_token_qs: make_seq(&[(10, 1.0), (11, 0.9), (12, 0.8)]),
+            token_include_mask: None,
+        },
+        TokenSequenceEntry {
+            role: AttractorRole::Fact,
+            text: "Fact Delta storage layout".to_string(),
+            energy: 2.0,
+            seq_len: 3,
+            per_layer_token_qs: make_seq(&[(14, 1.0), (15, 0.9), (16, 0.8)]),
+            token_include_mask: None,
+        },
+    ];
+
+    // Startup prior samples share BOS dim 0 plus a technical direction on dim 2 (overlapping Fact
+    // Alpha) alongside distinct neutral topic dimensions so prior PCA extracts both dim 0 and dim 2.
+    let prior_samples: Vec<TokenSequenceEntry> = (0..8)
+        .map(|i| TokenSequenceEntry {
+            role: AttractorRole::Persona,
+            text: if i % 2 == 0 {
+                format!("Neutral technical probe {i}")
+            } else {
+                format!("中立的な技術プローブ{i}")
+            },
+            energy: 1.0,
+            seq_len: 3,
+            per_layer_token_qs: make_seq(&[(2, 0.55), (20 + (i % 6), 0.90), (26 + (i % 5), 0.85)]),
+            token_include_mask: None,
+        })
+        .collect();
+    let prior = ModelBaseAttractorProfile::extract(
+        &adapter,
+        &prior_samples,
+        SequenceActivationPooler::default(),
+        0.55,
+    )
+    .expect("extract prior");
+
+    let batch = CompiledTokenCorpus::compile_with_base_prior(
+        &adapter,
+        &entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+        Some(&prior),
+    )
+    .expect("batch compile");
+    let mut distiller = StreamingCorpusDistiller::new(&adapter, StreamingDistillConfig::default());
+    for e in &entries {
+        let _ = distiller
+            .push_captured(
+                &adapter,
+                e.role,
+                e.text.as_str(),
+                e.energy,
+                CapturedTokenSequence::new(e.seq_len, e.per_layer_token_qs.clone()),
+            )
+            .expect("stream push");
+    }
+    let (streamed, _) = distiller
+        .finalize(&adapter, Some(&prior))
+        .expect("stream finalize");
+
+    assert!(batch.null_calibration.is_some());
+    assert!(streamed.null_calibration.is_some());
+
+    // Query targeting Fact Alpha (dims 2, 3, 4) must recall anchor #1 cleanly in BOTH paths.
+    let q_alpha = make_seq(&[(2, 1.0), (3, 0.9), (4, 0.8)]);
+    let rec_batch = batch
+        .recall_token_sequence(&adapter, &q_alpha, 3)
+        .expect("batch recall");
+    let rec_stream = streamed
+        .recall_token_sequence(&adapter, &q_alpha, 3)
+        .expect("stream recall");
+    assert_eq!(
+        rec_batch.recalled_facts.first().map(|(e, _)| e.anchor_id),
+        Some(1),
+        "batch path must protect Fact Alpha discrimination under overlapping base_prior"
+    );
+    assert_eq!(
+        rec_stream.recalled_facts.first().map(|(e, _)| e.anchor_id),
+        Some(1),
+        "streaming path must protect Fact Alpha discrimination under overlapping base_prior"
+    );
+
+    // Pure BOS/sink OOD query (only dim 0 + unrelated dims 30, 31) must be rejected in BOTH paths.
+    let q_bos_ood = make_seq(&[(30, 0.15), (31, 0.15)]);
+    let ood_batch = batch
+        .recall_token_sequence(&adapter, &q_bos_ood, 2)
+        .expect("batch ood");
+    let ood_stream = streamed
+        .recall_token_sequence(&adapter, &q_bos_ood, 2)
+        .expect("stream ood");
+    assert!(ood_batch.recalled_facts.is_empty());
+    assert_eq!(ood_batch.lacuna_state, LacunaBoundaryState::LiminalExterior);
+    assert!(ood_stream.recalled_facts.is_empty());
+    assert_eq!(
+        ood_stream.lacuna_state,
+        LacunaBoundaryState::LiminalExterior
+    );
 }

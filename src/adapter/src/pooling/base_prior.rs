@@ -486,3 +486,206 @@ pub(super) fn merge_orthonormal_basis(
     }
     out
 }
+
+/// Extracts deterministically stride-sampled pooled entry residual signatures from `corpus`
+/// (bounded by `STREAMING_PCA_SAMPLE_BUDGET`) for inter-entry discriminative subspace construction.
+pub(super) fn collect_corpus_pooled_sigs(corpus: &TextAttractorCorpus) -> Vec<Vec<f32>> {
+    let entries = corpus.entries();
+    let n = entries.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    if n <= STREAMING_PCA_SAMPLE_BUDGET {
+        entries.iter().map(|e| e.residual_sig.clone()).collect()
+    } else {
+        (0..STREAMING_PCA_SAMPLE_BUDGET)
+            .map(|s| {
+                entries[(s * n) / STREAMING_PCA_SAMPLE_BUDGET]
+                    .residual_sig
+                    .clone()
+            })
+            .collect()
+    }
+}
+
+/// Computes per-entry mean raw token signatures over deterministically stride-sampled entries
+/// (bounded by `STREAMING_PCA_SAMPLE_BUDGET`) for inter-entry discriminative subspace construction.
+pub(super) fn compute_entry_token_centroids(per_entry_tok_sigs: &[Vec<Vec<f32>>]) -> Vec<Vec<f32>> {
+    let n = per_entry_tok_sigs.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let indices: Vec<usize> = if n <= STREAMING_PCA_SAMPLE_BUDGET {
+        (0..n).collect()
+    } else {
+        (0..STREAMING_PCA_SAMPLE_BUDGET)
+            .map(|s| (s * n) / STREAMING_PCA_SAMPLE_BUDGET)
+            .collect()
+    };
+    let mut centroids = Vec::with_capacity(indices.len());
+    for i in indices {
+        let toks = &per_entry_tok_sigs[i];
+        let Some(dim) = toks.first().map(Vec::len).filter(|&d| d > 0) else {
+            continue;
+        };
+        let mut sum = vec![0.0_f64; dim];
+        let mut cnt = 0_usize;
+        for tok in toks {
+            if tok.len() != dim {
+                continue;
+            }
+            cnt += 1;
+            for (dst, &src) in sum.iter_mut().zip(tok.iter()) {
+                *dst += f64::from(src);
+            }
+        }
+        if cnt > 0 {
+            let inv = 1.0 / (cnt as f64);
+            centroids.push(sum.into_iter().map(|v| (v * inv) as f32).collect());
+        }
+    }
+    centroids
+}
+
+/// Builds an orthonormal basis spanning the corpus's inter-entry discriminative signal subspace
+/// (centered entry centroids after removing `corpus_common_mode_basis`).
+///
+/// Subtracting the cross-entry grand mean cancels shared BOS/sink and template framing identically,
+/// leaving only directions that distinguish distinct corpus entries from one another. Returns an
+/// empty basis when fewer than 2 valid entries exist (zero-variance / NaN safe).
+pub(super) fn build_corpus_discriminative_subspace(
+    entry_centroids: &[Vec<f32>],
+    corpus_common_mode_basis: &[Vec<f32>],
+) -> Vec<Vec<f32>> {
+    let Some(dim) = entry_centroids.first().map(Vec::len).filter(|&d| d > 0) else {
+        return Vec::new();
+    };
+    let mut projected: Vec<Vec<f32>> = Vec::with_capacity(entry_centroids.len());
+    for vec_i in entry_centroids {
+        if vec_i.len() != dim {
+            continue;
+        }
+        let mut work = vec_i.clone();
+        for dir in corpus_common_mode_basis {
+            if dir.len() != dim {
+                continue;
+            }
+            let dot: f64 = work
+                .iter()
+                .zip(dir.iter())
+                .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                .sum();
+            let d = dot as f32;
+            for (dst, &c) in work.iter_mut().zip(dir.iter()) {
+                *dst -= d * c;
+            }
+        }
+        projected.push(work);
+    }
+    let m = projected.len();
+    if m < 2 {
+        return Vec::new();
+    }
+
+    let mut grand_mean = vec![0.0_f64; dim];
+    for p in &projected {
+        for (dst, &src) in grand_mean.iter_mut().zip(p.iter()) {
+            *dst += f64::from(src);
+        }
+    }
+    let inv_m = 1.0 / (m as f64);
+    for v in &mut grand_mean {
+        *v *= inv_m;
+    }
+
+    let mut centered: Vec<(usize, Vec<f32>, f64)> = projected
+        .into_iter()
+        .enumerate()
+        .map(|(idx, mut p)| {
+            let mut nsq = 0.0_f64;
+            for (dst, &mu) in p.iter_mut().zip(grand_mean.iter()) {
+                let d = f64::from(*dst) - mu;
+                *dst = d as f32;
+                nsq += d * d;
+            }
+            (idx, p, nsq)
+        })
+        .collect();
+    centered.sort_by(|a, b| b.2.total_cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
+
+    // Cap rank so low-dimensional synthetic spaces preserve ambient room for orthogonal framing,
+    // while real high-dimensional LLM corpora retain the full inter-entry discriminative span.
+    let max_rank = (dim / 4).min(m.saturating_sub(1)).clamp(1, 32);
+    let mut basis: Vec<Vec<f32>> = Vec::with_capacity(max_rank);
+    for (_, mut delta, init_nsq) in centered {
+        if basis.len() >= max_rank || init_nsq <= 1e-10 {
+            break;
+        }
+        for existing in &basis {
+            let dot: f64 = delta
+                .iter()
+                .zip(existing.iter())
+                .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                .sum();
+            let d = dot as f32;
+            for (dst, &c) in delta.iter_mut().zip(existing.iter()) {
+                *dst -= d * c;
+            }
+        }
+        let res_nsq: f64 = delta.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        if res_nsq > 1e-10 {
+            let inv = (1.0 / res_nsq.sqrt()) as f32;
+            for v in &mut delta {
+                *v *= inv;
+            }
+            basis.push(delta);
+        }
+    }
+    basis
+}
+
+/// Projects candidate `prior_basis` vectors orthogonal to the corpus's inter-entry discriminative
+/// subspace `disc_basis`.
+///
+/// Any prior vector whose retained energy outside `disc_basis` falls below `0.50` (`angle < 45 deg`)
+/// is discarded rather than re-normalized so low-energy residuals never amplify noise, whereas
+/// universal BOS/sink directions orthogonal to inter-entry differences pass through intact.
+pub(super) fn orthogonalize_prior_basis_against_discriminative(
+    prior_basis: &[Vec<f32>],
+    disc_basis: &[Vec<f32>],
+) -> Vec<Vec<f32>> {
+    if prior_basis.is_empty() || disc_basis.is_empty() {
+        return prior_basis.to_vec();
+    }
+    let mut out = Vec::with_capacity(prior_basis.len());
+    for dir in prior_basis {
+        let orig_nsq: f64 = dir.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        if orig_nsq <= 1e-12 {
+            continue;
+        }
+        let mut orth = dir.clone();
+        for u in disc_basis {
+            if u.len() != orth.len() {
+                continue;
+            }
+            let dot: f64 = orth
+                .iter()
+                .zip(u.iter())
+                .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                .sum();
+            let d = dot as f32;
+            for (dst, &c) in orth.iter_mut().zip(u.iter()) {
+                *dst -= d * c;
+            }
+        }
+        let res_nsq: f64 = orth.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        if res_nsq >= 0.50 * orig_nsq {
+            let inv = (1.0 / res_nsq.sqrt()) as f32;
+            for v in &mut orth {
+                *v *= inv;
+            }
+            out.push(orth);
+        }
+    }
+    out
+}

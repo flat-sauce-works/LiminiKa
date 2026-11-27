@@ -55,10 +55,13 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
         let top2_fact_score = fact_scores.get(1).copied().unwrap_or(-1.0);
         let top1_persona_score = persona_scores.first().copied().unwrap_or(-1.0);
         let raw_guard_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
-        // Require the winning Guard attractor to exceed the Guard activation floor so sub-floor
-        // OOD noise (`max_guard_score` near 0 or negative) cannot trigger false `RepulsionEscape`.
+        // Require both the Guard activation floor and corpus token grounding (either Fact or Guard
+        // tokens explained) so complete foreign-OOD queries never trigger Layer 1 or Layer 2 Guard.
+        let foreign_ood_for_guard = ctx.query_seq_len > 0
+            && signal.telemetry.unexplained_token_ratio >= ctx.u_foreign
+            && signal.telemetry.unexplained_corpus_token_ratio >= ctx.u_foreign;
         let guard_floor = ctx.policy.min_coherence * 0.70;
-        let guard_conflict_margin = if max_guard_score >= guard_floor {
+        let guard_conflict_margin = if !foreign_ood_for_guard && max_guard_score >= guard_floor {
             raw_guard_margin
         } else {
             raw_guard_margin.min(0.0)
@@ -82,8 +85,9 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
         signal.boundary_metrics = metrics;
         signal.gate_decision = decision;
 
-        let repulsed_by_guard =
-            max_guard_score >= guard_floor && guard_conflict_margin > hard_margin;
+        let repulsed_by_guard = !foreign_ood_for_guard
+            && max_guard_score >= guard_floor
+            && guard_conflict_margin > hard_margin;
         if repulsed_by_guard {
             signal.action_decision = StigmergicActionDecision::RepulsionEscape;
         }

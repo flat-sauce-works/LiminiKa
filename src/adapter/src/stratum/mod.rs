@@ -56,6 +56,9 @@ pub struct LocalChannelObservation {
     pub token_deposits: Vec<TokenResonanceDeposit>,
     /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens not explained by corpus Facts.
     pub unexplained_token_ratio: f32,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens not explained by either corpus
+    /// Fact or Guard entries (`0.0` when unspecified/single-vector).
+    pub unexplained_corpus_token_ratio: f32,
     /// Original query token sequence length (`S`, `0` when single-vector or unspecified).
     pub query_seq_len: usize,
 }
@@ -122,6 +125,9 @@ pub struct StratumProbeTelemetry {
     pub query_ortho_ratio: f32,
     /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens unexplained by corpus Facts.
     pub unexplained_token_ratio: f32,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens unexplained by either corpus
+    /// Fact or Guard entries (`0.0` when unspecified/single-vector).
+    pub unexplained_corpus_token_ratio: f32,
     /// Effective Layer 1 hard-block Guard conflict margin resolved for this turn (`0.0` = default `0.05`).
     pub guard_hard_margin: f32,
     /// True when Layer 2 soft-caution Guard mode (`0 < margin <= hard_margin`) activated on this turn.
@@ -221,6 +227,8 @@ pub struct StratumContext<'a> {
     pub query_seq_len: usize,
     /// Orthogonal residual norm ratio `||P_perp(q - mu)|| / ||q - mu||` (`0.0..=1.0`).
     pub query_ortho_ratio: f32,
+    /// Active foreign-OOD unexplained-token cutoff (`u_foreign`) shared with [`crate::Boundary2DThresholds`].
+    pub u_foreign: f32,
     /// Active recall policy thresholds.
     pub policy: &'a RecallPolicy,
     /// Calibrated coalition-peeling and relative-scale thresholds (defaults to 1D fallback when uncalibrated).

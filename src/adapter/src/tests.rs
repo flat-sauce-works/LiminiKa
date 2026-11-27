@@ -1601,6 +1601,7 @@ fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_
             },
         ],
         unexplained_token_ratio: 0.0,
+        unexplained_corpus_token_ratio: 0.0,
         query_seq_len: 0,
     };
 
@@ -1642,6 +1643,7 @@ fn substrate_compound_decomposition_links_disjoint_specialists_while_respecting_
             token_phase_words: [0; 8],
         }],
         unexplained_token_ratio: 0.0,
+        unexplained_corpus_token_ratio: 0.0,
         query_seq_len: 0,
     };
     let ood_recall = corpus
@@ -1763,6 +1765,7 @@ fn residual_peeling_decomposer_chains_three_disjoint_specialists_beyond_top_k_tw
             },
         ],
         unexplained_token_ratio: 0.0,
+        unexplained_corpus_token_ratio: 0.0,
         query_seq_len: 0,
     };
 
@@ -1894,6 +1897,7 @@ fn split_premise_guard_coalition_triggers_repulsion_while_preserving_counter_fac
             },
         ],
         unexplained_token_ratio: 0.0,
+        unexplained_corpus_token_ratio: 0.0,
         query_seq_len: 0,
     };
 
@@ -3880,6 +3884,7 @@ fn text_attractor_corpus_lazy_flat_cache_invalidation_clone_and_mock_provider() 
         coalition_thresholds: CoalitionThresholds::default(),
         query_seq_len: 0,
         query_ortho_ratio: 1.0,
+        u_foreign: RecallEnvelopeBounds::standard().u_foreign_ceiling,
     };
     let mut signal = StratumSignal {
         candidate_scores: vec![0.50; entries.len()],
@@ -4970,6 +4975,7 @@ fn short_query_finite_sample_shrinkage_attenuates_loo_contrast_and_two_axis_isol
         d_to_q_scores: vec![0.10, 0.01, -0.02],
         token_deposits: Vec::new(),
         unexplained_token_ratio: 0.0,
+        unexplained_corpus_token_ratio: 0.0,
         query_seq_len: 2,
     };
     let long_obs = LocalChannelObservation {
@@ -5013,6 +5019,7 @@ fn short_query_finite_sample_shrinkage_attenuates_loo_contrast_and_two_axis_isol
         d_to_q_scores: vec![0.15, 0.12, -0.05],
         token_deposits: Vec::new(),
         unexplained_token_ratio: 0.74,
+        unexplained_corpus_token_ratio: 0.74,
         query_seq_len: 16,
     };
     let ext_recall = corpus
@@ -5062,6 +5069,7 @@ fn short_query_finite_sample_shrinkage_attenuates_loo_contrast_and_two_axis_isol
         d_to_q_scores: vec![0.25, 0.02, -0.05],
         token_deposits: Vec::new(),
         unexplained_token_ratio: 0.10,
+        unexplained_corpus_token_ratio: 0.10,
         query_seq_len: 16,
     };
     let self_recall = corpus
@@ -5918,6 +5926,7 @@ fn coalition_thresholds_scale_relative_to_coherence_dispersion_and_calibrated_un
             },
         ],
         unexplained_token_ratio: 0.15,
+        unexplained_corpus_token_ratio: 0.15,
         query_seq_len: 12,
     };
 
@@ -6335,4 +6344,262 @@ fn two_tier_guard_hard_block_vs_soft_caution_vs_non_guard_preserves_single_negat
         !e2e_rec.recalled_facts.is_empty(),
         "Layer 2 soft-caution must preserve Fact recall through TextAttractorCorpus"
     );
+}
+
+#[test]
+fn recall_envelope_bounds_invariants_and_viability_ceilings() {
+    let std_bounds = RecallEnvelopeBounds::standard();
+    assert_eq!(std_bounds, RecallEnvelopeBounds::default());
+    assert!(std_bounds.validate_invariants());
+    assert!((std_bounds.ood_null_coherence_ceiling - 0.50).abs() < 1e-6);
+    assert!((std_bounds.u_foreign_ceiling - 0.80).abs() < 1e-6);
+
+    // Violated invariants must fail validation cleanly.
+    let bad_inverted = RecallEnvelopeBounds {
+        ood_null_coherence_floor: 0.55,
+        ..std_bounds
+    };
+    assert!(!bad_inverted.validate_invariants());
+    let bad_nan = RecallEnvelopeBounds {
+        u_foreign_ceiling: f32::NAN,
+        ..std_bounds
+    };
+    assert!(!bad_nan.validate_invariants());
+    let bad_gap = RecallEnvelopeBounds {
+        u_semi_floor: 0.60,
+        u_semi_foreign_min_gap: 0.12,
+        u_foreign_floor: 0.65,
+        ..std_bounds
+    };
+    assert!(!bad_gap.validate_invariants());
+
+    // `Boundary2DThresholds` respects `u_foreign_ceiling = 0.80` even when held-out OOD
+    // probes saturate near `1.0`, while still allowing Stage 2 tightening down to `0.65`.
+    let high_unexp_env = NullCalibrationEnvelope {
+        sample_count: 24,
+        corpus_offdiag_floor: 0.18,
+        ood_null_mean: 0.22,
+        ood_null_std: 0.08,
+        ood_null_max: 0.43,
+        ood_null_high: 0.42,
+        calibrated_min_coherence: 0.42,
+        ood_null_median_ortho_ratio: 0.85,
+        token_explain_threshold: 0.36,
+        ood_coh_median: 0.24,
+        ood_coh_mad: 0.06,
+        ood_unexp_median: 0.96,
+        ood_unexp_mad: 0.04,
+        ood_unexp_p15: 0.88,
+    };
+    let b2d_hi = Boundary2DThresholds::from_null_calibration(&high_unexp_env, 0.42);
+    assert!((b2d_hi.u_foreign - std_bounds.u_foreign_ceiling).abs() < 1e-6);
+    assert!(b2d_hi.u_semi <= b2d_hi.u_foreign - std_bounds.u_semi_foreign_min_gap + 1e-6);
+
+    let low_unexp_env = NullCalibrationEnvelope {
+        ood_unexp_median: 0.72,
+        ood_unexp_p15: 0.68,
+        ..high_unexp_env
+    };
+    let b2d_lo = Boundary2DThresholds::from_null_calibration(&low_unexp_env, 0.42);
+    assert!(
+        (std_bounds.u_foreign_floor..=0.69).contains(&b2d_lo.u_foreign),
+        "Stage 2 calibration must tighten u_foreign downward cleanly: {}",
+        b2d_lo.u_foreign
+    );
+}
+
+#[test]
+fn complete_foreign_ood_suppresses_guard_layer1_and_layer2_while_preserving_true_guard() {
+    use liminika_core::runtime::{AdaptiveThresholdPolicy, StandardPhaseKvGopCache};
+    use liminika_core::stigmergy::StandardCognitiveBank;
+
+    let mut geom = sample_gqa_partial_rope();
+    geom.num_layers = 4;
+    geom.layer_rope_mask = 0xF;
+    let mut adapter = ModelSteeringAdapter::new(geom).expect("init adapter");
+    let q_len = adapter.geometry().q_rot_len();
+    let centroid = vec![0.0_f32; q_len];
+    let refs: Vec<&[f32]> = vec![centroid.as_slice(); 4];
+
+    let mut f_vec = vec![0.0_f32; q_len];
+    let mut g_vec = vec![0.0_f32; q_len];
+    f_vec[0] = 1.0;
+    g_vec[1] = 1.0;
+
+    let mut corpus = TextAttractorCorpus::new();
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Fact,
+            "Fact anchor",
+            &[f_vec.as_slice(); 4],
+            &refs,
+            2.0,
+        )
+        .expect("fact");
+    corpus
+        .ingest_text_activations(
+            &adapter,
+            AttractorRole::Guard,
+            "Guard anchor",
+            &[g_vec.as_slice(); 4],
+            &refs,
+            2.0,
+        )
+        .expect("guard");
+
+    let policy = RecallPolicy {
+        min_coherence: 0.25,
+        boundary_margin: 0.03,
+        guard_suppress_margin: 0.0,
+        top_k_facts: 2,
+        top_k_personas: 1,
+    };
+
+    // Layer 1 query vector (strong Guard lead: margin > 0.05).
+    let mut l1_q = vec![0.0_f32; q_len];
+    l1_q[0] = 0.20;
+    l1_q[1] = 0.85;
+
+    // Layer 2 query vector (narrow Guard lead: 0 < margin <= 0.05).
+    let mut l2_q = vec![0.0_f32; q_len];
+    l2_q[0] = 0.695;
+    l2_q[1] = 0.719;
+
+    let complete_ood_obs = LocalChannelObservation {
+        combined_scores: vec![0.0, 0.0],
+        q_to_d_scores: vec![0.0, 0.0],
+        d_to_q_scores: vec![0.0, 0.0],
+        token_deposits: Vec::new(),
+        unexplained_token_ratio: 0.94,
+        unexplained_corpus_token_ratio: 0.94,
+        query_seq_len: 16,
+    };
+
+    // 1. Complete foreign OOD suppresses Layer 1 hard-block Guard (both recall & TurnOrchestrator).
+    let l1_ood = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &[l1_q.as_slice(); 4],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(complete_ood_obs.clone()),
+        )
+        .expect("l1 ood recall");
+    assert_ne!(
+        l1_ood.action_decision,
+        StigmergicActionDecision::RepulsionEscape
+    );
+    assert!(l1_ood.guard_conflict_margin <= 0.0);
+    assert!(!l1_ood.telemetry.is_soft_guard_caution);
+    assert_eq!(l1_ood.lacuna_state, LacunaBoundaryState::LiminalExterior);
+    assert!(l1_ood.recalled_facts.is_empty());
+
+    // 2. Complete foreign OOD suppresses Layer 2 soft-caution Guard (`+R_soft` must NOT emit).
+    let l2_ood = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &[l2_q.as_slice(); 4],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(complete_ood_obs),
+        )
+        .expect("l2 ood recall");
+    assert_ne!(
+        l2_ood.action_decision,
+        StigmergicActionDecision::RepulsionEscape
+    );
+    assert!(l2_ood.guard_conflict_margin <= 0.0);
+    assert!(!l2_ood.telemetry.is_soft_guard_caution);
+    assert_eq!(l2_ood.lacuna_state, LacunaBoundaryState::LiminalExterior);
+    assert!(l2_ood.recalled_facts.is_empty());
+
+    // Confirm through `TurnOrchestrator::prepare_turn` that neither Layer 1 nor Layer 2 emits
+    // GuardPhaseAnchors or enables steering on complete foreign OOD.
+    struct StaticRecallSource(OwnedAttractorRecall);
+    impl AttractorRecallSource for StaticRecallSource {
+        fn recall_query(
+            &self,
+            _adapter: &ModelSteeringAdapter,
+            _query_token_qs: &[Vec<f32>],
+            _query_seq_len: usize,
+            _prior_circuit: Option<CognitiveTrajectoryLedger>,
+        ) -> Result<OwnedAttractorRecall, String> {
+            Ok(self.0.clone())
+        }
+    }
+    let mut kv_cache = StandardPhaseKvGopCache::new();
+    let kv_policy = AdaptiveThresholdPolicy::default();
+    for (idx, owned) in [l1_ood.to_owned_recall(), l2_ood.to_owned_recall()]
+        .into_iter()
+        .enumerate()
+    {
+        let src = StaticRecallSource(owned);
+        let plan = TurnOrchestrator::prepare_turn(
+            &src,
+            &mut adapter,
+            &mut kv_cache,
+            &TurnPrepareInput::<AdaptiveThresholdPolicy, StandardCognitiveBank> {
+                query_token_qs: &[],
+                query_seq_len: 16,
+                token_include_mask: None,
+                turn_index: (idx + 1) as u32,
+                kv_policy: &kv_policy,
+                kv_min_resonance_override: None,
+                persona_bank: None,
+                layer_steer_mask_override: None,
+            },
+        )
+        .expect("ood plan");
+        assert!(!plan.is_guard_trap());
+        assert!(!plan.is_soft_guard_caution());
+        assert!(plan.is_unobserved_lacuna());
+        assert!(!plan.steering_eligible());
+        assert!(plan.guard_anchors_per_layer().iter().all(Vec::is_empty));
+    }
+
+    // 3. Genuine Guard probe whose tokens are explained by Guard entries (`unexp_corpus = 0.35`)
+    //    even when Fact-only `unexp = 0.90 >= u_foreign` MUST still fire Layer 1 & Layer 2 Guard!
+    let guard_explained_obs = LocalChannelObservation {
+        combined_scores: vec![0.0, 0.0],
+        q_to_d_scores: vec![0.0, 0.0],
+        d_to_q_scores: vec![0.0, 0.0],
+        token_deposits: Vec::new(),
+        unexplained_token_ratio: 0.90,
+        unexplained_corpus_token_ratio: 0.35,
+        query_seq_len: 16,
+    };
+    let l1_guard = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &[l1_q.as_slice(); 4],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(guard_explained_obs.clone()),
+        )
+        .expect("l1 true guard");
+    assert_eq!(
+        l1_guard.action_decision,
+        StigmergicActionDecision::RepulsionEscape
+    );
+    assert!(l1_guard.guard_conflict_margin > 0.05);
+
+    let l2_guard = corpus
+        .recall_for_query_with_strata_observation(
+            &adapter,
+            &[l2_q.as_slice(); 4],
+            &refs,
+            &policy,
+            &StratumPipeline::default(),
+            Some(guard_explained_obs),
+        )
+        .expect("l2 true guard");
+    assert_ne!(
+        l2_guard.action_decision,
+        StigmergicActionDecision::RepulsionEscape
+    );
+    assert!(l2_guard.telemetry.is_soft_guard_caution);
 }

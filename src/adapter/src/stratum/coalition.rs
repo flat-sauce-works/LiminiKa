@@ -9,7 +9,9 @@ use super::{
     RecallStratum, StratumContext, StratumDirective, StratumSignal, TokenResonanceDeposit,
     TrailEmergenceReceptor,
 };
-use crate::{AttractorRole, Boundary2DThresholds, effective_guard_hard_margin};
+use crate::{
+    AttractorRole, Boundary2DThresholds, RecallEnvelopeBounds, effective_guard_hard_margin,
+};
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_tagged_ptr_t};
 use liminika_core::foundation::load_q7_words_64;
 use liminika_core::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
@@ -96,13 +98,17 @@ impl CoalitionThresholds {
         }
     }
 
-    /// Derives relative-scaled coalition thresholds from `u_foreign` and `coherence_scale`.
+    /// Derives relative-scaled coalition thresholds from `u_foreign` and `coherence_scale`,
+    /// bounded by [`RecallEnvelopeBounds::standard`].
     #[must_use]
     pub fn from_u_foreign_and_scale(u_foreign: f32, coherence_scale: f32) -> Self {
-        let u_coalition_cutoff = (u_foreign - 0.08).clamp(0.55, 0.82);
-        let u_basin_support_cutoff = (u_coalition_cutoff - 0.04).clamp(0.50, 0.78);
+        let bounds = RecallEnvelopeBounds::standard();
+        let u_coalition_cutoff =
+            (u_foreign - 0.08).clamp(bounds.u_coalition_floor, bounds.u_coalition_ceiling);
+        let u_basin_support_cutoff = (u_coalition_cutoff - 0.04)
+            .clamp(bounds.u_basin_support_floor, bounds.u_basin_support_ceiling);
         let scale = if coherence_scale.is_finite() {
-            coherence_scale.clamp(0.60, 1.60)
+            coherence_scale.clamp(bounds.coherence_scale_floor, bounds.coherence_scale_ceiling)
         } else {
             1.0
         };
@@ -1074,11 +1080,13 @@ impl RecallStratum for LocalTokenResonanceStratum {
                 } else {
                     0.0
                 };
+                let complete_ood_guard = ctx.query_seq_len > 0
+                    && signal.telemetry.unexplained_token_ratio >= thresholds.u_coalition_cutoff
+                    && signal.telemetry.unexplained_corpus_token_ratio
+                        >= thresholds.u_coalition_cutoff;
                 let guard_tok_support = signal.q_to_d_scores[g_pair.cand_a] > 0.0
                     && signal.q_to_d_scores[g_pair.cand_b] > 0.0
-                    && (ctx.query_seq_len == 0
-                        || signal.telemetry.unexplained_token_ratio
-                            < thresholds.u_coalition_cutoff);
+                    && !complete_ood_guard;
                 if g_bimodal
                     && guard_tok_support
                     && g_pair.pair_chamfer >= guard_chamfer_floor

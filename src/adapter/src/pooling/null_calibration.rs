@@ -5,12 +5,17 @@
 //! 2-pass `(top1_coh, unexp)` robust statistics and deterministic script-group conservative
 //! envelopes preventing cross-script bimodal distortion.
 
-use super::base_prior::{ModelBaseAttractorProfile, merge_orthonormal_basis};
+use super::base_prior::{
+    ModelBaseAttractorProfile, merge_orthonormal_basis,
+    orthogonalize_prior_basis_against_discriminative,
+};
 use super::{
     AdaptiveTokenSpecificityCalibrator, CompiledTokenCorpus, SequenceActivationPooler,
     TokenSequenceEntry, TokenSpecificityCalibrator,
 };
-use crate::{AttractorRole, ModelSteeringAdapter, RecallPolicy, TextAttractorCorpus};
+use crate::{
+    AttractorRole, ModelSteeringAdapter, RecallEnvelopeBounds, RecallPolicy, TextAttractorCorpus,
+};
 use liminika_core::runtime::ManifoldProbeBaseline;
 
 /// Minimum samples required within a single script group before applying per-script robust
@@ -19,14 +24,15 @@ pub(super) const MIN_SCRIPT_GROUP_SAMPLES: usize = 4;
 
 /// Safety floor on robust OOD coherence dispersion (`ood_coh_mad`) preventing division-by-zero
 /// or unstable $z_c$ amplification on narrow synthetic or degenerate probe sets.
-pub const OOD_COH_MAD_FLOOR: f32 = 0.025;
+pub const OOD_COH_MAD_FLOOR: f32 = RecallEnvelopeBounds::standard().ood_coh_mad_floor;
 
 /// Safety floor on robust OOD unexplained-token dispersion (`ood_unexp_mad`) preventing unstable
 /// $z_u$ amplification when held-out OOD probes saturate near `1.0`.
-pub const OOD_UNEXP_MAD_FLOOR: f32 = 0.04;
+pub const OOD_UNEXP_MAD_FLOOR: f32 = RecallEnvelopeBounds::standard().ood_unexp_mad_floor;
 
 /// Fallback `token_explain_threshold` used under `--no-base-prior` or empty token calibration sets.
-pub const DEFAULT_TOKEN_EXPLAIN_THRESHOLD: f32 = 0.40;
+pub const DEFAULT_TOKEN_EXPLAIN_THRESHOLD: f32 =
+    RecallEnvelopeBounds::standard().default_token_explain_threshold;
 
 /// Coarse script-family bucket used solely for deterministic bimodal null-calibration defense.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,20 +197,21 @@ fn split_by_script(samples: &[(ScriptGroup, f32)]) -> (Vec<f32>, Vec<f32>, Vec<f
 }
 
 /// Resolves the calibrated `token_explain_threshold` from held-out OOD token max-cosines using
-/// conservative per-script upper envelopes and relaxed bounds `(p85 + 0.04).clamp(0.22, 0.62)`.
+/// conservative per-script upper envelopes bounded by [`RecallEnvelopeBounds::standard`].
 #[must_use]
 pub(super) fn resolve_token_explain_threshold(tok_cos_samples: &[(ScriptGroup, f32)]) -> f32 {
+    let bounds = RecallEnvelopeBounds::standard();
     let (all_toks, ascii_toks, non_ascii_toks) = split_by_script(tok_cos_samples);
     if ascii_toks.len() >= MIN_SCRIPT_GROUP_SAMPLES
         && non_ascii_toks.len() >= MIN_SCRIPT_GROUP_SAMPLES
     {
         let a_p85 = RobustScalarSummary::from_values(&ascii_toks).map_or(0.36, |s| s.p85);
         let n_p85 = RobustScalarSummary::from_values(&non_ascii_toks).map_or(0.36, |s| s.p85);
-        (a_p85.max(n_p85) + 0.04).clamp(0.22, 0.62)
+        (a_p85.max(n_p85) + 0.04).clamp(bounds.token_explain_floor, bounds.token_explain_ceiling)
     } else if let Some(tok_sum) = RobustScalarSummary::from_values(&all_toks) {
-        (tok_sum.p85 + 0.04).clamp(0.22, 0.62)
+        (tok_sum.p85 + 0.04).clamp(bounds.token_explain_floor, bounds.token_explain_ceiling)
     } else {
-        DEFAULT_TOKEN_EXPLAIN_THRESHOLD
+        bounds.default_token_explain_threshold
     }
 }
 
@@ -222,6 +229,7 @@ pub(super) fn aggregate_null_envelope(
     tok_cos_samples: &[(ScriptGroup, f32)],
     unexp_samples: &[(ScriptGroup, f32)],
 ) -> Option<(NullCalibrationEnvelope, f32)> {
+    let bounds = RecallEnvelopeBounds::standard();
     let (all_peaks, ascii_peaks, non_ascii_peaks) = split_by_script(peak_samples);
     let overall_peaks = RobustScalarSummary::from_values(&all_peaks)?;
 
@@ -234,16 +242,22 @@ pub(super) fn aggregate_null_envelope(
         (
             ascii_sum.high_bound().max(non_ascii_sum.high_bound()),
             ascii_sum.median.max(non_ascii_sum.median),
-            ascii_sum.mad.max(non_ascii_sum.mad).max(OOD_COH_MAD_FLOOR),
+            ascii_sum
+                .mad
+                .max(non_ascii_sum.mad)
+                .max(bounds.ood_coh_mad_floor),
         )
     } else {
         (
             overall_peaks.high_bound(),
             overall_peaks.median,
-            overall_peaks.mad.max(OOD_COH_MAD_FLOOR),
+            overall_peaks.mad.max(bounds.ood_coh_mad_floor),
         )
     };
-    let ood_null_high = ood_null_high_raw.clamp(0.15, 0.36);
+    let ood_null_high = ood_null_high_raw.clamp(
+        bounds.ood_null_coherence_floor,
+        bounds.ood_null_coherence_ceiling,
+    );
     let calibrated_min_coherence = corpus_offdiag_floor.max(ood_null_high);
 
     let (all_orthos, ascii_orthos, non_ascii_orthos) = split_by_script(ortho_samples);
@@ -269,17 +283,21 @@ pub(super) fn aggregate_null_envelope(
         ) {
         (
             a_sum.median.min(n_sum.median).clamp(0.0, 1.0),
-            a_sum.mad.max(n_sum.mad).max(OOD_UNEXP_MAD_FLOOR),
+            a_sum.mad.max(n_sum.mad).max(bounds.ood_unexp_mad_floor),
             a_sum.p15.min(n_sum.p15).clamp(0.0, 1.0),
         )
     } else if let Some(u_sum) = RobustScalarSummary::from_values(&all_unexp) {
         (
             u_sum.median.clamp(0.0, 1.0),
-            u_sum.mad.max(OOD_UNEXP_MAD_FLOOR),
+            u_sum.mad.max(bounds.ood_unexp_mad_floor),
             u_sum.p15.clamp(0.0, 1.0),
         )
     } else {
-        (1.0_f32, OOD_UNEXP_MAD_FLOOR, 0.80_f32)
+        (
+            1.0_f32,
+            bounds.ood_unexp_mad_floor,
+            bounds.u_foreign_ceiling,
+        )
     };
 
     let envelope = NullCalibrationEnvelope {
@@ -308,6 +326,8 @@ pub(super) struct NullCalibrationContext<'a> {
     pub(super) prior: &'a ModelBaseAttractorProfile,
     pub(super) corpus_pre_prior: &'a TextAttractorCorpus,
     pub(super) corpus_tok_basis: &'a [Vec<f32>],
+    pub(super) pooled_disc_basis: &'a [Vec<f32>],
+    pub(super) tok_disc_basis: &'a [Vec<f32>],
     pub(super) novelty_reference_per_layer: &'a [Vec<f32>],
     pub(super) corpus_centroid_per_layer: &'a [Vec<f32>],
     pub(super) recall_policy: RecallPolicy,
@@ -367,12 +387,16 @@ where
         };
 
         let mut fold_corpus = ctx.corpus_pre_prior.clone();
-        fold_corpus.extend_common_mode_basis(&fold_prior.pooled_common_mode_basis, 3);
-        let fold_tok_basis = merge_orthonormal_basis(
-            ctx.corpus_tok_basis,
-            &fold_prior.token_common_mode_basis,
-            12,
+        let safe_fold_pooled = orthogonalize_prior_basis_against_discriminative(
+            &fold_prior.pooled_common_mode_basis,
+            ctx.pooled_disc_basis,
         );
+        fold_corpus.extend_common_mode_basis(&safe_fold_pooled, 3);
+        let safe_fold_tok = orthogonalize_prior_basis_against_discriminative(
+            &fold_prior.token_common_mode_basis,
+            ctx.tok_disc_basis,
+        );
+        let fold_tok_basis = merge_orthonormal_basis(ctx.corpus_tok_basis, &safe_fold_tok, 12);
         let fold_entry_toks = build_fold_entry_toks(&fold_tok_basis);
         let fold_stats = AdaptiveTokenSpecificityCalibrator::default()
             .calibrate_token_stats(&fold_entry_toks, fold_corpus.entries());

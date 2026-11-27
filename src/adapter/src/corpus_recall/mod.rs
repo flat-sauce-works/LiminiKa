@@ -5,6 +5,7 @@
 //! and persistent token-sequence recall ([`TextAttractorCorpus`]).
 
 mod boundary_2d;
+mod envelope_bounds;
 mod projection;
 
 pub use boundary_2d::{
@@ -13,6 +14,7 @@ pub use boundary_2d::{
     DEFAULT_SOFT_GUARD_Q7_SCALE, GuardLayerClassification, GuardLayerMode, RecallBoundaryGate,
     RecallBoundaryMetrics, RecallGateDecision, classify_guard_tier, effective_guard_hard_margin,
 };
+pub use envelope_bounds::RecallEnvelopeBounds;
 pub use projection::attenuate_guard_q7_soft;
 pub(crate) use projection::{
     AttractorRecallProjection, RecalledAnchorRef,
@@ -452,6 +454,11 @@ impl TextAttractorCorpus {
         &self.entries
     }
 
+    #[inline]
+    pub(crate) fn common_mode_basis(&self) -> &[Vec<f32>] {
+        &self.common_mode_basis
+    }
+
     /// Attaches or clears an in-memory 2-fold OOD [`NullCalibrationEnvelope`] powering calibrated
     /// 2D `(top1_coh, unexp)` decision boundaries and relative-scale coalition thresholds.
     pub fn set_null_calibration(&mut self, envelope: Option<NullCalibrationEnvelope>) {
@@ -827,8 +834,15 @@ impl TextAttractorCorpus {
         let mean = sims.iter().sum::<f64>() / n;
         let var = sims.iter().map(|&s| (s - mean) * (s - mean)).sum::<f64>() / n;
         let std = var.sqrt();
-        let min_coherence = (mean + 1.25 * std).clamp(0.15, 0.75) as f32;
-        let boundary_margin = (0.30 * std).clamp(0.01, 0.12) as f32;
+        let bounds = RecallEnvelopeBounds::standard();
+        let min_coherence = (mean + 1.25 * std).clamp(
+            f64::from(bounds.corpus_coherence_floor),
+            f64::from(bounds.corpus_coherence_ceiling),
+        ) as f32;
+        let boundary_margin = (0.30 * std).clamp(
+            f64::from(bounds.boundary_margin_floor),
+            f64::from(bounds.boundary_margin_ceiling),
+        ) as f32;
         RecallPolicy {
             top_k_facts,
             top_k_personas,
@@ -1110,6 +1124,7 @@ impl TextAttractorCorpus {
             d_to_q_scores,
             token_deposits,
             unexplained_token_ratio,
+            unexplained_corpus_token_ratio,
             query_seq_len,
         ) = match local_observation {
             Some(obs) => {
@@ -1125,10 +1140,19 @@ impl TextAttractorCorpus {
                     obs.d_to_q_scores,
                     obs.token_deposits,
                     obs.unexplained_token_ratio.clamp(0.0, 1.0),
+                    obs.unexplained_corpus_token_ratio.clamp(0.0, 1.0),
                     obs.query_seq_len,
                 )
             }
-            None => (Vec::new(), Vec::new(), Vec::new(), Vec::new(), 0.0_f32, 0),
+            None => (
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                0.0_f32,
+                0.0_f32,
+                0,
+            ),
         };
         let initial_signal = StratumSignal {
             candidate_scores: raw_cosines.clone(),
@@ -1162,6 +1186,7 @@ impl TextAttractorCorpus {
                 cognitive_trajectory: prior_circuit.unwrap_or_default(),
                 query_ortho_ratio,
                 unexplained_token_ratio,
+                unexplained_corpus_token_ratio,
                 ..StratumProbeTelemetry::default()
             },
         };
@@ -1177,6 +1202,7 @@ impl TextAttractorCorpus {
             rotary_dim: geom.rotary_dim,
             query_seq_len,
             query_ortho_ratio,
+            u_foreign: boundary_2d.u_foreign,
             policy,
             coalition_thresholds,
         };
@@ -1219,13 +1245,32 @@ impl TextAttractorCorpus {
         let hard_margin =
             effective_guard_hard_margin(policy.guard_suppress_margin, boundary_2d.coherence_scale);
         let guard_floor = policy.min_coherence * 0.70;
-        let guard_tier = classify_guard_tier(
-            signal.boundary_metrics.max_guard_score,
-            guard_floor,
-            signal.boundary_metrics.guard_conflict_margin,
-            hard_margin,
-            directive.repulse_guard,
-        );
+        // Complete foreign OOD queries unexplained by both Fact and Guard entries must never
+        // trigger Layer 1 hard-block nor Layer 2 soft-caution Guard intervention.
+        let foreign_ood_for_guard = query_seq_len > 0
+            && unexplained_token_ratio >= boundary_2d.u_foreign
+            && unexplained_corpus_token_ratio >= boundary_2d.u_foreign;
+        if foreign_ood_for_guard {
+            signal.boundary_metrics.guard_conflict_margin =
+                signal.boundary_metrics.guard_conflict_margin.min(0.0);
+        }
+        let guard_tier = if foreign_ood_for_guard {
+            classify_guard_tier(
+                f32::NEG_INFINITY,
+                guard_floor,
+                signal.boundary_metrics.guard_conflict_margin,
+                hard_margin,
+                false,
+            )
+        } else {
+            classify_guard_tier(
+                signal.boundary_metrics.max_guard_score,
+                guard_floor,
+                signal.boundary_metrics.guard_conflict_margin,
+                hard_margin,
+                directive.repulse_guard,
+            )
+        };
         signal.telemetry.guard_hard_margin = guard_tier.hard_margin;
         signal.telemetry.is_soft_guard_caution = guard_tier.is_soft_guard_caution;
 
