@@ -1,5 +1,7 @@
 # Getting Started
 
+This guide walks through building LiminiKa locally, exercising `liminika-cli` and the native C-ABI checks, and optionally running local GPU evaluation. Command examples use POSIX shell syntax; on Windows PowerShell, pass `-j 1` to Cargo commands and run CMake/CTest from a Visual Studio x64 Developer Command Prompt (`vcvars64.bat`).
+
 ## 1. Prerequisites
 
 - **Rust toolchain**: Edition **2024**, MSRV **`1.100.0`** (`resolver = "3"`), with `rustfmt` and `clippy`.

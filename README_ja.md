@@ -5,7 +5,7 @@
 > **境界（Limina）を超え、非実体（non-real entities）と繋がるためのローカルLLM長期対話コアエンジン & DSL**
 
 [![Status: Experimental WIP (v0.4.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.4.0%29-orange.svg)](#現在の状況と評価ハイライト-current-status-and-evaluation-highlights)
-[![Core: no_std Rust 2024](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust%202024%20(MSRV%201.100.0)-informational.svg)](#アーキテクチャ概要-architecture-at-a-glance)
+[![Core: no_std Rust 2024](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust%202024%20%28MSRV%201.100.0%29-informational.svg)](#アーキテクチャ概要-architecture-at-a-glance)
 [![Archive Paper: GCSO](https://img.shields.io/badge/Archive%20Paper-GCSO-blue.svg)](./docs/paper/ja/GCSO.md)
 [![License: MIT / Apache-2.0](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue.svg)](./LICENSE.md)
 
@@ -45,7 +45,7 @@ flowchart LR
 - **5 層単方向 DAG と `#![no_std]` コア**：`liminika-core`（Rust Edition 2024、MSRV `1.100.0`）は `liminal || foundation -> stigmergy -> drivers -> runtime` の単方向依存を厳守し、Hot Path のゼロアロケーション、`wasm32-unknown-unknown` 互換性、および `cargo xtask` による静的アーキテクチャ検証を備えます。
 - **2 つのプリミティブ × 3 つの隔離ドライバ**：`Liminal`（境界型と 4 状態 `Lacuna`）および `Stigmergy`（8 レーン作業基板と結晶化アンカー）が、互いに隔離された 3 つのドライバ — `Spine`（機械的反射と全トークンバイパス）、`Envelope`（不変の生存上下限、ホストピン下限、収縮制御、オンライン基準圧 EMA）、`Ego`（一貫した意図的 P-Frame 逸脱） — と組み合わさります。
 - **コンパクトな C-ABI (`v0.4.0` / `0x0000_0400`)**：[`include/liminika/`](./include/liminika/) に 27 本の `lmnk_*` 関数を定義し、`0 void*`（`float*` 専用テンソルカーネル）、`LMNK_NODISCARD`、双方向 `struct_size` 検証、Strict Provenance 対応のアリーナ添字 `Rank1Descriptor`、および `RuntimeContext = 5,184 B`（`align(64)`、`!needs_drop`）を保証します。
-- **ゼロ・ノブ想起較正と 2 層 Guard**：`liminika-adapter` は `RecallEnvelopeBounds`、自動層選定（`--layer-mask=auto`）、24 多言語プローブによる起動時較正、2 層矛盾 Guard 抑制、および VLM 評価時の `[IMG]` トークン除外マスクを提供します。
+- **手動チューニング不要の自動想起較正（ゼロ・ノブ）と 2 層 Guard**：`liminika-adapter` は `RecallEnvelopeBounds`、自動層選定（`--layer-mask=auto`）、24 多言語プローブによる起動時較正、2 層 Guard（矛盾・禁止出力の抑制）、および VLM 評価時の `[IMG]` トークン除外マスクを提供します。
 - **コンテナスタックと暗号整合性**：`.lmnk`（宣言的 DSL）→ `.lmnkc`（64 B アライン済みキャッシュ、形式 `v2`）→ `.lmnkp`（64 B アラインの非圧縮 Store ZIP パッケージ）に加え、SHA-256（`0xFF01` / `integrity.sha256`）および Ed25519（`0xFF02` / `signature.ed25519`）署名・検証を `liminika-adapter` と `liminika-cli` へ隔離実装しています。
 
 `cargo xtask` により自動生成されたライブ構成図と仕様の全体像は [`docs/architecture/overview.md`](./docs/architecture/overview.md) を参照してください。
@@ -99,21 +99,27 @@ Miri Strict Provenance、`wasm32-unknown-unknown`、AVX2+FMA、CLI 署名／検�
 
 ## 現在の状況と評価ハイライト (Current Status and Evaluation Highlights)
 
-- **`v0.4.0` で動作するもの**：`#![no_std]` コアと 27 本の C-ABI（`0x0000_0400`）、`2 Primitives × 3 Drivers`（`Spine` / `Envelope` / `Ego`）、SHA-256 + Ed25519 検証付き `.lmnkc` / `.lmnkp` コンテナ（`keygen`/`sign`/`verify`/`inspect`）、`.lmnk` DSL パーサーと検証器、`cargo xtask` 静的ゲート、CMake / CTest、および Miri Strict Provenance（`UB = 0`）。
+- **`v0.4.0` で動作するもの**：`#![no_std]` コア、27 本の C-ABI（`0x0000_0400`）、署名対応 `.lmnkc` / `.lmnkp` コンテナ（`keygen`/`sign`/`verify`/`inspect`）、`.lmnk` DSL 検証器、`cargo xtask` 検証、CMake / CTest、および Miri Strict Provenance（`UB = 0`）。
 - **コアマイクロベンチマーク（Ryzen 5 7600、コア固定）**：`evaluate_adaptive_compute_and_gop_budget` `2.57 ns`（`389.06 Melem/s`）、`eval_stateful_normal_mode` `4.28 ns`、`eval_surrogate_and_step_fused` `31.68 ns`、`apply_phase_steering_256b_tensor_tile/128x64` `274.61 ns`（`111.13 GiB/s`）、`online_toroidal_centroid_merge_and_prune_8centroids_64h` `249.67 ns`。
-- **ローカル GPU 評価（RTX 4070 12 GB、`Q4_K`、`--layer-mask=auto`）**：
-  - **`Phi-4-mini-instruct`**：Step 2 ハイブリッド decode `50.61 tok/s`（Vanilla `52.70 tok/s` 比 `0.960x`、`byp=57.2%`、`sem_forb` `15.6% -> 6.2%`、`OOD=0.0%`）；8 ターン `hit=66.7%`、`sem_forb=0.0%`、`byp=70.6%`；長文ストリーミング蒸留（`25,615` トークン → `7,204.2 MiB` 破棄、`24,576 B .lmnkc`、チャンク prefill `KL=0.000000`）；再起動跨ぎ平衡永続化（`kv=0` `SelfRef 2/2`、`OOD KL=0.000000`、ビット一致 `.lmnkp`）。
-  - **`Ministral-3-3B-Instruct-2512`（ゼロ・ノブ EN / ExtEN / JA / VLM）**：拡張英語 `OOD 100% (18/18, KL=0.000000)`・Guard `sem_forb 50.0% -> 38.6%`；日本語 `SELF_REF 75.0% (6/8)`、`EXTERIOR self_empty 100% (8/8)`、`OOD 100% (6/6, KL=0.000000)`；VLM（Pixtral ViT）視覚スモーク `3/3` 通過、画像クエリ OOD 非干渉 `KL=0.000000`、Text-Only 対 Image-In-KV 境界指標 100% 一致。
+- **ローカル GPU 評価ハイライト（RTX 4070 12 GB、`Q4_K`、自動層選定 `--layer-mask=auto`）**：
+
+| モデル・評価スイート | 実測ハイライト |
+| :--- | :--- |
+| **`Phi-4-mini-instruct`**（動的コーパス併用ハイブリッドデコード & 8 ターン） | デコード速度 `50.61 tok/s`（Vanilla `52.70 tok/s` 比 `0.960x`）、全トークンバイパス率 `57.2%`、禁止語出現率 `15.6% -> 6.2%`、OOD 染み出し `0.0%`。8 ターン永続 KV では期待ヒット率 `66.7%`、禁止語出現率 `0.0%`、全トークンバイパス率 `70.6%`。 |
+| **`Phi-4-mini-instruct`**（長文蒸留 & コールド再起動） | `25,615` トークンを処理し生アクティベーション `7,204.2 MiB` を破棄して `24,576 B` の `.lmnkc` に集約（チャンク prefill `KL = 0.000000`）。KV なしコールド再起動でも `SelfRef 2/2` を復元し、OOD `KL = 0.000000`・ビット一致 `.lmnkp` を確認。 |
+| **`Ministral-3-3B-Instruct-2512`**（手動調整なし 英語 / 日本語） | 拡張英語：OOD 非干渉 `100%`（`18/18`、`KL = 0.000000`）、Guard による禁止語出現率 `50.0% -> 38.6%`。日本語：`SELF_REF` ヒット `75.0%`（`6/8`）、`EXTERIOR` 隔離 `100%`（`8/8`）、OOD 非干渉 `100%`（`6/6`、`KL = 0.000000`）。 |
+| **`Ministral-3-3B-Instruct-2512`**（VLM・Pixtral ViT） | 視覚スモークテスト `3/3` 通過、画像クエリでの OOD ドリフトゼロ（`KL = 0.000000`）、テキストのみ対 画像 KV 保持ターン間の境界指標 `100%` 一致。 |
+
 - **開発中の課題**：`.lmnk` DSL からコンテナへの直接コンパイル、およびさらなるマルチモデル評価カバレッジの拡大。
 
-全実測値と再現コマンドは [`docs/benchmark/benchmarks.md`](./docs/benchmark/benchmarks.md) にまとめています。
+詳細な数値表・指標定義・再現コマンドは [`docs/benchmark/benchmarks.md`](./docs/benchmark/benchmarks.md) にまとめています。
 
 ---
 
 ## ドキュメント (Documentation)
 
 - **アーキテクチャ**：[概要と自動 Mermaid 構成図](./docs/architecture/overview.md) | [C-ABI 仕様 (`0x0000_0400`)](./docs/architecture/c_abi_spec.md) | [コンテナ・パッケージ仕様](./docs/architecture/container_spec.md) | [DSL 仕様](./docs/architecture/dsl_spec.md)
-- **ベンチマーク**：[Criterion ＆ RTX 4070 実測結果](./docs/benchmark/benchmarks.md)
+- **ベンチマーク**：[Criterion & RTX 4070 実測結果](./docs/benchmark/benchmarks.md)
 - **開発ガイド**：[Getting Started](./docs/dev/getting_started.md) | [Testing & Verification](./docs/dev/testing.md) | [Contributing](./CONTRIBUTING.md)
 - **アーカイブ論文**：[GCSO 論文 (EN)](./docs/paper/en/GCSO.md) | [GCSO 論文 (JA)](./docs/paper/ja/GCSO.md)
 

@@ -4,6 +4,8 @@
 
 LiminiKa separates semantic-free control and steering primitives (`liminika-core`) from host runtime orchestration, persistence, and model-specific adapters (`liminika-adapter`, `liminika-dsl`, `liminika-cli`).
 
+Splitting `liminika-core` into a strict five-layer DAG keeps pure math kernels and boundary axioms free of session state or model-specific vocabulary. Isolating three execution drivers (`Spine`, `Ego`, and `Envelope`) at Layer 3 ensures that fast mechanical reflexes, exploratory deviations, and hard viability bounds cannot cross-contaminate or silently override one another.
+
 ### 1.1 Five-Layer Unidirectional DAG
 
 `liminika-core` is strictly `#![no_std]` with zero hot-path dynamic allocation ($C_{\mathrm{alloc}} = 0$) and enforces a five-layer unidirectional Y-shaped dependency graph rooted at `liminal`:

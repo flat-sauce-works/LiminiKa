@@ -1,6 +1,6 @@
 # Testing & Verification
 
-This document describes the complete local and CI verification matrix for LiminiKa `v0.4.0`. On Windows, pass `-j 1` to Cargo commands to keep build parallelism deterministic.
+This document describes the complete local and CI verification matrix for LiminiKa `v0.4.0`. Command examples below use POSIX shell syntax; on Windows PowerShell, substitute `> $null` for `> /dev/null`, set/clear environment variables with `$env:VAR = "..."` and `Remove-Item Env:VAR`, and pass `-j 1` to Cargo commands to keep build parallelism deterministic.
 
 ---
 

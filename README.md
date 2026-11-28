@@ -5,7 +5,7 @@
 > **A lightweight local LLM core engine and DSL for long-term dialogue—bridging boundaries to connect with non-real entities.**
 
 [![Status: Experimental WIP (v0.4.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.4.0%29-orange.svg)](#current-status-and-evaluation-highlights)
-[![Core: no_std Rust 2024](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust%202024%20(MSRV%201.100.0)-informational.svg)](#architecture-at-a-glance)
+[![Core: no_std Rust 2024](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust%202024%20%28MSRV%201.100.0%29-informational.svg)](#architecture-at-a-glance)
 [![Archive Paper: GCSO](https://img.shields.io/badge/Archive%20Paper-GCSO-blue.svg)](./docs/paper/en/GCSO.md)
 [![License: MIT / Apache-2.0](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue.svg)](./LICENSE.md)
 
@@ -99,14 +99,20 @@ See [`docs/dev/getting_started.md`](./docs/dev/getting_started.md) and [`docs/de
 
 ## Current Status and Evaluation Highlights
 
-- **What works today (`v0.4.0`)**: `#![no_std]` core + 27-function C-ABI (`0x0000_0400`), `2 Primitives × 3 Drivers` (`Spine` / `Envelope` / `Ego`), `.lmnkc` / `.lmnkp` containers with SHA-256 + Ed25519 verification (`keygen`/`sign`/`verify`/`inspect`), `.lmnk` DSL parser + validator, `cargo xtask` static gate, CMake/CTest, and Miri Strict Provenance (`UB = 0`).
-- **Core microbenchmarks (Ryzen 5 7600, pinned core)**: `evaluate_adaptive_compute_and_gop_budget` `2.57 ns` (`389.06 Melem/s`), `eval_stateful_normal_mode` `4.28 ns`, `eval_surrogate_and_step_fused` `31.68 ns`, `apply_phase_steering_256b_tensor_tile/128x64` `274.61 ns` (`111.13 GiB/s`), `online_toroidal_centroid_merge_and_prune_8centroids_64h` `249.67 ns`.
-- **Local GPU evaluation (RTX 4070 12 GB, `Q4_K`, `--layer-mask=auto`)**:
-  - **`Phi-4-mini-instruct`**: Step 2 hybrid decode `50.61 tok/s` (`0.960x` vs vanilla `52.70 tok/s`, `byp=57.2%`, `sem_forb` `15.6% -> 6.2%`, `OOD=0.0%`); 8-turn `hit=66.7%`, `sem_forb=0.0%`, `byp=70.6%`; long-document streaming distillation (`25,615` tokens -> `7,204.2 MiB` discarded, `24,576 B .lmnkc`, chunked prefill `KL=0.000000`); cross-restart equilibrium (`kv=0` `SelfRef 2/2`, `OOD KL=0.000000`, bit-identical `.lmnkp`).
-  - **`Ministral-3-3B-Instruct-2512` (zero-knob EN / ExtEN / JA / VLM)**: Extended EN `OOD 100% (18/18, KL=0.000000)` & Guard `sem_forb 50.0% -> 38.6%`; Japanese `SELF_REF 75.0% (6/8)`, `EXTERIOR self_empty 100% (8/8)`, `OOD 100% (6/6, KL=0.000000)`; VLM (Pixtral ViT) `3/3` visual smoke pass, `0` OOD drift on image queries (`KL=0.000000`), and `100%` Text-Only vs Image-In-KV boundary parity.
+- **What runs today (`v0.4.0`)**: The `#![no_std]` core, 27-function C-ABI (`0x0000_0400`), signed `.lmnkc`/`.lmnkp` containers (`keygen`/`sign`/`verify`/`inspect`), `.lmnk` DSL validator, `cargo xtask` checks, CMake/CTest, and Miri Strict Provenance (`UB = 0`).
+- **Core hot-path microbenchmarks (Ryzen 5 7600, pinned core)**: `evaluate_adaptive_compute_and_gop_budget` `2.57 ns` (`389.06 Melem/s`), `eval_stateful_normal_mode` `4.28 ns`, `eval_surrogate_and_step_fused` `31.68 ns`, `apply_phase_steering_256b_tensor_tile/128x64` `274.61 ns` (`111.13 GiB/s`), and `online_toroidal_centroid_merge_and_prune_8centroids_64h` `249.67 ns`.
+- **Local GPU evaluation highlights (RTX 4070 12 GB, `Q4_K`, automatic layer selection `--layer-mask=auto`)**:
+
+| Model & Suite | Recorded Highlights |
+| :--- | :--- |
+| **`Phi-4-mini-instruct`** (dynamic-corpus hybrid decode & 8-turn) | `50.61 tok/s` (`0.960x` vs vanilla `52.70 tok/s`) with `57.2%` whole-token bypass rate, forbidden-output rate reduced `15.6% -> 6.2%`, and `0.0%` OOD bleed; 8-turn persistent KV achieves `66.7%` expected hit, `0.0%` forbidden output, and `70.6%` whole-token bypass rate. |
+| **`Phi-4-mini-instruct`** (long-document & cold restart) | Streams `25,615` tokens while discarding `7,204.2 MiB` of raw activations into a `24,576 B` `.lmnkc` (chunked prefill `KL = 0.000000`); cold restart without KV cache restores `SelfRef 2/2`, keeps OOD at `KL = 0.000000`, and rebakes a bit-identical `.lmnkp`. |
+| **`Ministral-3-3B-Instruct-2512`** (zero-knob EN / JA) | Extended English: `100%` OOD non-interference (`18/18`, `KL = 0.000000`) and Guard forbidden-output rate reduced `50.0% -> 38.6%`. Japanese: `75.0%` (`6/8`) `SELF_REF` hit, `100%` (`8/8`) `EXTERIOR` isolation, and `100%` (`6/6`, `KL = 0.000000`) OOD non-interference. |
+| **`Ministral-3-3B-Instruct-2512`** (VLM, Pixtral ViT) | `3/3` visual smoke pass, zero OOD drift on image queries (`KL = 0.000000`), and `100%` boundary parity between text-only and image-in-KV turns. |
+
 - **Still in progress**: Direct `.lmnk` DSL-to-container compilation and broader multi-model evaluation coverage.
 
-Full numbers and reproduction commands are documented in [`docs/benchmark/benchmarks.md`](./docs/benchmark/benchmarks.md).
+Full tables, metric definitions, and reproduction commands live in [`docs/benchmark/benchmarks.md`](./docs/benchmark/benchmarks.md).
 
 ---
 

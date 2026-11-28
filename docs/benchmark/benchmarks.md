@@ -11,6 +11,21 @@ All figures in this document are recorded directly from measured local runs on t
 - **Toolchain**: Rust Edition 2024, MSRV `1.100.0`, `resolver = "3"`.
 - **GPU Evaluation Defaults**: Greedy deterministic decoding (`det=true`), `--ego=medium`, `--guard-hold-tokens=0`, `--logits-observe-stride=1`, `--probe-frame=pre-rope`, `--layer-mask=auto` (automatic intra-group variance + centered linear CKA layer selection), `base_prior=true` (24-probe multilingual `startup_prior_probes.txt`), `max_tokens=64`.
 
+### Metric Glossary
+
+| Shorthand | Meaning |
+| :--- | :--- |
+| `expect_hit` / `hit` | Fraction of expected factual or persona keywords present in generated replies. |
+| `sem_forb` | Semantic forbidden-output rate (rate at which replies affirm contradicted/forbidden premises). |
+| `mattr20` / `mattr50` | Moving-Average Type-Token Ratio over 20-token and 50-token windows (lexical diversity). |
+| `dist2` | Distinct-2 bigram diversity ratio. |
+| `rep4` / `rep4_loop` | 4-gram repetition loop rate (`0.000` indicates no 4-gram looping). |
+| `aband` | Premature reply abandonment rate. |
+| `unobs` / `exact` / `KL` | Out-of-distribution (OOD) non-interference: fraction classified `Unobserved`, greedy first-token exact match vs unsteered baseline, and first-token logit KL divergence (`0.000000` = zero perturbation). |
+| `antiphase` / `trap` / `dLP_hyb<=0` | Guard repulsion diagnostics: fraction of Guard layers maintaining anti-phase orientation (`100%`), contradiction-trap trigger rate, and fraction of forbidden target tokens whose log-probability decreased under hybrid steering. |
+| `disjoint` / `self_empty` / `ku` | Boundary partitioning: `SelfRef` vs `Exterior` anchor-ID disjointness (`100%`), fraction of exterior probes keeping `SelfRef` empty, and `known_unknown` (`ku`) exterior staging rate. |
+| `byp` / `whole_tok_byp` | Fraction of decode tokens served via whole-token steering bypass (`Spine` + `AnonymousComputePool`). |
+
 ---
 
 ## 2. `liminika-core` Criterion Microbenchmarks
@@ -21,7 +36,7 @@ Measured with `cargo bench -j 1 --locked` (pinned physical core, single-thread p
 
 | Benchmark (`liminika-core`) | `v0.4.0` Point Est. (95% CI) | `v0.4.0` Throughput | `v0.3.0` Median | `v0.3.0` Mean |
 | :--- | ---: | ---: | ---: | ---: |
-| `evaluate_adaptive_compute_and_gop_budget` | **2.57 ns** (`2.53–2.62 ns`) | `389.06 Melem/s` | `2.42 ns` | `2.48 ns` (`402.54 MElem/s`) |
+| `evaluate_adaptive_compute_and_gop_budget` | **2.57 ns** (`2.53–2.62 ns`) | `389.06 Melem/s` | `2.42 ns` | `2.48 ns` (`402.54 Melem/s`) |
 | `eval_stateful_normal_mode` | **4.28 ns** (`4.24–4.34 ns`) | `233.69 Melem/s` | `4.56 ns` | `4.83 ns` |
 | `eval_surrogate_and_step_fused` | **31.68 ns** (`31.45–32.02 ns`) | `31.57 Melem/s` | `31.27 ns` | `33.35 ns` |
 | `apply_phase_steering_256b_tensor_tile/128x64` | **274.61 ns** (`270.18–280.34 ns`) | `111.13 GiB/s` | `279.70 ns` | `289.24 ns` |
@@ -59,7 +74,7 @@ Model geometry: `3,836.02M` params (`2,057.8 MiB` weights est.), `32` layers, `2
 | **`--layer-mask=top16`** (`0xFFFF0000`, `base_prior=true`) | `61.1%` (`11/18`) / `6.7%` / `0.937` / `0.000` | `96.0%` (`48/50`) / `98.0%` / `0.004196` | `100%` / `37.5%` (`6/16`) / `89.1%` (`-1.7551`) / `32.6%->21.7%` | `100%` / `66.7%` (`4/6`) / `33.3%` (`2/6`, `ku=16.7%`) / `100%` (`6/6`) |
 | **`--no-base-prior`** (`auto` `0x3BFBF000`) | `66.7%` (`12/18`) / `6.7%` / `0.929` / `0.003` | `98.0%` (`49/50`) / `98.0%` / `0.001427` | `100%` / `37.5%` (`6/16`) / `93.5%` (`-1.5466`) / `32.6%->15.2%` | `100%` / `83.3%` (`5/6`) / `66.7%` (`4/6`, `ku=16.7%`) / `100%` (`6/6`) |
 
-### 3.2 Step 2 & 8-Turn Multi-Turn Benchmark (`N = 3` Median Trials, `--layer-mask=auto`)
+### 3.2 Dynamic-Corpus Single-Turn (Step 2) & 8-Turn Multi-Turn Benchmark (`N = 3` Median Trials, `--layer-mask=auto`)
 
 | Condition | Pure Decode (Median) | vs `B` | E2E Throughput | Input Tokens | Expect Hit | `sem_forb` | OOD Bleed | Whole-Token Bypass |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

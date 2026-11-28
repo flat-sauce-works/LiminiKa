@@ -12,9 +12,9 @@ LiminiKa separates declarative source definitions, compiled topology-bound binar
 
 ---
 
-## 2. Unified `.lmnk` / `.lmnkc` Binary Container Format
+## 2. Unified `.lmnkc` (`"LMNK"`) Binary Container Format
 
-Implemented in `liminika-core` (`src/core/src/runtime/storage/`) with `#![no_std]` alignment-safe decoding (`LmnkContainerView::parse`).
+Implemented in `liminika-core` (`src/core/src/runtime/storage/`) with `#![no_std]` alignment-safe decoding (`LmnkContainerView::parse`). This `"LMNK"` wire format backs both standalone runtime snapshots and compiled `.lmnkc` caches.
 
 ### 2.1 Header (`LmnkContainerHeader`, 64 B, `align(64)`)
 

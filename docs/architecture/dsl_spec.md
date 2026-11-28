@@ -56,7 +56,7 @@ session_decl   := "session" IDENT "using" IDENT [ "on" IDENT ] "{" [ "mode" "=" 
 
 - **`TargetDecl`**: `name: String`, `model_path: String`, `vram_budget_mb: u32`, `export_path: String`.
 - **`PersonaDecl`**: `name: String`, `parent_preset: Option<String>`, `attractors: AttractorsBlock`.
-- **`AttractorsBlock`**: `attract_rules: Vec<AttractRule>` (`source_path: String`, `weight: f32`), `repel_rules: Vec<RepelRule>` (`target_pattern: String`, `weight: f32`).
+- **`AttractorsBlock`**: `attract_rules: Vec<AttractRule>` (`source_path: String`, `weight: f32`), `repel_rules: Vec<RepelRule>` (`target_pattern: String`, `weight: f32`). Intuitively, `attract` rules pull the latent phase trajectory toward reference sources, while `repel` rules push away from unwanted traits or contradictory premises, each scaled by a positive weight.
 - **`SessionDecl`**: `name: String`, `persona_ref: String`, `target_ref: Option<String>`, `mode: Option<String>`.
 - **`CompiledDslProgram`**: Validated summary grouping `targets`, `personas`, and `sessions`.
 

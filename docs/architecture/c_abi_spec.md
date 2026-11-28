@@ -62,7 +62,7 @@ Rust exports (`src/core/src/runtime/abi/{runtime,kernels}.rs`) and C declaration
 | `lmnk_context_step_decode` | `(lmnk_context_handle_t, const lmnk_decode_step_params_t*, lmnk_decode_step_report_t*)` | Executes one decode control step (`Spine` + `Envelope` + `DistortionTension`), returning dispatch mask, veto mask, and logits observe directive. |
 | `lmnk_context_get_state` | `(lmnk_context_handle_t, lmnk_runtime_state_view_t*)` | Copies an abstracted read-only `64 B` runtime state snapshot (including spine pins, bypass status, and envelope contraction/breach/baseline fields). |
 | `lmnk_context_emit_boundary_signal` | `(lmnk_context_handle_t, const lmnk_boundary_emit_params_t*, lmnk_boundary_signal_t*)` | Emits a `32 B` POD `lmnk_boundary_signal_t` (`0 alloc`, `0 fdiv`). |
-| `lmnk_context_serialize` | `(lmnk_context_handle_t, uint8_t* buffer, size_t* buffer_size)` | Two-pass sizing or serialization into a `576 B` unified `.lmnk` snapshot container. |
+| `lmnk_context_serialize` | `(lmnk_context_handle_t, uint8_t* buffer, size_t* buffer_size)` | Two-pass sizing or serialization into a `576 B` unified `.lmnkc` (`"LMNK"`) snapshot container. |
 | `lmnk_context_deserialize` | `(const uint8_t* buffer, size_t buffer_size, lmnk_context_handle_t* context_out)` | Verifies header, ABI version, `topology_crc32`, and CRC32, restoring context while enforcing host pin floors. |
 
 ### 2.3 Hot-Path Kernels, Lacuna & Standalone Envelope (6 Functions)
@@ -76,11 +76,11 @@ Rust exports (`src/core/src/runtime/abi/{runtime,kernels}.rs`) and C declaration
 | `lmnk_lacuna_partition_eval` | `(const lmnk_lacuna_eval_params_t*, lmnk_lacuna_partition_t*)` | Branchlessly evaluates 8-granule 4-state `Lacuna` partition masks. |
 | `lmnk_envelope_step` | `(lmnk_envelope_state_t*, const lmnk_envelope_step_params_t*, lmnk_envelope_feedback_t*)` | Evaluates one Tier-1 standalone safety-envelope step (`0 alloc`, `0 fdiv`) directly on `lmnk_envelope_state_t`. |
 
-### 2.4 Generic Unified `.lmnk` Container I/O (3 Functions)
+### 2.4 Generic Unified `.lmnkc` (`"LMNK"`) Container I/O (3 Functions)
 
 | Function | Signature Summary | Purpose |
 | :--- | :--- | :--- |
-| `lmnk_container_write` | `(const lmnk_container_write_params_t*)` | Writes a 64B-aligned `.lmnk` container stamped with active ABI version, `CORE_TOPOLOGY.topology_crc32`, and IEEE 802.3 CRC32s. |
+| `lmnk_container_write` | `(const lmnk_container_write_params_t*)` | Writes a 64B-aligned `.lmnkc` (`"LMNK"`) container stamped with active ABI version, `CORE_TOPOLOGY.topology_crc32`, and IEEE 802.3 CRC32s. |
 | `lmnk_container_verify` | `(const uint8_t* bytes, size_t byte_len, lmnk_container_verify_report_t*)` | Validates container bounds, magic, ABI version, `topology_crc32`, monotonic aligned spans, duplicate kinds, and CRC32s. |
 | `lmnk_container_find_section` | `(const uint8_t* bytes, size_t byte_len, uint16_t kind, lmnk_container_section_view_t*)` | Verifies container and returns a zero-copy pointer/length view of section `kind` (or `LMNK_ERR_ANCHOR_NOT_FOUND`). |
 
