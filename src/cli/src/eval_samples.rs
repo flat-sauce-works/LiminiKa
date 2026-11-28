@@ -148,9 +148,11 @@ mod tests {
         assert!(suite.probes.len() >= 5);
 
         assert_eq!(suite.probes[0].slot, ProbeSlot::Fact);
-        assert!(suite.probes[0]
-            .expected_keywords
-            .iter()
-            .any(|k| k.contains("Geometric Cellular Sheaf Orchestrator")));
+        assert!(
+            suite.probes[0]
+                .expected_keywords
+                .iter()
+                .any(|k| k.contains("Geometric Cellular Sheaf Orchestrator"))
+        );
     }
 }

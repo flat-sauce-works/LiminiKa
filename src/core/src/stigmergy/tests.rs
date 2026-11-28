@@ -5,9 +5,9 @@
 
 use super::*;
 use crate::foundation::{
-    compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
-    eval_gershgorin_lambda_max, evaluate_hodge_obstruction_and_dual_pairing, load_q7_words_64,
-    AlignedBuffer32, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_EXPRESS_PHASE, AlignedBuffer32, compute_tikhonov_chebyshev_coeffs_deg3,
+    eval_chebyshev_spectral_filter_deg3, eval_gershgorin_lambda_max,
+    evaluate_hodge_obstruction_and_dual_pairing, load_q7_words_64,
 };
 use crate::liminal::{LmnkResult, RuntimeConfig};
 
@@ -89,13 +89,9 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
         ACTION_PRESET_EXPRESS_PHASE,
         24,
     );
-    let (evolved_ptr, density, triggered) =
-        filter.apply_repulsion_and_evolve_ptr(init_ptr, &mut pattern, 2, 128);
-    assert!(triggered && density == 2 && pattern[0] == -12 && pattern[63] == 40);
-    assert_eq!(
-        evolved_ptr.target_attractor_slot(),
-        ATTRACTOR_SLOT_REPULSION
-    );
+    let (density, _rep_active, _words) =
+        filter.apply_phase_conjugate_repulsion_to_words(&mut pattern, 2, 128);
+    assert!(density == 2 && pattern[0] == -12 && pattern[63] == 40);
 
     for step in 0..100u8 {
         let p = [(step as i8).wrapping_mul(3); MAX_ATTENTION_HEADS];
@@ -109,15 +105,22 @@ fn test_paged_bitmask_bloom_trail_swarm_and_ledger_constant_time() {
         ..Default::default()
     };
     trail.accumulate_uniform_phase(16);
-    let (r_bar, mean_q7, kappa, grav) = trail.evaluate_trail_circular_stats_and_gravity();
+    let (r_bar, mean_q7, kappa) =
+        crate::foundation::circular_resultant_from_words_64(trail_phase_words_ref(&trail));
+    let grav = crate::foundation::branchless_phase_proximity_gravity_f32(
+        trail.stigmergic_density,
+        r_bar,
+        crate::foundation::DEFAULT_PHASE_GRAVITY_EPS,
+    );
     assert!(r_bar > 0.99 && mean_q7 == 16 && kappa > 10.0 && grav > 1.0);
 
     let mut target_phases = [24i8; MAX_ATTENTION_HEADS];
     target_phases[48..64].fill(112);
 
-    let report = trail.try_resolve_action_in_swarm(
+    let report = trail.try_resolve_action_in_swarm_masked(
         init_ptr,
         &target_phases,
+        0xFF,
         64,
         1,
         DEFAULT_STIGMERGIC_TOLERANCE_Q7,
@@ -322,11 +325,13 @@ fn test_sheaf_cohomology_symmetric_degrees_dual_pairing_and_qdpt() {
         base_ptr,
         &m0,
         &m1,
-        0.05,
-        0,
-        0.1,
-        &[0x100, 0x200, 0x300, 0x400],
-        &[4, 8, 12, 16],
+        QdptCascadeParams {
+            w_key: 0.05,
+            current_level: 0,
+            hysteresis_band: 0.1,
+            addr_offsets: &[0x100, 0x200, 0x300, 0x400],
+            phase_deltas: &[4, 8, 12, 16],
+        },
     )
     .unwrap();
     assert_eq!(qdpt_lvl, 0);

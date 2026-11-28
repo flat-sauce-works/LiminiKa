@@ -1,30 +1,31 @@
 // name: src/core/src/runtime/gateway/bridges/ledger_bridge.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! [`CognitiveTrajectoryLedger`], [`CognitiveCircuitBank`], [`PointerTrail`], and [`EntropyController`] Gateway bridges.
+//! [`CognitiveTrajectoryLedger`], [`CognitiveCircuitBank`], [`PointerTrail`], and [`EntropyController`] Gateway
+//! bridges.
 
 use super::super::*;
 use crate::drivers::{
-    EntropyController, ENTROPY_GATE_MODE_NORMAL_ENTROPY,
-    ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
+    ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
+    EntropyController,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_max_f32, branchless_min_f32,
-    branchless_relu_f32, fast_mean_q7_tag_from_words_64, load_q7_words_64, pack_action_slot_tag,
-    words_to_q7_array_64, RawPhaseProjectable, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
-    ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER, ACTION_MODE_SUBHEAD_ROUTE,
+    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    RawPhaseProjectable, TaggedPtr, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_max_f32, branchless_min_f32, branchless_relu_f32, fast_mean_q7_tag_from_words_64,
+    load_q7_words_64, pack_action_slot_tag, words_to_q7_array_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, PhaseQ7,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
+    branchless_select_f32, branchless_select_u8, branchless_select_u32,
 };
 use crate::stigmergy::{
-    trail_phase_words_ref, CognitiveCircuitActivation, CognitiveCircuitBank,
+    ATTRACTOR_SLOT_PERSONA, CognitiveCircuitActivation, CognitiveCircuitBank,
     CognitiveCircuitBankOps, CognitiveOpKind, CognitiveTrajectoryLedger, EpisodicPhaseSample,
-    PointerTrail, RelativeAttractorNode, StigmergicScaleGranularity, ATTRACTOR_SLOT_PERSONA,
-    MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_SWARM_QUORUM_MASK,
-    TRAIL_SWARM_QUORUM_SHIFT,
+    MAX_ATTRACTOR_PULL_FORCE, PointerTrail, RelativeAttractorNode, StigmergicScaleGranularity,
+    TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_SWARM_QUORUM_MASK, TRAIL_SWARM_QUORUM_SHIFT,
+    trail_phase_words_ref,
 };
 
 impl CognitiveTrajectoryLedger {
@@ -266,7 +267,7 @@ impl ManifoldGatewaySignal for PointerTrail {
                 ),
                 repulsion_severity: branchless_select_f32(rep, 0.85, 0.0),
                 lineage_flags: self.causal_provenance_bits(),
-                attribution_tag: branchless_select_u8(
+                root_cause_code: branchless_select_u8(
                     rep,
                     ROOT_CAUSE_COHOMOLOGY_REPULSION,
                     ROOT_CAUSE_NOMINAL,

@@ -3,18 +3,15 @@
 
 //! Static 64B-aligned lookup tables (Q7, TANH, Slice-by-16 CRC32) and branchless IEEE 802.3 CRC32 updaters.
 
-use core::mem::align_of;
-
-use crate::foundation::aligned::is_aligned_to;
 use crate::foundation::scalar_math::{
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, VON_MISES_KAPPA_AT_MAX_R,
     branchless_flush_subnormal_f32, branchless_max_f32, branchless_q7_abs_u8,
     branchless_q7_fold_s1_geodesic, branchless_relu_f32, branchless_rsqrt_f32,
-    fast_inv_pos_normal_f32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE,
-    VON_MISES_KAPPA_AT_MAX_R,
+    fast_inv_pos_normal_f32,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u8, branchless_select_usize, PhaseQ7,
-    Q7_PHASE_SCALE_RAD,
+    PhaseQ7, Q7_PHASE_SCALE_RAD, branchless_select_f32, branchless_select_u8,
+    branchless_select_usize,
 };
 
 // ===================================================================
@@ -42,6 +39,7 @@ pub(crate) const TWO_PI_F64: f64 = 2.0 * core::f64::consts::PI;
 pub(crate) const INV_LN2_F32: f32 = core::f32::consts::LOG2_E;
 pub(crate) const LN2_HI_F32: f32 = 0.693_145_75;
 pub(crate) const LN2_LO_F32: f32 = 1.428_606_8e-6;
+#[cfg(test)]
 pub(crate) const MAX_BAYESIAN_STIGMERGIC_DENSITY: f32 = 16.0;
 pub(crate) const INV_64_Q14_F32: f32 = f32::from_bits((127 - 20) << 23);
 pub(crate) const INV_8_Q14_F32: f32 = f32::from_bits((127 - 17) << 23);
@@ -315,7 +313,8 @@ pub(crate) const Q7_FULL_SIN_REF: &[f32; 256] = &Q7_FULL_SIN_LUT.0;
 /// Promoted `.rodata` reference to the 64B-aligned 256-entry `cos` Q7 table.
 pub(crate) const Q7_FULL_COS_REF: &[f32; 256] = &Q7_FULL_COS_LUT.0;
 
-/// 64B-aligned 2KB precomputed `(align_gain, inv_denom)` table for [`crate::foundation::scalar_math::branchless_phase_proximity_gravity_f32`]
+/// 64B-aligned 2KB precomputed `(align_gain, inv_denom)` table for
+/// [`crate::foundation::scalar_math::branchless_phase_proximity_gravity_f32`]
 /// under `DEFAULT_PHASE_GRAVITY_EPS` (`0.25`) across all 256 Q7 circular difference bytes `0..=255`,
 /// enabling 0-ULP bit-exact gravity evaluation in 1 LUT load + 2 `vmulss` (`0` Newton-Raphson iterations).
 pub(crate) const Q7_DEFAULT_GRAVITY_PAIR_LUT_256: AlignedLut256<(f32, f32)> = {
@@ -337,8 +336,10 @@ pub(crate) const Q7_DEFAULT_GRAVITY_PAIR_LUT_256: AlignedLut256<(f32, f32)> = {
 pub(crate) const Q7_DEFAULT_GRAVITY_PAIR_REF: &[(f32, f32); 256] =
     &Q7_DEFAULT_GRAVITY_PAIR_LUT_256.0;
 
-/// Evaluates Phase-Proximity Gravity $F_{\mathrm{grav}}(M_{\mathrm{grav}}, \cos(\Delta\theta_{\mathrm{Q7}}), \epsilon_{\mathrm{default}})$
-/// directly from a uniform Q7 circular difference byte `diff_u8` in 1 LUT load + 2 `vmulss` (`0` Newton-Raphson reciprocals, `0` ULP drift).
+/// Evaluates Phase-Proximity Gravity $F_{\mathrm{grav}}(M_{\mathrm{grav}}, \cos(\Delta\theta_{\mathrm{Q7}}),
+/// \epsilon_{\mathrm{default}})$
+/// directly from a uniform Q7 circular difference byte `diff_u8` in 1 LUT load + 2 `vmulss` (`0` Newton-Raphson
+/// reciprocals, `0` ULP drift).
 #[inline(always)]
 #[must_use]
 pub(crate) const fn branchless_q7_default_gravity_from_diff_u8(
@@ -386,7 +387,8 @@ pub(crate) const fn build_q7_fused_self_phase_clamp_sincos_lut(
 pub(crate) const Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_phase_clamp_sincos_lut(false);
 
-/// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(theta_b + theta_p), cos(theta_b + theta_p))`
+/// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(theta_b + theta_p), cos(theta_b +
+/// theta_p))`
 /// when `base_clamp_q7 == subhead_slot_q7` under `DEFAULT_PHASE_CLAMP_MAX_RAD` (geodesic sub-head router).
 pub(crate) const Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_phase_clamp_sincos_lut(true);
@@ -1022,32 +1024,70 @@ pub const fn compute_crc32_ieee(bytes: &[u8]) -> u32 {
 
 #[inline(always)]
 #[must_use]
+fn read_block64_le_words(block: &[u8]) -> [u64; 8] {
+    [
+        u64::from_le_bytes([
+            block[0], block[1], block[2], block[3], block[4], block[5], block[6], block[7],
+        ]),
+        u64::from_le_bytes([
+            block[8], block[9], block[10], block[11], block[12], block[13], block[14], block[15],
+        ]),
+        u64::from_le_bytes([
+            block[16], block[17], block[18], block[19], block[20], block[21], block[22], block[23],
+        ]),
+        u64::from_le_bytes([
+            block[24], block[25], block[26], block[27], block[28], block[29], block[30], block[31],
+        ]),
+        u64::from_le_bytes([
+            block[32], block[33], block[34], block[35], block[36], block[37], block[38], block[39],
+        ]),
+        u64::from_le_bytes([
+            block[40], block[41], block[42], block[43], block[44], block[45], block[46], block[47],
+        ]),
+        u64::from_le_bytes([
+            block[48], block[49], block[50], block[51], block[52], block[53], block[54], block[55],
+        ]),
+        u64::from_le_bytes([
+            block[56], block[57], block[58], block[59], block[60], block[61], block[62], block[63],
+        ]),
+    ]
+}
+
+#[inline(always)]
+#[must_use]
 pub(crate) fn update_aligned64_blocks_crc32_raw(mut crc: u32, bytes: &[u8]) -> u32 {
     let len = bytes.len();
     let num_blocks = len >> 6;
-    // SAFETY: Caller guarantees `bytes` is 8-byte aligned and `len` is a multiple of 64.
-    let blocks =
-        unsafe { core::slice::from_raw_parts(bytes.as_ptr().cast::<[u64; 8]>(), num_blocks) };
     let mut b = 0usize;
     while b + 4 <= num_blocks {
-        let z0 = crc32_block64_zero_seed_words(&blocks[b]);
-        let z1 = crc32_block64_zero_seed_words(&blocks[b + 1]);
+        let base = b << 6;
+        let w0 = read_block64_le_words(&bytes[base..base + 64]);
+        let w1 = read_block64_le_words(&bytes[base + 64..base + 128]);
+        let w2 = read_block64_le_words(&bytes[base + 128..base + 192]);
+        let w3 = read_block64_le_words(&bytes[base + 192..base + 256]);
+        let z0 = crc32_block64_zero_seed_words(&w0);
+        let z1 = crc32_block64_zero_seed_words(&w1);
         let z01 = (if z0 == 0 { 0 } else { crc32_step_l4(z0) }) ^ z1;
-        let z2 = crc32_block64_zero_seed_words(&blocks[b + 2]);
-        let z3 = crc32_block64_zero_seed_words(&blocks[b + 3]);
+        let z2 = crc32_block64_zero_seed_words(&w2);
+        let z3 = crc32_block64_zero_seed_words(&w3);
         let c23 = (if z2 == 0 { 0 } else { crc32_step_l4(z2) }) ^ z3;
         crc = crc32_step_l16(crc) ^ (if z01 == 0 { 0 } else { crc32_step_l8(z01) }) ^ c23;
         b += 4;
     }
     while b + 2 <= num_blocks {
-        let z0 = crc32_block64_zero_seed_words(&blocks[b]);
-        let z1 = crc32_block64_zero_seed_words(&blocks[b + 1]);
+        let base = b << 6;
+        let w0 = read_block64_le_words(&bytes[base..base + 64]);
+        let w1 = read_block64_le_words(&bytes[base + 64..base + 128]);
+        let z0 = crc32_block64_zero_seed_words(&w0);
+        let z1 = crc32_block64_zero_seed_words(&w1);
         let z01 = (if z0 == 0 { 0 } else { crc32_step_l4(z0) }) ^ z1;
         crc = crc32_step_l8(crc) ^ z01;
         b += 2;
     }
     if b < num_blocks {
-        crc = crc32_step_block64_words(crc, &blocks[b]);
+        let base = b << 6;
+        let w0 = read_block64_le_words(&bytes[base..base + 64]);
+        crc = crc32_step_block64_words(crc, &w0);
     }
     crc
 }
@@ -1055,11 +1095,8 @@ pub(crate) fn update_aligned64_blocks_crc32_raw(mut crc: u32, bytes: &[u8]) -> u
 #[inline(always)]
 #[must_use]
 pub(crate) fn compute_aligned64_payload_crc32_ieee(bytes: &[u8]) -> u32 {
-    #[cfg(target_endian = "little")]
-    {
-        if (bytes.len() & 63) == 0 && is_aligned_to(bytes, align_of::<u64>()) {
-            return !update_aligned64_blocks_crc32_raw(0xFFFF_FFFFu32, bytes);
-        }
+    if (bytes.len() & 63) == 0 {
+        return !update_aligned64_blocks_crc32_raw(0xFFFF_FFFFu32, bytes);
     }
     branchless_crc32_ieee(bytes)
 }

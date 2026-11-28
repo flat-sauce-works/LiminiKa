@@ -8,23 +8,22 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use crate::drivers::{
     AnonymousComputePool, DistortionTension, EgoDifferentialNet, EntropyController, EntropyState,
-    LiminalEgoState, SystemSpineState,
+    EnvelopeBounds, EnvelopeState, LiminalEgoState, SystemSpineState,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_is_finite_f32, Pod, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, Pod, branchless_clamp_f32,
+    branchless_is_finite_f32,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, LacunaPartition8,
-    LiminalThresholdState, LmnkResult, RuntimeConfig, DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_MAJOR,
-    LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH, LMNK_ABI_VERSION_STRING,
-    LMNK_CAP_INPLACE_CONTEXT_INIT, LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON, LMNK_CAP_SIMD_WASM128,
-    LMNK_CAP_SWAR_BASELINE, LMNK_CAP_ZERO_ALLOC_CORE, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_MAJOR, LMNK_ABI_VERSION_MINOR, LMNK_ABI_VERSION_PATCH,
+    LMNK_ABI_VERSION_STRING, LMNK_CAP_INPLACE_CONTEXT_INIT, LMNK_CAP_SIMD_AVX2, LMNK_CAP_SIMD_NEON,
+    LMNK_CAP_SIMD_WASM128, LMNK_CAP_SWAR_BASELINE, LMNK_CAP_ZERO_ALLOC_CORE,
+    LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, LiminalThresholdState, LmnkResult,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD, RuntimeConfig,
+    branchless_select_f32, branchless_select_u8, branchless_select_u32,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::gateway::{
@@ -34,9 +33,9 @@ use crate::runtime::gateway::{
 use crate::runtime::horizon::{EpistemicHorizonReading, HorizonDwellState};
 use crate::runtime::telemetry::{CoreTelemetryBank, TelemetryCapturePolicy};
 use crate::stigmergy::{
-    CognitiveTrajectoryLedger, CorePrimitiveState, DissipativeOverflowReport,
-    OverlapDiscoveryReport, PhaseSteeringEngine, SandboxLifecycleEvent, StigmergicGranuleState,
-    StigmergicSubstrate, StigmergicSubstrateOps, DEFAULT_SUBSTRATE_CAPACITY, MAX_PHASE_ANCHORS,
+    CognitiveTrajectoryLedger, CorePrimitiveState, DEFAULT_SUBSTRATE_CAPACITY,
+    DissipativeOverflowReport, MAX_PHASE_ANCHORS, OverlapDiscoveryReport, PhaseSteeringEngine,
+    SandboxLifecycleEvent, StigmergicGranuleState, StigmergicSubstrate, StigmergicSubstrateOps,
 };
 
 mod accessors;
@@ -44,6 +43,8 @@ mod config;
 mod orchestration;
 mod snapshot;
 mod traits;
+
+pub use accessors::ContextRebindParams;
 
 pub use config::Config;
 
@@ -87,6 +88,7 @@ pub const fn query_capability() -> u64 {
 #[inline(always)]
 pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
     *config = RuntimeConfig {
+        struct_size: core::mem::size_of::<RuntimeConfig>() as u32,
         head_dim: 128,
         num_heads: 32,
         paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
@@ -101,7 +103,9 @@ pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
         ledger_mode: 0,
         rotary_dim: 0,
         rope_layout: 0,
-        reserved: [0; 20],
+        guard_hold_tokens: 0,
+        max_observe_stride: 1,
+        reserved: [0; 14],
     };
     Ok(())
 }
@@ -109,13 +113,17 @@ pub fn init_default_config(config: &mut RuntimeConfig) -> LmnkResult<()> {
 /// Branchlessly validates a [`RuntimeConfig`] descriptor against LiminiKa architectural invariants.
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any dimension, scale, or capacity invariant is violated.
+/// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `struct_size` or any dimension, scale, or capacity invariant is violated.
 #[inline(always)]
 pub fn validate_config_invariants(config: &RuntimeConfig) -> LmnkResult<()> {
+    let valid_envelope = config.struct_size == core::mem::size_of::<RuntimeConfig>() as u32;
     let valid_dims = (config.head_dim != 0)
         & ((config.head_dim & 1) == 0)
         & (config.num_heads != 0)
         & ((config.num_heads as usize) <= MAX_ATTENTION_HEADS)
+        & (config.rotary_dim <= config.head_dim)
+        & ((config.rotary_dim & 1) == 0)
+        & (config.rope_layout <= 1)
         & ((config.paged_block_size == 16) | (config.paged_block_size == 32));
     let valid_scales = branchless_is_finite_f32(config.q7_phase_scale)
         & (config.q7_phase_scale > 0.0)
@@ -129,7 +137,7 @@ pub fn validate_config_invariants(config: &RuntimeConfig) -> LmnkResult<()> {
         & (config.substrate_capacity != 0)
         & (config.ledger_mode <= 2);
 
-    if valid_dims & valid_scales & valid_caps {
+    if valid_envelope & valid_dims & valid_scales & valid_caps {
         Ok(())
     } else {
         Err(LMNK_ERR_INVALID_ARGUMENT)
@@ -176,13 +184,6 @@ impl CoreStateStack {
             liminal: self.liminal,
             stigmergy: self.stigmergy,
         }
-    }
-
-    /// Replaces the `Liminal` + `Stigmergy` halves from `primitives`.
-    #[inline(always)]
-    pub const fn set_core_primitive_state(&mut self, primitives: CorePrimitiveState) {
-        self.liminal = primitives.liminal;
-        self.stigmergy = primitives.stigmergy;
     }
 
     /// Branchlessly co-adapts Slot 0 (`LiminalThresholdState`) and Slot 1 (`StigmergicGranuleState`)
@@ -356,7 +357,8 @@ pub struct OrchestratorStatusSnapshot {
     pub ego_intervention_epochs: u32,
     /// Whether Core Stack Slot 0 boundaries are quiescent (`stationary_shortcut_ready != 0`).
     pub stationary_shortcut_ready: bool,
-    /// Bitmask of external [`crate::runtime::horizon::LatentHorizonSlot`] traits currently slid into the cognitive window.
+    /// Bitmask of external [`crate::runtime::horizon::LatentHorizonSlot`] traits currently slid into the
+    /// cognitive window.
     pub active_horizon_slots_mask: u32,
     /// Consecutive destabilized steps observed by the orchestrator.
     pub unstable_dwell_steps: u16,
@@ -371,11 +373,46 @@ pub(crate) const CTX_ALLOC_HEAP_BOXED: u8 = 1;
 /// Allocation provenance tag for [`RuntimeContext::allocation_mode`]: caller-owned `in_place` memory.
 pub(crate) const CTX_ALLOC_IN_PLACE: u8 = 2;
 
-/// Exact payload byte size (`384` bytes) of a serialized `RuntimeSnapshot` section.
-pub const LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES: usize = 384;
+/// Exact payload byte size (`448` bytes) of a serialized `RuntimeSnapshot` section.
+pub const LMNK_RUNTIME_SNAPSHOT_PAYLOAD_BYTES: usize = 448;
 
-/// Exact total byte size (`512` bytes) of a serialized single-section `RuntimeContext` container.
-pub const LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES: usize = 512;
+/// Exact total byte size (`576` bytes) of a serialized single-section `RuntimeContext` container.
+pub const LMNK_RUNTIME_SNAPSHOT_TOTAL_BYTES: usize = 576;
+
+/// Compact derived configuration fields split out of [`Config`] (`24 B, align(8)`) so
+/// [`RuntimeContext`] embeds [`EnvelopeState`] (`@ 320`), [`SystemSpineState`] (`@ 384`), and
+/// [`EnvelopeBounds`] (`@ 416`) while preserving its exact 5,184-byte L1D footprint.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct DerivedRuntimeConfig {
+    pub(super) slot_coupling_matrix: u64,
+    pub(super) hysteresis_band: f32,
+    pub(super) tau_flux: f32,
+    pub(super) bifurcation_threshold: f32,
+    pub(super) repulsion_threshold: u8,
+    pub(super) repulsion_scale_u7: u8,
+    pub(super) _pad: [u8; 2],
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<DerivedRuntimeConfig>() == 24);
+    assert!(core::mem::align_of::<DerivedRuntimeConfig>() == 8);
+};
+
+impl DerivedRuntimeConfig {
+    #[inline(always)]
+    const fn from_config(config: &Config) -> Self {
+        Self {
+            slot_coupling_matrix: config.slot_coupling_matrix,
+            hysteresis_band: config.hysteresis_band,
+            tau_flux: config.tau_flux,
+            bifurcation_threshold: config.bifurcation_threshold,
+            repulsion_threshold: config.repulsion_threshold,
+            repulsion_scale_u7: config.repulsion_scale_u7,
+            _pad: [0; 2],
+        }
+    }
+}
 
 /// Deterministically scrubs `size_of::<T>()` bytes at `dst` to zero using volatile stores
 /// followed by a `SeqCst` compiler fence to prevent dead-store elimination.
@@ -392,7 +429,7 @@ pub(crate) unsafe fn zeroize_volatile<T>(dst: *mut T) {
     let mut ptr_u8 = dst.cast::<u8>();
     let mut rem = byte_len;
 
-    if ((ptr_u8 as usize) & (core::mem::align_of::<usize>() - 1)) == 0 {
+    if (ptr_u8.addr() & (core::mem::align_of::<usize>() - 1)) == 0 {
         let word_count = rem / word_bytes;
         let mut ptr_word = ptr_u8.cast::<usize>();
         let mut w = 0usize;
@@ -431,17 +468,20 @@ pub(crate) unsafe fn zeroize_volatile<T>(dst: *mut T) {
 #[derive(Debug)]
 pub struct RuntimeContext {
     // --- Hot (per-token step working set) ---
-    config: Config,
+    raw_config: RuntimeConfig,
     core_layers: CoreStateStack,
     entropy_controller: EntropyController,
-    probe_baseline: ManifoldProbeBaseline,
+    envelope: EnvelopeState,
     system_spine: SystemSpineState,
+    envelope_bounds: EnvelopeBounds,
     last_horizon: EpistemicHorizonReading,
     last_overlap_report: OverlapDiscoveryReport,
     distortion_tension: DistortionTension,
     phase_steering: PhaseSteeringEngine,
     last_lacuna_partition: LacunaPartition8,
     last_boundary_delta: LiminalBoundaryDelta,
+    derived_config: DerivedRuntimeConfig,
+    probe_baseline: ManifoldProbeBaseline,
     horizon_dwell: HorizonDwellState,
     active_horizon_slots_mask: u32,
     sandbox_settlements: u32,
@@ -458,9 +498,15 @@ pub struct RuntimeContext {
 }
 
 const _: () = {
-    assert!(core::mem::size_of::<RuntimeContext>() == 5120);
+    assert!(core::mem::size_of::<RuntimeContext>() == 5184);
     assert!(core::mem::align_of::<RuntimeContext>() == 64);
-    assert!(core::mem::offset_of!(RuntimeContext, telemetry) == 4544);
+    assert!(core::mem::offset_of!(RuntimeContext, raw_config) == 0);
+    assert!(core::mem::offset_of!(RuntimeContext, envelope) == 320);
+    assert!(core::mem::offset_of!(RuntimeContext, system_spine) == 384);
+    assert!(core::mem::offset_of!(RuntimeContext, envelope_bounds) == 416);
+    assert!(core::mem::offset_of!(RuntimeContext, derived_config) == 592);
+    assert!(core::mem::offset_of!(RuntimeContext, allocation_mode) == 654);
+    assert!(core::mem::offset_of!(RuntimeContext, telemetry) == 4608);
     assert!(!core::mem::needs_drop::<RuntimeContext>());
 };
 
@@ -487,18 +533,31 @@ impl RuntimeContext {
         entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
         entropy_ctrl.set_tau_flux(config.tau_flux);
 
+        let mut raw_config = config.raw;
+        if raw_config.max_observe_stride == 0 {
+            raw_config.max_observe_stride = 1;
+        }
+        let derived_config = DerivedRuntimeConfig::from_config(&config);
+        let system_spine = SystemSpineState::with_policy(
+            raw_config.guard_hold_tokens,
+            raw_config.max_observe_stride,
+        );
+
         Ok(Self {
-            config,
+            raw_config,
             core_layers: CoreStateStack::new(),
             entropy_controller: entropy_ctrl,
-            probe_baseline: ManifoldProbeBaseline::new(),
-            system_spine: SystemSpineState::new(),
+            envelope: EnvelopeState::new(),
+            system_spine,
+            envelope_bounds: EnvelopeBounds::new(),
             last_horizon: EpistemicHorizonReading::default(),
             last_overlap_report: OverlapDiscoveryReport::default(),
             distortion_tension: DistortionTension::default(),
             phase_steering,
             last_lacuna_partition: LacunaPartition8::default(),
             last_boundary_delta: LiminalBoundaryDelta::default(),
+            derived_config,
+            probe_baseline: ManifoldProbeBaseline::new(),
             horizon_dwell: HorizonDwellState::default(),
             active_horizon_slots_mask: 0,
             sandbox_settlements: 0,
@@ -541,15 +600,19 @@ impl RuntimeContext {
         entropy_ctrl.set_hysteresis_band(config.hysteresis_band);
         entropy_ctrl.set_tau_flux(config.tau_flux);
 
-        let raw_cfg = config.raw;
-        let rep_thresh = config.repulsion_threshold;
-        let rep_scale_u7 = config.repulsion_scale_u7;
-        let coupling = config.slot_coupling_matrix;
+        let mut raw_cfg = config.raw;
+        if raw_cfg.max_observe_stride == 0 {
+            raw_cfg.max_observe_stride = 1;
+        }
+        let derived_cfg = DerivedRuntimeConfig::from_config(&config);
+        let rep_thresh = derived_cfg.repulsion_threshold;
+        let rep_scale_u7 = derived_cfg.repulsion_scale_u7;
+        let coupling = derived_cfg.slot_coupling_matrix;
 
         // SAFETY: Caller guarantees `dst` is valid, writable, non-aliased, and 64-byte aligned.
         unsafe {
             core::ptr::write_bytes(dst, 0u8, 1);
-            core::ptr::write(core::ptr::addr_of_mut!((*dst).config), config);
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).raw_config), raw_cfg);
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).core_layers),
                 CoreStateStack::new(),
@@ -559,12 +622,19 @@ impl RuntimeContext {
                 entropy_ctrl,
             );
             core::ptr::write(
-                core::ptr::addr_of_mut!((*dst).probe_baseline),
-                ManifoldProbeBaseline::new(),
+                core::ptr::addr_of_mut!((*dst).envelope),
+                EnvelopeState::new(),
             );
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).system_spine),
-                SystemSpineState::new(),
+                SystemSpineState::with_policy(
+                    raw_cfg.guard_hold_tokens,
+                    raw_cfg.max_observe_stride,
+                ),
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).envelope_bounds),
+                EnvelopeBounds::new(),
             );
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).last_horizon),
@@ -589,6 +659,11 @@ impl RuntimeContext {
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).last_boundary_delta),
                 LiminalBoundaryDelta::default(),
+            );
+            core::ptr::write(core::ptr::addr_of_mut!((*dst).derived_config), derived_cfg);
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*dst).probe_baseline),
+                ManifoldProbeBaseline::new(),
             );
             core::ptr::write(
                 core::ptr::addr_of_mut!((*dst).horizon_dwell),
@@ -631,7 +706,7 @@ impl RuntimeContext {
     }
 
     /// Allocates and initializes a [`RuntimeContext`] directly on the heap via `Box::new_uninit`
-    /// without staging the 5,120-byte structure on the caller's stack.
+    /// without staging the 5,184-byte structure on the caller's stack.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `config` violates architectural invariants or
@@ -649,7 +724,7 @@ impl RuntimeContext {
         }
     }
 
-    /// Scrubs all 5,120 bytes of a raw [`RuntimeContext`] pointer via volatile zeroization without
+    /// Scrubs all 5,184 bytes of a raw [`RuntimeContext`] pointer via volatile zeroization without
     /// creating any intermediate Rust reference (preserving Stacked Borrows provenance for FFI teardown).
     ///
     /// # Safety
@@ -677,11 +752,11 @@ impl RuntimeContext {
         unsafe { core::ptr::addr_of!((*ptr).allocation_mode).read() }
     }
 
-    /// Scrubs all 5,120 bytes of this [`RuntimeContext`] via volatile zeroization and restores valid
+    /// Scrubs all 5,184 bytes of this [`RuntimeContext`] via volatile zeroization and restores valid
     /// empty enum discriminants so the reference remains structurally valid without drop glue.
     pub fn zeroize_in_place(&mut self) {
         let raw = core::ptr::from_mut(self);
-        // SAFETY: `raw` derives from a uniquely borrowed 5,120-byte `RuntimeContext` with `!needs_drop`
+        // SAFETY: `raw` derives from a uniquely borrowed 5,184-byte `RuntimeContext` with `!needs_drop`
         // and is never re-borrowed through `self` after `zeroize_raw`. Recursive field audit confirms
         // `EntropyController.is_active: bool` (`false`), `CoreTelemetryBank.ema_initialized: bool`
         // (`false`), `ComputePressureRegime::Quiescent = 0`, `TelemetryVerbosityMode::Coarse = 0`,

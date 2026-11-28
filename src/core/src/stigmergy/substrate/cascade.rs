@@ -4,27 +4,29 @@
 //! Pheromone evaporation, pointer-chain cascade orchestration, and trait implementations for [`StigmergicSubstrate`].
 
 use super::{
-    StigmergicActionDecision, StigmergicSubstrate, StigmergicThresholds, SubstrateStepReport,
-    SUBSTRATE_INLINE_TRAILS,
+    SUBSTRATE_INLINE_TRAILS, StigmergicActionDecision, StigmergicSubstrate, StigmergicThresholds,
+    SubstrateStepReport,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_fast_transition_log_prob, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32, branchless_relu_f32,
-    coherence_from_word_arrays_64, fast_inv_len_f32, load_q7_words_64, pack_action_slot_tag,
-    resolve_autonomous_swarm_rot_dim, swar_or_avx2_q7_add_sat_words_64, swar_words_nonzero_64,
-    AlignedSliceMut32, PagedBitmask, TaggedPtr, ACTION_MODE_RANK1_INJECT, ATTRACTOR_SLOT_ID_MASK,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
+    ACTION_MODE_RANK1_INJECT, ATTRACTOR_SLOT_ID_MASK, AlignedSliceMut32,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, PagedBitmask, SWAR_SPLAT_BYTE_64,
+    TaggedPtr, branchless_clamp_f32, branchless_fast_transition_log_prob,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_relu_f32, coherence_from_word_arrays_64, fast_inv_len_f32,
+    load_q7_words_64, pack_action_slot_tag, resolve_autonomous_swarm_rot_dim,
+    swar_or_avx2_q7_add_sat_words_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    branchless_select_usize, LmnkResult, PhaseQ7, RuntimeConfig, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig, branchless_select_f32, branchless_select_u8,
+    branchless_select_u32, branchless_select_u64, branchless_select_usize,
 };
 use crate::stigmergy::ledger::{FastPathLedger, LedgerSlot};
 use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::trail::{
+    PointerSubstrate, PointerTrail, StigmergicSubstrateOps,
     select_rewire_bridge_and_modulate_with_preloaded_words_64, trail_phase_words_mut,
-    trail_phase_words_ref, PointerSubstrate, PointerTrail, StigmergicSubstrateOps,
+    trail_phase_words_ref,
 };
 use crate::stigmergy::{
     LEDGER_HISTORY_LEN, LEDGER_METRIC_FAST_PATH_HIT, LEDGER_METRIC_LAYER_SKIP_COMPENSATED,
@@ -32,6 +34,17 @@ use crate::stigmergy::{
     LEDGER_METRIC_SLOT_SYNERGY_ACTIVE, LEDGER_METRIC_SUBHEAD_ROUTED, MAX_ATTRACTOR_PULL_FORCE,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
 };
+
+/// Traversal parameters for [`StigmergicSubstrate::traverse_pointer_chain_and_orchestrate`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChainTraverseParams {
+    /// Starting inline trail slot index (`0..SUBSTRATE_INLINE_TRAILS`).
+    pub start_trail_idx: usize,
+    /// Maximum number of pointer-chain hops to traverse (`>= 1`).
+    pub max_hops: usize,
+    /// Current normalized entropy observation $\tilde{H}$.
+    pub entropy_h_tilde: f32,
+}
 
 impl StigmergicSubstrate {
     /// Applies per-step pheromone evaporation ($\rho_j \gets \rho_j \cdot \lambda_{\mathrm{retain}}$)
@@ -170,42 +183,9 @@ impl StigmergicSubstrate {
     /// 5. Applies global pheromone evaporation & reinforcement (`evaporate_and_deposit_pheromone`).
     /// 6. Evaluates `self.thresholds.select_action_decision` to choose the next
     ///    [`StigmergicActionDecision`] (`PassiveSidecar`, `InertialLayerSkip`, `ExpressPhaseSteer`,
-    ///    `SubHeadRoute`, `FullOrchestration`, `CrystallizeMacroBasin`, or `RepulsionEscape`).
-    /// 7. Executes the selected action on `query_tensor` / `key_tensor` / `logits_opt` and logs
-    ///    telemetry into `self.ledger_slot`.
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `query_tensor` and `key_tensor` alias or have
-    /// fewer than `head_dim * num_heads` elements.
     #[inline]
-    pub fn orchestrate_next_action_step(
-        &mut self,
-        input_ptr: TaggedPtr,
-        entropy_h_tilde: f32,
-        dominant_slot: u8,
-        trail_inout: &mut PointerTrail,
-        attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
-        query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
-        logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
-    ) -> LmnkResult<SubstrateStepReport> {
-        self.orchestrate_next_action_step_core(
-            input_ptr,
-            entropy_h_tilde,
-            dominant_slot,
-            trail_inout,
-            attention_scores,
-            query_tensor,
-            key_tensor,
-            logits_opt,
-            true,
-            None,
-            DEFAULT_PHASE_STEP_MIN_RAD,
-            DEFAULT_PHASE_CLAMP_MAX_RAD,
-        )
-    }
-
-    #[inline]
+    // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn orchestrate_next_action_step_core(
         &mut self,
         input_ptr: TaggedPtr,
@@ -384,13 +364,15 @@ impl StigmergicSubstrate {
 
         let (steered, subhead_routed, skip_compensated) =
             StigmergicThresholds::execute_decision_steering_and_logit_scaling(
-                decision,
-                &steer_words,
-                phase_step_min_rad,
-                phase_clamp_max,
-                head_dim,
-                num_heads,
-                best_coh,
+                super::thresholds::DecisionSteerParams {
+                    decision,
+                    steer_words: &steer_words,
+                    phase_step_min_rad,
+                    phase_clamp_max,
+                    head_dim,
+                    num_heads,
+                    best_coh,
+                },
                 query_tensor,
                 key_tensor,
                 logits_opt,
@@ -471,15 +453,18 @@ impl StigmergicSubstrate {
     #[inline]
     pub fn traverse_pointer_chain_and_orchestrate(
         &mut self,
-        start_trail_idx: usize,
-        max_hops: usize,
-        entropy_h_tilde: f32,
+        params: ChainTraverseParams,
         trail_inout: &mut PointerTrail,
         attention_scores: Option<&mut AlignedSliceMut32<'_, f32>>,
         query_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         key_tensor: Option<&mut AlignedSliceMut32<'_, f32>>,
         logits_opt: Option<&mut AlignedSliceMut32<'_, f32>>,
     ) -> LmnkResult<(SubstrateStepReport, u32, usize, u32, f32)> {
+        let ChainTraverseParams {
+            start_trail_idx,
+            max_hops,
+            entropy_h_tilde,
+        } = params;
         let active_len = self.inline_active_len();
         if start_trail_idx >= active_len || max_hops == 0 {
             return Err(LMNK_ERR_INVALID_ARGUMENT);

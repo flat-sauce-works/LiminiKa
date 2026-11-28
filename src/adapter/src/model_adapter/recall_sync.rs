@@ -5,12 +5,16 @@
 
 use super::super::*;
 use super::{ModelSteeringAdapter, RopeGeometry};
+use crate::corpus_recall::{
+    AttractorRecallProjection, DEFAULT_SOFT_GUARD_Q7_SCALE, GuardLayerMode,
+    attenuate_guard_q7_soft, classify_guard_tier_from_projection,
+};
 
 impl ModelSteeringAdapter {
     /// Updates Core Layer 0 (`Liminal`), Layer 1 (`Stigmergic`), and Layer 2 (`Ego`)
     /// branchlessly, leveraging `LiminalBoundaryDelta::stationary_shortcut_ready` to skip
     /// redundant adaptation churn when boundaries are quiescent without stagnation triggers.
-    pub fn adapt_core_layers(
+    pub(crate) fn adapt_core_layers(
         &mut self,
         horizon: &EpistemicHorizonReading,
         overlap_report: &OverlapDiscoveryReport,
@@ -67,87 +71,79 @@ impl ModelSteeringAdapter {
     }
 
     /// Synchronizes all three core layers (`Liminal`, `Stigmergic`, `Ego`), temporal boundary
-    /// delta (`LiminalBoundaryDelta`), and fragmented micro-ensemble consensus directly from a
-    /// live [`DynamicAttractorRecall`] outcome.
-    pub fn sync_core_layers_from_recall(
+    /// delta (`LiminalBoundaryDelta`), and fragmented micro-ensemble consensus directly from any
+    /// recall projection (borrowed [`DynamicAttractorRecall`] or owned [`OwnedAttractorRecall`]).
+    pub(crate) fn sync_core_layers_from_recall<R: AttractorRecallProjection + ?Sized>(
         &mut self,
-        recall: &DynamicAttractorRecall<'_>,
+        recall: &R,
         query_words_opt: Option<&[u64; NUM_STIGMERGIC_GRANULES]>,
-    ) -> (
+    ) -> LmnkResult<(
         EpistemicHorizonReading,
         OverlapDiscoveryReport,
         Option<StigmergicFragmentEnsembleReport>,
-    ) {
-        let has_guard_conflict = recall.guard_conflict_margin > 0.0;
-        let guard_turn = has_guard_conflict
-            || matches!(
-                recall.action_decision,
-                liminika_core::stigmergy::StigmergicActionDecision::RepulsionEscape
-            );
-        self.turn_guard_active = guard_turn;
-        self.transient_guard_relaxed = false;
-        self.ctx.reset_turn_bypass_state();
-        if guard_turn {
-            let active_mask = self.ctx.compute_pool().active_mask;
-            self.ctx.apply_host_spine_pin_floor(active_mask);
-        } else {
-            self.ctx.system_spine_mut().pinned_compute_mask = self.baseline_pinned_compute_mask;
-        }
-        self.ctx
-            .apply_host_spine_pin_floor(self.baseline_pinned_compute_mask);
-        *self.ctx.last_lacuna_partition_mut() = recall.lacuna_partition;
-        self.ctx.system_spine_mut().unobserved_locked = u8::from(
-            matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
-                && !recall.is_known_unknown_exterior
-                && recall.guard_conflict_margin <= 0.05,
-        );
-        if !has_guard_conflict && self.configured_ego.is_active() {
+    )> {
+        let guard_margin = recall.guard_conflict_margin();
+        let lacuna_state = recall.lacuna_state();
+        let is_known_unknown = recall.is_known_unknown_exterior();
+        let top1_fact = recall.top1_fact_score();
+        let top2_fact = recall.top2_fact_score();
+        let gateway_frame = *recall.gateway_frame();
+
+        let guard_tier = classify_guard_tier_from_projection(recall);
+        let is_hard_guard = guard_tier.is_guard_trap;
+        let is_soft_guard = guard_tier.is_soft_guard_caution;
+        let has_guard_conflict = is_hard_guard || is_soft_guard;
+        // Layer 1 hard-block engages `guard_turn = true`; Layer 2 soft-caution keeps
+        // `guard_turn = false` to avoid full bypass lock while preserving Fact grounding.
+        let guard_turn = is_hard_guard;
+        let unobserved_locked = matches!(lacuna_state, LacunaBoundaryState::LiminalExterior)
+            && !is_known_unknown
+            && guard_tier.mode == GuardLayerMode::None;
+        self.begin_turn_spine_policy(guard_turn, unobserved_locked);
+        *self.ctx.last_lacuna_partition_mut() = recall.lacuna_partition();
+        if !is_hard_guard && self.configured_ego.is_active() {
             let tension = self.ctx.distortion_tension_mut();
             tension.effective_ego_scale_q7 = tension.effective_ego_scale_q7.max(48);
             tension.suppression_cooldown_steps = 0;
         }
-        let regime_code = if has_guard_conflict
-            || matches!(recall.lacuna_state, LacunaBoundaryState::LiminalBoundary)
-        {
-            EpistemicRegime::InternalConflict as u8
-        } else if matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior) {
-            EpistemicRegime::Liminal as u8
-        } else {
-            EpistemicRegime::KnownCoherent as u8
-        };
+        let regime_code =
+            if is_hard_guard || matches!(lacuna_state, LacunaBoundaryState::LiminalBoundary) {
+                EpistemicRegime::InternalConflict as u8
+            } else if matches!(lacuna_state, LacunaBoundaryState::LiminalExterior) {
+                EpistemicRegime::Liminal as u8
+            } else {
+                EpistemicRegime::KnownCoherent as u8
+            };
         let is_liminal = regime_code == EpistemicRegime::Liminal as u8;
         let horizon = EpistemicHorizonReading {
-            total_memory_support: (recall.top1_fact_score.max(0.0) * 2.0).max(if is_liminal {
+            total_memory_support: (top1_fact.max(0.0) * 2.0).max(if is_liminal {
                 0.0
             } else {
                 0.35
             }),
-            peak_positive_affinity: recall.top1_fact_score.max(0.0),
+            peak_positive_affinity: top1_fact.max(0.0),
             internal_conflict_energy: if has_guard_conflict {
-                recall.guard_conflict_margin.max(0.0)
+                guard_margin.max(0.0)
             } else {
-                (recall.top2_fact_score.max(0.0) * 0.5).max(0.0)
+                (top2_fact.max(0.0) * 0.5).max(0.0)
             },
             horizon_gate: if is_liminal { 0.0 } else { 1.0 },
             conflict_severity: if has_guard_conflict {
-                recall.guard_conflict_margin.clamp(0.15, 1.0)
+                guard_margin.clamp(0.15, 1.0)
             } else if regime_code == EpistemicRegime::InternalConflict as u8 {
                 0.25
             } else {
                 0.0
             },
-            dominant_anchor_id: recall
-                .recalled_facts
-                .first()
-                .map_or(0, |(e, _)| e.anchor_id),
-            opposing_anchor_id: recall.recalled_facts.get(1).map_or(0, |(e, _)| e.anchor_id),
+            dominant_anchor_id: recall.recalled_fact_at(0).map_or(0, |a| a.anchor_id),
+            opposing_anchor_id: recall.recalled_fact_at(1).map_or(0, |a| a.anchor_id),
             regime_code,
             reserved_align: [0; 3],
         };
 
         let q_words = query_words_opt
             .copied()
-            .unwrap_or(*recall.gateway_frame.phase_words_ref());
+            .unwrap_or(*gateway_frame.phase_words_ref());
         let mut drifted_words = q_words;
         for (g, w) in drifted_words.iter_mut().enumerate() {
             let tol = self.ctx.core_layers().stigmergy.granule_noise_tolerance_q7[g];
@@ -155,16 +151,19 @@ impl ModelSteeringAdapter {
             *w = swar_q7_circular_add_x8(*w, nudge);
         }
 
+        let n_facts = recall.recalled_fact_len();
         let mut fact_fragments: Vec<ObjectiveFact<[i8; MAX_ATTENTION_HEADS]>> =
-            Vec::with_capacity(recall.recalled_facts.len());
-        for &(entry, score) in &recall.recalled_facts {
-            let q7 = entry
-                .per_layer_q7
-                .last()
-                .copied()
-                .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
-            let scaled_e = (entry.energy * score.clamp(0.25, 1.25)).max(0.25);
-            fact_fragments.push(ObjectiveFact::new(q7, scaled_e, 0, entry.anchor_id));
+            Vec::with_capacity(n_facts);
+        for i in 0..n_facts {
+            if let Some(anchor) = recall.recalled_fact_at(i) {
+                let q7 = anchor
+                    .per_layer_q7
+                    .last()
+                    .copied()
+                    .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
+                let scaled_e = (anchor.energy * anchor.score.clamp(0.25, 1.25)).max(0.25);
+                fact_fragments.push(ObjectiveFact::new(q7, scaled_e, 0, anchor.anchor_id));
+            }
         }
 
         let aperture_floor =
@@ -205,7 +204,7 @@ impl ModelSteeringAdapter {
             WorkbenchPreset::GuardDefense
         } else if horizon.regime_code == EpistemicRegime::Liminal as u8 {
             WorkbenchPreset::CreativeLiminal
-        } else if !recall.recalled_facts.is_empty() && recall.top1_fact_score >= 0.20 {
+        } else if n_facts > 0 && top1_fact >= 0.20 {
             WorkbenchPreset::FactualGrounding
         } else {
             WorkbenchPreset::BalancedDialog
@@ -213,112 +212,132 @@ impl ModelSteeringAdapter {
 
         let lane_budget = usize::from(preset.recommended_lane_budget());
         let mut specs: Vec<WorkbenchSlotSpec> = Vec::with_capacity(lane_budget);
-        let repulsion_spec = has_guard_conflict.then(|| {
-            let mut rep_phases = [0_i8; MAX_ATTENTION_HEADS];
-            for (dst, &src) in rep_phases
-                .iter_mut()
-                .zip(recall.gateway_frame.phase_deltas.iter())
-            {
-                *dst = src.saturating_neg();
-            }
-            WorkbenchSlotSpec::auto_repulsion(
-                recall.guard_conflict_margin.clamp(0.35, 1.0),
-                rep_phases,
-            )
-        });
-        if preset.prioritizes_repulsion() {
-            if let Some(spec) = repulsion_spec {
-                if specs.len() < lane_budget {
-                    specs.push(spec);
-                }
-            }
+        let repulsion_spec = (has_guard_conflict || gateway_frame.is_repulsed())
+            .then_some(())
+            .and_then(|()| {
+                let (rep_phases, rep_weight) = if gateway_frame.is_repulsed() {
+                    // Repulsed frames already carry saturating anti-phase (`-guard`); avoid double negation.
+                    (
+                        Some(gateway_frame.phase_deltas),
+                        guard_margin.clamp(0.35, 1.0),
+                    )
+                } else {
+                    let phases = recall
+                        .top_guard_ref()
+                        .and_then(|anchor| anchor.per_layer_q7.last().copied())
+                        .map(|guard_q7| {
+                            let pole = if is_soft_guard {
+                                attenuate_guard_q7_soft(guard_q7, DEFAULT_SOFT_GUARD_Q7_SCALE)
+                            } else {
+                                guard_q7
+                            };
+                            let mut negated = [0_i8; MAX_ATTENTION_HEADS];
+                            for (dst, &src) in negated.iter_mut().zip(pole.iter()) {
+                                *dst = src.saturating_neg();
+                            }
+                            negated
+                        });
+                    let weight = if is_soft_guard {
+                        (0.25 + guard_margin.max(0.0)).clamp(0.25, 0.35)
+                    } else {
+                        guard_margin.clamp(0.35, 1.0)
+                    };
+                    (phases, weight)
+                };
+                rep_phases.map(|phases| WorkbenchSlotSpec::auto_repulsion(rep_weight, phases))
+            });
+        if preset.prioritizes_repulsion()
+            && let Some(spec) = repulsion_spec
+            && specs.len() < lane_budget
+        {
+            specs.push(spec);
         }
-        for (fact_rank, &(entry, score)) in recall.recalled_facts.iter().take(3).enumerate() {
+        for fact_rank in 0..n_facts.min(3) {
             if specs.len() >= lane_budget {
                 break;
             }
-            if let Some(&phases) = entry.per_layer_q7.last() {
+            if let Some(anchor) = recall.recalled_fact_at(fact_rank)
+                && let Some(&phases) = anchor.per_layer_q7.last()
+            {
                 let (min_s, max_s, min_w, max_w) = match fact_rank {
                     0 => (0.25_f32, 1.0_f32, 0.15_f32, 1.0_f32),
                     1 => (0.20_f32, 0.90_f32, 0.10_f32, 0.90_f32),
                     _ => (0.15_f32, 0.80_f32, 0.10_f32, 0.80_f32),
                 };
                 specs.push(WorkbenchSlotSpec::auto_free(
-                    (entry.energy * score.clamp(min_s, max_s)).clamp(min_w, max_w),
+                    (anchor.energy * anchor.score.clamp(min_s, max_s)).clamp(min_w, max_w),
                     phases,
                 ));
             }
         }
-        if specs.len() < lane_budget {
-            if let Some(&(entry, score)) = recall.recalled_personas.first() {
-                if let Some(&phases) = entry.per_layer_q7.last() {
-                    specs.push(WorkbenchSlotSpec::auto_free(
-                        (entry.energy * score.clamp(0.20, 1.0)).clamp(0.15, 1.0),
-                        phases,
-                    ));
-                }
-            }
+        if specs.len() < lane_budget
+            && let Some(anchor) = recall.recalled_persona_at(0)
+            && let Some(&phases) = anchor.per_layer_q7.last()
+        {
+            specs.push(WorkbenchSlotSpec::auto_free(
+                (anchor.energy * anchor.score.clamp(0.20, 1.0)).clamp(0.15, 1.0),
+                phases,
+            ));
         }
-        if !preset.prioritizes_repulsion() {
-            if let Some(spec) = repulsion_spec {
-                if specs.len() < lane_budget {
-                    specs.push(spec);
-                }
-            }
+        if !preset.prioritizes_repulsion()
+            && let Some(spec) = repulsion_spec
+            && specs.len() < lane_budget
+        {
+            specs.push(spec);
         }
         let prev_was_sandbox = self.ctx.sandbox_workbench_lane().is_some();
-        let _ = self.ctx.substrate_mut().apply_preset_lanes(&specs);
+        self.ctx.substrate_mut().apply_preset_lanes(&specs)?;
         *self.ctx.sandbox_workbench_lane_mut() = None;
         let assim_drift = self.ctx.telemetry_bank().assimilation_drift();
-        if prev_was_sandbox || recall.is_known_unknown_exterior {
+        if prev_was_sandbox || is_known_unknown {
             let improved = prev_was_sandbox
-                && recall.top1_fact_score > self.prev_sandbox_coherence
+                && top1_fact > self.prev_sandbox_coherence
                 && assim_drift <= self.prev_sandbox_assim_drift + 0.02;
             self.sandbox_settlement_streak = if improved {
                 self.sandbox_settlement_streak.saturating_add(1)
             } else {
                 0
             };
-            self.prev_sandbox_coherence = recall.top1_fact_score;
+            self.prev_sandbox_coherence = top1_fact;
             self.prev_sandbox_assim_drift = assim_drift;
         }
-        if !has_guard_conflict && recall.is_known_unknown_exterior {
-            if let Some(&(ext_entry, ext_score)) = recall.exterior_sandbox_facts.first() {
-                if let Some(&ext_phases) = ext_entry.per_layer_q7.last() {
-                    let ext_weight =
-                        (ext_entry.energy * ext_score.clamp(0.20, 0.90)).clamp(0.15, 0.95);
-                    if let Ok(lane) = self
+        if !has_guard_conflict
+            && is_known_unknown
+            && let Some(ext_anchor) = recall.exterior_sandbox_at(0)
+            && let Some(&ext_phases) = ext_anchor.per_layer_q7.last()
+        {
+            let ext_weight =
+                (ext_anchor.energy * ext_anchor.score.clamp(0.20, 0.90)).clamp(0.15, 0.95);
+            if let Ok(lane) = self
+                .ctx
+                .substrate_mut()
+                .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(ext_weight, ext_phases))
+            {
+                *self.ctx.sandbox_workbench_lane_mut() = Some(lane);
+                if self.sandbox_settlement_streak >= 2
+                    && self
                         .ctx
                         .substrate_mut()
-                        .allocate_lane(&WorkbenchSlotSpec::auto_sandbox(ext_weight, ext_phases))
-                    {
-                        *self.ctx.sandbox_workbench_lane_mut() = Some(lane);
-                        if self.sandbox_settlement_streak >= 2
-                            && self
-                                .ctx
-                                .substrate_mut()
-                                .settle_sandbox_lane(lane)
-                                .unwrap_or(false)
-                        {
-                            self.ctx.increment_sandbox_settlements();
-                            *self.ctx.sandbox_workbench_lane_mut() = None;
-                            self.sandbox_settlement_streak = 0;
-                        }
-                    }
+                        .settle_sandbox_lane(lane)
+                        .unwrap_or(false)
+                {
+                    self.ctx.increment_sandbox_settlements();
+                    *self.ctx.sandbox_workbench_lane_mut() = None;
+                    self.sandbox_settlement_streak = 0;
                 }
             }
         }
-        if let Some(esc_lane) = self.ctx.escalated_workbench_lane() {
-            if (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0 {
-                *self.ctx.escalated_workbench_lane_mut() = None;
-            }
+        if let Some(esc_lane) = self.ctx.escalated_workbench_lane()
+            && (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0
+        {
+            *self.ctx.escalated_workbench_lane_mut() = None;
         }
         if self.ctx.core_layers().ego.is_active() {
-            let mut p_frame = recall.gateway_frame;
-            let _ = self.ctx.evaluate_ego_pframe_chain_mut(&mut p_frame);
+            let mut p_frame = gateway_frame;
+            self.ctx.evaluate_ego_pframe_chain_mut(&mut p_frame);
         }
         self.active_workbench_preset = preset;
-        (horizon, overlap_report, ensemble_report)
+        Ok((horizon, overlap_report, ensemble_report))
     }
 
     /// Returns the anonymous workbench lane (`0..=7`) currently leased by cold-path escalation, if any.
@@ -350,10 +369,10 @@ impl ModelSteeringAdapter {
             .substrate_mut()
             .apply_preset_lanes(specs)
             .map_err(|e| format!("apply_preset_lanes error: {e}"))?;
-        if let Some(esc_lane) = self.ctx.escalated_workbench_lane() {
-            if (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0 {
-                *self.ctx.escalated_workbench_lane_mut() = None;
-            }
+        if let Some(esc_lane) = self.ctx.escalated_workbench_lane()
+            && (self.ctx.substrate().slot_enabled_mask & (1u8 << esc_lane)) == 0
+        {
+            *self.ctx.escalated_workbench_lane_mut() = None;
         }
         self.active_workbench_preset = preset;
         Ok(updated)
@@ -367,12 +386,12 @@ impl ModelSteeringAdapter {
     pub fn render_liminal_topology_mermaid(
         &self,
         active_anchors: u8,
-        spawned_daughters: u8,
+        spawned_anchors: u8,
     ) -> String {
         let distortion = self.telemetry_snapshot().distortion;
         self.render_liminal_topology_mermaid_with_distortion(
             active_anchors,
-            spawned_daughters,
+            spawned_anchors,
             &distortion,
         )
     }
@@ -383,7 +402,7 @@ impl ModelSteeringAdapter {
     pub fn render_liminal_topology_mermaid_with_distortion(
         &self,
         active_anchors: u8,
-        spawned_daughters: u8,
+        spawned_anchors: u8,
         distortion: &LayerDistortionReport,
     ) -> String {
         let core_layers = self.ctx.core_layers();
@@ -391,7 +410,7 @@ impl ModelSteeringAdapter {
             &core_layers.liminal,
             self.ctx.last_horizon(),
             active_anchors,
-            spawned_daughters,
+            spawned_anchors,
         );
         let mut buf = [0u8; 2048];
         let written = snap.format_core_topology_mermaid_with_distortion(
@@ -539,15 +558,15 @@ impl ModelSteeringAdapter {
             RopeLayout::HalfSplit => 1,
         };
         self.ctx
-            .rebind_phase_and_substrate(
-                new_geometry.rotary_dim as u32,
-                new_geometry.num_q_heads as u32,
-                new_geometry.rotary_dim as u32,
-                layout_byte,
-                16,
-                calibrated,
-                next_probe.baseline_entropy,
-            )
+            .rebind_phase_and_substrate(liminika_core::ContextRebindParams {
+                head_dim: new_geometry.rotary_dim as u32,
+                num_heads: new_geometry.num_q_heads as u32,
+                rotary_dim: new_geometry.rotary_dim as u32,
+                rope_layout: layout_byte,
+                substrate_capacity: 16,
+                thresholds: calibrated,
+                baseline_entropy: next_probe.baseline_entropy,
+            })
             .map_err(|e| format!("rebind_phase_and_substrate failed: {e}"))?;
 
         let (active_slots, pinned_slots, reversible_slots) =
@@ -557,27 +576,25 @@ impl ModelSteeringAdapter {
         *self.ctx.escalated_workbench_lane_mut() = None;
         self.escalation_boundary_dirty = true;
         self.last_escalated_regime = EpistemicRegime::KnownCoherent as u8;
-        self.turn_guard_active = false;
-        self.transient_guard_relaxed = false;
-        self.ctx.reset_turn_bypass_state();
-        self.baseline_pinned_compute_mask = pinned_slots;
         self.ctx
             .compute_pool_mut()
             .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
-        self.ctx.system_spine_mut().pinned_compute_mask = pinned_slots;
-        self.ctx.apply_host_spine_pin_floor(pinned_slots);
+        self.ctx.set_baseline_pin_mask(pinned_slots);
+        self.begin_turn_spine_policy(false, false);
         self.ctx.reset_telemetry();
         self.ctx.set_probe_baseline(next_probe);
         Ok(next_probe.probe_epoch)
     }
 
     /// Returns a mutable reference to the embedded [`EntropyController`].
-    pub fn entropy_controller_mut(&mut self) -> &mut EntropyController {
+    #[cfg(test)]
+    pub(crate) fn entropy_controller_mut(&mut self) -> &mut EntropyController {
         self.ctx.entropy_controller_mut()
     }
 
     /// Returns a mutable reference to the embedded [`ResidualAdapterEngine`] (Rank-1 residual).
-    pub fn residual_adapter_mut(&mut self) -> &mut ResidualAdapterEngine {
+    #[cfg(test)]
+    pub(crate) fn residual_adapter_mut(&mut self) -> &mut ResidualAdapterEngine {
         &mut self.residual_adapter
     }
 }

@@ -14,13 +14,14 @@ mod workers;
 
 pub use boundary::{StratumGatewayMapping, SubstrateBoundaryStratum};
 pub use coalition::{
-    LocalTokenResonanceStratum, ResidualPeelingStigmergicDecomposer, StigmergicCoalitionDecomposer,
+    CoalitionThresholds, LocalTokenResonanceStratum, ResidualPeelingStigmergicDecomposer,
+    StigmergicCoalitionDecomposer,
 };
 pub use workers::{HeadAngleWorkerStratum, LocalFeatureWorkerStratum, PerspectiveHubnessStratum};
 
 use crate::{
-    AsymmetricHubnessPerspective, CoherenceGuardGate, RecallBoundaryMetrics, RecallGateDecision,
-    RecallPolicy, TextAttractorEntry,
+    AsymmetricHubnessPerspective, CoherenceGuardGate, NeighborhoodStatsProvider,
+    RecallBoundaryMetrics, RecallGateDecision, RecallPolicy, TextAttractorEntry,
 };
 use liminika_core::abi::lmnk_pointer_trail_t;
 use liminika_core::liminal::{LmnkResult, NUM_STIGMERGIC_GRANULES};
@@ -53,6 +54,13 @@ pub struct LocalChannelObservation {
     pub d_to_q_scores: Vec<f32>,
     /// Uncollapsed per-query-token resonance deposits evaluated by the stigmergic swarm.
     pub token_deposits: Vec<TokenResonanceDeposit>,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens not explained by corpus Facts.
+    pub unexplained_token_ratio: f32,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens not explained by either corpus
+    /// Fact or Guard entries (`0.0` when unspecified/single-vector).
+    pub unexplained_corpus_token_ratio: f32,
+    /// Original query token sequence length (`S`, `0` when single-vector or unspecified).
+    pub query_seq_len: usize,
 }
 
 /// [`StigmergicReceptor`] tracking multi-trail pointer emergence when
@@ -112,6 +120,18 @@ pub struct StratumProbeTelemetry {
     pub cognitive_trajectory: CognitiveTrajectoryLedger,
     /// Latest stigmergic cognitive circuit gating activation computed from trajectory history.
     pub layer_activation: CognitiveCircuitActivation,
+    /// Orthogonal residual norm ratio `||P_perp(q - mu)|| / ||q - mu||` (`0.0..=1.0`) after
+    /// common-mode projection.
+    pub query_ortho_ratio: f32,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens unexplained by corpus Facts.
+    pub unexplained_token_ratio: f32,
+    /// SIF-weighted fraction (`0.0..=1.0`) of salient query tokens unexplained by either corpus
+    /// Fact or Guard entries (`0.0` when unspecified/single-vector).
+    pub unexplained_corpus_token_ratio: f32,
+    /// Effective Layer 1 hard-block Guard conflict margin resolved for this turn (`0.0` = default `0.05`).
+    pub guard_hard_margin: f32,
+    /// True when Layer 2 soft-caution Guard mode (`0 < margin <= hard_margin`) activated on this turn.
+    pub is_soft_guard_caution: bool,
 }
 
 /// Bottom-up and top-down signal flowing across a hierarchical [`StratumPipeline`].
@@ -190,16 +210,43 @@ pub struct StratumContext<'a> {
     pub raw_sig: &'a [f32],
     /// Common-mode-projected normalized query signature.
     pub query_sig: &'a [f32],
-    /// Common-mode-projected normalized corpus signatures.
-    pub entry_sigs: &'a [Vec<f32>],
+    /// Flat row-major common-mode-projected normalized corpus signatures (`entries.len() * projected_sig_dim`).
+    pub projected_sigs_flat: &'a [f32],
+    /// Fixed dimension of each projected corpus signature row (`0` when unavailable).
+    pub projected_sig_dim: usize,
+    /// Precomputed role-scoped neighborhood statistics and role index partitions.
+    pub neighborhood_stats: &'a dyn NeighborhoodStatsProvider,
     /// Rotary dimension per steered layer chunk (`q_rot_len`).
     pub layer_chunk_dim: usize,
     /// Number of query attention heads (`H_Q`) inside each steered layer chunk.
     pub num_q_heads: usize,
     /// Active rotated dimensions per attention head (`rotary_dim`).
     pub rotary_dim: usize,
+    /// Query token sequence length (`S`, `0` when unspecified/single-vector) for finite-sample
+    /// shrinkage of short-query viewing-angle contrast boosts.
+    pub query_seq_len: usize,
+    /// Orthogonal residual norm ratio `||P_perp(q - mu)|| / ||q - mu||` (`0.0..=1.0`).
+    pub query_ortho_ratio: f32,
+    /// Active foreign-OOD unexplained-token cutoff (`u_foreign`) shared with [`crate::Boundary2DThresholds`].
+    pub u_foreign: f32,
     /// Active recall policy thresholds.
     pub policy: &'a RecallPolicy,
+    /// Calibrated coalition-peeling and relative-scale thresholds (defaults to 1D fallback when uncalibrated).
+    pub coalition_thresholds: CoalitionThresholds,
+}
+
+impl<'a> StratumContext<'a> {
+    /// Returns the common-mode-projected signature slice for `entry_idx` from the flat buffer.
+    #[inline]
+    #[must_use]
+    pub fn projected_entry_sig(&self, entry_idx: usize) -> Option<&'a [f32]> {
+        if self.projected_sig_dim == 0 {
+            return None;
+        }
+        let start = entry_idx.checked_mul(self.projected_sig_dim)?;
+        let end = start.checked_add(self.projected_sig_dim)?;
+        self.projected_sigs_flat.get(start..end)
+    }
 }
 
 /// Pluggable hierarchical layer in a multi-stratum recall/steering stack (`n - 1 <-> n <-> n + 1`).

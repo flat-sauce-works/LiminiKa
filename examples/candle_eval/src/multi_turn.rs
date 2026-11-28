@@ -3,33 +3,27 @@
 
 //! Step 2B multi-turn persistent KV dialogue and Step 3 `.lmnkc` GOP seek / cross-model re-bake.
 
-use std::path::Path;
 use std::time::Instant;
 
 use liminika_adapter::{
     AdaptiveGopCutDetector, AttractorContainerCodec, AttractorRole, AttractorTrajectoryEvaluator,
     CompiledTokenCorpus, FrameTransitionMetrics, LacunaBoundaryState, LmnkTimeline,
-    ManifoldReflectionEvaluator, ModelSteeringAdapter, RebakeContext, ReflectionGateInput,
-    ReflectionPolicy, ReflectionSelection, RopeGeometry, SequenceActivationPooler,
-    SourceTextRecord, SubtitleActivationEncoder, TimelineResumeOutcome, TimelineStepContext,
-    TrajectoryManifoldSnapshot,
+    ManifoldReflectionEvaluator, ModelSteeringAdapter, PooledSubtitleEncoder, RebakeContext,
+    ReflectionPolicy, ReflectionSelection, SourceTextRecord, TimelineResumeOutcome,
+    TimelineStepContext, TurnOrchestrator, TurnPrepareInput,
 };
 use liminika_core::drivers::LiminalEgoPreset;
-use liminika_core::runtime::{
-    AdaptiveThresholdPolicy, CognitiveCircuitThresholdPolicy, ObjectiveFact,
-    StandardPhaseKvGopCache,
-};
-use liminika_core::stigmergy::{CognitiveCircuitBankOps, StigmergicActionDecision};
-use tokenizers::Tokenizer;
+use liminika_core::runtime::{AdaptiveThresholdPolicy, StandardPhaseKvGopCache};
+use liminika_core::stigmergy::CognitiveCircuitBankOps;
 
-use crate::bake::{format_phi4_prompt, query_nvidia_smi_vram};
+use crate::bake::{LmTokenEncoder, query_nvidia_smi_vram};
 use crate::cli::{EvalCliConfig, EvalRuntime, TrialPassMetrics};
 use crate::eval::{
-    apply_ego_mode, count_semantic_forbid_hits, critique_generated_draft,
-    generate_steered_reply_with_offset, HorizonAblationMode, KvTraceStats, ReflectMode,
-    SteerDecodeConfig,
+    HorizonAblationMode, KvTraceStats, ReflectMode, SteerDecodeConfig, apply_ego_mode,
+    count_semantic_forbid_hits, critique_generated_draft, generate_steered_reply_with_offset,
 };
-use crate::model::{LogitsFetchMode, Phi3Model, ResonantAnchors};
+use crate::metrics::summarize_dialogue_quality;
+use crate::model::{KvCacheMode, LogitsFetchMode, ResonantAnchors};
 use crate::step2::Step2Output;
 
 pub(crate) fn run_multi_turn_and_step3(
@@ -38,8 +32,10 @@ pub(crate) fn run_multi_turn_and_step3(
     step2: &mut Step2Output,
     run_step3: bool,
 ) -> Result<Option<TrialPassMetrics>, Box<dyn std::error::Error>> {
-    let cfg = rt.cfg;
     let tokenizer = rt.tokenizer;
+    let chat = rt.chat;
+    let model_arch_label = rt.cfg.arch.label();
+    let layer_mask_override = cli.resolve_layer_mask_override(rt.cfg.num_hidden_layers);
     let model = &mut *rt.model;
     let adapter = &mut *rt.adapter;
     let baked_opt = rt.baked_opt;
@@ -57,7 +53,7 @@ pub(crate) fn run_multi_turn_and_step3(
     let rng_seed = cli.rng_seed;
     let circuit_mode = cli.circuit_mode;
     let persona_lmnk_out = &cli.persona_lmnk_out;
-    let compiled: &CompiledTokenCorpus = &step2.compiled;
+    let compiled: &CompiledTokenCorpus = rt.compiled;
     let timeline: &mut LmnkTimeline = &mut step2.timeline;
     let cut_detector: &AdaptiveGopCutDetector = &step2.cut_detector;
     let kv_policy: &AdaptiveThresholdPolicy = &step2.kv_policy;
@@ -66,7 +62,9 @@ pub(crate) fn run_multi_turn_and_step3(
 
     if multi_turn && (recall_only || baked_opt.is_some()) {
         {
-            println!("\n=== Step 2B: Full Multi-Turn Dialogue Eval (Persistent KV + RamPhaseKvGopCache) ===");
+            println!(
+                "\n=== Step 2B: Full Multi-Turn Dialogue Eval (Persistent KV + RamPhaseKvGopCache) ==="
+            );
             let dialogue_turns: [(&str, &str, &[&str], &[&str]); 8] = [
                 (
                     "T1:GCSO",
@@ -120,7 +118,7 @@ pub(crate) fn run_multi_turn_and_step3(
 
             adapter.reset_horizon_and_core_state();
             adapter.set_guard_hold_tokens(cli.guard_hold_tokens);
-            adapter.compute_pool_mut().reanchor_baseline_pressure(8192);
+            adapter.reanchor_compute_pressure(8192);
             adapter.set_ego_max_hops(ego_max_hops);
             apply_ego_mode(adapter, ego_mode);
 
@@ -137,24 +135,19 @@ pub(crate) fn run_multi_turn_and_step3(
             let mut mt_prefill_secs = 0.0_f64;
             let mut mt_decode_secs = 0.0_f64;
             let mut mt_prompts_timed = 0_usize;
-            let mut mt_whole_bypass_hits = 0_usize;
-            let mut mt_decode_tokens_steered = 0_usize;
-            let mut mt_abstract_tokens = 0_usize;
-            let mut mt_concrete_tokens = 0_usize;
-            let mut mt_boundary_churn = 0_usize;
-            let mut mt_logits_skips = 0_usize;
-            let mut mt_guard_relaxations = 0_usize;
+            let mut mt_replies: Vec<String> = Vec::with_capacity(dialogue_turns.len());
 
             model.clear_cache();
-            let mut conv_history_ids: Vec<u32> = Vec::new();
             let mut conv_offset = 0_usize;
 
             for (t_idx, (turn_tag, turn_prompt, expected, forbidden)) in
                 dialogue_turns.iter().enumerate()
             {
-                // Run query-only forward in a temporary cleared cache to obtain fresh pre-RoPE Q
-                // activations for `CompiledTokenCorpus`, then restore persistent conversation KV.
-                model.clear_cache();
+                let turn_start_kv = model.kv_len();
+                debug_assert_eq!(turn_start_kv, conv_offset);
+
+                // Run query-only probe in `KvCacheMode::IsolatedProbe` so persistent
+                // conversation KV remains intact with zero history re-prefill.
                 let q_ids = tokenizer
                     .encode(*turn_prompt, false)
                     .map_err(|e| format!("mt encode error: {e}"))?
@@ -167,140 +160,97 @@ pub(crate) fn run_multi_turn_and_step3(
                     false,
                     true,
                     LogitsFetchMode::FullLogits,
+                    KvCacheMode::IsolatedProbe,
                 )?;
-                model.clear_cache();
-                if !conv_history_ids.is_empty() {
-                    let _ = model.forward_tokens(
-                        &conv_history_ids,
-                        0,
-                        None,
-                        false,
-                        false,
-                        LogitsFetchMode::FullLogits,
-                    )?;
-                }
+                debug_assert_eq!(model.kv_len(), turn_start_kv);
 
-                let prior_circuit = active_persona_bank
-                    .as_ref()
-                    .map(CognitiveCircuitBankOps::to_consolidated_ledger);
-                let recall = compiled.recall_token_sequence_with_circuit(
+                let t_mt_prep = Instant::now();
+                let plan = TurnOrchestrator::prepare_turn(
+                    compiled,
                     adapter,
-                    &query_tok_qs,
-                    q_ids.len(),
-                    prior_circuit,
-                )?;
-                let recalled_ctx = recall.recalled_context_text();
-                let fact_ctx = recall.recalled_facts_only_context_text();
-                let ext_ctx = recall.exterior_pointer_context_text();
-                let mut turn_snap = TrajectoryManifoldSnapshot::from_recall(&recall);
-                if let Some(ref bank) = active_persona_bank {
-                    let cons = bank.to_consolidated_ledger();
-                    turn_snap.cognitive_trajectory = cons.compose_persona_circuit(
-                        &turn_snap.cognitive_trajectory,
-                        kv_policy.kv_circuit_blend_q7(&recall.gateway_frame),
-                    );
-                }
-
-                let ctx_hash = recall.context_fingerprint_u64();
-                let t_mt_kv = Instant::now();
-                let mt_outcome = mt_kv_cache
-                    .step_with_gateway_and_override(
-                        ctx_hash,
-                        q_ids.len() as u32,
-                        &recall.gateway_frame,
-                        &mut turn_snap.cognitive_trajectory,
-                        recall.telemetry.layer_activation,
+                    &mut mt_kv_cache,
+                    &TurnPrepareInput {
+                        query_token_qs: &query_tok_qs,
+                        query_seq_len: q_ids.len(),
+                        token_include_mask: None,
+                        turn_index: (t_idx + 1) as u32,
                         kv_policy,
-                        kv_min_res,
-                        (t_idx + 1) as u32,
-                    )
-                    .map_err(|e| format!("mt_kv_cache error: {e}"))?;
+                        kv_min_resonance_override: kv_min_res,
+                        persona_bank: active_persona_bank.as_ref(),
+                        layer_steer_mask_override: layer_mask_override,
+                    },
+                )?;
                 let mt_kv_note = mt_kv_stats.record_outcome(
-                    mt_outcome,
-                    t_mt_kv.elapsed().as_secs_f64() * 1_000_000.0,
-                    &recall.gateway_frame.phase_deltas,
+                    plan.kv_outcome(),
+                    t_mt_prep.elapsed().as_secs_f64() * 1_000_000.0,
+                    &plan.gateway_frame().phase_deltas,
                 );
-                if active_persona_bank.is_some() {
-                    adapter.set_active_circuit(turn_snap.cognitive_trajectory);
-                } else {
-                    adapter.clear_active_circuit();
-                }
-                let _ = adapter.sync_core_layers_from_recall(&recall, None);
 
-                let mut dyn_facts = recall.build_fact_anchors_per_layer(cfg.num_hidden_layers);
-                if recall.recalled_facts.is_empty() && recall.is_known_unknown_exterior {
-                    for (l, layer_facts) in
-                        dyn_facts.iter_mut().enumerate().take(cfg.num_hidden_layers)
-                    {
-                        for &(entry, score) in &recall.exterior_sandbox_facts {
-                            if let Some(&arr) = entry.per_layer_q7.get(l) {
-                                let scaled_e =
-                                    (entry.energy * score.clamp(0.25, 0.90) * 0.5).max(0.20);
-                                layer_facts.push(ObjectiveFact::new(
-                                    arr,
-                                    scaled_e,
-                                    0,
-                                    entry.anchor_id,
-                                ));
-                            }
-                        }
-                    }
-                }
-                let dyn_personas = recall.build_persona_anchors_per_layer(cfg.num_hidden_layers);
-                let mt_recall_preview = if recall.recalled_facts.is_empty() {
+                let fact_ctx = plan.self_ref_context();
+                let persona_ctx = plan.persona_context();
+                let ext_ctx = plan.exterior_context();
+                let recalled_ctx = match (fact_ctx.is_empty(), persona_ctx.is_empty()) {
+                    (false, false) => format!("{fact_ctx} {persona_ctx}"),
+                    (false, true) => fact_ctx.to_string(),
+                    (true, false) => persona_ctx.to_string(),
+                    (true, true) => String::new(),
+                };
+                // Keep `TurnSteeringPlan` strictly partitioned (`S & O` vs `O \ S`) while
+                // selecting the exterior sandbox slice explicitly for RTX 4070 baseline parity.
+                let steer_facts = if plan.has_self_ref_anchors() {
+                    plan.self_ref_anchors_per_layer()
+                } else if plan.is_known_unknown_exterior() {
+                    plan.exterior_sandbox_anchors_per_layer()
+                } else {
+                    plan.self_ref_anchors_per_layer()
+                };
+                let has_steer_facts = steer_facts.iter().any(|layer| !layer.is_empty());
+                let dyn_personas = plan.persona_anchors_per_layer();
+                let mt_recall_preview = if plan.self_ref_anchor_ids().is_empty() {
                     "none".to_string()
                 } else {
-                    recall
-                        .recalled_facts
+                    plan.self_ref_anchor_ids()
                         .iter()
-                        .map(|(e, _)| format!("#{}", e.anchor_id))
+                        .map(|id| format!("#{id}"))
                         .collect::<Vec<_>>()
                         .join("+")
                 };
                 let (reply_text, mt_reflect_note) = if let Some(baked) =
                     baked_opt.as_ref().filter(|_| !recall_only)
                 {
-                    let mt_is_guard_trap = recall.guard_conflict_margin > 0.05
-                        || matches!(
-                            recall.action_decision,
-                            StigmergicActionDecision::RepulsionEscape
-                        );
-                    let use_steer = mt_is_guard_trap
-                        || !matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
-                        || recall.is_known_unknown_exterior;
+                    let mt_is_guard_trap = plan.is_guard_trap();
+                    let use_steer = plan.steering_eligible();
                     let res_ctx = if use_steer {
                         Some(ResonantAnchors {
-                            facts: dyn_facts.as_slice(),
-                            personas: dyn_personas.as_slice(),
-                            guards: baked.guard_anchors_per_layer.as_slice(),
-                            negs: baked.neg_sum.as_slice(),
-                            poss: baked.pos_sum.as_slice(),
+                            facts: steer_facts,
+                            personas: dyn_personas,
+                            guards: plan.guard_anchors_per_layer(),
+                            negs: baked.repulsive_centroid_per_layer.as_slice(),
+                            poss: baked.attractive_centroid_per_layer.as_slice(),
                         })
                     } else {
                         None
                     };
-                    let turn_body =
-                        if matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
-                            && !mt_is_guard_trap
-                            && !recall.is_known_unknown_exterior
-                        {
-                            (*turn_prompt).to_string()
-                        } else if !fact_ctx.is_empty() {
-                            format!("[Context: {fact_ctx}]\n{turn_prompt}")
-                        } else if recall.is_known_unknown_exterior && !ext_ctx.is_empty() {
-                            format!("[External Pointer: {ext_ctx}]\n{turn_prompt}")
-                        } else if !recalled_ctx.is_empty() {
-                            format!("[Context: {recalled_ctx}]\n{turn_prompt}")
-                        } else {
-                            (*turn_prompt).to_string()
-                        };
-                    let formatted_turn = if conv_offset == 0 {
-                        format!(
-                            "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{turn_body}<|end|><|assistant|>"
-                        )
+                    let turn_body = if plan.is_unobserved_lacuna() && !mt_is_guard_trap {
+                        (*turn_prompt).to_string()
+                    } else if !fact_ctx.is_empty() {
+                        format!("[Context: {fact_ctx}]\n{turn_prompt}")
+                    } else if plan.is_known_unknown_exterior() && !ext_ctx.is_empty() {
+                        format!("[External Pointer: {ext_ctx}]\n{turn_prompt}")
+                    } else if !recalled_ctx.is_empty() {
+                        format!("[Context: {recalled_ctx}]\n{turn_prompt}")
                     } else {
-                        format!("<|end|><|user|>{turn_body}<|end|><|assistant|>")
+                        (*turn_prompt).to_string()
                     };
+                    const MT_SYSTEM_PROMPT: &str = "Answer concisely and directly from the provided [Conte\
+                     xt: ...] facts without questioning whether terms are real; reject any premise in a qu\
+                     estion that contradicts the context.";
+                    let formatted_turn = if turn_start_kv == 0 {
+                        chat.format_first_turn_with_system(MT_SYSTEM_PROMPT, &turn_body)
+                    } else {
+                        chat.format_followup_turn(&turn_body)
+                    };
+                    let effective_layer_mask = plan.effective_layer_steer_mask(adapter);
                     let mut turn_cfg = SteerDecodeConfig {
                         q7s: Some(baked.fact_q7.as_slice()),
                         persona_q7s: Some(baked.persona_q7.as_slice()),
@@ -319,46 +269,42 @@ pub(crate) fn run_multi_turn_and_step3(
                         temperature,
                         rng_seed,
                         logits_observe_stride: cli.logits_observe_stride,
+                        layer_steer_mask: Some(effective_layer_mask),
+                        probe_frame: cli.probe_frame,
+                        phase_clamp_override: cli.phase_clamp_rad,
+                        random_push_seed: cli.random_push_control.then_some(rng_seed),
+                        max_tokens: cli.max_tokens,
+                        prefill_chunk_size: cli.prefill_chunk_size,
+                        capture_first_logits: false,
+                        first_prefill_logits: None,
+                        exit_entropy_h_tilde: 0.0,
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
-                        whole_token_bypass_hits: 0,
-                        decode_tokens_total: 0,
-                        abstract_tokens: 0,
-                        concrete_tokens: 0,
-                        boundary_churn_transitions: 0,
-                        logits_skips: 0,
-                        instability_recoveries: 0,
-                        guard_relaxations: 0,
                         spine_veto_guard_hits: 0,
                         spine_veto_repulse_hits: 0,
                         spine_veto_pin_hits: 0,
                     };
-                    let (mut reply_text, mut turn_ids, dec_timing) =
+                    let (mut reply_text, p1_turn_ids, dec_timing) =
                         generate_steered_reply_with_offset(
                             model,
                             tokenizer,
+                            chat,
                             adapter,
                             &formatted_turn,
-                            conv_offset,
+                            turn_start_kv,
                             &mut turn_cfg,
                         )?;
+                    debug_assert_eq!(model.kv_len(), turn_start_kv + p1_turn_ids.len());
                     let prompt_tok_len = tokenizer
                         .encode(formatted_turn.as_str(), false)
                         .map_err(|e| format!("mt prompt len error: {e}"))?
                         .get_ids()
                         .len();
-                    let gen_tok_len = turn_ids.len().saturating_sub(prompt_tok_len);
+                    let gen_tok_len = p1_turn_ids.len().saturating_sub(prompt_tok_len);
                     mt_decode_tokens += gen_tok_len;
                     mt_prefill_secs += dec_timing.prefill_secs;
                     mt_decode_secs += dec_timing.decode_secs;
                     mt_prompts_timed += 1;
-                    mt_whole_bypass_hits += turn_cfg.whole_token_bypass_hits;
-                    mt_decode_tokens_steered += turn_cfg.decode_tokens_total;
-                    mt_abstract_tokens += turn_cfg.abstract_tokens;
-                    mt_concrete_tokens += turn_cfg.concrete_tokens;
-                    mt_boundary_churn += turn_cfg.boundary_churn_transitions;
-                    mt_logits_skips += turn_cfg.logits_skips;
-                    mt_guard_relaxations += turn_cfg.guard_relaxations;
 
                     let mut mt_reflect_note = match reflect_mode {
                         ReflectMode::Off => "off".to_string(),
@@ -368,19 +314,7 @@ pub(crate) fn run_multi_turn_and_step3(
                         ReflectMode::Off => false,
                         ReflectMode::Always => true,
                         ReflectMode::Conditional => {
-                            let gate_in = ReflectionGateInput {
-                                boundary_sensitivity_q7: recall
-                                    .lacuna_partition
-                                    .boundary_sensitivity_q7,
-                                has_undigested_known_unknown: recall.is_known_unknown_exterior,
-                                exit_entropy_h_tilde: adapter.substrate().last_entropy_h_tilde,
-                                guard_conflict_margin: recall.guard_conflict_margin,
-                                is_unobserved_lacuna: matches!(
-                                    recall.lacuna_state,
-                                    LacunaBoundaryState::LiminalExterior
-                                ) && !recall.is_known_unknown_exterior,
-                                ..ReflectionGateInput::default()
-                            };
+                            let gate_in = plan.reflection_gate_input(turn_cfg.exit_entropy_h_tilde);
                             let fire =
                                 ManifoldReflectionEvaluator.should_trigger_reflection(&gate_in);
                             if !fire {
@@ -389,184 +323,187 @@ pub(crate) fn run_multi_turn_and_step3(
                             fire
                         }
                     };
-                    if mt_gate_fire && reflection_policy.max_retries > 0 {
-                        if let Some(p1_crit) = critique_generated_draft(
+                    if mt_gate_fire
+                        && reflection_policy.max_retries > 0
+                        && let Some(p1_crit) = critique_generated_draft(
                             model,
                             tokenizer,
                             adapter,
                             compiled,
-                            &turn_snap,
+                            plan.query_snapshot(),
                             &reply_text,
                             reflection_policy,
-                        )? {
-                            if p1_crit.directive.rethink_recommended {
-                                let cue = p1_crit
-                                    .corrective_instruction(&reply_text)
-                                    .unwrap_or_default();
-                                let mt_retry_ctx = if !fact_ctx.is_empty() {
-                                    fact_ctx.as_str()
-                                } else if recall.is_known_unknown_exterior {
-                                    ext_ctx.as_str()
+                        )?
+                    {
+                        if p1_crit.directive.rethink_recommended {
+                            let cue = p1_crit
+                                .corrective_instruction(&reply_text)
+                                .unwrap_or_default();
+                            let mt_retry_ctx = if !fact_ctx.is_empty() {
+                                fact_ctx
+                            } else if plan.is_known_unknown_exterior() {
+                                ext_ctx
+                            } else {
+                                recalled_ctx.as_str()
+                            };
+                            let retry_body = if p1_crit.directive.suppress_injection
+                                || mt_retry_ctx.is_empty()
+                            {
+                                format!("{cue}\n{turn_prompt}")
+                            } else {
+                                format!("[Context: {mt_retry_ctx}]\n{cue}\n{turn_prompt}")
+                            };
+                            let retry_prompt = if turn_start_kv == 0 {
+                                chat.format_first_turn_with_system(MT_SYSTEM_PROMPT, &retry_body)
+                            } else {
+                                chat.format_followup_turn(&retry_body)
+                            };
+                            model.truncate_cache(turn_start_kv)?;
+                            debug_assert_eq!(model.kv_len(), turn_start_kv);
+                            let retry_use_steer = !p1_crit.directive.suppress_injection
+                                && (has_steer_facts || p1_crit.directive.inject_guard_repulsion);
+                            let mut retry_cfg = SteerDecodeConfig {
+                                q7s: Some(baked.fact_q7.as_slice()),
+                                persona_q7s: Some(baked.persona_q7.as_slice()),
+                                resonant_ctx: if retry_use_steer {
+                                    Some(ResonantAnchors {
+                                        facts: steer_facts,
+                                        personas: dyn_personas,
+                                        guards: plan.guard_anchors_per_layer(),
+                                        negs: baked.repulsive_centroid_per_layer.as_slice(),
+                                        poss: baked.attractive_centroid_per_layer.as_slice(),
+                                    })
                                 } else {
-                                    recalled_ctx.as_str()
-                                };
-                                let retry_body = if p1_crit.directive.suppress_injection
-                                    || mt_retry_ctx.is_empty()
-                                {
-                                    format!("{cue}\n{turn_prompt}")
+                                    None
+                                },
+                                rope_rad: if retry_use_steer {
+                                    turn_cfg.rope_rad + p1_crit.directive.rope_rad_delta
                                 } else {
-                                    format!("[Context: {mt_retry_ctx}]\n{cue}\n{turn_prompt}")
-                                };
-                                let retry_prompt = if conv_offset == 0 {
-                                    format!(
-                                        "<|system|>Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.<|end|><|user|>{retry_body}<|end|><|assistant|>"
-                                    )
+                                    0.0
+                                },
+                                rank1: if retry_use_steer {
+                                    Some((
+                                        baked.rank1_u.as_slice(),
+                                        baked.rank1_v.as_slice(),
+                                        -1.00 + p1_crit.directive.rank1_scale_delta,
+                                    ))
                                 } else {
-                                    format!("<|end|><|user|>{retry_body}<|end|><|assistant|>")
-                                };
-                                model.clear_cache();
-                                if !conv_history_ids.is_empty() {
-                                    let _ = model.forward_tokens(
-                                        &conv_history_ids,
-                                        0,
-                                        None,
-                                        false,
-                                        false,
-                                        LogitsFetchMode::FullLogits,
-                                    )?;
-                                }
-                                let retry_use_steer = !p1_crit.directive.suppress_injection
-                                    && (!dyn_facts.is_empty()
-                                        || p1_crit.directive.inject_guard_repulsion);
-                                let mut retry_cfg = SteerDecodeConfig {
-                                    q7s: Some(baked.fact_q7.as_slice()),
-                                    persona_q7s: Some(baked.persona_q7.as_slice()),
-                                    resonant_ctx: if retry_use_steer {
-                                        Some(ResonantAnchors {
-                                            facts: dyn_facts.as_slice(),
-                                            personas: dyn_personas.as_slice(),
-                                            guards: baked.guard_anchors_per_layer.as_slice(),
-                                            negs: baked.neg_sum.as_slice(),
-                                            poss: baked.pos_sum.as_slice(),
-                                        })
-                                    } else {
-                                        None
-                                    },
-                                    rope_rad: if retry_use_steer {
-                                        turn_cfg.rope_rad + p1_crit.directive.rope_rad_delta
-                                    } else {
-                                        0.0
-                                    },
-                                    rank1: if retry_use_steer {
-                                        Some((
-                                            baked.rank1_u.as_slice(),
-                                            baked.rank1_v.as_slice(),
-                                            -1.00 + p1_crit.directive.rank1_scale_delta,
-                                        ))
-                                    } else {
-                                        None
-                                    },
-                                    use_steer: retry_use_steer,
-                                    horizon_mode,
-                                    escalation_provider: None,
-                                    pressure_sim: pressure_sim_mode,
-                                    enable_pre_bypass,
-                                    temperature,
-                                    rng_seed,
-                                    logits_observe_stride: cli.logits_observe_stride,
-                                    steer_bypass_hits: 0,
-                                    steer_eligible_layers: 0,
-                                    whole_token_bypass_hits: 0,
-                                    decode_tokens_total: 0,
-                                    abstract_tokens: 0,
-                                    concrete_tokens: 0,
-                                    boundary_churn_transitions: 0,
-                                    logits_skips: 0,
-                                    instability_recoveries: 0,
-                                    guard_relaxations: 0,
-                                    spine_veto_guard_hits: 0,
-                                    spine_veto_repulse_hits: 0,
-                                    spine_veto_pin_hits: 0,
-                                };
-                                let (p2_text, p2_ids, p2_timing) =
-                                    generate_steered_reply_with_offset(
-                                        model,
-                                        tokenizer,
-                                        adapter,
-                                        &retry_prompt,
-                                        conv_offset,
-                                        &mut retry_cfg,
-                                    )?;
-                                let p2_prompt_len = tokenizer
-                                    .encode(retry_prompt.as_str(), false)
-                                    .map_err(|e| format!("mt retry len error: {e}"))?
-                                    .get_ids()
-                                    .len();
-                                mt_decode_tokens += p2_ids.len().saturating_sub(p2_prompt_len);
-                                mt_prefill_secs += p2_timing.prefill_secs;
-                                mt_decode_secs += p2_timing.decode_secs;
-                                mt_prompts_timed += 1;
-                                mt_whole_bypass_hits += retry_cfg.whole_token_bypass_hits;
-                                mt_decode_tokens_steered += retry_cfg.decode_tokens_total;
-                                mt_abstract_tokens += retry_cfg.abstract_tokens;
-                                mt_concrete_tokens += retry_cfg.concrete_tokens;
-                                mt_boundary_churn += retry_cfg.boundary_churn_transitions;
-                                mt_logits_skips += retry_cfg.logits_skips;
-                                mt_guard_relaxations += retry_cfg.guard_relaxations;
-                                if let Some(p2_crit) = critique_generated_draft(
-                                    model,
-                                    tokenizer,
-                                    adapter,
-                                    compiled,
-                                    &turn_snap,
-                                    &p2_text,
-                                    reflection_policy,
-                                )? {
-                                    if matches!(
-                                        ManifoldReflectionEvaluator.select_better_pass(
-                                            reflection_policy,
-                                            &p1_crit,
-                                            &p2_crit,
-                                        ),
-                                        ReflectionSelection::Pass2
-                                    ) {
-                                        reply_text = p2_text;
-                                        turn_ids = p2_ids;
-                                        mt_reflect_note = format!(
-                                            "{:?}->{:?}(P2)",
-                                            p1_crit.trigger, p2_crit.trigger
-                                        );
-                                    } else {
-                                        mt_reflect_note = format!(
-                                            "{:?}->{:?}(P1)",
-                                            p1_crit.trigger, p2_crit.trigger
-                                        );
-                                    }
+                                    None
+                                },
+                                use_steer: retry_use_steer,
+                                horizon_mode,
+                                escalation_provider: None,
+                                pressure_sim: pressure_sim_mode,
+                                enable_pre_bypass,
+                                temperature,
+                                rng_seed,
+                                logits_observe_stride: cli.logits_observe_stride,
+                                layer_steer_mask: Some(effective_layer_mask),
+                                probe_frame: cli.probe_frame,
+                                phase_clamp_override: cli.phase_clamp_rad,
+                                random_push_seed: cli.random_push_control.then_some(rng_seed),
+                                max_tokens: cli.max_tokens,
+                                prefill_chunk_size: cli.prefill_chunk_size,
+                                capture_first_logits: false,
+                                first_prefill_logits: None,
+                                exit_entropy_h_tilde: 0.0,
+                                steer_bypass_hits: 0,
+                                steer_eligible_layers: 0,
+                                spine_veto_guard_hits: 0,
+                                spine_veto_repulse_hits: 0,
+                                spine_veto_pin_hits: 0,
+                            };
+                            let (p2_text, p2_ids, p2_timing) = generate_steered_reply_with_offset(
+                                model,
+                                tokenizer,
+                                chat,
+                                adapter,
+                                &retry_prompt,
+                                turn_start_kv,
+                                &mut retry_cfg,
+                            )?;
+                            debug_assert_eq!(model.kv_len(), turn_start_kv + p2_ids.len());
+                            let p2_prompt_len = tokenizer
+                                .encode(retry_prompt.as_str(), false)
+                                .map_err(|e| format!("mt retry len error: {e}"))?
+                                .get_ids()
+                                .len();
+                            mt_decode_tokens += p2_ids.len().saturating_sub(p2_prompt_len);
+                            mt_prefill_secs += p2_timing.prefill_secs;
+                            mt_decode_secs += p2_timing.decode_secs;
+                            mt_prompts_timed += 1;
+                            let adopt_p2 = if let Some(p2_crit) = critique_generated_draft(
+                                model,
+                                tokenizer,
+                                adapter,
+                                compiled,
+                                plan.query_snapshot(),
+                                &p2_text,
+                                reflection_policy,
+                            )? {
+                                if matches!(
+                                    ManifoldReflectionEvaluator.select_better_pass(
+                                        reflection_policy,
+                                        &p1_crit,
+                                        &p2_crit,
+                                    ),
+                                    ReflectionSelection::Pass2
+                                ) {
+                                    reply_text = p2_text;
+                                    mt_reflect_note =
+                                        format!("{:?}->{:?}(P2)", p1_crit.trigger, p2_crit.trigger);
+                                    true
+                                } else {
+                                    mt_reflect_note =
+                                        format!("{:?}->{:?}(P1)", p1_crit.trigger, p2_crit.trigger);
+                                    false
                                 }
                             } else {
-                                mt_reflect_note = format!("{:?}(0)", p1_crit.trigger);
+                                false
+                            };
+                            if !adopt_p2 {
+                                model.truncate_cache(turn_start_kv)?;
+                                let _ = model.forward_tokens(
+                                    &p1_turn_ids,
+                                    turn_start_kv,
+                                    None,
+                                    false,
+                                    false,
+                                    LogitsFetchMode::FullLogits,
+                                    KvCacheMode::Append,
+                                )?;
+                                debug_assert_eq!(model.kv_len(), turn_start_kv + p1_turn_ids.len());
                             }
+                        } else {
+                            mt_reflect_note = format!("{:?}(0)", p1_crit.trigger);
                         }
                     }
-                    conv_history_ids.extend_from_slice(&turn_ids);
-                    conv_offset = conv_history_ids.len();
+                    conv_offset = model.kv_len();
                     (reply_text, mt_reflect_note)
                 } else {
                     (String::new(), "skip(recall_only)".to_string())
                 };
 
-                if let Some(ref mut bank) = active_persona_bank {
-                    if let Some(step) = recall.telemetry.cognitive_trajectory.latest_step() {
-                        bank.push_step_hierarchical(step);
-                    }
-                    bank.reinforce_bank(&recall.telemetry.layer_activation, true);
+                if let Some(bank) = active_persona_bank {
+                    bank.reinforce_bank(&plan.telemetry().layer_activation, true);
+                    TurnOrchestrator::commit_turn_circuit(adapter, &plan, bank, None);
                 }
 
                 if matches!(horizon_mode, HorizonAblationMode::SlowLoop) {
-                    let _ = adapter.apply_slow_loop_telemetry_epoch(64);
+                    let slow_adj = adapter.apply_slow_loop_telemetry_epoch(64);
+                    if slow_adj.applied {
+                        println!(
+                            "    [MT:slow_loop] steps={} alpha_q7={} repulse_bias_q7={} dwell_delta={}",
+                            slow_adj.sampled_steps,
+                            slow_adj.suggested_derivative_alpha_q7,
+                            slow_adj.suggested_repulse_bias_q7,
+                            slow_adj.suggested_slide_out_dwell_delta,
+                        );
+                    }
                 }
 
                 let lower = reply_text.to_lowercase();
+                mt_replies.push(reply_text.clone());
                 let t_exp = expected
                     .iter()
                     .filter(|kw| lower.contains(&kw.to_lowercase()))
@@ -581,23 +518,25 @@ pub(crate) fn run_multi_turn_and_step3(
                     mt_forb_total += forbidden.len();
                 } else {
                     mt_ood_total += 1;
-                    if !matches!(recall.lacuna_state, LacunaBoundaryState::LiminalExterior)
-                        || recall.is_known_unknown_exterior
+                    if !matches!(plan.lacuna_state(), LacunaBoundaryState::LiminalExterior)
+                        || plan.is_known_unknown_exterior()
                         || t_sem_forb > 0
                     {
                         mt_ood_bleed_hits += 1;
                     }
                 }
-                let mt_tlm = recall.telemetry;
+                let mt_tlm = *plan.telemetry();
                 println!(
-                    "  [MT:{}:{}] kv_off={} lacuna={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} sem_forb={}(raw={}) => {}",
+                    "  [MT:{}:{}] kv_off={} lacuna={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} pro\
+                     be=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} sem_forb={}(ra\
+                     w={}) => {}",
                     t_idx + 1,
                     turn_tag,
                     conv_offset,
-                    recall.lacuna_state,
-                    recall.top1_fact_score,
-                    recall.top2_fact_score,
-                    recall.guard_conflict_margin,
+                    plan.lacuna_state(),
+                    plan.top1_fact_score(),
+                    plan.top2_fact_score(),
+                    plan.guard_conflict_margin(),
                     mt_recall_preview,
                     mt_tlm.global_top1_anchor.unwrap_or(0),
                     mt_tlm.global_top1_score,
@@ -613,6 +552,14 @@ pub(crate) fn run_multi_turn_and_step3(
                     reply_text
                 );
             }
+            let mt_snap = adapter.telemetry_snapshot();
+            let mt_abstract_tokens = mt_snap.abstract_token_count as usize;
+            let mt_concrete_tokens = mt_snap.concrete_token_count as usize;
+            let mt_whole_bypass_hits = mt_abstract_tokens;
+            let mt_decode_tokens_steered = mt_abstract_tokens + mt_concrete_tokens;
+            let mt_boundary_churn = mt_snap.boundary_churn_count as usize;
+            let mt_logits_skips = mt_snap.logits_skip_count as usize;
+            let mt_guard_relaxations = mt_snap.guard_relaxation_count as usize;
             let mt_occ = mt_kv_cache.occupied_slot_count();
             let mt_hits = mt_kv_stats.exact_hits + mt_kv_stats.res_hits;
             let mt_pure_tps = if mt_decode_secs > 1e-6 {
@@ -638,7 +585,11 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits as f64 / mt_decode_tokens_steered as f64 * 100.0
             };
             println!(
-                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} guard_relax={} | logits_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | pure_decode={:.2} tok/s e2e={:.2} tok/s prefill={:.1}ms ({:.2}ms/t)",
+                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw\
+                 _forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} \
+                 conc={} churn={} guard_relax={} | logits_skip={}/{} | sb_settle={} | kv_occupied={} kv_hi\
+                 ts={}/8 (exact={} res={}) pframes={} seeks={} | pure_decode={:.2} tok/s e2e={:.2} tok/s p\
+                 refill={:.1}ms ({:.2}ms/t)",
                 adapter.ego_differential_net().max_hops,
                 if mt_exp_total == 0 {
                     0.0
@@ -682,6 +633,19 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_prefill_total_ms,
                 mt_prefill_mean_ms,
             );
+            let mt_q = summarize_dialogue_quality(&mt_replies);
+            println!(
+                "  [MultiTurnQuality] mattr20={:.3} mattr50={:.3} dist2={:.3} rep4_loop={:.3} aband={:.1}% \
+                 | drift(T8-T1): d_mattr20={:+.3} d_dist2={:+.3} d_rep4={:+.3}",
+                mt_q.mean_mattr20,
+                mt_q.concat_mattr50,
+                mt_q.mean_distinct2,
+                mt_q.mean_rep4_loop,
+                mt_q.abandonment_rate * 100.0,
+                mt_q.delta_mattr20,
+                mt_q.delta_distinct2,
+                mt_q.delta_rep4_loop,
+            );
             mt_metrics = Some(TrialPassMetrics {
                 label: "8-Turn".to_string(),
                 pure_decode_tps: mt_pure_tps,
@@ -704,13 +668,12 @@ pub(crate) fn run_multi_turn_and_step3(
     }
 
     if !recall_only && run_step3 {
-        // Step 3: Repository-Contained .lmnkc Persistence, Zero-Forward Seek & Cross-Model Re-Bake
+        // Step 3: Temp-Directory .lmnkc Persistence, Zero-Forward Seek & Cross-Model Re-Bake
         println!("\n=== Step 3: Dual-Track .lmnkc GOP Seek & Cross-Model Re-Bake ===");
-        let containers_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("containers");
-        let container_path = containers_dir.join("phi4_session.lmnkc");
+        let containers_dir =
+            std::env::temp_dir().join(format!("liminika_step3_{}", std::process::id()));
+        std::fs::create_dir_all(&containers_dir)?;
+        let container_path = containers_dir.join(format!("{model_arch_label}_session.lmnkc"));
         let mut exported_topo = adapter.export_logical_pframe_topology();
         if exported_topo.is_empty() {
             let mut tmp_ego = ModelSteeringAdapter::new(adapter.geometry().clone())?;
@@ -734,50 +697,11 @@ pub(crate) fn run_multi_turn_and_step3(
             expected_topo_len,
         );
 
-        struct SubtitleModelProjector<'a> {
-            model: &'a mut Phi3Model,
-            tokenizer: &'a Tokenizer,
-            model_rotary_dim: usize,
-            target_rotary_dim: usize,
-        }
-
-        impl SubtitleActivationEncoder for SubtitleModelProjector<'_> {
-            fn encode_subtitle_activations(
-                &mut self,
-                record: &SourceTextRecord,
-            ) -> Result<Vec<Vec<f32>>, String> {
-                self.model.clear_cache();
-                let prompt = format_phi4_prompt(&record.text);
-                let ids = self
-                    .tokenizer
-                    .encode(prompt.as_str(), false)
-                    .map_err(|e| format!("rebake encode error: {e}"))?
-                    .get_ids()
-                    .to_vec();
-                let (_, query_tok_qs, _) = self
-                    .model
-                    .forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)
-                    .map_err(|e| format!("rebake forward error: {e}"))?;
-                let mut out = Vec::with_capacity(query_tok_qs.len());
-                for tok_flat in query_tok_qs {
-                    let mut layer_q = SequenceActivationPooler::uniform_unit_mean(
-                        &tok_flat,
-                        ids.len(),
-                        self.model_rotary_dim,
-                    )?;
-                    layer_q.resize(self.target_rotary_dim, 0.0);
-                    out.push(layer_q);
-                }
-                Ok(out)
-            }
-        }
-
-        let mut same_projector = SubtitleModelProjector {
-            model,
-            tokenizer,
-            model_rotary_dim: adapter.geometry().q_rot_len(),
-            target_rotary_dim: adapter.geometry().q_rot_len(),
-        };
+        let mut same_projector = PooledSubtitleEncoder::new(
+            LmTokenEncoder::new(model, tokenizer, chat).with_chat_prompt(true),
+            adapter.geometry().q_rot_len(),
+            adapter.geometry().q_rot_len(),
+        );
         let same_ctx = RebakeContext {
             adapter,
             policy: &compiled.recall_policy,
@@ -797,17 +721,20 @@ pub(crate) fn run_multi_turn_and_step3(
             );
         }
 
-        let mut alt_geom = RopeGeometry::phi4_mini();
-        alt_geom.head_dim = 128;
-        alt_geom.rotary_dim = 128;
+        let mut alt_geom = adapter.geometry().clone();
+        if alt_geom.rotary_dim == 128 {
+            alt_geom.rotary_dim = 96;
+        } else {
+            alt_geom.head_dim = 128;
+            alt_geom.rotary_dim = 128;
+        }
         let mut alt_adapter = ModelSteeringAdapter::new(alt_geom)?;
         alt_adapter.set_ego_max_hops(ego_max_hops);
-        let mut alt_projector = SubtitleModelProjector {
-            model,
-            tokenizer,
-            model_rotary_dim: adapter.geometry().q_rot_len(),
-            target_rotary_dim: alt_adapter.geometry().q_rot_len(),
-        };
+        let mut alt_projector = PooledSubtitleEncoder::new(
+            LmTokenEncoder::new(model, tokenizer, chat).with_chat_prompt(true),
+            adapter.geometry().q_rot_len(),
+            alt_adapter.geometry().q_rot_len(),
+        );
         let alt_ctx = RebakeContext {
             adapter: &alt_adapter,
             policy: &compiled.recall_policy,
@@ -825,17 +752,19 @@ pub(crate) fn run_multi_turn_and_step3(
         } = reloaded.resume_or_rebake(&alt_ctx, &mut alt_projector, 2)?
         {
             alt_adapter.bake_logical_pframe_topology(rebaked_tl.logical_pframe_topology());
-            let rebaked_path = containers_dir.join("phi4_rebaked_alt.lmnkc");
+            let rebaked_path = containers_dir.join(format!("{model_arch_label}_rebaked_alt.lmnkc"));
             let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
             println!(
-                "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | pframe_nodes=0x{:02X} (hops={}) | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
+                "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x\
+                 {target_fingerprint:016x} | frames={rebaked_frames} | pframe_nodes=0x{:02X} (hops={}) | s\
+                 aved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
                 alt_adapter.ego_differential_net().active_node_mask,
                 alt_adapter.ego_differential_net().max_hops,
                 rebaked_path.display(),
                 seek_state.anchor_ids.len(),
             );
         }
-        if let Some(ref bank) = active_persona_bank {
+        if let Some(bank) = active_persona_bank.as_ref() {
             let pc = bank.to_consolidated_ledger();
             let active_units = bank.units().iter().filter(|u| u.op_counts().1 > 0).count();
             let total_steps: usize = bank
@@ -844,7 +773,8 @@ pub(crate) fn run_multi_turn_and_step3(
                 .map(|u| usize::from(u.op_counts().1))
                 .sum();
             println!(
-                "Updated Persona Cognitive Bank (units={active_units}/{}, total_steps={total_steps}): consolidated={:02x?}",
+                "Updated Persona Cognitive Bank (units={active_units}/{}, total_steps={total_steps}): cons\
+                 olidated={:02x?}",
                 bank.units().len(),
                 pc.steps
             );
@@ -880,6 +810,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 );
             }
         }
+        let _ = std::fs::remove_dir_all(&containers_dir);
     }
 
     Ok(mt_metrics)

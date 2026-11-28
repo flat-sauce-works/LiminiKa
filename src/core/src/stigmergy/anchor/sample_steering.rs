@@ -5,21 +5,20 @@
 
 use super::PhaseAnchorRecord;
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
-    branchless_rad_to_phase_step_u8, branchless_relu_f32, branchless_splitmix64,
-    branchless_von_mises_kappa, circular_r_bar_from_words_64, is_phase_profile_nonzero_64,
-    is_word_array_uniform_64, load_q7_words_64, store_q7_word_at, store_q7_words_64,
-    swar_q7_phase_step_filter_words_64, swar_q7_phase_step_filter_x8,
-    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64, AlignedBuffer16, AlignedSlice,
-    AlignedSliceMut32, PhaseSteering, Pod, SWAR_LOW7_MASK_64, SWAR_SIGN_MASK_64,
-    SWAR_SPLAT_BYTE_64,
+    AlignedBuffer16, AlignedSlice, AlignedSliceMut32, PhaseSteering, Pod, SWAR_LOW7_MASK_64,
+    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
+    branchless_splitmix64, branchless_von_mises_kappa, circular_r_bar_from_words_64,
+    is_phase_profile_nonzero_64, is_word_array_uniform_64, load_q7_words_64, store_q7_word_at,
+    store_q7_words_64, swar_q7_phase_step_filter_words_64, swar_q7_phase_step_filter_x8,
+    swar_q7_scale_le128_with_bias_x8, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, LmnkResult, PhaseQ7, Scoped,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7,
+    Scoped, branchless_select_f32, branchless_select_i32,
 };
 use crate::stigmergy::gate::{PhaseDeltaSlice, PhaseSteeringActiveExt};
-use crate::stigmergy::trail::{trail_phase_words_ref, PointerTrail, TaggedPtr};
+use crate::stigmergy::trail::{PointerTrail, TaggedPtr, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_REPULSION_ACTIVE,
@@ -136,7 +135,7 @@ pub trait EpisodicPhaseSample {
     /// Extracts or deterministically projects the sample's 64-head Q7 phase coordinates on $SO(2)^{64}$.
     fn sample_phase_coords(&self, domain_salt: u32) -> [PhaseQ7; MAX_ATTENTION_HEADS];
 
-    /// Returns the initial mass / emotional or semantic salience of this sample point (`>= 0.0`).
+    /// Returns the initial mass / semantic salience of this sample point (`>= 0.0`).
     #[inline(always)]
     fn sample_mass(&self) -> f32 {
         1.0
@@ -424,7 +423,7 @@ impl<S: EpisodicPhaseSample> EpisodicPhaseSample for (S, f32, u32) {
 // 2. Blanket RoPE Direct Steering & Attractor Growth
 // ===================================================================
 
-/// 16-byte [`Pod`] telemetry report summarizing the personality growth and precision gain achieved
+/// 16-byte [`Pod`] telemetry report summarizing the persona-anchor growth and precision gain achieved
 /// when absorbing one or more [`EpisodicPhaseSample`] points into the phase-anchor field.
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -433,7 +432,8 @@ pub struct AttractorGrowthReport {
     pub resonant_pull_force: f32,
     /// Circular resultant vector length $\bar{R}_c \in [0, 1]$ measuring phase alignment precision.
     pub resultant_r_bar: f32,
-    /// Von Mises concentration parameter $\kappa_c$ (higher values indicate sharper, more deterministic persona steering).
+    /// Von Mises concentration parameter $\kappa_c$ (higher values indicate sharper, more deterministic persona
+    /// steering).
     pub von_mises_kappa: f32,
     /// Newly crystallized anchor ID (`> 0`) if the sample triggered bottom-up crystallization, or `0`.
     pub crystallized_anchor_id: u32,
@@ -605,9 +605,9 @@ impl<T: EpisodicPhaseSample + ?Sized> EpisodicSampleSteering for T {}
 mod tests {
     use super::*;
     use crate::foundation::{
-        is_phase_profile_nonzero_64, AlignedBuffer32, PhaseSteering, DEFAULT_PHASE_CLAMP_MAX_RAD,
+        AlignedBuffer32, DEFAULT_PHASE_CLAMP_MAX_RAD, PhaseSteering, is_phase_profile_nonzero_64,
     };
-    use crate::liminal::{PhaseQ7, MAX_ATTENTION_HEADS};
+    use crate::liminal::{MAX_ATTENTION_HEADS, PhaseQ7};
 
     struct DummyPhaseSteerer;
     impl PhaseSteering for DummyPhaseSteerer {

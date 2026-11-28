@@ -3,7 +3,7 @@
 
 //! Level 4 (`Runtime`): Stateful orchestration context ([`RuntimeContext`]), configuration
 //! ([`Config`]), telemetry ([`CoreTelemetryBank`]), Composite Manifold Gateway (`gateway`),
-//! Latent Horizon (`horizon`), `.lmnk` zero-copy `storage`, and C11/C++20 `v0.2.0` FFI boundary (`abi`).
+//! Latent Horizon (`horizon`), `.lmnk` zero-copy `storage`, and C11/C++20 `v0.4.0` FFI boundary (`abi`).
 
 #![deny(missing_docs)]
 #![deny(unsafe_op_in_unsafe_fn)]
@@ -19,7 +19,7 @@ pub mod storage;
 pub mod telemetry;
 pub mod topology;
 
-pub use self::boundary_delta::{LiminalBoundaryDelta, CHATTER_FIRE_THRESHOLD_U8};
+pub use self::boundary_delta::{CHATTER_FIRE_THRESHOLD_U8, LiminalBoundaryDelta};
 pub use self::context::*;
 pub use self::gateway::*;
 pub use self::horizon::*;

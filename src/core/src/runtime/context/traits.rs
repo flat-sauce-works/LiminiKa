@@ -5,26 +5,26 @@
 
 use super::{Result, RuntimeContext};
 use crate::foundation::{
-    branchless_clamp_f32, branchless_is_finite_f32, branchless_max_f32, branchless_min_f32,
-    branchless_q7_add_sat, branchless_q7_conjugate_64, branchless_rad_to_phase_step_u8,
-    branchless_relu_f32, is_phase_profile_nonzero_64, load_q7_words_64, store_q7_words_64,
-    swar_or_avx2_q7_add_sat_words_64, AlignedSlice16, PhaseSteering, TaggedPtr,
-    ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    ACTION_MODE_LAYER_SKIP, ATTRACTOR_SLOT_ID_MASK, AlignedSlice16, DEFAULT_PHASE_CLAMP_MAX_RAD,
+    PhaseSteering, TaggedPtr, branchless_clamp_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_q7_add_sat, branchless_q7_conjugate_64,
+    branchless_rad_to_phase_step_u8, branchless_relu_f32, load_q7_words_64,
+    swar_or_avx2_q7_add_sat_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, PhaseQ7, RuntimeConfig,
     LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, RuntimeConfig, branchless_select_f32, branchless_select_u32,
 };
 use crate::runtime::gateway::{
     CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal, SystemConstraintSignal,
 };
 use crate::runtime::storage::{
-    KvKeyframeCache, KvKeyframeHeader, MappedStorage, LMNK_CONTAINER_HEADER_BYTES,
+    KvKeyframeCache, KvKeyframeHeader, LMNK_CONTAINER_HEADER_BYTES, MappedStorage,
 };
 use crate::stigmergy::{
-    FastPathLedger, LedgerSlot, PagedBitmask, PointerSubstrate, PointerTrail, StigmergicSubstrate,
-    WorkbenchSlotSpec, ATTRACTOR_SLOT_PERSONA, LEDGER_HISTORY_LEN, MAX_ATTRACTOR_PULL_FORCE,
-    SUBSTRATE_INLINE_TRAILS,
+    ATTRACTOR_SLOT_PERSONA, FastPathLedger, LEDGER_HISTORY_LEN, LedgerSlot,
+    MAX_ATTRACTOR_PULL_FORCE, PagedBitmask, PointerSubstrate, PointerTrail,
+    SUBSTRATE_INLINE_TRAILS, StigmergicSubstrate, WorkbenchSlotSpec,
 };
 
 // ===================================================================
@@ -51,7 +51,7 @@ impl PointerSubstrate for RuntimeContext {
 
     #[inline]
     fn step_pointer(&mut self, current_ptr: u64, trail_out: &mut PointerTrail) -> Result<()> {
-        let cap = self.config.raw.substrate_capacity;
+        let cap = self.raw_config.substrate_capacity;
         let cur_active = self.substrate.active_count;
         self.substrate.active_count =
             branchless_select_u32(cur_active < cap, cur_active.wrapping_add(1), cur_active);
@@ -80,7 +80,7 @@ impl PointerSubstrate for RuntimeContext {
 
     #[inline]
     fn update_cellular_state_express(&mut self, trail_id: u32, phase_delta: PhaseQ7) -> Result<()> {
-        if trail_id >= self.config.raw.substrate_capacity {
+        if trail_id >= self.raw_config.substrate_capacity {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
         self.substrate
@@ -120,7 +120,7 @@ impl PointerSubstrate for RuntimeContext {
 
     #[inline(always)]
     fn capacity(&self) -> u32 {
-        self.config.raw.substrate_capacity
+        self.raw_config.substrate_capacity
     }
 
     #[inline(always)]
@@ -160,7 +160,7 @@ impl PointerSubstrate for RuntimeContext {
 impl FastPathLedger for RuntimeContext {
     #[inline]
     fn evaluate_auto_tune(&self, slot: &LedgerSlot, config_out: &mut RuntimeConfig) -> Result<()> {
-        *config_out = self.config.raw;
+        *config_out = self.raw_config;
 
         // Count high-intensity telemetry spike events (>= 0x80) across all 8 ring bytes via 1 SWAR op.
         let word = u64::from_le_bytes(slot.telemetry_mini_ledger);
@@ -229,7 +229,8 @@ impl RuntimeContext {
     /// Sets the relative weight of workbench domain lane `domain_id`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS` or `weight` is negative/non-finite.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS` or `weight` is
+    /// negative/non-finite.
     #[inline]
     pub fn set_domain_weight(&mut self, domain_id: u32, weight: f32) -> Result<()> {
         let idx = domain_id as usize;
@@ -278,50 +279,6 @@ impl RuntimeContext {
         }
 
         (best_id, branchless_relu_f32(best_score))
-    }
-
-    /// Evaluates the phase vector and pull force for a single workbench domain lane.
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS`.
-    #[inline]
-    pub fn evaluate_slot_force(
-        &self,
-        domain_id: u32,
-        _trail: &PointerTrail,
-        slot_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-    ) -> Result<f32> {
-        let idx = domain_id as usize;
-        if idx >= MAX_ATTRACTOR_DOMAINS {
-            return Err(LMNK_ERR_INVALID_ARGUMENT);
-        }
-        let enabled = ((self.substrate.slot_enabled_mask >> idx) & 1) != 0;
-        if !enabled {
-            *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
-            return Ok(0.0);
-        }
-
-        let bank_slice = self.substrate.slot_phase_bank.as_aligned_slice();
-        let bank_slot = bank_slice.slot_exact::<MAX_ATTENTION_HEADS>(idx)?;
-        if is_phase_profile_nonzero_64(bank_slot) {
-            *slot_phase_out = *bank_slot;
-            return Ok(self.substrate.slot_weights[idx]);
-        }
-
-        *slot_phase_out = [0i8; MAX_ATTENTION_HEADS];
-        Ok(self.substrate.slot_weights[idx])
-    }
-
-    /// Evaluates unified multi-domain superposition across active workbench lanes.
-    #[inline]
-    pub fn evaluate_multi_domain_superposition(
-        &self,
-        trail: &PointerTrail,
-        composite_phase_out: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-    ) -> f32 {
-        let (run_w, pull) = self.evaluate_multi_domain_superposition_words(trail);
-        store_q7_words_64(composite_phase_out, &run_w);
-        pull
     }
 
     /// Releases all workbench lanes and clears any escalated lane marker.
@@ -388,7 +345,7 @@ impl MappedStorage for RuntimeContext {
         config_out: &mut RuntimeConfig,
     ) -> Result<()> {
         self.deserialize_from_bytes(buffer)?;
-        *config_out = self.config.raw;
+        *config_out = self.raw_config;
         Ok(())
     }
 
@@ -408,14 +365,14 @@ impl MappedStorage for RuntimeContext {
 impl CausalProvenanceSignal for RuntimeContext {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
-        self.entropy_controller.causal_provenance_bits() | self.config.raw.causal_provenance_bits()
+        self.entropy_controller.causal_provenance_bits() | self.raw_config.causal_provenance_bits()
     }
 
     #[inline(always)]
     fn causal_anomaly_severity(&self) -> f32 {
         branchless_max_f32(
             self.entropy_controller.causal_anomaly_severity(),
-            self.config.raw.causal_anomaly_severity(),
+            self.raw_config.causal_anomaly_severity(),
         )
     }
 }
@@ -444,7 +401,7 @@ impl SystemConstraintSignal for RuntimeContext {
     #[inline(always)]
     fn phase_step_min_rad_override(&self) -> f32 {
         branchless_max_f32(
-            self.config.raw.phase_step_min_rad_override(),
+            self.raw_config.phase_step_min_rad_override(),
             self.entropy_controller.phase_step_min_rad_override(),
         )
     }

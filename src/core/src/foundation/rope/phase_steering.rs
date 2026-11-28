@@ -71,7 +71,8 @@ pub trait PhaseSteering {
     /// Applies dynamic phase-shifted RoPE (`PhaseSteering`) in-place to a single 32B-aligned Query or Key tensor.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `tensor.len() < head_dim * num_heads` or `phase_deltas.len() < num_heads`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `tensor.len() < head_dim * num_heads` or `phase_deltas.len() <
+    /// num_heads`.
     #[inline(always)]
     fn apply_phase_steering(
         &self,
@@ -112,7 +113,8 @@ pub trait PhaseSteering {
         Ok(())
     }
 
-    /// Applies soft-bounded (`PhaseClamp`) phase steering ($\Delta\theta_{\mathrm{safe}} = \theta_{\max} \cdot \tanh(\Delta\theta / \theta_{\max})$)
+    /// Applies soft-bounded (`PhaseClamp`) phase steering ($\Delta\theta_{\mathrm{safe}} = \theta_{\max} \cdot
+    /// \tanh(\Delta\theta / \theta_{\max})$)
     /// to the upper low-frequency quarter (`rot_dim = ((head_dim >> 2) & !1).max(2)`) of an arbitrary
     /// hardware-aligned tensor (`ALIGN >= 32`, Section 2.2).
     ///
@@ -274,7 +276,8 @@ pub trait PhaseSteering {
         )
     }
 
-    /// Applies fused soft-bounded (`PhaseClamp`) phase steering to both Query and Key tensors over any alignment `ALIGN >= 32`.
+    /// Applies fused soft-bounded (`PhaseClamp`) phase steering to both Query and Key tensors over any
+    /// alignment `ALIGN >= 32`.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_ALIGNMENT`] if `ALIGN < 32`, or [`LMNK_ERR_INVALID_ARGUMENT`]

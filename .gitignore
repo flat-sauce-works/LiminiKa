@@ -33,6 +33,9 @@ target/
 **/target/
 examples/*/Cargo.lock
 !examples/candle_eval/Cargo.lock
+fuzz/Cargo.lock
+fuzz/corpus/
+fuzz/artifacts/
 **/*.rs.bk
 
 # Profiling, coverage, and benchmark outputs

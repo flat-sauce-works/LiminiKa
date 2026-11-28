@@ -14,17 +14,17 @@ use core::mem::{align_of, offset_of, size_of};
 
 use crate::drivers::ego::intent::{EgoIntentAxes, LiminalEgoState};
 use crate::foundation::{
-    branchless_q7_weighted_ensemble_contiguous_words_64, load_q7_words_64, swar_q7_circular_add_x8,
-    swar_q7_scale_le128_with_bias_x8, Pod, SWAR_SPLAT_BYTE_64,
+    Pod, SWAR_SPLAT_BYTE_64, branchless_q7_weighted_ensemble_contiguous_words_64, load_q7_words_64,
+    swar_q7_circular_add_x8, swar_q7_scale_le128_with_bias_x8,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u8, AttributionTag, BitCut8, LacunaPartition8,
-    PhaseQ7, Scoped, ScopedCut, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
-    SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR, SCOPE_REGION_SELF_REF,
+    AttributionTag, BitCut8, LacunaPartition8, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    PhaseQ7, SCOPE_REGION_EXTERIOR, SCOPE_REGION_INTERIOR, SCOPE_REGION_SELF_REF, Scoped,
+    ScopedCut, branchless_select_u8, branchless_select_u32,
 };
+use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 use crate::stigmergy::anchor::{PhaseAnchorRecord, PhaseProfile64};
 use crate::stigmergy::granule::StigmergicGranuleState;
-use crate::stigmergy::ATTRACTOR_SLOT_SYSTEM_BASELINE;
 
 /// Maximum number of inline P-Frame [`DistortionDelta`] nodes hosted by [`EgoDifferentialNet`].
 pub const MAX_EGO_PFRAME_NODES: usize = 8;
@@ -65,7 +65,7 @@ pub struct DistortionDelta {
     pub pheromone_q7: u8,
     /// Directed delta scaling gain in Q0.7 (`0..=127`, `offset 14`).
     pub gain_q7: u8,
-    /// 2-bit [`AttributionTag`] (`Stigmergy`/`Ego`, `offset 15`).
+    /// 3-bit [`AttributionTag`] (`Stigmergy`/`Ego`, `offset 15`).
     pub attribution_tag: u8,
     /// Model-agnostic logical `EgoIntentAxes` transition (`16 B`, `offset 16..32`).
     pub intent_delta: EgoIntentAxes,
@@ -155,19 +155,19 @@ pub struct PFrameRoutingMeta {
     pub pheromone_q7: u8,
     /// Directed delta scaling gain in Q0.7 (`0..=127`, `offset 6`).
     pub gain_q7: u8,
-    /// Packed 2-bit [`AttributionTag`] (`bits 0..=1`) and lifecycle flags (`bits 2..=4`, `offset 7`).
+    /// Packed 3-bit [`AttributionTag`] (`bits 0..=2`) and lifecycle flags (`bits 3..=5`, `offset 7`).
     pub flags_and_tag: u8,
 }
 
 impl PFrameRoutingMeta {
-    /// Bit `2`: node is active and eligible for lacuna trigger matching.
-    pub const FLAG_ACTIVE_BIT: u8 = 1 << 2;
-    /// Bit `3`: node was consolidated into an I-Frame phase anchor.
-    pub const FLAG_CONSOLIDATED_BIT: u8 = 1 << 3;
-    /// Bit `4`: node carries valid model-baked 64-head Q7 phase deltas.
-    pub const FLAG_BAKED_VALID_BIT: u8 = 1 << 4;
-    /// Low 2-bit mask extracting [`AttributionTag::raw()`].
-    pub const TAG_MASK: u8 = 0x03;
+    /// Bit `3`: node is active and eligible for lacuna trigger matching.
+    pub const FLAG_ACTIVE_BIT: u8 = 1 << 3;
+    /// Bit `4`: node was consolidated into an I-Frame phase anchor.
+    pub const FLAG_CONSOLIDATED_BIT: u8 = 1 << 4;
+    /// Bit `5`: node carries valid model-baked 64-head Q7 phase deltas.
+    pub const FLAG_BAKED_VALID_BIT: u8 = 1 << 5;
+    /// Low 3-bit mask extracting [`AttributionTag::raw()`].
+    pub const TAG_MASK: u8 = 0x07;
 
     /// Constructs an inactive default 8-byte [`PFrameRoutingMeta`].
     #[inline(always)]
@@ -184,7 +184,7 @@ impl PFrameRoutingMeta {
         }
     }
 
-    /// Packs `DISTORTION_DELTA_FLAG_*` bits and a 2-bit [`AttributionTag`] into `flags_and_tag`.
+    /// Packs `DISTORTION_DELTA_FLAG_*` bits and a 3-bit [`AttributionTag`] into `flags_and_tag`.
     #[inline(always)]
     #[must_use]
     pub const fn pack_flags_and_tag(distortion_flags: u32, tag: u8) -> u8 {
@@ -228,7 +228,7 @@ impl PFrameRoutingMeta {
         a | c | b
     }
 
-    /// Extracts the 2-bit [`AttributionTag`] code (`0..=3`).
+    /// Extracts the 3-bit [`AttributionTag`] code (`0..=5`).
     #[inline(always)]
     #[must_use]
     pub const fn attribution_tag(self) -> u8 {
@@ -577,10 +577,10 @@ impl EgoDifferentialNet {
         };
         n0.scope_region_selector = SCOPE_REGION_SELF_REF;
         n0.pheromone_q7 = 88;
-        n0.gain_q7 = ego.counter_basin_thrust_q7.clamp(32, 127);
+        n0.gain_q7 = ego.basin_resistance_q7.clamp(32, 127);
         n0.intent_delta = *axes;
         n0.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
-        n0.delta_phase_q7 = make_phase(&ego.sovereign_granule_phase_q7, 4, false);
+        n0.delta_phase_q7 = make_phase(&ego.preferred_granule_phase_q7, 4, false);
 
         let mut n1 = DistortionDelta::new_empty(2, u32::from(ATTRACTOR_SLOT_SYSTEM_BASELINE) + 2);
         n1.next_hop_idx = 2;
@@ -592,8 +592,8 @@ impl EgoDifferentialNet {
         n1.intent_delta = *axes;
         n1.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
         n1.delta_phase_q7 = make_phase(
-            &ego.sovereign_granule_phase_q7,
-            ego.transgression_bias_q7 >> 2,
+            &ego.preferred_granule_phase_q7,
+            ego.boundary_crossing_q7 >> 2,
             true,
         );
 
@@ -604,12 +604,12 @@ impl EgoDifferentialNet {
         n2.scope_region_selector =
             SCOPE_REGION_EXTERIOR | SCOPE_REGION_INTERIOR | SCOPE_REGION_SELF_REF;
         n2.pheromone_q7 = 64;
-        n2.gain_q7 = ego.transgression_bias_q7.unsigned_abs().clamp(24, 127);
+        n2.gain_q7 = ego.boundary_crossing_q7.unsigned_abs().clamp(24, 127);
         n2.intent_delta = *axes;
         n2.flags = DISTORTION_DELTA_FLAG_ACTIVE | DISTORTION_DELTA_FLAG_BAKED_PHASE_VALID;
         n2.delta_phase_q7 = make_phase(
-            &ego.sovereign_granule_phase_q7,
-            -(ego.transgression_bias_q7 >> 2),
+            &ego.preferred_granule_phase_q7,
+            -(ego.boundary_crossing_q7 >> 2),
             false,
         );
 
@@ -672,6 +672,7 @@ impl EgoDifferentialNet {
     /// Cold-Path GOP maintenance: consolidates reinforced multi-hop P-Frame chains into an I-Frame
     /// [`PhaseAnchorRecord`] and evaporates stale unreinforced P-Frame nodes below `evaporation_floor_q7`.
     #[inline]
+    #[must_use]
     pub fn consolidate_and_evaporate_cold_path(
         &mut self,
         current_epoch: u32,
@@ -715,7 +716,7 @@ impl EgoDifferentialNet {
                         cold.anchor_ref_id,
                         ATTRACTOR_SLOT_SYSTEM_BASELINE,
                         cold.reinforce_count,
-                        f32::from(routing.gain_q7) * (1.0 / 127.0),
+                        f32::from(routing.gain_q7) * (1.0 / 128.0),
                         grounded,
                     );
                     routing.set_consolidated(true);
@@ -916,7 +917,7 @@ mod tests {
         let ego = LiminalEgoState::from_preset(LiminalEgoPreset::High);
         let axes = EgoIntentAxes::new()
             .with_autonomy_q7(72)
-            .with_transgression_q7(48);
+            .with_boundary_crossing_q7(48);
         let mut net_1 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 1);
         let net_3 = EgoDifferentialNet::from_ego_state_and_axes(&ego, &axes, 3);
         let partition = LacunaPartition8 {

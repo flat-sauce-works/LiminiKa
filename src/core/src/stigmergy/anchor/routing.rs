@@ -5,27 +5,57 @@
 //! folding for [`PhaseAnchorRecord`].
 
 use crate::foundation::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_min_f32,
-    branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
+    TaggedPtr, branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_min_f32, branchless_phase_proximity_gravity_f32, branchless_popcount_rsqrt_u32,
     branchless_q7_default_gravity_from_diff_u8, branchless_relu_f32, branchless_rsqrt_f32,
     coherence_above_floor_from_word_arrays_64,
     coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_len_f32,
     fast_inv_pos_normal_f32, fast_ln_1p_bounded_f32, is_word_array_uniform_64, load_q7_words_64,
     pack_action_slot_tag, store_q7_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
-    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, TaggedPtr,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_GRAVITY_EPS, Q7_FULL_COS_REF, SWAR_SPLAT_BYTE_64,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, PhaseQ7, DEFAULT_ENTROPY_EPS,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7,
+    branchless_select_f32, branchless_select_u32,
 };
-use crate::stigmergy::trail::{trail_phase_words_mut, trail_phase_words_ref, PointerTrail};
+use crate::stigmergy::trail::{PointerTrail, trail_phase_words_mut, trail_phase_words_ref};
 use crate::stigmergy::{
     MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_LIMINAL_BEAT_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE, TRAIL_FLAG_SYNERGY_RESONANCE,
 };
 
 use super::PhaseAnchorRecord;
+
+/// Routing and scoring parameters for [`PhaseAnchorRecord::route_coarse_to_fine_candidates_64`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoarseToFineParams {
+    /// Attention head dimension used for $1/\sqrt{d_{\mathrm{head}}}$ scaling.
+    pub head_dim: u32,
+    /// Gain weighting circular phase interference coherence.
+    pub phase_interference_gain: f32,
+    /// Gain weighting logarithmic stigmergic trail density prior.
+    pub stigmergic_prior_gain: f32,
+    /// Score bonus when a candidate matches the source trail's `linked_trail_id`.
+    pub pointer_link_bonus: f32,
+    /// Score bonus for candidates aligned with the winning macro cluster.
+    pub cluster_bonus_gain: f32,
+    /// Contradiction rejection threshold (`coh < -contradiction_threshold`).
+    pub contradiction_threshold: f32,
+}
+
+pub(crate) type Top2LiminalCentroidRoute = (
+    usize,
+    usize,
+    u32,
+    u32,
+    f32,
+    f32,
+    bool,
+    [u64; NUM_STIGMERGIC_GRANULES],
+    [u64; NUM_STIGMERGIC_GRANULES],
+    [u64; NUM_STIGMERGIC_GRANULES],
+);
 
 impl PhaseAnchorRecord {
     /// Evaluates macro distribution diagnostics across `centroids` in $\mathcal{O}(K^2)$ SWAR:
@@ -91,6 +121,7 @@ impl PhaseAnchorRecord {
     }
 
     #[inline(always)]
+    // Hot-path SWAR helper keeps flat word/scalar arguments for register residency.
     #[allow(clippy::too_many_arguments)]
     fn apply_macro_centroid_pull_to_trail_64(
         trail: &mut PointerTrail,
@@ -249,18 +280,7 @@ impl PhaseAnchorRecord {
         trail_w: [u64; NUM_STIGMERGIC_GRANULES],
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
-    ) -> (
-        usize,
-        usize,
-        u32,
-        u32,
-        f32,
-        f32,
-        bool,
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-    ) {
+    ) -> Top2LiminalCentroidRoute {
         let k_len = centroids.len();
         if k_len == 0 {
             return (
@@ -466,18 +486,7 @@ impl PhaseAnchorRecord {
         trail: &mut PointerTrail,
         pull_step_u7: u8,
         liminal_gravity_ratio_thresh: f32,
-    ) -> (
-        usize,
-        usize,
-        u32,
-        u32,
-        f32,
-        f32,
-        bool,
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-        [u64; NUM_STIGMERGIC_GRANULES],
-    ) {
+    ) -> Top2LiminalCentroidRoute {
         let trail_w = *trail_phase_words_ref(trail);
         Self::route_top2_liminal_centroids_from_preloaded_words_64(
             centroids,
@@ -495,7 +504,8 @@ impl PhaseAnchorRecord {
     /// geodesic between both centroids (bridging the *Limina* inter-memory boundary) and stamps
     /// `TRAIL_FLAG_LIMINAL_BEAT_ACTIVE | TRAIL_FLAG_SYNERGY_RESONANCE`.
     ///
-    /// Returns `(primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence, total_gravity, is_liminal_bifurcation)`.
+    /// Returns `(primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence,
+    /// total_gravity, is_liminal_bifurcation)`.
     #[inline]
     pub fn route_top2_liminal_centroids_64(
         centroids: &[Self],
@@ -516,7 +526,7 @@ impl PhaseAnchorRecord {
     /// **Coarse-to-Fine Macro-to-Micro Routing ($\mathcal{O}(K) + \mathcal{O}(M_{\mathrm{local}})$)**:
     /// 1. Executes the $\mathcal{O}(K)$ Online Toroidal $k$-Means E-step to identify the winning
     ///    macro centroid `win_k` and stamps `src_trail.cluster_id = macro_anchor_id`.
-    /// 2. Evaluates `candidate_trails` with a macro-cluster affinity bonus (`cluster_bonus_gain`)
+    /// 2. Evaluates `candidate_trails` with a macro-cluster affinity bonus (`params.cluster_bonus_gain`)
     ///    for trails belonging to `macro_anchor_id` (or geometrically aligned with `centroids[win_k]`),
     ///    links the winning candidate into `src_trail.linked_trail_id`, and returns
     ///    `(winning_centroid_idx, winning_trail_id, best_score, best_coherence, found_valid)`.
@@ -525,13 +535,16 @@ impl PhaseAnchorRecord {
         centroids: &[Self],
         src_trail: &mut PointerTrail,
         candidate_trails: &[PointerTrail],
-        head_dim: u32,
-        phase_interference_gain: f32,
-        stigmergic_prior_gain: f32,
-        pointer_link_bonus: f32,
-        cluster_bonus_gain: f32,
-        contradiction_threshold: f32,
+        params: CoarseToFineParams,
     ) -> (usize, u32, f32, f32, bool) {
+        let CoarseToFineParams {
+            head_dim,
+            phase_interference_gain,
+            stigmergic_prior_gain,
+            pointer_link_bonus,
+            cluster_bonus_gain,
+            contradiction_threshold,
+        } = params;
         let self_w = *trail_phase_words_ref(src_trail);
         let (
             win_k,
@@ -548,11 +561,7 @@ impl PhaseAnchorRecord {
 
         let macro_anchor_id = if has_win_centroid {
             let aid = centroids[win_k].anchor_id;
-            if aid != 0 {
-                aid
-            } else {
-                (win_k as u32) + 1
-            }
+            if aid != 0 { aid } else { (win_k as u32) + 1 }
         } else {
             src_trail.cluster_id
         };

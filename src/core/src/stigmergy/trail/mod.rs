@@ -9,38 +9,41 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::Q7_FULL_COS_REF;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::Q7_FULL_COS_REF;
-use crate::foundation::{
-    branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_popcount_rsqrt_u32, branchless_relu_f32, branchless_rsqrt_f32,
-    coherence_from_word_arrays_with_both_uniform_flags_64, fast_ln_1p_bounded_f32,
-    is_word_array_uniform_64, Pod, RawPhaseProjectable,
-};
 pub use crate::foundation::{PagedBitmask, TaggedPtr};
-use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, PhaseQ7, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+use crate::foundation::{
+    Pod, RawPhaseProjectable, branchless_abs_f32, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_popcount_rsqrt_u32, branchless_relu_f32,
+    branchless_rsqrt_f32, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_ln_1p_bounded_f32, is_word_array_uniform_64,
 };
-pub use crate::stigmergy::ledger::LedgerSlot;
+use crate::liminal::{
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_u32,
+};
 use crate::stigmergy::TRAIL_FLAG_REPULSION_ACTIVE;
+pub use crate::stigmergy::ledger::LedgerSlot;
 
 mod ops;
 mod resonance;
 mod traits;
 
 pub(crate) use ops::select_rewire_bridge_and_modulate_with_preloaded_words_64;
+#[cfg(test)]
+pub(crate) use resonance::modulate_attention_scores_by_bayesian_trails_64;
 pub use resonance::{
-    bridge_and_filter_liminal_trail_chain, detect_and_record_obstruction_repulsion,
-    eval_stigmergic_block_degrees, evaluate_trail_chain_cohomology_and_joint_log_prob,
-    modulate_attention_scores_by_bayesian_trails_64, resolve_dyadic_qdpt_and_cascade_ptr,
+    QdptCascadeParams, bridge_and_filter_liminal_trail_chain,
+    detect_and_record_obstruction_repulsion, eval_stigmergic_block_degrees,
+    evaluate_trail_chain_cohomology_and_joint_log_prob, resolve_dyadic_qdpt_and_cascade_ptr,
 };
 pub(crate) use traits::validate_optional_qk_tensors;
-pub use traits::{PointerSubstrate, StigmergicSubstrateOps};
+pub use traits::{
+    PhaseStepSteerParams, PointerSubstrate, StigmergicSubstrateOps, TokenCascadeParams,
+};
 
 /// Stigmergic pointer trail structure aligned to 64 bytes (2 cache lines, 128 bytes total).
 #[repr(C, align(64))]
@@ -157,6 +160,8 @@ pub(super) const fn precompute_bayesian_trail_scales(
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn eval_candidate_trail_words_with_macro_fast(
     self_w: &[u64; 8],
     self_is_uniform: bool,
@@ -268,6 +273,8 @@ pub(super) fn eval_candidate_trail_words_with_macro_fast(
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn eval_candidate_trail_avx2_with_macro_fast(
     self_w: &[u64; 8],
     self_is_uniform: bool,

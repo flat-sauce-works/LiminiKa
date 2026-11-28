@@ -1,0 +1,61 @@
+# name: fuzz/Cargo.toml
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "liminika-fuzz"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.100.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+liminika-adapter = { path = "../src/adapter" }
+liminika-core = { path = "../src/core" }
+liminika-dsl = { path = "../src/dsl" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+
+[lints.clippy]
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+inline_always = "allow"
+undocumented_unsafe_blocks = "warn"
+
+[[bin]]
+name = "lmnkc_container"
+path = "fuzz_targets/lmnkc_container.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lmnkp_package"
+path = "fuzz_targets/lmnkp_package.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lmnk_dsl"
+path = "fuzz_targets/lmnk_dsl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lmnk_timeline"
+path = "fuzz_targets/lmnk_timeline.rs"
+test = false
+doc = false
+bench = false

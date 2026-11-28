@@ -28,9 +28,11 @@
 //!   `Q7_GEODESIC_DEFAULT_PHASE_CLAMP_SINCOS_REF` or `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` outside
 //!   the head loop and index `lut[(slot_q7 as u8) as usize]` directly with zero per-head integer
 //!   folding/scaling arithmetic and zero cache-branch jitter.
-//! - **Single-Evaluation $SO(2)$ Group-Closure `PhaseClamp` + Sub-Head Router Fusion**: Because both `PhaseClamp` and sub-head router
+//! - **Single-Evaluation $SO(2)$ Group-Closure `PhaseClamp` + Sub-Head Router Fusion**: Because both
+//!   `PhaseClamp` and sub-head router
 //!   operate on the upper low-frequency quarter `rot_dim`, `dispatch_fused_phase_clamp_words_and_subhead_profiles_core`
-//!   fuses $\mathbf{R}(\theta_{\mathrm{clamp}})\mathbf{R}(\theta_{\mathrm{subhead}}) = \mathbf{R}(\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}})$
+//!   fuses $\mathbf{R}(\theta_{\mathrm{clamp}})\mathbf{R}(\theta_{\mathrm{subhead}}) =
+//!   \mathbf{R}(\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}})$
 //!   via `eval_fused_phase_clamp_subhead_sincos_q7_fast` (evaluating the trigonometric polynomial once per
 //!   head instead of twice on custom `PhaseClamp` limits) and caches consecutive head `(sin, cos)` pairs.
 //! - **Zero-Jitter Micro-Swarm Quorum Pre-Pass & Constant-Time Damping**: `steer_from_swar_words_core_safe`
@@ -41,7 +43,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 use crate::foundation::aligned::{
     AlignedSlice16, AlignedSlice32, AlignedSliceMut, AlignedSliceMut16, AlignedSliceMut32,
     DisjointMutPair,
@@ -53,14 +54,14 @@ use crate::foundation::lut_crc32::{
     SWAR_SPLAT_BYTE_64,
 };
 use crate::foundation::pod::{
-    unpack_action_mode_from_tag, Rank1Descriptor, SubheadConfig, TaggedPtr, ACTION_MODE_PHASE_STEER,
+    ACTION_MODE_PHASE_STEER, Rank1Descriptor, SubheadConfig, TaggedPtr, unpack_action_mode_from_tag,
 };
 use crate::foundation::scalar_math::{
-    branchless_clamp_f32, branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32,
-    branchless_q7_add_sat, branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7,
-    branchless_rad_to_phase_step_u8, branchless_sincos_f32, branchless_sincos_half_pi_f32,
-    branchless_sincos_q7_phase_clamp_preinv, fast_inv_len_f32, fast_inv_pos_normal_f32,
-    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE, branchless_clamp_f32,
+    branchless_inv_pos_f32, branchless_is_finite_f32, branchless_min_f32, branchless_q7_add_sat,
+    branchless_q7_fold_s1_geodesic, branchless_q7_scale_u7, branchless_rad_to_phase_step_u8,
+    branchless_sincos_f32, branchless_sincos_half_pi_f32, branchless_sincos_q7_phase_clamp_preinv,
+    fast_inv_len_f32, fast_inv_pos_normal_f32,
 };
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::simd_stats::avx2_rotate_so2_block32;
@@ -76,8 +77,8 @@ use crate::foundation::swar_simd::{
     swar_q7_scale_u7_x8, swar_u8_sum_x8,
 };
 use crate::liminal::{
-    branchless_select_f32, LmnkResult, PhaseQ7, LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT, LmnkResult,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7, Q7_PHASE_SCALE_RAD, branchless_select_f32,
 };
 use core::f32::consts::FRAC_PI_2;
 use core::mem::{align_of, size_of};
@@ -106,7 +107,7 @@ pub use visual::*;
 const _: () = {
     assert!(size_of::<SubheadConfig>() == 32);
     assert!(align_of::<SubheadConfig>() == 16);
-    assert!(size_of::<Rank1Descriptor>() == 64);
+    assert!(size_of::<Rank1Descriptor>() == 32);
     assert!(align_of::<Rank1Descriptor>() == 32);
     assert!(NUM_SWARM_CELLS * HEADS_PER_CELL == MAX_ATTENTION_HEADS);
 };

@@ -31,17 +31,19 @@ use crate::foundation::scalar_math::{
 };
 use crate::foundation::swar_simd::{is_word_array_uniform_64, load_q7_words_64, store_q7_words_64};
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_usize, PhaseQ7,
-    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS,
+    DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, PhaseQ7, branchless_select_f32,
+    branchless_select_u32, branchless_select_usize,
 };
 
-/// Register-resident Unified-Manifold folder returning `([u64; 8], total_pull, mean_coherence, dominant_idx, active_count)`.
+/// Register-resident Unified-Manifold folder returning `([u64; 8], total_pull, mean_coherence, dominant_idx,
+/// active_count)`.
 ///
 /// Includes a zero-division, zero-SLERP single-anchor fast path (`count == 1 && init_w <= 1.0e-12`)
 /// and guards 64-head Q14 cosine LUT lookups behind `trail_nonzero & anchor_nonzero`.
 /// Order-invariant (commutative) folding of an arbitrary slice of anchors
 /// (`anchor_phases`, `anchor_base_energies`) directly in 8 `u64` SWAR / AVX2 registers,
-/// returning `(folded_words, total_weight, mean_coherence, dominant_anchor_idx, active_anchor_count, any_resonant, any_liminal)`.
+/// returning `(folded_words, total_weight, mean_coherence, dominant_anchor_idx, active_anchor_count,
+/// any_resonant, any_liminal)`.
 #[inline]
 pub(crate) fn branchless_q7_unified_manifold_fold_words_with_flags_64(
     trail_words: &[u64; 8],
@@ -114,7 +116,7 @@ pub(crate) fn branchless_q7_unified_manifold_fold_words_with_flags_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `t` is a 64-byte (`8 * u64`) stack array.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
                 __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
                 _mm256_testz_si256,
@@ -343,7 +345,7 @@ pub(crate) fn branchless_q7_unified_manifold_fold_words_with_flags_64(
                 any_resonant,
                 any_liminal,
             )
-        };
+        }
     }
 
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
@@ -452,7 +454,8 @@ pub(crate) fn branchless_q7_unified_manifold_fold_words_with_flags_64(
 
 /// Register-resident core for [`branchless_q7_unified_manifold_fold_with_init_weight_64`] that folds
 /// `anchor_phases` directly in 8 `u64` SWAR registers (`trail_words`) without intermediate memory
-/// stores or reloads, returning `(folded_words_64, total_weight, mean_coherence, dominant_anchor_idx, active_anchor_count)`.
+/// stores or reloads, returning `(folded_words_64, total_weight, mean_coherence, dominant_anchor_idx,
+/// active_anchor_count)`.
 #[inline(always)]
 #[must_use]
 pub fn branchless_q7_unified_manifold_fold_words_with_init_weight_64(
@@ -516,7 +519,8 @@ pub fn branchless_q7_unified_manifold_fold_64(
 
 /// Folds an arbitrary slice of crystallized attractors (`anchor_phases`, `anchor_gravity_masses`)
 /// on $SO(2)^{64}$ weighted by inverse-chord **Phase-Proximity Gravity**
-/// $F_{\mathrm{grav}}(k) = \frac{M_{\mathrm{grav},k} \cdot \max(0, 1 + \mathcal{C}_{\mathrm{phase}})}{2(1 - \mathcal{C}_{\mathrm{phase}}) + \epsilon_{\mathrm{grav}}}$.
+/// $F_{\mathrm{grav}}(k) = \frac{M_{\mathrm{grav},k} \cdot \max(0, 1 + \mathcal{C}_{\mathrm{phase}})}{2(1 -
+/// \mathcal{C}_{\mathrm{phase}}) + \epsilon_{\mathrm{grav}}}$.
 ///
 /// Returns `(total_gravity_pull, mean_coherence, dominant_anchor_idx, active_count)`.
 #[inline]
@@ -541,7 +545,7 @@ pub fn branchless_q7_gravity_fold_64(
         // SAFETY: Guarded by `target_feature = "avx2"`. Fast-paths word-uniform anchors directly in
         // a single 64-bit GPR (`r_w0`) with zero YMM loads/extractions, and transitions to two
         // 256-bit YMM registers (`vr0, vr1`) via direct `_mm256_loadu_si256` when non-uniform.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
                 __m256i, _mm256_loadu_si256, _mm256_or_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
                 _mm256_testz_si256,
@@ -725,7 +729,7 @@ pub fn branchless_q7_gravity_fold_64(
                 dominant_idx,
                 active_count,
             )
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -858,7 +862,8 @@ pub fn branchless_q7_transition_log_prob_words_64(
 }
 
 /// Evaluates the conditional transition coherence $\mathcal{C}_{\mathrm{phase}}(M_{t-1}, M_t) \in [-1.0, 1.0]$
-/// and log-transition probability $\ln P(M_t \mid M_{t-1}) = \ln(\max((1 + \mathcal{C}_{\mathrm{phase}})/2, \epsilon_{\mathrm{log}})) \le 0$.
+/// and log-transition probability $\ln P(M_t \mid M_{t-1}) = \ln(\max((1 + \mathcal{C}_{\mathrm{phase}})/2,
+/// \epsilon_{\mathrm{log}})) \le 0$.
 #[inline(always)]
 pub fn branchless_q7_transition_log_prob_64(
     prev_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],

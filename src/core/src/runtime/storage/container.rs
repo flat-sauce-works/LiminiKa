@@ -6,25 +6,25 @@
 use core::mem::{align_of, offset_of, size_of};
 
 use super::{
-    init_container_header, KvKeyframeCache, KvKeyframeHeader, LmnkContainerHeader,
-    LmnkSectionEntry, LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_KNOWN_FLAGS,
+    KvKeyframeCache, KvKeyframeHeader, LMNK_CONTAINER_HEADER_BYTES, LMNK_CONTAINER_KNOWN_FLAGS,
     LMNK_CONTAINER_MAGIC, LMNK_MAX_CONTAINER_BYTES, LMNK_MAX_CONTAINER_SECTIONS,
     LMNK_SECTION_BLOOM_FILTER, LMNK_SECTION_CAUSAL_PROVENANCE, LMNK_SECTION_ENTRY_BYTES,
     LMNK_SECTION_LEDGER_SLOT, LMNK_SECTION_PHASE_ANCHORS, LMNK_SECTION_POINTER_TRAILS,
+    LmnkContainerHeader, LmnkSectionEntry, init_container_header,
 };
 use crate::foundation::{
-    compute_aligned64_payload_crc32_ieee, compute_crc32_ieee, AlignedSlice, Pod,
+    AlignedSlice, Pod, compute_aligned64_payload_crc32_ieee, compute_crc32_ieee,
 };
 use crate::liminal::{
-    LmnkResult, RuntimeConfig, LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL,
-    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_TOPOLOGY_MISMATCH,
-    LMNK_ERR_VERSION_MISMATCH,
+    LMNK_ABI_VERSION_HEX, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_TOPOLOGY_MISMATCH, LMNK_ERR_VERSION_MISMATCH, LmnkResult,
+    RuntimeConfig, validate_abi_version,
 };
 use crate::runtime::gateway::signals::CausalProvenanceReport;
 use crate::runtime::topology::CORE_TOPOLOGY;
 use crate::stigmergy::{
-    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LedgerSlot, PhaseAnchorRecord,
-    PointerTrail, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
+    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, LEDGER_FLAG_COGNITIVE_TRAJECTORY,
+    LedgerSlot, PhaseAnchorRecord, PointerTrail,
 };
 
 /// Cold-path trait for Zero-Overhead In-Memory Mapped Storage (mapped-storage) (**Storage / Persistence Level**).
@@ -113,7 +113,8 @@ pub trait MappedStorage: Send + Sync {
         Ok(crc)
     }
 
-    /// Extracts a zero-copy byte slice `&'a [u8]` of length `track_len` for `track_id` (`0..=3`) from `container_bytes`.
+    /// Extracts a zero-copy byte slice `&'a [u8]` of length `track_len` for `track_id` (`0..=3`) from
+    /// `container_bytes`.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `track_id > 3`.
@@ -390,14 +391,34 @@ pub struct LmnkContainerView<'a> {
     sections: [LmnkSectionEntry; LMNK_MAX_CONTAINER_SECTIONS as usize],
 }
 
+/// Section payload inputs for [`LmnkContainerView::write_standard_sections_to_bytes`].
+#[derive(Debug, Clone, Copy)]
+pub struct StandardSectionsInput<'a> {
+    /// Container classification bitflags (`LMNK_CONTAINER_FLAG_*`).
+    pub container_flags: u32,
+    /// Crystallized phase anchor records to serialize.
+    pub anchors: &'a [PhaseAnchorRecord],
+    /// Pointer trails to serialize.
+    pub trails: &'a [PointerTrail],
+    /// Optional contrastive phase Bloom filter section.
+    pub bloom: Option<&'a ContrastivePhaseBloomFilter>,
+    /// Optional fast-path ledger slot section.
+    pub ledger: Option<&'a LedgerSlot>,
+    /// Causal provenance reports to serialize.
+    pub provenance_reports: &'a [CausalProvenanceReport],
+    /// Unix epoch timestamp in seconds stamped into the container header.
+    pub timestamp_epoch_sec: u64,
+}
+
 impl<'a> LmnkContainerView<'a> {
     /// Parses and validates an untrusted `.lmnk` container byte slice without panics or
     /// base-pointer alignment assumptions.
     ///
     /// Validation sequence:
     /// 1. Length bounds (`64 <= bytes.len() <= 64 MiB`) and `header.total_size == bytes.len()`.
-    /// 2. Magic (`"LMNK"`), ABI version (`0x0000_0200`), header geometry (`header_size == 64`,
-    ///    `section_table_offset == 64`, `section_count <= 32`).
+    /// 2. Magic (`"LMNK"`), ABI version compatibility (`MAJOR.MINOR` strict match and
+    ///    `file_patch <= runtime_patch` via [`validate_abi_version`]), header geometry
+    ///    (`header_size == 64`, `section_table_offset == 64`, `section_count <= 32`).
     /// 3. Header IEEE 802.3 CRC32 verification (`bytes[0..60]`).
     /// 4. Topology CRC32 verification against [`CORE_TOPOLOGY`] ([`LMNK_ERR_TOPOLOGY_MISMATCH`]).
     /// 5. Monotonic 64B-aligned non-overlapping section table parsing, unique `kind` enforcement,
@@ -423,9 +444,7 @@ impl<'a> LmnkContainerView<'a> {
         if header.magic != LMNK_CONTAINER_MAGIC {
             return Err(LMNK_ERR_CONTAINER_CORRUPTED);
         }
-        if header.version != LMNK_ABI_VERSION_HEX {
-            return Err(LMNK_ERR_VERSION_MISMATCH);
-        }
+        validate_abi_version(header.version)?;
         if header.header_size != LMNK_CONTAINER_HEADER_BYTES as u16
             || header.section_table_offset != LMNK_CONTAINER_HEADER_BYTES as u32
             || header.section_count > LMNK_MAX_CONTAINER_SECTIONS
@@ -600,10 +619,10 @@ impl<'a> LmnkContainerView<'a> {
         let mut idx = 0usize;
         let count = usize::from(self.header.section_count);
         while idx < count {
-            if let Some(&entry) = self.sections.get(idx) {
-                if entry.kind == kind {
-                    return Some(entry);
-                }
+            if let Some(&entry) = self.sections.get(idx)
+                && entry.kind == kind
+            {
+                return Some(entry);
             }
             idx += 1;
         }
@@ -861,17 +880,19 @@ impl<'a> LmnkContainerView<'a> {
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] on size overflow or [`LMNK_ERR_BUFFER_TOO_SMALL`] if
     /// `dst_bytes` is smaller than [`Self::required_standard_byte_len`].
     #[inline]
-    #[allow(clippy::too_many_arguments)]
     pub fn write_standard_sections_to_bytes(
-        container_flags: u32,
-        anchors: &[PhaseAnchorRecord],
-        trails: &[PointerTrail],
-        bloom_opt: Option<&ContrastivePhaseBloomFilter>,
-        ledger_opt: Option<&LedgerSlot>,
-        provenance_reports: &[CausalProvenanceReport],
-        timestamp_epoch_sec: u64,
+        input: StandardSectionsInput<'_>,
         dst_bytes: &mut [u8],
     ) -> LmnkResult<usize> {
+        let StandardSectionsInput {
+            container_flags,
+            anchors,
+            trails,
+            bloom: bloom_opt,
+            ledger: ledger_opt,
+            provenance_reports,
+            timestamp_epoch_sec,
+        } = input;
         let total_len = Self::required_standard_byte_len(
             anchors.len(),
             trails.len(),
@@ -898,7 +919,7 @@ impl<'a> LmnkContainerView<'a> {
 
         if !anchors.is_empty() {
             let off = cursor;
-            let len = anchors.len() * size_of::<PhaseAnchorRecord>();
+            let len = core::mem::size_of_val(anchors);
             let end = off + len;
             let payload_slice = buf.get_mut(off..end).ok_or(LMNK_ERR_BUFFER_TOO_SMALL)?;
             let _ = PhaseAnchorRecord::write_records_to_container_bytes(anchors, payload_slice)?;

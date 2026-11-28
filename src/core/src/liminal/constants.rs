@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Layer 0 fundamental constants, C-ABI configuration/status primitives, cognitive threshold
-//! masks, and 2-bit structural attribution tags.
+//! masks, and 3-bit structural attribution tags (`2 Primitives x 3 Drivers`).
 
 #![forbid(unsafe_code)]
 
@@ -17,16 +17,20 @@ use core::mem::{align_of, offset_of, size_of};
 /// Unified LiminiKa C-ABI Major Version Component.
 pub const LMNK_ABI_VERSION_MAJOR: u32 = 0;
 /// Unified LiminiKa C-ABI Minor Version Component.
-pub const LMNK_ABI_VERSION_MINOR: u32 = 2;
+pub const LMNK_ABI_VERSION_MINOR: u32 = 4;
 /// Unified LiminiKa C-ABI Patch Version Component.
 pub const LMNK_ABI_VERSION_PATCH: u32 = 0;
-/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0200`).
+/// Hexadecimal Representation of the active Unified ABI Version (`0x0000_0400`).
 pub const LMNK_ABI_VERSION_HEX: u32 =
     (LMNK_ABI_VERSION_MAJOR << 16) | (LMNK_ABI_VERSION_MINOR << 8) | LMNK_ABI_VERSION_PATCH;
+/// Bitmask extracting `(MAJOR << 16) | (MINOR << 8)` for Pre-1.0 ABI compatibility checks.
+pub const LMNK_ABI_COMPAT_MASK: u32 = 0xFFFF_FF00;
+/// Packed hexadecimal `MAJOR.MINOR` compatibility prefix (`LMNK_ABI_VERSION_HEX & LMNK_ABI_COMPAT_MASK`).
+pub const LMNK_ABI_COMPAT_VERSION_HEX: u32 = LMNK_ABI_VERSION_HEX & LMNK_ABI_COMPAT_MASK;
 /// String Representation of the active Unified ABI Version (derived from `Cargo.toml`).
 pub const LMNK_ABI_VERSION_STRING: &str = env!("CARGO_PKG_VERSION");
 /// NUL-terminated C string representation of the active Unified ABI Version.
-pub const LMNK_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.2.0";
+pub const LMNK_ABI_VERSION_CSTR: &core::ffi::CStr = c"0.4.0";
 
 const _: () = {
     let c_bytes = LMNK_ABI_VERSION_CSTR.to_bytes();
@@ -52,13 +56,25 @@ pub const LMNK_CAP_ZERO_ALLOC_CORE: u64 = 1 << 4;
 /// Capability bitmask flag indicating zero-heap caller-buffered `in_place` context lifecycle.
 pub const LMNK_CAP_INPLACE_CONTEXT_INIT: u64 = 1 << 5;
 
-/// Validates a C-ABI snapshot or descriptor version against [`LMNK_ABI_VERSION_HEX`].
+/// Returns `true` when `file_version` is ABI-compatible with `runtime_version`:
+/// non-zero, identical `MAJOR.MINOR` prefix (`& LMNK_ABI_COMPAT_MASK`), and
+/// `file_patch <= runtime_patch` (Pre-1.0 strict `MAJOR.MINOR` + `PATCH` backward compatibility).
+#[inline(always)]
+#[must_use]
+pub const fn is_compatible_abi_version(file_version: u32, runtime_version: u32) -> bool {
+    (file_version != 0)
+        & ((file_version & LMNK_ABI_COMPAT_MASK) == (runtime_version & LMNK_ABI_COMPAT_MASK))
+        & ((file_version & 0xFF) <= (runtime_version & 0xFF))
+}
+
+/// Validates a C-ABI snapshot or container version against [`LMNK_ABI_VERSION_HEX`] using
+/// [`is_compatible_abi_version`] (`MAJOR.MINOR` strict match and `file_patch <= runtime_patch`).
 ///
 /// # Errors
-/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version_hex != LMNK_ABI_VERSION_HEX`.
+/// Returns [`LMNK_ERR_VERSION_MISMATCH`] if `version_hex` is incompatible with [`LMNK_ABI_VERSION_HEX`].
 #[inline(always)]
 pub const fn validate_abi_version(version_hex: u32) -> Result<(), LmnkStatus> {
-    if version_hex == LMNK_ABI_VERSION_HEX {
+    if is_compatible_abi_version(version_hex, LMNK_ABI_VERSION_HEX) {
         Ok(())
     } else {
         Err(LMNK_ERR_VERSION_MISMATCH)
@@ -342,58 +358,95 @@ pub type PhaseQ7 = i8;
 
 /// Portable environment-agnostic runtime configuration descriptor (64 bytes, `#[repr(C, align(64))]`).
 #[repr(C, align(64))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RuntimeConfig {
-    /// Dimension per attention head ($d_{\mathrm{head}}$, must be positive and even, `offset 0..4`).
+    /// Envelope byte size (`sizeof(lmnk_config_t)` == `64`, `offset 0..4`).
+    pub struct_size: u32,
+    /// Dimension per attention head ($d_{\mathrm{head}}$, must be positive and even, `offset 4..8`).
     pub head_dim: u32,
-    /// Total number of attention heads ($1 \le H \le 64$, `offset 4..8`).
+    /// Total number of attention heads ($1 \le H \le 64$, `offset 8..12`).
     pub num_heads: u32,
-    /// Tokens per paged KV cache block (`16` or `32`, `offset 8..12`).
+    /// Tokens per paged KV cache block (`16` or `32`, `offset 12..16`).
     pub paged_block_size: u32,
-    /// Floating-point scale factor for Q7 phase values ($\beta_{\mathrm{Q7}} = \pi / 128$, `offset 12..16`).
+    /// Floating-point scale factor for Q7 phase values ($\beta_{\mathrm{Q7}} = \pi / 128$, `offset 16..20`).
     pub q7_phase_scale: f32,
-    /// Maximum allowed rotation angle for soft phase clamping in radians ($\theta_{\max}$, `offset 16..20`).
+    /// Maximum allowed rotation angle for soft phase clamping in radians ($\theta_{\max}$, `offset 20..24`).
     pub phase_clamp_max_rad: f32,
-    /// Minimum rotation angle threshold for phase step filtering in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 20..24`).
+    /// Minimum rotation angle threshold for phase step filtering in radians
+    /// ($\Delta\theta_{\mathrm{min\_step}}$, `offset 24..28`).
     pub phase_step_min_rad: f32,
-    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$, `offset 24..28`).
+    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$,
+    /// `offset 28..32`).
     pub entropy_singularity_eps: f32,
-    /// Maximum supported prompt anchor points (`offset 28..32`).
+    /// Maximum supported prompt anchor points (`offset 32..36`).
     pub max_prompt_anchors: u32,
-    /// Maximum logical trail capacity of the stigmergic substrate (`offset 32..36`).
+    /// Maximum logical trail capacity of the stigmergic substrate (`offset 36..40`).
     pub substrate_capacity: u32,
-    /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE, `offset 36..40`).
+    /// Active rotated dimensions per head (`0` defaults to full `head_dim`; smaller for partial RoPE, `offset 40..44`).
     pub rotary_dim: u32,
-    /// Vendor-neutral execution policy bitflags (`offset 40`).
+    /// Vendor-neutral execution policy bitflags (`offset 44`).
     pub execution_flags: u8,
-    /// Strict enforcement of zero dynamic allocations on Hot Path (`1` = strict, `offset 41`).
+    /// Strict enforcement of zero dynamic allocations on Hot Path (`1` = strict, `offset 45`).
     pub enable_zero_alloc_strict: u8,
-    /// Initial operational mode for `FastPathLedger` (`0`, `1`, or `2`, `offset 42`).
+    /// Initial operational mode for `FastPathLedger` (`0`, `1`, or `2`, `offset 46`).
     pub ledger_mode: u8,
-    /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit, `offset 43`).
+    /// RoPE channel pairing layout (`0` = Interleaved, `1` = HalfSplit, `offset 47`).
     pub rope_layout: u8,
-    /// Explicit zero-padded space for future ABI extensions (`offset 44..64`).
-    pub reserved: [u8; 20],
+    /// Opening decode token hold window for transient contradiction-guard pins (`0` = full turn, `offset 48`).
+    pub guard_hold_tokens: u8,
+    /// Maximum dynamic logits D2H observation stride (`0` or `1` = observe every token, `offset 49`).
+    pub max_observe_stride: u8,
+    /// Explicit zero-padded space for future ABI extensions (`offset 50..64`).
+    pub reserved: [u8; 14],
+}
+
+impl Default for RuntimeConfig {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            struct_size: size_of::<Self>() as u32,
+            head_dim: 0,
+            num_heads: 0,
+            paged_block_size: 0,
+            q7_phase_scale: 0.0,
+            phase_clamp_max_rad: 0.0,
+            phase_step_min_rad: 0.0,
+            entropy_singularity_eps: 0.0,
+            max_prompt_anchors: 0,
+            substrate_capacity: 0,
+            rotary_dim: 0,
+            execution_flags: 0,
+            enable_zero_alloc_strict: 0,
+            ledger_mode: 0,
+            rope_layout: 0,
+            guard_hold_tokens: 0,
+            max_observe_stride: 0,
+            reserved: [0; 14],
+        }
+    }
 }
 
 const _: () = {
     assert!(size_of::<RuntimeConfig>() == 64);
     assert!(align_of::<RuntimeConfig>() == 64);
-    assert!(offset_of!(RuntimeConfig, head_dim) == 0);
-    assert!(offset_of!(RuntimeConfig, num_heads) == 4);
-    assert!(offset_of!(RuntimeConfig, paged_block_size) == 8);
-    assert!(offset_of!(RuntimeConfig, q7_phase_scale) == 12);
-    assert!(offset_of!(RuntimeConfig, phase_clamp_max_rad) == 16);
-    assert!(offset_of!(RuntimeConfig, phase_step_min_rad) == 20);
-    assert!(offset_of!(RuntimeConfig, entropy_singularity_eps) == 24);
-    assert!(offset_of!(RuntimeConfig, max_prompt_anchors) == 28);
-    assert!(offset_of!(RuntimeConfig, substrate_capacity) == 32);
-    assert!(offset_of!(RuntimeConfig, rotary_dim) == 36);
-    assert!(offset_of!(RuntimeConfig, execution_flags) == 40);
-    assert!(offset_of!(RuntimeConfig, enable_zero_alloc_strict) == 41);
-    assert!(offset_of!(RuntimeConfig, ledger_mode) == 42);
-    assert!(offset_of!(RuntimeConfig, rope_layout) == 43);
-    assert!(offset_of!(RuntimeConfig, reserved) == 44);
+    assert!(offset_of!(RuntimeConfig, struct_size) == 0);
+    assert!(offset_of!(RuntimeConfig, head_dim) == 4);
+    assert!(offset_of!(RuntimeConfig, num_heads) == 8);
+    assert!(offset_of!(RuntimeConfig, paged_block_size) == 12);
+    assert!(offset_of!(RuntimeConfig, q7_phase_scale) == 16);
+    assert!(offset_of!(RuntimeConfig, phase_clamp_max_rad) == 20);
+    assert!(offset_of!(RuntimeConfig, phase_step_min_rad) == 24);
+    assert!(offset_of!(RuntimeConfig, entropy_singularity_eps) == 28);
+    assert!(offset_of!(RuntimeConfig, max_prompt_anchors) == 32);
+    assert!(offset_of!(RuntimeConfig, substrate_capacity) == 36);
+    assert!(offset_of!(RuntimeConfig, rotary_dim) == 40);
+    assert!(offset_of!(RuntimeConfig, execution_flags) == 44);
+    assert!(offset_of!(RuntimeConfig, enable_zero_alloc_strict) == 45);
+    assert!(offset_of!(RuntimeConfig, ledger_mode) == 46);
+    assert!(offset_of!(RuntimeConfig, rope_layout) == 47);
+    assert!(offset_of!(RuntimeConfig, guard_hold_tokens) == 48);
+    assert!(offset_of!(RuntimeConfig, max_observe_stride) == 49);
+    assert!(offset_of!(RuntimeConfig, reserved) == 50);
 };
 
 // ===================================================================
@@ -500,8 +553,12 @@ pub const THRESHOLD_STIGMERGY_WIDE: u32 = 0x0000_FFFF;
 /// Number of dynamic channel slots tracked by `LiminalThresholdState`.
 pub const NUM_LIMINAL_THRESHOLD_CHANNELS: usize = 8;
 
+/// Minimum host-immutable compute slot bitmask (`bit 0`) preserved across untrusted snapshot restores
+/// and shared across isolated Lv.3 drivers (`spine`, `envelope`).
+pub const HOST_IMMUTABLE_PINNED_COMPUTE_MASK: u64 = 1u64 << 0;
+
 // ===================================================================
-// 4. 2 Primitives x 2 Drivers Lightweight Attribution Tags
+// 4. 2 Primitives x 3 Drivers Lightweight Attribution Tags
 // ===================================================================
 
 /// Geometric primitive classifier (`PrimitiveKind`).
@@ -537,49 +594,57 @@ pub enum DriverKind {
     System = 0,
     /// Anisotropic intentional differential noise / P-Frame network (`1`).
     Ego = 1,
+    /// Bounded safety-envelope constraint and pin-floor driver (`2`).
+    Envelope = 2,
 }
 
 impl DriverKind {
-    /// Decodes a [`DriverKind`] branchlessly from bit 0 of a shifted driver field.
+    /// Decodes a [`DriverKind`] branchlessly from a 2-bit driver field (`0 => System`, `1 => Ego`,
+    /// `2 => Envelope`, reserved `3 => System`).
     #[inline(always)]
     #[must_use]
-    pub const fn from_bit(bit: u8) -> Self {
-        if (bit & 1) == 0 {
-            Self::System
-        } else {
-            Self::Ego
+    pub const fn from_bits(bits: u8) -> Self {
+        match bits & 0x03 {
+            1 => Self::Ego,
+            2 => Self::Envelope,
+            _ => Self::System,
         }
     }
 }
 
-/// Packed 2-bit structural attribution tag (`[Driver(1b) | Primitive(1b)]`) inside a 1-byte
-/// wrapper for zero-cost telemetry and bypass provenance without marker-trait bloat.
+/// Packed 3-bit structural attribution tag (`[Driver(2b) | Primitive(1b)]`) inside a 1-byte
+/// wrapper for zero-cost telemetry and bypass provenance across `2 Primitives x 3 Drivers`
+/// (`0..=5`) without marker-trait bloat.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AttributionTag(pub u8);
 
 impl AttributionTag {
-    /// Packs `(primitive, driver)` into a 2-bit attribution tag byte.
+    /// Packs `(primitive, driver)` into a 3-bit attribution tag byte (`0..=5`).
     #[inline(always)]
     #[must_use]
     pub const fn new(primitive: PrimitiveKind, driver: DriverKind) -> Self {
-        Self((primitive as u8) | ((driver as u8) << 1))
+        Self(((primitive as u8) & 0x01) | (((driver as u8) & 0x03) << 1))
     }
 
-    /// Attribution tag for (`Liminal`, `System`).
+    /// Attribution tag for (`Liminal`, `System`) = `0`.
     pub const LIMINAL_SYSTEM: Self = Self::new(PrimitiveKind::Liminal, DriverKind::System);
-    /// Attribution tag for (`Liminal`, `Ego`).
-    pub const LIMINAL_EGO: Self = Self::new(PrimitiveKind::Liminal, DriverKind::Ego);
-    /// Attribution tag for (`Stigmergy`, `System`).
+    /// Attribution tag for (`Stigmergy`, `System`) = `1`.
     pub const STIGMERGY_SYSTEM: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::System);
-    /// Attribution tag for (`Stigmergy`, `Ego`).
+    /// Attribution tag for (`Liminal`, `Ego`) = `2`.
+    pub const LIMINAL_EGO: Self = Self::new(PrimitiveKind::Liminal, DriverKind::Ego);
+    /// Attribution tag for (`Stigmergy`, `Ego`) = `3`.
     pub const STIGMERGY_EGO: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::Ego);
+    /// Attribution tag for (`Liminal`, `Envelope`) = `4`.
+    pub const LIMINAL_ENVELOPE: Self = Self::new(PrimitiveKind::Liminal, DriverKind::Envelope);
+    /// Attribution tag for (`Stigmergy`, `Envelope`) = `5`.
+    pub const STIGMERGY_ENVELOPE: Self = Self::new(PrimitiveKind::Stigmergy, DriverKind::Envelope);
 
-    /// Returns the raw byte representation (`bits 0..=1`).
+    /// Returns the raw 3-bit tag representation (`bits 0..=2`).
     #[inline(always)]
     #[must_use]
     pub const fn raw(self) -> u8 {
-        self.0 & 0x03
+        self.0 & 0x07
     }
 
     /// Extracts the [`PrimitiveKind`] primitive axis (`bit 0`).
@@ -589,25 +654,32 @@ impl AttributionTag {
         PrimitiveKind::from_bit(self.0)
     }
 
-    /// Extracts the [`DriverKind`] orthogonal driver axis (`bit 1`).
+    /// Extracts the [`DriverKind`] orthogonal driver axis (`bits 1..=2`).
     #[inline(always)]
     #[must_use]
     pub const fn driver(self) -> DriverKind {
-        DriverKind::from_bit(self.0 >> 1)
+        DriverKind::from_bits(self.0 >> 1)
     }
 
     /// Returns `true` when attributed to the deterministic [`DriverKind::System`] spine.
     #[inline(always)]
     #[must_use]
     pub const fn is_system(self) -> bool {
-        (self.0 & (1 << 1)) == 0
+        ((self.0 >> 1) & 0x03) == DriverKind::System as u8
     }
 
     /// Returns `true` when attributed to the differential [`DriverKind::Ego`] operator.
     #[inline(always)]
     #[must_use]
     pub const fn is_ego(self) -> bool {
-        (self.0 & (1 << 1)) != 0
+        ((self.0 >> 1) & 0x03) == DriverKind::Ego as u8
+    }
+
+    /// Returns `true` when attributed to the bounded [`DriverKind::Envelope`] constraint driver.
+    #[inline(always)]
+    #[must_use]
+    pub const fn is_envelope(self) -> bool {
+        ((self.0 >> 1) & 0x03) == DriverKind::Envelope as u8
     }
 }
 
@@ -616,4 +688,78 @@ impl AttributionTag {
 #[must_use]
 pub const fn pack_attribution_tag(primitive: PrimitiveKind, driver: DriverKind) -> u8 {
     AttributionTag::new(primitive, driver).raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_attribution_tag_two_by_three_mutual_exclusivity() {
+        let cases = [
+            (
+                AttributionTag::LIMINAL_SYSTEM,
+                0u8,
+                PrimitiveKind::Liminal,
+                DriverKind::System,
+                (true, false, false),
+            ),
+            (
+                AttributionTag::STIGMERGY_SYSTEM,
+                1u8,
+                PrimitiveKind::Stigmergy,
+                DriverKind::System,
+                (true, false, false),
+            ),
+            (
+                AttributionTag::LIMINAL_EGO,
+                2u8,
+                PrimitiveKind::Liminal,
+                DriverKind::Ego,
+                (false, true, false),
+            ),
+            (
+                AttributionTag::STIGMERGY_EGO,
+                3u8,
+                PrimitiveKind::Stigmergy,
+                DriverKind::Ego,
+                (false, true, false),
+            ),
+            (
+                AttributionTag::LIMINAL_ENVELOPE,
+                4u8,
+                PrimitiveKind::Liminal,
+                DriverKind::Envelope,
+                (false, false, true),
+            ),
+            (
+                AttributionTag::STIGMERGY_ENVELOPE,
+                5u8,
+                PrimitiveKind::Stigmergy,
+                DriverKind::Envelope,
+                (false, false, true),
+            ),
+        ];
+
+        for (tag, expected_raw, expected_prim, expected_drv, (sys, ego, env)) in cases {
+            assert_eq!(tag.raw(), expected_raw);
+            assert_eq!(
+                pack_attribution_tag(expected_prim, expected_drv),
+                expected_raw
+            );
+            assert_eq!(tag.primitive(), expected_prim);
+            assert_eq!(tag.driver(), expected_drv);
+            assert_eq!(tag.is_system(), sys);
+            assert_eq!(tag.is_ego(), ego);
+            assert_eq!(tag.is_envelope(), env);
+            let active_count = usize::from(tag.is_system())
+                + usize::from(tag.is_ego())
+                + usize::from(tag.is_envelope());
+            assert_eq!(active_count, 1);
+        }
+
+        // Reserved driver code 3 falls back fail-safely to System.
+        assert_eq!(DriverKind::from_bits(3), DriverKind::System);
+        assert_eq!(DriverKind::from_bits(0b1111_1110), DriverKind::Envelope);
+    }
 }

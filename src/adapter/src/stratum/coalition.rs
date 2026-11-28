@@ -9,15 +9,140 @@ use super::{
     RecallStratum, StratumContext, StratumDirective, StratumSignal, TokenResonanceDeposit,
     TrailEmergenceReceptor,
 };
-use crate::AttractorRole;
+use crate::{
+    AttractorRole, Boundary2DThresholds, RecallEnvelopeBounds, effective_guard_hard_margin,
+};
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_tagged_ptr_t};
 use liminika_core::foundation::load_q7_words_64;
 use liminika_core::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
 use liminika_core::runtime::StigmergicReceptor;
 use liminika_core::stigmergy::{
-    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicReconstitutionReport,
-    StigmergicScaleGranularity, StigmergicSubstrate, SUBSTRATE_INLINE_TRAILS,
+    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, SUBSTRATE_INLINE_TRAILS,
+    StigmergicReconstitutionReport, StigmergicScaleGranularity, StigmergicSubstrate,
 };
+
+/// Lightweight `Copy` coalition and local-channel arbitration thresholds carried inside
+/// [`StratumContext`], replacing fixed absolute floors with OOD-calibrated cutoffs and
+/// relative cosine-dispersion scaling while preserving exact 1D fallback under `--no-base-prior`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CoalitionThresholds {
+    /// Unexplained-token ratio ceiling above which Fact/Guard multi-hop coalitions are blocked.
+    /// Derived from `(u_foreign - 0.08).clamp(0.55, 0.82)` (`0.72` when uncalibrated).
+    pub u_coalition_cutoff: f32,
+    /// Stricter unexplained-token ceiling for the secondary token-only `basin_supported` branch
+    /// (`0.68` when uncalibrated).
+    pub u_basin_support_cutoff: f32,
+    /// Relative cosine-dispersion scale `(ood_coh_mad / 0.05).clamp(0.60, 1.60)` (`1.0` fallback).
+    pub coherence_scale: f32,
+    /// Minimum single-entry gain in `evaluate_role_coalition_pair` (`0.004 * scale`).
+    pub min_single_gain: f32,
+    /// Minimum pair pre-filter `second_contrib` (`0.012 * scale`).
+    pub min_pair_second_contrib: f32,
+    /// Minimum bimodal `joint_excl` floor (`0.040 * scale`).
+    pub min_joint_excl: f32,
+    /// Minimum bimodal `second_contrib` floor (`0.015 * scale`).
+    pub min_second_contrib: f32,
+    /// Minimum pair-Chamfer improvement over global top-1 hub (`0.020 * scale`).
+    pub min_pair_chamfer_margin: f32,
+    /// Minimum local per-role top-1 minus top-2 margin (`0.025 * scale`).
+    pub min_local_role_margin: f32,
+    /// Minimum global-sharper local top-1 floor (`0.040 * scale`).
+    pub min_local_role_top1: f32,
+    /// Minimum `raw_joint_q_to_d` for token-only basin support when `query_seq_len > 0` (`0.080 * scale`).
+    pub min_raw_joint_support_seq: f32,
+    /// Minimum `raw_joint_q_to_d` for token-only basin support when `query_seq_len == 0` (`0.065 * scale`).
+    pub min_raw_joint_support_vec: f32,
+    /// Minimum Guard coalition pair-Chamfer floor when `query_seq_len > 0` (`0.045 * scale`).
+    pub min_guard_chamfer_floor: f32,
+    /// Minimum Guard coalition pair-Chamfer advantage over best Fact (`0.010 * scale`).
+    pub min_guard_chamfer_margin: f32,
+    /// Minimum 3rd-hop specialist peak excess (`0.080 * scale`).
+    pub min_third_hop_excess: f32,
+    /// Minimum 3rd-hop specialist delta over top-2 pair (`0.025 * scale`).
+    pub min_third_hop_delta: f32,
+    /// Minimum 3rd-hop aggregate residual gain (`0.004 * scale`).
+    pub min_third_hop_gain: f32,
+}
+
+impl Default for CoalitionThresholds {
+    #[inline]
+    fn default() -> Self {
+        Self::fallback_without_prior()
+    }
+}
+
+impl CoalitionThresholds {
+    /// Strict `--no-base-prior` fallback preserving exact legacy 1D thresholds (`u = 0.72 / 0.68`,
+    /// `coherence_scale = 1.0`).
+    #[inline]
+    #[must_use]
+    pub const fn fallback_without_prior() -> Self {
+        Self {
+            u_coalition_cutoff: 0.72,
+            u_basin_support_cutoff: 0.68,
+            coherence_scale: 1.0,
+            min_single_gain: 0.004,
+            min_pair_second_contrib: 0.012,
+            min_joint_excl: 0.040,
+            min_second_contrib: 0.015,
+            min_pair_chamfer_margin: 0.020,
+            min_local_role_margin: 0.025,
+            min_local_role_top1: 0.040,
+            min_raw_joint_support_seq: 0.080,
+            min_raw_joint_support_vec: 0.065,
+            min_guard_chamfer_floor: 0.045,
+            min_guard_chamfer_margin: 0.010,
+            min_third_hop_excess: 0.080,
+            min_third_hop_delta: 0.025,
+            min_third_hop_gain: 0.004,
+        }
+    }
+
+    /// Derives relative-scaled coalition thresholds from `u_foreign` and `coherence_scale`,
+    /// bounded by [`RecallEnvelopeBounds::standard`].
+    #[must_use]
+    pub fn from_u_foreign_and_scale(u_foreign: f32, coherence_scale: f32) -> Self {
+        let bounds = RecallEnvelopeBounds::standard();
+        let u_coalition_cutoff =
+            (u_foreign - 0.08).clamp(bounds.u_coalition_floor, bounds.u_coalition_ceiling);
+        let u_basin_support_cutoff = (u_coalition_cutoff - 0.04)
+            .clamp(bounds.u_basin_support_floor, bounds.u_basin_support_ceiling);
+        let scale = if coherence_scale.is_finite() {
+            coherence_scale.clamp(bounds.coherence_scale_floor, bounds.coherence_scale_ceiling)
+        } else {
+            1.0
+        };
+        Self {
+            u_coalition_cutoff,
+            u_basin_support_cutoff,
+            coherence_scale: scale,
+            min_single_gain: 0.004 * scale,
+            min_pair_second_contrib: 0.012 * scale,
+            min_joint_excl: 0.040 * scale,
+            min_second_contrib: 0.015 * scale,
+            min_pair_chamfer_margin: 0.020 * scale,
+            min_local_role_margin: 0.025 * scale,
+            min_local_role_top1: 0.040 * scale,
+            min_raw_joint_support_seq: 0.080 * scale,
+            min_raw_joint_support_vec: 0.065 * scale,
+            min_guard_chamfer_floor: 0.045 * scale,
+            min_guard_chamfer_margin: 0.010 * scale,
+            min_third_hop_excess: 0.080 * scale,
+            min_third_hop_delta: 0.025 * scale,
+            min_third_hop_gain: 0.004 * scale,
+        }
+    }
+
+    /// Derives coalition thresholds from [`Boundary2DThresholds`], falling back strictly to
+    /// [`Self::fallback_without_prior`] when `!boundary.is_calibrated`.
+    #[must_use]
+    pub fn from_boundary_2d(boundary: &Boundary2DThresholds) -> Self {
+        if !boundary.is_calibrated {
+            return Self::fallback_without_prior();
+        }
+        Self::from_u_foreign_and_scale(boundary.u_foreign, boundary.coherence_scale)
+    }
+}
 
 /// Trait abstracting multi-point stigmergic coalition decomposition over token resonance
 /// deposits and 8-cell Micro-Swarm phase consensus (`StigmergicSubstrate`).
@@ -124,18 +249,20 @@ impl LocalTokenResonanceStratum {
         let mut swarm_trail = lmnk_pointer_trail_t::default();
         swarm_trail.copy_from_with_words_fast(&lmnk_pointer_trail_t::default(), &g_words);
         let (swarm_report, _) = swarm_trail.try_resolve_action_in_swarm_from_words(
-            Default::default(),
             &l_words,
-            0xFF,
-            64,
-            4,
-            24,
-            4,
-            0.40,
-            0.15,
-            None,
-            3,
-            96,
+            liminika_core::stigmergy::SwarmResolveParams {
+                action_ptr: Default::default(),
+                active_cell_mask: 0xFF,
+                step_gain_u7: 64,
+                min_step_q7: 4,
+                tolerance_q7: 24,
+                quorum_threshold: 4,
+                entropy_h_tilde: 0.40,
+                low_entropy_skip_thresh: 0.15,
+                bloom_filter: None,
+                repulsion_threshold: 3,
+                repulsion_scale_u7: 96,
+            },
         );
         swarm_report
     }
@@ -227,18 +354,20 @@ impl LocalTokenResonanceStratum {
                     continue;
                 }
                 let (rep, _swarm_w) = trail_states[slot].try_resolve_action_in_swarm_from_words(
-                    lmnk_tagged_ptr_t::default(),
                     &dep.token_phase_words,
-                    0xFF,
-                    64,
-                    4,
-                    24,
-                    4,
-                    0.45,
-                    0.15,
-                    Some(&substrate.bloom_filter),
-                    3,
-                    96,
+                    liminika_core::stigmergy::SwarmResolveParams {
+                        action_ptr: lmnk_tagged_ptr_t::default(),
+                        active_cell_mask: 0xFF,
+                        step_gain_u7: 64,
+                        min_step_q7: 4,
+                        tolerance_q7: 24,
+                        quorum_threshold: 4,
+                        entropy_h_tilde: 0.45,
+                        low_entropy_skip_thresh: 0.15,
+                        bloom_filter: Some(&substrate.bloom_filter),
+                        repulsion_threshold: 3,
+                        repulsion_scale_u7: 96,
+                    },
                 );
                 let consensus = (rep.resolved_cell_count as f32) / (NUM_STIGMERGIC_GRANULES as f32);
                 let bloom_repulsed = rep.stigmergic_delta_density < 0.0;
@@ -288,6 +417,7 @@ fn evaluate_role_coalition_pair(
     token_deposits: &[TokenResonanceDeposit],
     d_to_q_scores: &[f32],
     role_idxs: &[usize],
+    thresholds: CoalitionThresholds,
 ) -> Option<(RoleCoalitionPair, Vec<(usize, f32)>)> {
     if role_idxs.len() < 2 || token_deposits.is_empty() {
         return None;
@@ -348,16 +478,27 @@ fn evaluate_role_coalition_pair(
         })
         .collect();
 
+    // For large corpora (> 32 entries of the same role), bound pairwise coalition search to the
+    // top-32 single-entry candidates (`<= 496` pairs, O(1)) while keeping `<= 32` bit-identical.
+    let pair_candidates: Vec<(usize, f32)> = if excl_single_scores.len() <= 32 {
+        excl_single_scores.clone()
+    } else {
+        let mut ranked = excl_single_scores.clone();
+        ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ranked.truncate(32);
+        ranked
+    };
+
     let mut best_pair: Option<(usize, usize, f32, f32, f32)> = None;
-    for a in 0..role_idxs.len() {
-        let (i, gain_i) = excl_single_scores[a];
+    for a in 0..pair_candidates.len() {
+        let (i, gain_i) = pair_candidates[a];
         let gain_i_pos = gain_i.max(0.0);
-        if gain_i_pos <= 0.004 {
+        if gain_i_pos <= thresholds.min_single_gain {
             continue;
         }
-        for &(j, gain_j) in &excl_single_scores[(a + 1)..] {
+        for &(j, gain_j) in &pair_candidates[(a + 1)..] {
             let gain_j_pos = gain_j.max(0.0);
-            if gain_j_pos <= 0.004 {
+            if gain_j_pos <= thresholds.min_single_gain {
                 continue;
             }
             let joint_excl = token_deposits
@@ -369,7 +510,7 @@ fn evaluate_role_coalition_pair(
             let second_contrib = (joint_excl - gain_i_pos)
                 .min(joint_excl - gain_j_pos)
                 .max(0.0);
-            if second_contrib <= 0.012 {
+            if second_contrib <= thresholds.min_pair_second_contrib {
                 continue;
             }
             let pair_d_to_q = 0.5 * (d_to_q_scores[i] + d_to_q_scores[j]);
@@ -435,6 +576,14 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         {
             return;
         }
+        let thresholds = ctx.coalition_thresholds;
+        // Foreign OOD queries whose salient tokens are overwhelmingly unexplained by corpus Facts
+        // must never fabricate multi-hop Fact coalitions (`floor_score >= min_coherence * 1.15`).
+        if ctx.query_seq_len > 0
+            && signal.telemetry.unexplained_token_ratio >= thresholds.u_coalition_cutoff
+        {
+            return;
+        }
 
         let max_guard_raw = ctx
             .entries
@@ -450,20 +599,18 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             .filter(|(e, _)| e.role != AttractorRole::Guard)
             .map(|(_, &s)| s)
             .fold(f32::NEG_INFINITY, f32::max);
+        let hard_guard_margin = effective_guard_hard_margin(
+            ctx.policy.guard_suppress_margin,
+            thresholds.coherence_scale,
+        );
         if max_guard_raw.is_finite()
             && max_non_guard_raw.is_finite()
-            && (max_guard_raw - max_non_guard_raw) > ctx.policy.guard_suppress_margin
+            && (max_guard_raw - max_non_guard_raw) > hard_guard_margin
         {
             return;
         }
 
-        let fact_idxs: Vec<usize> = ctx
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.role == AttractorRole::Fact)
-            .map(|(i, _)| i)
-            .collect();
+        let fact_idxs = ctx.neighborhood_stats.role_indices(AttractorRole::Fact);
         if fact_idxs.len() < 2 {
             return;
         }
@@ -477,9 +624,12 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             return;
         }
 
-        let Some((pair, excl_single_scores)) =
-            evaluate_role_coalition_pair(&signal.token_deposits, &signal.d_to_q_scores, &fact_idxs)
-        else {
+        let Some((pair, excl_single_scores)) = evaluate_role_coalition_pair(
+            &signal.token_deposits,
+            &signal.d_to_q_scores,
+            fact_idxs,
+            thresholds,
+        ) else {
             return;
         };
         let RoleCoalitionPair {
@@ -513,15 +663,22 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             .map(|d| d.disc_weight.max(0.0) * d.entry_excess[cand_a].max(d.entry_excess[cand_b]))
             .sum::<f32>()
             / total_disc_w;
-        let basin_supported =
-            g_fact_top1_score >= ctx.policy.min_coherence * 0.55 || raw_joint_q_to_d >= 0.065;
-        let strictly_bimodal = joint_excl >= 0.040
-            && second_contrib >= 0.015
+        let basin_supported = if ctx.query_seq_len > 0 {
+            g_fact_top1_score >= ctx.policy.min_coherence * 0.50
+                || (raw_joint_q_to_d >= thresholds.min_raw_joint_support_seq
+                    && signal.telemetry.unexplained_token_ratio < thresholds.u_basin_support_cutoff)
+        } else {
+            g_fact_top1_score >= ctx.policy.min_coherence * 0.55
+                || raw_joint_q_to_d >= thresholds.min_raw_joint_support_vec
+        };
+        let strictly_bimodal = joint_excl >= thresholds.min_joint_excl
+            && second_contrib >= thresholds.min_second_contrib
             && second_contrib >= 0.25 * joint_excl
             && (joint_excl - max_subsumption) >= 0.22 * joint_excl;
         let global_chamfer_top1 =
             0.70 * g_top1_excl.max(0.0) + 0.20 * signal.d_to_q_scores[g_fact_top1];
-        let outperforms_global_hub = pair_chamfer > global_chamfer_top1 + 0.020
+        let outperforms_global_hub = pair_chamfer
+            > global_chamfer_top1 + thresholds.min_pair_chamfer_margin
             || signal.candidate_scores[cand_a] < ctx.policy.min_coherence * 0.75
             || signal.candidate_scores[cand_b] < ctx.policy.min_coherence * 0.75;
 
@@ -543,8 +700,34 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
             .min(SUBSTRATE_INLINE_TRAILS)
             .min(fact_idxs.len());
         if hop_cap >= 3 {
+            // Precompute per-deposit top-2 remaining Fact excess values in O(T_q * N) so the
+            // 3rd-hop specialist search stays linear in `fact_idxs.len()` instead of O(N^2 * T_q).
+            let rem_top2: Vec<(usize, f32, f32)> = signal
+                .token_deposits
+                .iter()
+                .map(|d| {
+                    let mut best_idx = usize::MAX;
+                    let mut best_v = 0.0_f32;
+                    let mut second_v = 0.0_f32;
+                    for &m in fact_idxs {
+                        if m == first_idx || m == second_idx {
+                            continue;
+                        }
+                        let v = d.entry_excess[m].max(0.0);
+                        if v > best_v {
+                            second_v = best_v;
+                            best_v = v;
+                            best_idx = m;
+                        } else if v > second_v {
+                            second_v = v;
+                        }
+                    }
+                    (best_idx, best_v, second_v)
+                })
+                .collect();
+
             let mut best_third: Option<(usize, f32)> = None;
-            for &k in &fact_idxs {
+            for &k in fact_idxs {
                 if k == first_idx || k == second_idx {
                     continue;
                 }
@@ -553,7 +736,12 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                 }
                 let mut res_gain = 0.0_f32;
                 let mut has_specialist_peak = false;
-                for (d, &w) in signal.token_deposits.iter().zip(decomp_weights.iter()) {
+                for ((d, &w), &(top_m, top_v, second_v)) in signal
+                    .token_deposits
+                    .iter()
+                    .zip(decomp_weights.iter())
+                    .zip(rem_top2.iter())
+                {
                     let pair_ex = d.entry_excess[first_idx]
                         .max(d.entry_excess[second_idx])
                         .max(0.0);
@@ -561,12 +749,7 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                     if ex_k <= pair_ex {
                         continue;
                     }
-                    let other_rem_max = fact_idxs
-                        .iter()
-                        .copied()
-                        .filter(|&m| m != first_idx && m != second_idx && m != k)
-                        .map(|m| d.entry_excess[m].max(0.0))
-                        .fold(0.0_f32, f32::max);
+                    let other_rem_max = if top_m == k { second_v } else { top_v };
                     let rem_excl = if ex_k > 1e-6 {
                         ((ex_k - other_rem_max) / ex_k).clamp(0.0, 1.0)
                     } else {
@@ -575,12 +758,15 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
                     let delta = ex_k - pair_ex;
                     let eff_w = w + 0.0015 * rem_excl;
                     res_gain += eff_w * delta;
-                    if ex_k >= 0.08 && delta >= 0.025 && rem_excl >= 0.40 {
+                    if ex_k >= thresholds.min_third_hop_excess
+                        && delta >= thresholds.min_third_hop_delta
+                        && rem_excl >= 0.40
+                    {
                         has_specialist_peak = true;
                     }
                 }
                 res_gain /= total_decomp_w;
-                if res_gain >= 0.004 && has_specialist_peak {
+                if res_gain >= thresholds.min_third_hop_gain && has_specialist_peak {
                     let score = res_gain
                         + 0.20 * signal.q_to_d_scores[k].max(0.0)
                         + 0.15 * signal.d_to_q_scores[k].max(0.0);
@@ -628,9 +814,11 @@ impl StigmergicCoalitionDecomposer for ResidualPeelingStigmergicDecomposer {
         let mut receptor = TrailEmergenceReceptor::default();
         if let Ok((chain_report, _hops, _term_idx, _term_anchor, _mean_coh)) = substrate
             .traverse_pointer_chain_and_orchestrate(
-                0,
-                chain_len,
-                0.58,
+                liminika_core::stigmergy::ChainTraverseParams {
+                    start_trail_idx: 0,
+                    max_hops: chain_len,
+                    entropy_h_tilde: 0.58,
+                },
                 &mut chain_trail,
                 None,
                 None,
@@ -789,23 +977,17 @@ impl RecallStratum for LocalTokenResonanceStratum {
             if role == AttractorRole::Fact && signal.decomposition_triggered {
                 continue;
             }
-            let idxs: Vec<usize> = ctx
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.role == role)
-                .map(|(i, _)| i)
-                .collect();
+            let idxs = ctx.neighborhood_stats.role_indices(role);
             if idxs.len() <= 1 {
                 continue;
             }
             let Some((g_r_idx, g_r_top1, _g_r_top2, g_r_mean, g_r_std, g_r_sharp)) =
-                Self::channel_sharpness_on_indices(&signal.candidate_scores, &idxs, 0.05)
+                Self::channel_sharpness_on_indices(&signal.candidate_scores, idxs, 0.05)
             else {
                 continue;
             };
             let Some((l_r_idx, l_r_top1, l_r_top2, l_r_mean, l_r_std, l_r_sharp)) =
-                Self::channel_sharpness_on_indices(&signal.local_token_scores, &idxs, 0.035)
+                Self::channel_sharpness_on_indices(&signal.local_token_scores, idxs, 0.035)
             else {
                 continue;
             };
@@ -815,16 +997,18 @@ impl RecallStratum for LocalTokenResonanceStratum {
                 continue;
             }
 
+            let thresholds = ctx.coalition_thresholds;
             let l_r_margin = (l_r_top1 - l_r_top2).max(0.0);
             let agree_floor = ctx.policy.min_coherence * 0.65;
-            let role_local_sharper =
-                (global_local_sharper && g_r_idx != l_r_idx && l_r_top1 > 0.04)
-                    || (l_r_margin >= 0.025
-                        && l_r_sharp > g_r_sharp * 1.15
-                        && ((g_r_idx != l_r_idx && l_r_top1 >= energy_floor)
-                            || (g_r_idx == l_r_idx
-                                && g_r_top1 >= agree_floor
-                                && l_r_top1 >= agree_floor)));
+            let role_local_sharper = (global_local_sharper
+                && g_r_idx != l_r_idx
+                && l_r_top1 > thresholds.min_local_role_top1)
+                || (l_r_margin >= thresholds.min_local_role_margin
+                    && l_r_sharp > g_r_sharp * 1.15
+                    && ((g_r_idx != l_r_idx && l_r_top1 >= energy_floor)
+                        || (g_r_idx == l_r_idx
+                            && g_r_top1 >= agree_floor
+                            && l_r_top1 >= agree_floor)));
 
             if g_r_idx == l_r_idx && l_r_top1 > 0.0 {
                 signal.stigmergic_weights[g_r_idx] = (signal.stigmergic_weights[g_r_idx]
@@ -848,7 +1032,7 @@ impl RecallStratum for LocalTokenResonanceStratum {
             } else {
                 g_r_std.max(0.03)
             };
-            for &i in &idxs {
+            for &i in idxs {
                 let z_loc = ((signal.local_token_scores[i] - l_r_mean) / l_r_std).clamp(-2.0, 3.0);
                 let matched_loc = g_r_mean + z_loc * scale;
                 signal.candidate_scores[i] =
@@ -870,20 +1054,16 @@ impl RecallStratum for LocalTokenResonanceStratum {
             && signal.d_to_q_scores.len() == n_entries
             && signal.q_to_d_scores.len() == n_entries
         {
-            let guard_idxs: Vec<usize> = ctx
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.role == AttractorRole::Guard)
-                .map(|(i, _)| i)
-                .collect();
+            let thresholds = ctx.coalition_thresholds;
+            let guard_idxs = ctx.neighborhood_stats.role_indices(AttractorRole::Guard);
             if let Some((g_pair, _)) = evaluate_role_coalition_pair(
                 &signal.token_deposits,
                 &signal.d_to_q_scores,
-                &guard_idxs,
+                guard_idxs,
+                thresholds,
             ) {
-                let g_bimodal = g_pair.joint_excl >= 0.040
-                    && g_pair.second_contrib >= 0.015
+                let g_bimodal = g_pair.joint_excl >= thresholds.min_joint_excl
+                    && g_pair.second_contrib >= thresholds.min_second_contrib
                     && g_pair.second_contrib >= 0.25 * g_pair.joint_excl
                     && (g_pair.joint_excl - g_pair.max_subsumption) >= 0.22 * g_pair.joint_excl;
                 let best_fact_chamfer = ctx
@@ -895,7 +1075,23 @@ impl RecallStratum for LocalTokenResonanceStratum {
                         0.70 * signal.q_to_d_scores[i].max(0.0) + 0.20 * signal.d_to_q_scores[i]
                     })
                     .fold(0.0_f32, f32::max);
-                if g_bimodal && g_pair.pair_chamfer > best_fact_chamfer + 0.010 {
+                let guard_chamfer_floor = if ctx.query_seq_len > 0 {
+                    thresholds.min_guard_chamfer_floor
+                } else {
+                    0.0
+                };
+                let complete_ood_guard = ctx.query_seq_len > 0
+                    && signal.telemetry.unexplained_token_ratio >= thresholds.u_coalition_cutoff
+                    && signal.telemetry.unexplained_corpus_token_ratio
+                        >= thresholds.u_coalition_cutoff;
+                let guard_tok_support = signal.q_to_d_scores[g_pair.cand_a] > 0.0
+                    && signal.q_to_d_scores[g_pair.cand_b] > 0.0
+                    && !complete_ood_guard;
+                if g_bimodal
+                    && guard_tok_support
+                    && g_pair.pair_chamfer >= guard_chamfer_floor
+                    && g_pair.pair_chamfer > best_fact_chamfer + thresholds.min_guard_chamfer_margin
+                {
                     let max_fact_score = ctx
                         .entries
                         .iter()

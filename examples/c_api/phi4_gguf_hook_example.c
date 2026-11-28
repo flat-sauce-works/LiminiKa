@@ -32,7 +32,10 @@ static void lmnk_free_aligned(void* ptr) {
 
 /**
  * @brief Minimal C11 host harness demonstrating a GGUF / llama.cpp post-RoPE hook
- * using Phi-4-mini HalfSplit partial-RoPE geometry via the LiminiKa C-ABI.
+ * using HalfSplit partial-RoPE geometry via the LiminiKa v0.4.0 C-ABI.
+ *
+ * @note The LiminiKa C-ABI is model-agnostic; this example uses a 24-head,
+ * d_head=128, rotary_dim=96 HalfSplit layout as a concrete case.
  */
 int main(void) {
     lmnk_config_t cfg;
@@ -42,7 +45,7 @@ int main(void) {
         return 1;
     }
 
-    /* Configure Phi-4-mini geometry (HalfSplit, d_head=128, rotary_dim=96, H_Q=24). */
+    /* Configure HalfSplit partial-RoPE geometry (d_head=128, rotary_dim=96, H_Q=24). */
     cfg.head_dim = 128u;
     cfg.rotary_dim = 96u;
     cfg.num_heads = 24u;
@@ -83,13 +86,25 @@ int main(void) {
         }
     }
 
-    /* Example Top-16 layer mask (upper 16 layers of 32-layer Phi-4-mini). */
+    /* Example Top-16 layer mask (upper 16 layers of a 32-layer model). */
     const uint32_t top16_layer_mask = 0xFFFF0000u;
     const uint32_t example_layer_idx = 20u;
     if ((top16_layer_mask & (1u << example_layer_idx)) != 0u) {
-        status = lmnk_phase_steering_apply_with_config_safe(q_after, phase_deltas, &cfg);
+        lmnk_rope_steer_params_t steer_params;
+        memset(&steer_params, 0, sizeof(steer_params));
+        steer_params.struct_size = (uint32_t)sizeof(steer_params);
+        steer_params.head_dim = cfg.head_dim;
+        steer_params.rotary_dim = cfg.rotary_dim;
+        steer_params.num_heads = cfg.num_heads;
+        steer_params.rope_layout = cfg.rope_layout;
+        steer_params.max_rad = cfg.phase_clamp_max_rad;
+        steer_params.num_tokens = 1u;
+        steer_params.query_tensor = q_after;
+        steer_params.phase_deltas = phase_deltas;
+
+        status = lmnk_rope_steer_q(&steer_params);
         if (status != LMNK_OK) {
-            fprintf(stderr, "lmnk_phase_steering_apply_with_config_safe failed: %d\n", (int)status);
+            fprintf(stderr, "lmnk_rope_steer_q failed: %d\n", (int)status);
             lmnk_free_aligned(q_before);
             lmnk_free_aligned(q_after);
             lmnk_free_aligned(phase_deltas);
@@ -113,11 +128,21 @@ int main(void) {
         }
     }
 
-    status = lmnk_phase_steering_compute_procrustes_half_split(q_before, q_after, head_dim,
-                                                               rotary_dim, num_heads, recovered_q7);
+    lmnk_rope_procrustes_params_t proc_params;
+    memset(&proc_params, 0, sizeof(proc_params));
+    proc_params.struct_size = (uint32_t)sizeof(proc_params);
+    proc_params.head_dim = cfg.head_dim;
+    proc_params.rotary_dim = cfg.rotary_dim;
+    proc_params.num_heads = cfg.num_heads;
+    proc_params.rope_layout = cfg.rope_layout;
+    proc_params.num_tokens = 1u;
+    proc_params.q_before = q_before;
+    proc_params.q_after = q_after;
+    proc_params.q7_phase_out = recovered_q7;
+
+    status = lmnk_rope_procrustes_q7(&proc_params);
     if (status != LMNK_OK) {
-        fprintf(stderr, "lmnk_phase_steering_compute_procrustes_half_split failed: %d\n",
-                (int)status);
+        fprintf(stderr, "lmnk_rope_procrustes_q7 failed: %d\n", (int)status);
         lmnk_free_aligned(q_before);
         lmnk_free_aligned(q_after);
         lmnk_free_aligned(phase_deltas);
@@ -125,7 +150,7 @@ int main(void) {
         return 1;
     }
 
-    printf("Phi-4-mini C-ABI HalfSplit hook OK: layer=%u head0_q7_in=%d head0_q7_recovered=%d\n",
+    printf("C-ABI HalfSplit hook OK: layer=%u head0_q7_in=%d head0_q7_recovered=%d\n",
            example_layer_idx, (int)phase_deltas[0], (int)recovered_q7[0]);
 
     /* Also verify 2-Origin Gateway composite steering (structural hyperparameters). */
@@ -147,11 +172,25 @@ int main(void) {
         persona_deltas[h] = (lmnk_q7_t)(-8);
     }
 
-    status = lmnk_phase_steering_steer_with_gateway_and_config_safe(
-        q_after, phase_deltas, 2.5f, persona_deltas, 1.8f, trail, &cfg);
+    lmnk_gateway_steer_params_t gw_params;
+    memset(&gw_params, 0, sizeof(gw_params));
+    gw_params.struct_size = (uint32_t)sizeof(gw_params);
+    gw_params.head_dim = cfg.head_dim;
+    gw_params.rotary_dim = cfg.rotary_dim;
+    gw_params.num_heads = cfg.num_heads;
+    gw_params.rope_layout = cfg.rope_layout;
+    gw_params.unresolved_damping_u7 = 128u;
+    gw_params.fact_energy = 2.5f;
+    gw_params.persona_energy = 1.8f;
+    gw_params.num_tokens = 1u;
+    gw_params.query_tensor = q_after;
+    gw_params.fact_phases = phase_deltas;
+    gw_params.persona_phases = persona_deltas;
+    gw_params.trail_inout = trail;
+
+    status = lmnk_gateway_steer(&gw_params);
     if (status != LMNK_OK) {
-        fprintf(stderr, "lmnk_phase_steering_steer_with_gateway_and_config_safe failed: %d\n",
-                (int)status);
+        fprintf(stderr, "lmnk_gateway_steer failed: %d\n", (int)status);
         lmnk_free_aligned(trail);
         lmnk_free_aligned(persona_deltas);
         lmnk_free_aligned(q_before);
@@ -176,8 +215,7 @@ int main(void) {
             }
         }
     }
-    printf("Phi-4-mini Gateway composite C-ABI OK: trail_step=%llu\n",
-           (unsigned long long)trail->step_count);
+    printf("Gateway composite C-ABI OK: trail_step=%llu\n", (unsigned long long)trail->step_count);
 
     lmnk_free_aligned(trail);
     lmnk_free_aligned(persona_deltas);

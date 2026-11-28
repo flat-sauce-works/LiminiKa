@@ -1,14 +1,34 @@
 // name: src/adapter/src/model_adapter/steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Per-layer RoPE phase baking, gateway/horizon steering, Rank-1 residual injection, and entropy evaluation on [`ModelSteeringAdapter`].
+//! Per-layer RoPE phase baking, gateway/horizon steering, Rank-1 residual injection, and
+//! entropy evaluation on [`ModelSteeringAdapter`].
 
 use super::super::*;
 use super::{AlignedF32Buffer32, AlignedQ7Buffer16, ModelSteeringAdapter};
 
+/// Per-layer RoPE steering step descriptor shared by
+/// [`ModelSteeringAdapter::orchestrate_layer_rope_with_substrate`],
+/// [`ModelSteeringAdapter::orchestrate_layer_rope_with_horizon_slots`], and
+/// [`ModelSteeringAdapter::orchestrate_layer_rope_with_spillover`].
+pub struct LayerRopeStepInput<'a, S: ManifoldGatewaySignal + ?Sized> {
+    /// Zero-based transformer layer index.
+    pub layer_idx: usize,
+    /// Active manifold gateway steering signal.
+    pub signal: &'a S,
+    /// Optional exit entropy override (`None` reuses substrate `last_entropy_h_tilde`).
+    pub entropy_h_tilde_opt: Option<f32>,
+    /// Unresolved damping multiplier in Q0.7 (`0..=128`).
+    pub unresolved_damping_u7: u8,
+    /// Mutable flattened `[num_heads * rotary_dim]` pre-RoPE query slice.
+    pub q_rot_inout: &'a mut [f32],
+    /// Optional mutable logits slice for entropy-gate modulation.
+    pub logits_opt: Option<&'a mut [f32]>,
+}
+
 impl ModelSteeringAdapter {
     /// Computes per-head Q7 phase deltas from negative (`source`) and positive (`target`)
-    /// post-RoPE query centroids via [`PhaseSteeringGeometryExt::compute_procrustes_phase_delta_for_geometry`].
+    /// pre-RoPE query centroids via [`PhaseSteeringGeometryExt::compute_procrustes_phase_delta_for_geometry`].
     ///
     /// # Errors
     ///
@@ -203,11 +223,13 @@ impl ModelSteeringAdapter {
             this.ctx
                 .phase_steering()
                 .steer_gateway_signal_with_core_layers_for_geometry_safe(
-                    signal,
-                    &this.geometry,
-                    core_ctx,
+                    liminika_core::GatewaySteerInput {
+                        signal,
+                        geometry: &this.geometry,
+                        core_ctx,
+                        unresolved_damping_u7,
+                    },
                     trail_inout,
-                    unresolved_damping_u7,
                     q,
                     None,
                     logits,
@@ -240,12 +262,14 @@ impl ModelSteeringAdapter {
             let mut ledger_slot = substrate.ledger_slot;
             let res = substrate
                 .ingest_gateway_and_steer_with_core_layers_for_geometry_safe(
-                    signal,
-                    &this.geometry,
-                    core_ctx,
+                    liminika_core::GatewaySteerInput {
+                        signal,
+                        geometry: &this.geometry,
+                        core_ctx,
+                        unresolved_damping_u7,
+                    },
                     &mut ledger_slot,
                     trail_inout,
-                    unresolved_damping_u7,
                     Some(q),
                     logits,
                 )
@@ -265,17 +289,11 @@ impl ModelSteeringAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
-    #[allow(clippy::too_many_arguments)]
+    /// Returns an error if `input.q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
     pub fn orchestrate_layer_rope_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
-        layer_idx: usize,
-        signal: &S,
+        input: LayerRopeStepInput<'_, S>,
         trail_inout: &mut lmnk_pointer_trail_t,
-        entropy_h_tilde_opt: Option<f32>,
-        unresolved_damping_u7: u8,
-        q_rot_inout: &mut [f32],
-        logits_opt: Option<&mut [f32]>,
     ) -> Result<
         Option<(
             GatewayFrame,
@@ -287,15 +305,10 @@ impl ModelSteeringAdapter {
         let mut guard_slot = self.coherence_guard_slot;
         let mut no_escalator = ();
         let res = self.orchestrate_layer_rope_with_horizon_slots(
-            layer_idx,
-            signal,
+            input,
             &mut guard_slot,
             &mut no_escalator,
             trail_inout,
-            entropy_h_tilde_opt,
-            unresolved_damping_u7,
-            q_rot_inout,
-            logits_opt,
         );
         self.coherence_guard_slot = guard_slot;
         res
@@ -307,24 +320,18 @@ impl ModelSteeringAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
+    /// Returns an error if `input.q_rot_inout` length mismatches, `escalation_provider` fails, or
     /// `liminika-core` rejects the inputs.
-    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_layer_rope_with_horizon_slots<
         S: ManifoldGatewaySignal + ?Sized,
         H: LatentHorizonSlot + ?Sized,
         E: HorizonEscalationProvider + ?Sized,
     >(
         &mut self,
-        layer_idx: usize,
-        signal: &S,
+        input: LayerRopeStepInput<'_, S>,
         horizon_slots: &mut H,
         escalation_provider: &mut E,
         trail_inout: &mut lmnk_pointer_trail_t,
-        entropy_h_tilde_opt: Option<f32>,
-        unresolved_damping_u7: u8,
-        q_rot_inout: &mut [f32],
-        logits_opt: Option<&mut [f32]>,
     ) -> Result<
         Option<(
             GatewayFrame,
@@ -333,6 +340,14 @@ impl ModelSteeringAdapter {
         )>,
         String,
     > {
+        let LayerRopeStepInput {
+            layer_idx,
+            signal,
+            entropy_h_tilde_opt,
+            unresolved_damping_u7,
+            q_rot_inout,
+            logits_opt,
+        } = input;
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let entropy_h_tilde =
                 entropy_h_tilde_opt.unwrap_or(this.ctx.substrate().last_entropy_h_tilde);
@@ -355,6 +370,11 @@ impl ModelSteeringAdapter {
             let num_layers_denom = this.geometry.num_layers.saturating_sub(1).max(1);
             let layer_scale_q7 = ((layer_idx * 127) / num_layers_denom).min(127) as u8;
             let conflict_active = pre_trigger.repulsion_severity > 0.25;
+            let repulsion_lane_already_active = (this.ctx.substrate().slot_repulsion_mask
+                & this.ctx.substrate().slot_enabled_mask)
+                != 0;
+            let suppress_duplicate_repulsion_escalation =
+                conflict_active && repulsion_lane_already_active;
             let esc_req = HorizonEscalationRequest {
                 trigger: pre_trigger,
                 placement: WorkbenchLanePlacement::AutoFree,
@@ -370,10 +390,11 @@ impl ModelSteeringAdapter {
             let lane_active = this.ctx.escalated_workbench_lane().is_some_and(|l| {
                 l < 8 && (this.ctx.substrate().slot_enabled_mask & (1u8 << l)) != 0
             });
-            let should_check_escalation = this.escalation_boundary_dirty
-                || pre_trigger.epistemic_regime != this.last_escalated_regime
-                || (lane_active && pre_trigger.can_retract())
-                || (!lane_active && pre_trigger.is_destabilized());
+            let should_check_escalation = !suppress_duplicate_repulsion_escalation
+                && (this.escalation_boundary_dirty
+                    || pre_trigger.epistemic_regime != this.last_escalated_regime
+                    || (lane_active && pre_trigger.can_retract())
+                    || (!lane_active && pre_trigger.is_destabilized()));
             let escalated = if should_check_escalation {
                 let mut esc_lane = this.ctx.escalated_workbench_lane();
                 let sw = this
@@ -394,20 +415,26 @@ impl ModelSteeringAdapter {
                 let mut ledger_slot = substrate.ledger_slot;
                 let res = substrate
                     .orchestrate_gateway_layer_with_core_layers_safe(
-                        signal,
-                        &this.geometry,
-                        core_ctx,
-                        &this.threshold_policy,
-                        &this.system_constraint,
-                        probe_baseline,
-                        scale,
-                        entropy_h_tilde,
+                        liminika_core::runtime::GatewayLayerInput {
+                            signal,
+                            geometry: &this.geometry,
+                            core_ctx,
+                            scale,
+                            entropy_h_tilde,
+                            unresolved_damping_u7,
+                        },
+                        liminika_core::runtime::GatewayPolicyContext {
+                            policy: &this.threshold_policy,
+                            system: &this.system_constraint,
+                            probe: probe_baseline,
+                        },
                         &mut ledger_slot,
                         trail_inout,
-                        unresolved_damping_u7,
-                        Some(q),
-                        None,
-                        logits,
+                        liminika_core::runtime::GatewayLayerTargets {
+                            query_tensor: Some(q),
+                            rank1_hidden: None,
+                            logits_opt: logits,
+                        },
                     )
                     .map_err(|e| {
                         format!("orchestrate_gateway_layer_with_core_layers_safe error: {e}")
@@ -420,7 +447,7 @@ impl ModelSteeringAdapter {
                 entropy_gate_mode: this.ctx.entropy_controller().state().active_branch_mode,
                 moving_z_entropy: entropy_h_tilde,
                 repulsion_severity: frame.repulsion_severity,
-                causal_root_cause: frame.attribution_tag,
+                causal_root_cause: frame.root_cause_code,
                 epistemic_regime: this.ctx.last_horizon().regime_code,
                 stationary_shortcut_ready: this.ctx.last_boundary_delta().stationary_shortcut_ready
                     != 0,
@@ -449,7 +476,7 @@ impl ModelSteeringAdapter {
                 res
             };
 
-            let qos_throttled = frame.attribution_tag == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
+            let qos_throttled = frame.root_cause_code == ROOT_CAUSE_SYSTEM_QOS_THROTTLE;
             let last_horizon = *this.ctx.last_horizon();
             let last_delta = *this.ctx.last_boundary_delta();
             let last_overlap = *this.ctx.last_overlap_report();
@@ -457,19 +484,19 @@ impl ModelSteeringAdapter {
             let probe_baseline = *this.ctx.probe_baseline();
             {
                 let bank = this.ctx.telemetry_bank_mut();
-                let _ = bank.evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
-                bank.record_step(
+                bank.evaluate_policy(trigger.is_destabilized(), q_dwell, qos_throttled);
+                bank.record_step(liminika_core::runtime::StepTelemetryInput {
                     decision,
-                    &last_horizon,
-                    &last_delta,
-                    &last_overlap,
-                    &ego_snapshot,
-                    trigger.entropy_gate_mode,
-                    slid_in,
-                    slid_out,
+                    horizon: &last_horizon,
+                    delta: &last_delta,
+                    overlap: &last_overlap,
+                    ego: &ego_snapshot,
+                    entropy_gate_mode: trigger.entropy_gate_mode,
+                    slid_in_bits: slid_in,
+                    slid_out_bits: slid_out,
                     escalated,
                     qos_throttled,
-                );
+                });
                 let _ = bank.update_assimilation_ema(
                     entropy_h_tilde,
                     frame.fact_persona_coherence,
@@ -484,13 +511,15 @@ impl ModelSteeringAdapter {
             )
             .outside;
             let sb_event = this.ctx.step_sandbox_hypothesis_lifecycle(
-                decision,
-                this.configured_ego.is_active(),
-                exterior_granule_mask,
-                liminika_core::stigmergy::trail_phase_words_ref(trail_inout),
-                frame.effective_energy,
-                3,
-                3,
+                liminika_core::runtime::SandboxLifecycleInput {
+                    decision,
+                    ego_active: this.configured_ego.is_active(),
+                    exterior_granule_mask,
+                    candidate_words: liminika_core::stigmergy::trail_phase_words_ref(trail_inout),
+                    candidate_weight: frame.effective_energy,
+                    drift_dwell_threshold: 3,
+                    settle_dwell_threshold: 3,
+                },
             );
             match sb_event {
                 SandboxLifecycleEvent::Settled(_) | SandboxLifecycleEvent::Released(_) => {
@@ -509,22 +538,16 @@ impl ModelSteeringAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
+    /// Returns an error if `input.q_rot_inout` length mismatches, `escalation_provider` fails, or
     /// `liminika-core` rejects the inputs.
-    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_layer_rope_with_spillover<
         S: ManifoldGatewaySignal + ?Sized,
         E: HorizonEscalationProvider + ?Sized,
     >(
         &mut self,
-        layer_idx: usize,
-        signal: &S,
+        input: LayerRopeStepInput<'_, S>,
         escalation_provider: &mut E,
         trail_inout: &mut lmnk_pointer_trail_t,
-        entropy_h_tilde_opt: Option<f32>,
-        unresolved_damping_u7: u8,
-        q_rot_inout: &mut [f32],
-        logits_opt: Option<&mut [f32]>,
     ) -> Result<
         Option<(
             GatewayFrame,
@@ -538,15 +561,10 @@ impl ModelSteeringAdapter {
         let res = {
             let mut combined = (&mut guard_slot, &mut *spillover_box);
             self.orchestrate_layer_rope_with_horizon_slots(
-                layer_idx,
-                signal,
+                input,
                 &mut combined,
                 escalation_provider,
                 trail_inout,
-                entropy_h_tilde_opt,
-                unresolved_damping_u7,
-                q_rot_inout,
-                logits_opt,
             )
         };
         self.coherence_guard_slot = guard_slot;
@@ -615,7 +633,7 @@ impl ModelSteeringAdapter {
         frm_w: &[u64; NUM_STIGMERGIC_GRANULES],
     ) {
         if let Some(c) = circuit {
-            let _ = c.modulate_gateway_frame_at_scale(
+            c.modulate_gateway_frame_at_scale(
                 frame,
                 frm_w,
                 frm_w,
@@ -706,7 +724,7 @@ impl ModelSteeringAdapter {
                 .ego_differential_net()
                 .evaluate_pframe_chain_branchless(
                     &core_layers.ego,
-                    self.ctx.system_spine(),
+                    self.ctx.envelope(),
                     self.ctx.last_lacuna_partition(),
                     &core_layers.stigmergy,
                     self.ctx.distortion_tension(),
@@ -715,7 +733,7 @@ impl ModelSteeringAdapter {
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(self.active_circuit(), &mut frame, &cand_w);
             self.ctx
-                .system_spine()
+                .envelope()
                 .enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
             frame
         } else if core_layers.liminal.adaptation_epochs > 0 {
@@ -752,7 +770,7 @@ impl ModelSteeringAdapter {
         let last_boundary_delta = *self.ctx.last_boundary_delta();
         let last_horizon = *self.ctx.last_horizon();
         let last_overlap = *self.ctx.last_overlap_report();
-        let spine = *self.ctx.system_spine();
+        let envelope = *self.ctx.envelope();
         let frame = if ego_active {
             let mut sys_baseline =
                 signal.synthesize_gateway_with_aperture_from_stack(self.ctx.core_layers());
@@ -767,10 +785,10 @@ impl ModelSteeringAdapter {
                 &last_horizon,
                 &last_overlap,
             );
-            let _ = self.ctx.evaluate_ego_pframe_chain_mut(&mut frame);
+            self.ctx.evaluate_ego_pframe_chain_mut(&mut frame);
             let cand_w = *frame.phase_words_ref();
             Self::modulate_rank1_circuit_frame(circuit, &mut frame, &cand_w);
-            spine.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
+            envelope.enforce_pinned_isolation_branchless(&sys_baseline, &mut frame);
             frame
         } else if adapted {
             let mut frame =
@@ -831,7 +849,18 @@ impl ModelSteeringAdapter {
         let _temp = self
             .ctx
             .entropy_controller_mut()
-            .eval_surrogate_and_step(p_max, p_2nd, 0.0, 0.0, 1.0, 0.1, 0.1, &mut state_out)
+            .eval_surrogate_and_step(
+                liminika_core::drivers::spine::entropy::SurrogateEntropyInput {
+                    p_max,
+                    p_2nd,
+                    cosine_dist: 0.0,
+                    mu_dist: 0.0,
+                    sigma_dist: 1.0,
+                    alpha_z: 0.1,
+                    gamma_mod: 0.1,
+                },
+                &mut state_out,
+            )
             .map_err(|e| format!("eval_surrogate_and_step error: {e}"))?;
         self.ctx.substrate_mut().last_entropy_h_tilde = state_out.moving_z_entropy;
         Ok(state_out)

@@ -5,12 +5,21 @@
 name = "liminika-adapter"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 description = "Model connection, RoPE geometry mapping, and optimization adapter over liminika-core"
 
 [dependencies]
+ed25519-dalek.workspace = true
+getrandom.workspace = true
 liminika-core = { path = "../core" }
+sha2.workspace = true
+zeroize.workspace = true
 
 [lints]
 workspace = true
+
+[[test]]
+name = "host_envelope_coordination"
+path = "../../tests/integration/host_envelope_coordination.rs"

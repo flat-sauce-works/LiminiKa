@@ -1,0 +1,5 @@
+# name: .cargo/config.toml
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[alias]
+xtask = "run --locked --package xtask --"

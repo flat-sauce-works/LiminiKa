@@ -8,25 +8,24 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use crate::foundation::{
-    branchless_clamp_f32, branchless_popcount_rsqrt_u32, branchless_relu_f32,
-    branchless_splitmix64, branchless_tanh_f32, is_word_array_uniform_64, load_q7_words_64,
-    store_q7_words_64, swar_q7_add_sat_x8, swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8,
-    swar_u8_add_sat_x8, swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8,
-    swar_u8_nonzero_msb_mask, swar_u8_sub_sat_x8, swar_words_nonzero_64, PagedBitmask, Pod,
-    TaggedPtr, ACTION_PRESET_REPULSION_ESCAPE, PAGED_BITMASK_BITS, SWAR_EVEN_BYTES_64,
-    SWAR_LOW7_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
+    PAGED_BITMASK_BITS, PagedBitmask, Pod, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_64,
+    SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64, TaggedPtr, branchless_clamp_f32,
+    branchless_popcount_rsqrt_u32, branchless_relu_f32, branchless_splitmix64, branchless_tanh_f32,
+    is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_add_sat_x8,
+    swar_q7_neg_sat_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_add_sat_x8,
+    swar_u8_halve_decay_x8, swar_u8_max_x8, swar_u8_nonzero_count_x8, swar_u8_nonzero_msb_mask,
+    swar_u8_sub_sat_x8, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_u32, branchless_select_u64, branchless_select_u8, LmnkResult, PhaseQ7,
-    RuntimeConfig, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, LmnkResult, MAX_ATTENTION_HEADS,
+    NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64,
 };
 use crate::stigmergy::{
-    ATTRACTOR_SLOT_REPULSION, DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD,
-    FAST_PATH_SHORTCUT_SLOTS, LEDGER_HISTORY_LEN,
+    DEFAULT_BLOOM_MAX_ACTIVE_BUCKETS, DEFAULT_BLOOM_MAX_MASS_THRESHOLD, FAST_PATH_SHORTCUT_SLOTS,
+    LEDGER_HISTORY_LEN,
 };
 
 /// Dynamic Adaptive Extension Scratchpad (FastPathLedger) slot layout (64 bytes, 1 cache line, Section 5.4.F).
@@ -296,7 +295,8 @@ impl PagedBitmask {
                 + (self.bits[3] & other.bits[3]).count_ones())
     }
 
-    /// Evaluates normalized Jaccard similarity $\frac{\vert{}\mathbf{M}_i \cap \mathbf{M}_j\vert{}}{\vert{}\mathbf{M}_i \cup \mathbf{M}_j\vert{}} \in [0, 1]$
+    /// Evaluates normalized Jaccard similarity $\frac{\vert{}\mathbf{M}_i \cap
+    /// \mathbf{M}_j\vert{}}{\vert{}\mathbf{M}_i \cup \mathbf{M}_j\vert{}} \in [0, 1]$
     /// in division-free (`0 fdiv`) constant time via `POPCOUNT_RSQRT_LUT_257`.
     #[inline(always)]
     pub fn stigmergic_jaccard_similarity(&self, other: &Self) -> f32 {
@@ -309,7 +309,8 @@ impl PagedBitmask {
         branchless_clamp_f32((inter as f32) * (rsqrt_u * rsqrt_u), 0.0, 1.0)
     }
 
-    /// Evaluates non-negative binary cosine similarity $\frac{\mathbf{M}_i^T \mathbf{M}_j}{\sqrt{\Vert{}\mathbf{M}_i\Vert{}_1 \Vert{}\mathbf{M}_j\Vert{}_1}} \in [0, 1]$.
+    /// Evaluates non-negative binary cosine similarity $\frac{\mathbf{M}_i^T
+    /// \mathbf{M}_j}{\sqrt{\Vert{}\mathbf{M}_i\Vert{}_1 \Vert{}\mathbf{M}_j\Vert{}_1}} \in [0, 1]$.
     #[inline(always)]
     pub fn stigmergic_cosine_similarity(&self, other: &Self) -> f32 {
         let inter = self.stigmergic_adjacency_overlap(other);
@@ -668,7 +669,8 @@ impl ContrastivePhaseBloomFilter {
 
     /// Applies Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) in-place across
     /// `candidate_phases` and returns `(density, repulsion_triggered, post_repulsion_words)` directly
-    /// in 8 `u64` SWAR registers (`0` stack reload for downstream `PhaseStepFilter`/`PhaseClamp` or unified-field kernels).
+    /// in 8 `u64` SWAR registers (`0` stack reload for downstream `PhaseStepFilter`/`PhaseClamp` or
+    /// unified-field kernels).
     #[inline(always)]
     pub const fn apply_phase_conjugate_repulsion_to_words(
         &self,
@@ -686,52 +688,6 @@ impl ContrastivePhaseBloomFilter {
             store_q7_words_64(candidate_phases, &words);
         }
         (density, active, words)
-    }
-
-    /// Applies Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) in-place across
-    /// all 64 attention heads in strictly constant time (`0` branches) using `branchless_select_u64`
-    /// and hoisted `bias_restore`.
-    #[inline(always)]
-    pub const fn apply_phase_conjugate_repulsion(
-        &self,
-        candidate_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-        density_threshold: u8,
-        repulsion_scale_u7: u8,
-    ) -> u8 {
-        self.apply_phase_conjugate_repulsion_to_words(
-            candidate_phases,
-            density_threshold,
-            repulsion_scale_u7,
-        )
-        .0
-    }
-
-    /// Evaluates `apply_phase_conjugate_repulsion` on `candidate_phases` and simultaneously evolves
-    /// `tagged_ptr` into [`ACTION_PRESET_REPULSION_ESCAPE`] targeting [`ATTRACTOR_SLOT_REPULSION`] (`lane 3`).
-    #[inline(always)]
-    pub fn apply_repulsion_and_evolve_ptr(
-        &self,
-        tagged_ptr: TaggedPtr,
-        candidate_phases: &mut [PhaseQ7; MAX_ATTENTION_HEADS],
-        density_threshold: u8,
-        repulsion_scale_u7: u8,
-    ) -> (TaggedPtr, u8, bool) {
-        let density = self.apply_phase_conjugate_repulsion(
-            candidate_phases,
-            density_threshold,
-            repulsion_scale_u7,
-        );
-        let triggered = (density >= density_threshold) & (density > 0);
-        let rep_mode = tagged_ptr.action_mode_flags() | ACTION_PRESET_REPULSION_ESCAPE;
-        let rep_ptr = tagged_ptr
-            .with_action_and_slot(ATTRACTOR_SLOT_REPULSION, rep_mode)
-            .conjugate_phase();
-        let out_ptr = TaggedPtr(branchless_select_u64(
-            triggered,
-            rep_ptr.raw(),
-            tagged_ptr.raw(),
-        ));
-        (out_ptr, density, triggered)
     }
 
     /// Applies evaporative decay across all 64 counters in-place in strictly constant time (`0` branches).
@@ -916,7 +872,8 @@ pub trait FastPathLedger {
         Ok(())
     }
 
-    /// Evaluates telemetry ledger to auto-tune sub-head router ratios, `PhaseClamp` limits, and `EntropyController` thresholds.
+    /// Evaluates telemetry ledger to auto-tune sub-head router ratios, `PhaseClamp` limits, and
+    /// `EntropyController` thresholds.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_STATE`] if `slot` is in an incompatible mode.

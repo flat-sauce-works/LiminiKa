@@ -1,395 +1,33 @@
 // name: examples/candle_eval/src/eval.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! CLI profile parsers, KV-cache statistics, steered decoding, and reflection critique.
+//! KV-cache statistics, steered decoding, and reflection critique.
 
-use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use candle_core::quantized::GgmlDType;
+use candle_core::Tensor;
 use liminika_adapter::{
     AttractorTrajectoryEvaluator, CompiledTokenCorpus, CorpusRecallEscalationProvider,
-    LmnkTimeline, ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique,
-    ReflectionPolicy, SystemPressureReading, TrajectoryManifoldSnapshot,
+    ManifoldReflectionEvaluator, ModelSteeringAdapter, ReflectionCritique, ReflectionPolicy,
+    SPINE_BYPASS_VETO_GUARD_ACTIVE, SPINE_BYPASS_VETO_PINNED_LOCK,
+    SPINE_BYPASS_VETO_REPULSION_ACTIVE, SPINE_SENTINEL_AUTO_U8, SpineDecodeInput,
+    SpineLogitsObserveMode, SystemPressureReading, TrajectoryManifoldSnapshot,
 };
 use liminika_core::abi::{lmnk_pointer_trail_t, lmnk_q7_t};
-use liminika_core::drivers::{
-    LiminalEgoPreset, TokenBypassObservation, SPINE_BYPASS_VETO_GUARD_ACTIVE,
-    SPINE_BYPASS_VETO_PINNED_LOCK, SPINE_BYPASS_VETO_REPULSION_ACTIVE,
-};
 use liminika_core::foundation::ACTION_MODE_PHASE_REPULSE;
 use liminika_core::runtime::{
     CoreTelemetryBank, CoreTelemetrySnapshot, LayerDistortionReport, RamPhaseKvStepOutcome,
 };
-use liminika_core::stigmergy::{
-    CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger, StigmergicScaleGranularity,
-    TRAIL_FLAG_REPULSION_ACTIVE,
-};
+use liminika_core::stigmergy::TRAIL_FLAG_REPULSION_ACTIVE;
 use tokenizers::Tokenizer;
 
-use crate::bake::{argmax, format_phi4_prompt};
-use crate::model::{ForwardSteer, LogitsFetchMode, LogitsOutcome, Phi3Model, ResonantAnchors};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum PressureSimMode {
-    #[default]
-    Off,
-    Elevated,
-    Surge,
-}
-
-pub(crate) fn parse_pressure_sim_mode<'a>(
-    args: impl IntoIterator<Item = &'a str>,
-) -> PressureSimMode {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--pressure-sim=") {
-            if val.eq_ignore_ascii_case("elevated") {
-                return PressureSimMode::Elevated;
-            }
-            if val.eq_ignore_ascii_case("surge") {
-                return PressureSimMode::Surge;
-            }
-        }
-    }
-    PressureSimMode::Off
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CircuitProfileMode {
-    None,
-    Analytical,
-    Integrative,
-    Hybrid(u8),
-}
-
-pub(crate) fn parse_circuit_mode<'a>(
-    args: impl IntoIterator<Item = &'a str>,
-) -> CircuitProfileMode {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--circuit=") {
-            if val.eq_ignore_ascii_case("analytical") {
-                return CircuitProfileMode::Analytical;
-            }
-            if val.eq_ignore_ascii_case("integrative") {
-                return CircuitProfileMode::Integrative;
-            }
-            if val.eq_ignore_ascii_case("hybrid") {
-                return CircuitProfileMode::Hybrid(64);
-            }
-            if let Some(blend_str) = val.strip_prefix("hybrid:") {
-                if let Ok(blend) = blend_str.parse::<u8>() {
-                    return CircuitProfileMode::Hybrid(blend.min(128));
-                }
-            }
-        }
-    }
-    CircuitProfileMode::None
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EgoProfileMode {
-    Custom,
-    Preset(LiminalEgoPreset),
-    NaturalLanguage(String),
-}
-
-pub(crate) fn parse_ego_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> EgoProfileMode {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--ego=") {
-            if val.eq_ignore_ascii_case("custom") || val.eq_ignore_ascii_case("off") {
-                return EgoProfileMode::Custom;
-            }
-            if val.eq_ignore_ascii_case("low") {
-                return EgoProfileMode::Preset(LiminalEgoPreset::Low);
-            }
-            if val.eq_ignore_ascii_case("medium") {
-                return EgoProfileMode::Preset(LiminalEgoPreset::Medium);
-            }
-            if val.eq_ignore_ascii_case("high") {
-                return EgoProfileMode::Preset(LiminalEgoPreset::High);
-            }
-            if let Some(desc) = val.strip_prefix("desc:") {
-                return EgoProfileMode::NaturalLanguage(desc.to_string());
-            }
-            return EgoProfileMode::NaturalLanguage(val.to_string());
-        }
-    }
-    EgoProfileMode::Custom
-}
-
-pub(crate) fn apply_ego_mode(adapter: &mut ModelSteeringAdapter, mode: &EgoProfileMode) {
-    match mode {
-        EgoProfileMode::Custom => adapter.configure_ego_from_preset(LiminalEgoPreset::Custom),
-        EgoProfileMode::Preset(p) => adapter.configure_ego_from_preset(*p),
-        EgoProfileMode::NaturalLanguage(desc) => adapter.configure_ego_from_natural_language(desc),
-    }
-}
-
-pub(crate) fn parse_kv_min_res<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<lmnk_q7_t> {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--kv-min-res=") {
-            if let Ok(parsed) = val.parse::<i8>() {
-                return Some(parsed.clamp(-127, 127));
-            }
-        }
-    }
-    None
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum ReflectMode {
-    Off,
-    Conditional,
-    #[default]
-    Always,
-}
-
-impl ReflectMode {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Conditional => "cond",
-            Self::Always => "on",
-        }
-    }
-}
-
-pub(crate) fn parse_reflect_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> ReflectMode {
-    let mut no_reflect = false;
-    for arg in args {
-        if arg == "--no-reflect" {
-            no_reflect = true;
-        } else if let Some(val) = arg.strip_prefix("--reflect-mode=") {
-            if val.eq_ignore_ascii_case("off") {
-                return ReflectMode::Off;
-            }
-            if val.eq_ignore_ascii_case("conditional") || val.eq_ignore_ascii_case("cond") {
-                return ReflectMode::Conditional;
-            }
-            if val.eq_ignore_ascii_case("always") || val.eq_ignore_ascii_case("on") {
-                return ReflectMode::Always;
-            }
-        }
-    }
-    if no_reflect {
-        ReflectMode::Off
-    } else {
-        ReflectMode::Always
-    }
-}
-
-pub(crate) fn parse_ego_max_hops<'a>(args: impl IntoIterator<Item = &'a str>) -> u8 {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--ego-max-hops=") {
-            if let Ok(parsed) = val.parse::<u8>() {
-                return parsed.clamp(1, 4);
-            }
-        }
-    }
-    1
-}
-
-pub(crate) fn parse_temperature<'a>(args: impl IntoIterator<Item = &'a str>) -> f32 {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--temp=") {
-            if let Ok(parsed) = val.parse::<f32>() {
-                if parsed.is_finite() && parsed >= 0.0 {
-                    return parsed;
-                }
-            }
-        }
-    }
-    0.0
-}
-
-pub(crate) fn parse_rng_seed<'a>(args: impl IntoIterator<Item = &'a str>) -> u64 {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--seed=") {
-            if let Ok(parsed) = val.parse::<u64>() {
-                return parsed.max(1);
-            }
-        }
-    }
-    42
-}
-
-pub(crate) const LOGITS_OBSERVE_MIN_DYNAMIC_STRIDE: usize = 2;
-pub(crate) const DEFAULT_LOGITS_OBSERVE_STRIDE: usize = 1;
-pub(crate) const DEFAULT_GUARD_HOLD_TOKENS: u8 = ModelSteeringAdapter::DEFAULT_GUARD_HOLD_TOKENS;
-
-/// Per-prompt / per-turn residency and boundary churn tracker between
-/// abstract residency (`whole_token_bypass == true`) and concrete residency
-/// (`whole_token_bypass == false`).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct LiminalDecodeChurnTracker {
-    prev_was_bypass: Option<bool>,
-    pub(crate) abstract_tokens: usize,
-    pub(crate) concrete_tokens: usize,
-    pub(crate) boundary_churn_transitions: usize,
-}
-
-impl LiminalDecodeChurnTracker {
-    pub(crate) const fn new() -> Self {
-        Self {
-            prev_was_bypass: None,
-            abstract_tokens: 0,
-            concrete_tokens: 0,
-            boundary_churn_transitions: 0,
-        }
-    }
-
-    pub(crate) fn reset_prompt(&mut self) {
-        self.prev_was_bypass = None;
-    }
-
-    pub(crate) fn record_token(&mut self, curr_was_bypass: bool) {
-        if curr_was_bypass {
-            self.abstract_tokens += 1;
-        } else {
-            self.concrete_tokens += 1;
-        }
-        if self
-            .prev_was_bypass
-            .is_some_and(|prev| prev != curr_was_bypass)
-        {
-            self.boundary_churn_transitions += 1;
-        }
-        self.prev_was_bypass = Some(curr_was_bypass);
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn total_tokens(&self) -> usize {
-        self.abstract_tokens + self.concrete_tokens
-    }
-}
-
-pub(crate) fn parse_logits_observe_stride<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--logits-observe-stride=") {
-            if let Ok(parsed) = val.parse::<usize>() {
-                return parsed.max(1);
-            }
-        }
-    }
-    DEFAULT_LOGITS_OBSERVE_STRIDE
-}
-
-pub(crate) fn parse_guard_hold_tokens<'a>(args: impl IntoIterator<Item = &'a str>) -> u8 {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--guard-hold-tokens=") {
-            if let Ok(parsed) = val.parse::<u8>() {
-                return parsed;
-            }
-        }
-    }
-    DEFAULT_GUARD_HOLD_TOKENS
-}
-
-pub(crate) fn parse_bench_trials<'a>(args: impl IntoIterator<Item = &'a str>) -> usize {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--bench-trials=") {
-            if let Ok(parsed) = val.parse::<usize>() {
-                return parsed.max(1);
-            }
-        }
-    }
-    1
-}
-
-pub(crate) fn parse_fixture_path<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<PathBuf> {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--fixture=") {
-            let trimmed = val.trim();
-            if !trimmed.is_empty() {
-                return Some(PathBuf::from(trimmed));
-            }
-        }
-    }
-    None
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct LogitsObserveStrideGate {
-    pub(crate) max_stride: usize,
-    pub(crate) unobserved_bypass_run: usize,
-    pub(crate) logits_skips: usize,
-}
-
-impl LogitsObserveStrideGate {
-    pub(crate) const fn new(max_stride: usize) -> Self {
-        let clamped_stride = if max_stride == 0 { 1 } else { max_stride };
-        Self {
-            max_stride: clamped_stride,
-            unobserved_bypass_run: 0,
-            logits_skips: 0,
-        }
-    }
-
-    #[must_use]
-    pub(crate) fn compute_effective_stride(
-        max_stride: usize,
-        sens_q7: u8,
-        last_observed_entropy: f32,
-    ) -> usize {
-        if max_stride <= 1 {
-            return 1;
-        }
-        let p_ent_q7 = ((last_observed_entropy / (2.0 * 0.78)) * 127.0).clamp(0.0, 64.0) as u8;
-        let ent_sens_q7 = liminika_core::liminal::threshold::sensitivity_4p1mp_q7(p_ent_q7);
-        let eff_sens_q7 = sens_q7.max(ent_sens_q7);
-        let span = max_stride - LOGITS_OBSERVE_MIN_DYNAMIC_STRIDE;
-        let shrink = ((span * usize::from(eff_sens_q7) + 64) >> 7).min(span);
-        max_stride - shrink
-    }
-
-    #[must_use]
-    pub(crate) fn select_fetch_mode(
-        &self,
-        step_idx: usize,
-        temperature: f32,
-        tok_was_whole_bypass: bool,
-        sens_q7: u8,
-        last_observed_entropy: f32,
-    ) -> LogitsFetchMode {
-        if self.max_stride <= 1 || temperature > 1e-6 || step_idx == 0 || !tok_was_whole_bypass {
-            return LogitsFetchMode::FullLogits;
-        }
-        let stride =
-            Self::compute_effective_stride(self.max_stride, sens_q7, last_observed_entropy);
-        if self.unobserved_bypass_run + 1 < stride {
-            LogitsFetchMode::DeviceArgmaxOnly
-        } else {
-            LogitsFetchMode::FullLogits
-        }
-    }
-
-    pub(crate) fn record_observed(&mut self) {
-        self.unobserved_bypass_run = 0;
-    }
-
-    pub(crate) fn record_unobserved_skip(&mut self) {
-        self.unobserved_bypass_run = self.unobserved_bypass_run.saturating_add(1);
-        self.logits_skips = self.logits_skips.saturating_add(1);
-    }
-}
-
-pub(crate) fn update_observed_entropy_stats(
-    outcome: &LogitsOutcome,
-    entropy_sum: &mut f32,
-    entropy_count: &mut u32,
-    last_observed_entropy: &mut f32,
-) -> Option<f32> {
-    match outcome {
-        LogitsOutcome::ObservedFull(logits) => {
-            let h = compute_top_k_logit_entropy(logits, 16);
-            *entropy_sum += h;
-            *entropy_count += 1;
-            *last_observed_entropy = h;
-            Some(h)
-        }
-        LogitsOutcome::UnobservedDeviceArgmax(_) => None,
-    }
-}
+use crate::bake::argmax;
+use crate::eval_common::count_semantic_forbid_hits_in_clauses;
+pub(crate) use crate::eval_profiles::*;
+use crate::model::{
+    CausalLmModel, ChatTemplate, ForwardSteer, KvCacheMode, LogitsFetchMode, LogitsOutcome,
+    ProbeCoordinateFrame, ResonantAnchors,
+};
 
 /// Computes normalized Top-K Shannon entropy in `[0.0, 1.0]` directly on an already-fetched CPU
 /// logits vector without issuing extra GPU->CPU D2H transfers.
@@ -504,50 +142,15 @@ pub(crate) fn count_semantic_forbid_hits(reply_text: &str, forbidden: &[String])
         " are not used",
     ];
 
-    let mut raw_hits = 0_usize;
-    let mut semantic_hits = 0_usize;
-    for kw in forbidden {
-        let kw_l = kw.to_ascii_lowercase();
-        if kw_l.is_empty() {
-            continue;
-        }
-        let mut matched_raw = false;
-        let mut matched_semantic = false;
-        for &clause in &clauses {
-            let mut search_from = 0_usize;
-            while let Some(rel) = clause[search_from..].find(&kw_l) {
-                matched_raw = true;
-                let abs_pos = search_from + rel;
-                let mut prefix_start = abs_pos.saturating_sub(96);
-                while prefix_start > 0 && !clause.is_char_boundary(prefix_start) {
-                    prefix_start -= 1;
-                }
-                let prefix = &clause[prefix_start..abs_pos];
-                let kw_end = abs_pos + kw_l.len();
-                let mut suffix_end = (kw_end + 28).min(clause.len());
-                while suffix_end < clause.len() && !clause.is_char_boundary(suffix_end) {
-                    suffix_end += 1;
-                }
-                let suffix = &clause[kw_end..suffix_end];
-                let is_negated = PREFIX_NEG_CUES.iter().any(|cue| prefix.contains(cue))
-                    || SUFFIX_NEG_CUES.iter().any(|cue| suffix.contains(cue));
-                if !is_negated {
-                    matched_semantic = true;
-                }
-                search_from = abs_pos + kw_l.len();
-                if search_from >= clause.len() {
-                    break;
-                }
-            }
-        }
-        if matched_raw {
-            raw_hits += 1;
-        }
-        if matched_semantic {
-            semantic_hits += 1;
-        }
-    }
-    (raw_hits, semantic_hits)
+    let forbidden_lower: Vec<String> = forbidden.iter().map(|k| k.to_ascii_lowercase()).collect();
+    count_semantic_forbid_hits_in_clauses(
+        &clauses,
+        &forbidden_lower,
+        PREFIX_NEG_CUES,
+        SUFFIX_NEG_CUES,
+        &[],
+        28,
+    )
 }
 
 /// Samples the next token deterministically via `argmax` when `temperature <= 1e-4`, or
@@ -666,220 +269,18 @@ impl KvTraceStats {
                 };
                 if exact_hit {
                     format!(
-                        "EXACT(s{slot_idx},pf={pframe_count},min={min_resonance_q7},l1={ph_l1},h={ph_head:?}{seek_note})"
+                        "EXACT(s{slot_idx},pf={pframe_count},min={min_resonance_q7},l1={ph_l1},h=\
+                         {ph_head:?}{seek_note})"
                     )
                 } else {
                     format!(
-                        "RES(s{slot_idx},r={resonance_q7},min={min_resonance_q7},pf={pframe_count},l1={ph_l1},h={ph_head:?}{seek_note})"
+                        "RES(s{slot_idx},r={resonance_q7},min={min_resonance_q7},pf={pframe_count},l1=\
+                         {ph_l1},h={ph_head:?}{seek_note})"
                     )
                 }
             }
         }
     }
-}
-
-pub(crate) fn parse_quant_mode<'a>(args: impl IntoIterator<Item = &'a str>) -> Option<GgmlDType> {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--quant=") {
-            if val.eq_ignore_ascii_case("q4_0") || val.eq_ignore_ascii_case("q40") {
-                return Some(GgmlDType::Q4_0);
-            }
-            if val.eq_ignore_ascii_case("q4k") || val.eq_ignore_ascii_case("q4_k") {
-                return Some(GgmlDType::Q4K);
-            }
-            if val.eq_ignore_ascii_case("q8_0") || val.eq_ignore_ascii_case("q80") {
-                return Some(GgmlDType::Q8_0);
-            }
-            if val.eq_ignore_ascii_case("none") || val.eq_ignore_ascii_case("bf16") {
-                return None;
-            }
-        }
-    }
-    None
-}
-
-pub(crate) fn build_preset_circuit(mode: CircuitProfileMode) -> Option<CognitiveTrajectoryLedger> {
-    let mut analytical = CognitiveTrajectoryLedger::new();
-    analytical.push_step(CognitiveStepOp::pack(
-        StigmergicScaleGranularity::CellTrail,
-        CognitiveOpKind::DecomposePeel,
-        6,
-    ));
-    analytical.push_step(CognitiveStepOp::pack(
-        StigmergicScaleGranularity::PointerBit,
-        CognitiveOpKind::RouteSubHead,
-        6,
-    ));
-
-    let mut integrative = CognitiveTrajectoryLedger::new();
-    integrative.push_step(CognitiveStepOp::pack(
-        StigmergicScaleGranularity::TypeGateway,
-        CognitiveOpKind::SynthesizeFuse,
-        6,
-    ));
-    integrative.push_step(CognitiveStepOp::pack(
-        StigmergicScaleGranularity::MacroCoalition,
-        CognitiveOpKind::CrystallizeCommit,
-        7,
-    ));
-
-    match mode {
-        CircuitProfileMode::None => None,
-        CircuitProfileMode::Analytical => Some(analytical),
-        CircuitProfileMode::Integrative => Some(integrative),
-        CircuitProfileMode::Hybrid(blend_q7) => {
-            Some(analytical.compose_persona_circuit(&integrative, blend_q7))
-        }
-    }
-}
-
-pub(crate) fn resolve_persona_circuit(
-    mode: CircuitProfileMode,
-    load_path: Option<&Path>,
-) -> Option<CognitiveTrajectoryLedger> {
-    let loaded = load_path
-        .and_then(|p| LmnkTimeline::load_from_path(p).ok())
-        .and_then(|tl| tl.persona_circuit());
-    let preset = build_preset_circuit(mode);
-    match (loaded, preset) {
-        (Some(base), Some(ov)) => Some(base.compose_persona_circuit(&ov, 64)),
-        (Some(base), None) => Some(base),
-        (None, Some(ov)) => Some(ov),
-        (None, None) => None,
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FairBenchCondition {
-    /// Condition A: Vanilla + Standard RAG (Fact + Persona + Guard text injected, Steer OFF).
-    VanillaFullRag,
-    /// Condition B: Vanilla + Minimal RAG (Fact text only, Steer OFF).
-    VanillaMinRag,
-    /// Condition C: LiminiKa Hybrid (Fact text only + RoPE/Rank-1/Substrate Steer ON).
-    LiminiKaHybrid,
-    /// Condition D: LiminiKa Zero-Context (No text injection + RoPE/Rank-1/Substrate Steer ON).
-    LiminiKaZeroContext,
-}
-
-impl FairBenchCondition {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::VanillaFullRag => "A:Vanilla+FullRAG",
-            Self::VanillaMinRag => "B:Vanilla+MinRAG",
-            Self::LiminiKaHybrid => "C:LiminiKa-Hybrid",
-            Self::LiminiKaZeroContext => "D:LiminiKa-ZeroCtx",
-        }
-    }
-
-    pub(crate) const fn steering_enabled(self) -> bool {
-        matches!(self, Self::LiminiKaHybrid | Self::LiminiKaZeroContext)
-    }
-
-    pub(crate) const fn inject_fact_text(self) -> bool {
-        matches!(
-            self,
-            Self::VanillaFullRag | Self::VanillaMinRag | Self::LiminiKaHybrid
-        )
-    }
-
-    pub(crate) const fn inject_persona_and_guard_text(self) -> bool {
-        matches!(self, Self::VanillaFullRag)
-    }
-}
-
-pub(crate) fn parse_fair_bench_conditions<'a>(
-    args: impl IntoIterator<Item = &'a str>,
-    default_no_reflect: bool,
-) -> Option<Vec<(FairBenchCondition, bool, Option<bool>)>> {
-    let mut fair_all = false;
-    let mut selected: Vec<(FairBenchCondition, bool, Option<bool>)> = Vec::new();
-    for arg in args {
-        if arg == "--fair-bench" {
-            fair_all = true;
-        } else if let Some(val) = arg.strip_prefix("--bench-cond=") {
-            for tok in val.split(',').map(str::trim) {
-                match tok.to_ascii_lowercase().as_str() {
-                    "a" | "vanilla-full" => {
-                        selected.push((FairBenchCondition::VanillaFullRag, true, Some(false)))
-                    }
-                    "b" | "vanilla-min" => {
-                        selected.push((FairBenchCondition::VanillaMinRag, true, Some(false)))
-                    }
-                    "c" | "hybrid" => selected.push((
-                        FairBenchCondition::LiminiKaHybrid,
-                        default_no_reflect,
-                        None,
-                    )),
-                    "c-noreflect" | "c-off" => {
-                        selected.push((FairBenchCondition::LiminiKaHybrid, true, None))
-                    }
-                    "c-byp-off" | "c(byp=off)" => {
-                        selected.push((FairBenchCondition::LiminiKaHybrid, true, Some(false)))
-                    }
-                    "c-byp-on" | "c(byp=on)" => {
-                        selected.push((FairBenchCondition::LiminiKaHybrid, true, Some(true)))
-                    }
-                    "c-reflect" | "c-on" => {
-                        selected.push((FairBenchCondition::LiminiKaHybrid, false, None))
-                    }
-                    "d" | "zero-ctx" => {
-                        selected.push((FairBenchCondition::LiminiKaZeroContext, true, None))
-                    }
-                    "all" => fair_all = true,
-                    _ => {}
-                }
-            }
-        }
-    }
-    if fair_all {
-        Some(vec![
-            (FairBenchCondition::VanillaFullRag, true, Some(false)),
-            (FairBenchCondition::VanillaMinRag, true, Some(false)),
-            (FairBenchCondition::LiminiKaHybrid, true, None),
-            (FairBenchCondition::LiminiKaHybrid, false, None),
-            (FairBenchCondition::LiminiKaZeroContext, true, None),
-        ])
-    } else if !selected.is_empty() {
-        Some(selected)
-    } else {
-        None
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HorizonAblationMode {
-    Core3,
-    Spillover,
-    SlowLoop,
-}
-
-impl HorizonAblationMode {
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::Core3 => "Core3",
-            Self::Spillover => "Core3+Spillover",
-            Self::SlowLoop => "Core3+Spillover+SlowLoop",
-        }
-    }
-}
-
-pub(crate) fn parse_horizon_mode<'a>(
-    args: impl IntoIterator<Item = &'a str>,
-) -> HorizonAblationMode {
-    for arg in args {
-        if let Some(val) = arg.strip_prefix("--horizon-mode=") {
-            if val.eq_ignore_ascii_case("spillover") {
-                return HorizonAblationMode::Spillover;
-            }
-            if val.eq_ignore_ascii_case("slow-loop") || val.eq_ignore_ascii_case("slow_loop") {
-                return HorizonAblationMode::SlowLoop;
-            }
-            if val.eq_ignore_ascii_case("core3") {
-                return HorizonAblationMode::Core3;
-            }
-        }
-    }
-    HorizonAblationMode::Core3
 }
 
 #[derive(Default)]
@@ -959,16 +360,17 @@ pub(crate) struct SteerDecodeConfig<'a, 'c, 'e> {
     pub(crate) temperature: f32,
     pub(crate) rng_seed: u64,
     pub(crate) logits_observe_stride: usize,
+    pub(crate) layer_steer_mask: Option<u64>,
+    pub(crate) probe_frame: ProbeCoordinateFrame,
+    pub(crate) phase_clamp_override: Option<f32>,
+    pub(crate) random_push_seed: Option<u64>,
+    pub(crate) max_tokens: usize,
+    pub(crate) prefill_chunk_size: usize,
+    pub(crate) capture_first_logits: bool,
+    pub(crate) first_prefill_logits: Option<Vec<f32>>,
+    pub(crate) exit_entropy_h_tilde: f32,
     pub(crate) steer_bypass_hits: usize,
     pub(crate) steer_eligible_layers: usize,
-    pub(crate) whole_token_bypass_hits: usize,
-    pub(crate) decode_tokens_total: usize,
-    pub(crate) abstract_tokens: usize,
-    pub(crate) concrete_tokens: usize,
-    pub(crate) boundary_churn_transitions: usize,
-    pub(crate) logits_skips: usize,
-    pub(crate) instability_recoveries: usize,
-    pub(crate) guard_relaxations: usize,
     pub(crate) spine_veto_guard_hits: usize,
     pub(crate) spine_veto_repulse_hits: usize,
     pub(crate) spine_veto_pin_hits: usize,
@@ -983,27 +385,36 @@ pub(crate) struct ReplyTiming {
 /// Runs an untimed warmup decode pass (1 short prompt, up to 10 greedy tokens) to stabilize
 /// GPU P0 clocks before Trial 1, then explicitly clears the model KV cache.
 pub(crate) fn run_gpu_warmup(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let t_warm = Instant::now();
     model.clear_cache();
-    let warmup_prompt = format_phi4_prompt("Warmup: what is 2 + 2?");
+    let warmup_prompt = chat.format_single_turn("Warmup: what is 2 + 2?");
     let ids = tokenizer
         .encode(warmup_prompt.as_str(), false)
         .map_err(|e| format!("warmup encode error: {e}"))?
         .get_ids()
         .to_vec();
-    let (mut outcome, _, _) =
-        model.forward_tokens(&ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
+    let (mut outcome, _, _) = model.forward_tokens(
+        &ids,
+        0,
+        None,
+        false,
+        false,
+        LogitsFetchMode::FullLogits,
+        KvCacheMode::Append,
+    )?;
     let mut gen_count = 0usize;
     for offset in (ids.len()..).take(10) {
         let next = match outcome {
             LogitsOutcome::ObservedFull(ref logits) => argmax(logits),
             LogitsOutcome::UnobservedDeviceArgmax(tok) => tok,
+            LogitsOutcome::SkippedIntermediate => break,
         };
         gen_count += 1;
-        if next == 199999 || next == 200020 {
+        if chat.is_stop_token(next) {
             break;
         }
         let (next_out, _, _) = model.forward_tokens(
@@ -1013,6 +424,7 @@ pub(crate) fn run_gpu_warmup(
             false,
             false,
             LogitsFetchMode::FullLogits,
+            KvCacheMode::Append,
         )?;
         outcome = next_out;
     }
@@ -1025,274 +437,383 @@ pub(crate) fn run_gpu_warmup(
     Ok(())
 }
 
-pub(crate) fn generate_steered_reply_with_offset(
-    model: &mut Phi3Model,
+/// Runs a 5-prompt Steer-OFF greedy generation smoke test to validate RoPE pairing, YaRN
+/// scaling, explicit `head_dim`, tied embeddings, and chat template / BOS / EOS resolution.
+pub(crate) fn run_steer_off_smoke_test(
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
+    max_tokens: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const PROMPTS: [(&str, &str); 5] = [
+        (
+            "Capital",
+            "What is the capital of France? Answer in one short sentence.",
+        ),
+        (
+            "Arithmetic",
+            "What is 17 + 25? Answer with just the number.",
+        ),
+        (
+            "Boiling",
+            "What is the boiling point of water at sea level in Celsius?",
+        ),
+        ("Chemistry", "What is the chemical symbol for gold?"),
+        ("Astronomy", "Which planet is fourth from the Sun?"),
+    ];
+    println!(
+        "\n=== Step 0: Steer-OFF Greedy Generation Smoke Test (template={}, stops={:?}) ===",
+        chat.kind.label(),
+        chat.stop_token_ids
+    );
+    let max_gen = max_tokens.clamp(1, 64);
+    for (tag, prompt) in PROMPTS {
+        model.clear_cache();
+        let formatted = chat.format_single_turn(prompt);
+        let ids = tokenizer
+            .encode(formatted.as_str(), false)
+            .map_err(|e| format!("smoke encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let t0 = Instant::now();
+        let (mut outcome, _, _) = model.forward_tokens(
+            &ids,
+            0,
+            None,
+            false,
+            false,
+            LogitsFetchMode::FullLogits,
+            KvCacheMode::Append,
+        )?;
+        let mut gen_ids = Vec::with_capacity(max_gen);
+        let mut hit_eos = false;
+        for offset in (ids.len()..).take(max_gen) {
+            let next = match outcome {
+                LogitsOutcome::ObservedFull(ref logits) => argmax(logits),
+                LogitsOutcome::UnobservedDeviceArgmax(tok) => tok,
+                LogitsOutcome::SkippedIntermediate => break,
+            };
+            if chat.is_stop_token(next) {
+                hit_eos = true;
+                break;
+            }
+            gen_ids.push(next);
+            let (next_out, _, _) = model.forward_tokens(
+                &[next],
+                offset,
+                None,
+                false,
+                false,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::Append,
+            )?;
+            outcome = next_out;
+        }
+        let elapsed_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let reply = tokenizer
+            .decode(&gen_ids, true)
+            .map_err(|e| format!("smoke decode error: {e}"))?
+            .replace('\n', " ");
+        println!(
+            "  [Smoke:{tag:<10}] in_tok={} gen_tok={} eos={} ({:.1}ms) => {reply}",
+            ids.len(),
+            gen_ids.len(),
+            hit_eos,
+            elapsed_ms
+        );
+    }
+    model.clear_cache();
+    Ok(())
+}
+
+enum SteerPrefillInput<'a> {
+    Tokens(&'a [u32]),
+    Embeds(&'a Tensor),
+}
+
+fn generate_steered_reply_core(
+    model: &mut CausalLmModel,
+    tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
+    adapter: &mut ModelSteeringAdapter,
+    prefill: SteerPrefillInput<'_>,
+    start_offset: usize,
+    cfg: &mut SteerDecodeConfig<'_, '_, '_>,
+) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
+    let prompt_len = match prefill {
+        SteerPrefillInput::Tokens(ids) => ids.len(),
+        SteerPrefillInput::Embeds(embeds) => embeds.dims3()?.1,
+    };
+    let saved_layer_mask = cfg
+        .layer_steer_mask
+        .filter(|&m| m != adapter.geometry().layer_rope_mask)
+        .map(|m| {
+            let prev = adapter.geometry().layer_rope_mask;
+            adapter.set_layer_rope_mask(m);
+            prev
+        });
+
+    let result = (|| -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
+        let mut trail = lmnk_pointer_trail_t::default();
+        let mut steer = ForwardSteer {
+            adapter,
+            q7s: cfg.q7s,
+            persona_q7s: cfg.persona_q7s,
+            resonant_ctx: cfg.resonant_ctx,
+            rope_rad: cfg.rope_rad,
+            trail: &mut trail,
+            rank1: cfg.rank1,
+            horizon_mode: cfg.horizon_mode,
+            escalation_provider: cfg.escalation_provider.as_deref_mut(),
+            compute_dispatch: None,
+            layer_steer_mask: cfg.layer_steer_mask,
+            probe_frame: cfg.probe_frame,
+            phase_clamp_override: cfg.phase_clamp_override,
+            random_push_seed: cfg.random_push_seed,
+            steer_bypass_hits: 0,
+            steer_eligible_layers: 0,
+        };
+        let t_prefill = Instant::now();
+        steer.adapter.reset_turn_decode_state();
+        steer
+            .adapter
+            .set_max_observe_stride(cfg.logits_observe_stride.clamp(1, u8::MAX as usize) as u8);
+        steer
+            .adapter
+            .set_pre_bypass_enabled(cfg.use_steer && cfg.enable_pre_bypass);
+
+        let mut pending_outcome = match prefill {
+            SteerPrefillInput::Tokens(ids) => {
+                model
+                    .prefill_tokens_chunked(
+                        ids,
+                        start_offset,
+                        cfg.prefill_chunk_size.max(1),
+                        Some(&mut steer),
+                        None,
+                        cfg.use_steer,
+                        LogitsFetchMode::FullLogits,
+                    )?
+                    .0
+            }
+            SteerPrefillInput::Embeds(embeds) => {
+                model
+                    .forward_embeds(
+                        embeds,
+                        start_offset,
+                        Some(&mut steer),
+                        cfg.use_steer,
+                        false,
+                        LogitsFetchMode::FullLogits,
+                        KvCacheMode::Append,
+                    )?
+                    .0
+            }
+        };
+        let prefill_secs = t_prefill.elapsed().as_secs_f64();
+        if cfg.capture_first_logits
+            && let LogitsOutcome::ObservedFull(ref logits) = pending_outcome
+        {
+            cfg.first_prefill_logits = Some(logits.clone());
+        }
+
+        let max_gen_tokens = cfg.max_tokens.max(1);
+        let mut gen_ids = Vec::with_capacity(max_gen_tokens);
+        let mut rng_state = cfg.rng_seed.max(1);
+        let greedy = cfg.temperature <= 1e-6;
+        let mut entropy_sum = 0.0_f32;
+        let mut entropy_count = 0_u32;
+        let mut next_fetch_mode = LogitsFetchMode::FullLogits;
+
+        let t_dec = Instant::now();
+        for (step_idx, offset) in (start_offset + prompt_len..)
+            .take(max_gen_tokens)
+            .enumerate()
+        {
+            let next = match pending_outcome {
+                LogitsOutcome::ObservedFull(ref logits) => {
+                    sample_next_token(logits, cfg.temperature, &mut rng_state)
+                }
+                LogitsOutcome::UnobservedDeviceArgmax(tok_id) => tok_id,
+                LogitsOutcome::SkippedIntermediate => break,
+            };
+            if chat.is_stop_token(next) {
+                break;
+            }
+            gen_ids.push(next);
+
+            let t_tok = Instant::now();
+            let (next_outcome, _, _) = model.forward_tokens(
+                &[next],
+                offset,
+                Some(&mut steer),
+                cfg.use_steer,
+                false,
+                next_fetch_mode,
+                KvCacheMode::Append,
+            )?;
+            let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
+
+            let observed_entropy = match &next_outcome {
+                LogitsOutcome::ObservedFull(logits) => {
+                    let h = compute_top_k_logit_entropy(logits, 16);
+                    entropy_sum += h;
+                    entropy_count += 1;
+                    Some(h)
+                }
+                LogitsOutcome::UnobservedDeviceArgmax(_) | LogitsOutcome::SkippedIntermediate => {
+                    None
+                }
+            };
+
+            if cfg.use_steer {
+                let measured_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
+                if !matches!(cfg.pressure_sim, PressureSimMode::Off)
+                    && gen_ids.len() == 4
+                    && steer.adapter.compute_pool().baseline_pressure_q15 == 8192
+                {
+                    steer.adapter.reanchor_compute_pressure(measured_q15);
+                }
+                let base_p = steer.adapter.compute_pool().baseline_pressure_q15;
+                let pressure_q15 = match cfg.pressure_sim {
+                    PressureSimMode::Off => base_p,
+                    PressureSimMode::Elevated => {
+                        measured_q15.max(base_p.saturating_add(6144).min(32767))
+                    }
+                    PressureSimMode::Surge => {
+                        measured_q15.max(base_p.saturating_add(14336).min(32767))
+                    }
+                };
+                let pressure = SystemPressureReading {
+                    frame_time_pressure_q15: pressure_q15,
+                    bandwidth_pressure_q15: pressure_q15,
+                    l3_load_pressure_q15: pressure_q15 >> 1,
+                    irreversible_step: 0,
+                    _pad: 0,
+                };
+                let repulsion_active = ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
+                    || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
+
+                let decode_input = match observed_entropy {
+                    Some(h) => SpineDecodeInput::from_observed_entropy_f32(
+                        pressure,
+                        step_idx as u16,
+                        h,
+                        SPINE_SENTINEL_AUTO_U8,
+                        repulsion_active,
+                        greedy,
+                    ),
+                    None => SpineDecodeInput::unobserved(
+                        pressure,
+                        step_idx as u16,
+                        SPINE_SENTINEL_AUTO_U8,
+                        repulsion_active,
+                        greedy,
+                    ),
+                }
+                .with_pre_bypass(cfg.enable_pre_bypass);
+
+                let step_plan = steer.adapter.step_decode_control(&decode_input);
+                if (step_plan.veto_mask & SPINE_BYPASS_VETO_GUARD_ACTIVE) != 0 {
+                    cfg.spine_veto_guard_hits += 1;
+                }
+                if (step_plan.veto_mask & SPINE_BYPASS_VETO_REPULSION_ACTIVE) != 0 {
+                    cfg.spine_veto_repulse_hits += 1;
+                }
+                if (step_plan.veto_mask & SPINE_BYPASS_VETO_PINNED_LOCK) != 0 {
+                    cfg.spine_veto_pin_hits += 1;
+                }
+                steer.compute_dispatch = Some(step_plan.dispatch);
+                next_fetch_mode = match step_plan.next_observe_mode_enum() {
+                    SpineLogitsObserveMode::SkipToDeviceArgmax => LogitsFetchMode::DeviceArgmaxOnly,
+                    SpineLogitsObserveMode::ObserveFullLogits => LogitsFetchMode::FullLogits,
+                };
+            }
+            pending_outcome = next_outcome;
+        }
+        let decode_secs = t_dec.elapsed().as_secs_f64();
+        cfg.exit_entropy_h_tilde = if entropy_count > 0 {
+            entropy_sum / entropy_count as f32
+        } else {
+            steer.adapter.substrate().last_entropy_h_tilde
+        };
+        cfg.steer_bypass_hits += steer.steer_bypass_hits;
+        cfg.steer_eligible_layers += steer.steer_eligible_layers;
+        let text = tokenizer
+            .decode(&gen_ids, true)
+            .map_err(|e| format!("decode error: {e}"))?
+            .replace('\n', " ");
+        debug_assert_eq!(model.kv_len(), start_offset + prompt_len + gen_ids.len());
+        Ok((
+            text,
+            gen_ids,
+            ReplyTiming {
+                prefill_secs,
+                decode_secs,
+            },
+        ))
+    })();
+
+    if let Some(prev) = saved_layer_mask {
+        adapter.set_layer_rope_mask(prev);
+    }
+    result
+}
+
+pub(crate) fn generate_steered_reply_with_offset(
+    model: &mut CausalLmModel,
+    tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
     start_offset: usize,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
 ) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
-    let mut trail = lmnk_pointer_trail_t::default();
     let ids = tokenizer
         .encode(formatted_prompt, false)
         .map_err(|e| format!("encode error: {e}"))?
         .get_ids()
         .to_vec();
-
-    let mut steer = ForwardSteer {
+    let (text, gen_ids, timing) = generate_steered_reply_core(
+        model,
+        tokenizer,
+        chat,
         adapter,
-        q7s: cfg.q7s,
-        persona_q7s: cfg.persona_q7s,
-        resonant_ctx: cfg.resonant_ctx,
-        rope_rad: cfg.rope_rad,
-        trail: &mut trail,
-        rank1: cfg.rank1,
-        horizon_mode: cfg.horizon_mode,
-        escalation_provider: cfg.escalation_provider.as_deref_mut(),
-        compute_dispatch: None,
-        steer_bypass_hits: 0,
-        steer_eligible_layers: 0,
-    };
-    let t_prefill = Instant::now();
-    steer
-        .adapter
-        .runtime_context_mut()
-        .reset_turn_bypass_state();
-    steer.adapter.substrate_mut().last_entropy_h_tilde = 0.0;
-    let mut prefill_dispatch = steer.adapter.step_compute_dispatch_with_spine(
-        SystemPressureReading {
-            frame_time_pressure_q15: 8192,
-            bandwidth_pressure_q15: 8192,
-            l3_load_pressure_q15: 8192,
-            irreversible_step: 1,
-            _pad: 0,
-        },
-        false,
-    );
-    prefill_dispatch.whole_token_steering_bypass = 0;
-    steer.compute_dispatch = Some(prefill_dispatch);
-    let (mut pending_outcome, _, _) = model.forward_tokens(
-        &ids,
+        SteerPrefillInput::Tokens(&ids),
         start_offset,
-        Some(&mut steer),
-        cfg.use_steer,
-        false,
-        LogitsFetchMode::FullLogits,
+        cfg,
     )?;
-    steer
-        .adapter
-        .commit_compute_exit_reward(prefill_dispatch.execute_mask, 64);
-    let prefill_secs = t_prefill.elapsed().as_secs_f64();
-
-    const MAX_GEN_TOKENS: usize = 64;
-    let mut gen_ids = Vec::with_capacity(MAX_GEN_TOKENS);
-    let mut rng_state = cfg.rng_seed.max(1);
-    let mut entropy_sum = 0.0f32;
-    let mut entropy_count = 0u32;
-    let mut last_observed_entropy = match pending_outcome {
-        LogitsOutcome::ObservedFull(ref prefill_logits) => {
-            compute_top_k_logit_entropy(prefill_logits, 16)
-        }
-        LogitsOutcome::UnobservedDeviceArgmax(_) => 0.0_f32,
-    };
-    let mut gate = LogitsObserveStrideGate::new(cfg.logits_observe_stride);
-    let mut churn_tracker = LiminalDecodeChurnTracker::new();
-    churn_tracker.reset_prompt();
-
-    let t_dec = Instant::now();
-    for (step_idx, offset) in (start_offset + ids.len()..)
-        .take(MAX_GEN_TOKENS)
-        .enumerate()
-    {
-        let next = match pending_outcome {
-            LogitsOutcome::ObservedFull(ref logits) => {
-                sample_next_token(logits, cfg.temperature, &mut rng_state)
-            }
-            LogitsOutcome::UnobservedDeviceArgmax(tok_id) => tok_id,
-        };
-        if next == 199999 || next == 200020 {
-            gen_ids.push(next);
-            break;
-        }
-        gen_ids.push(next);
-        let tok_was_whole_bypass = cfg.use_steer
-            && steer
-                .compute_dispatch
-                .is_some_and(|d| d.whole_token_steering_bypass != 0);
-        churn_tracker.record_token(tok_was_whole_bypass);
-        if cfg.use_steer {
-            cfg.decode_tokens_total += 1;
-            if tok_was_whole_bypass {
-                cfg.whole_token_bypass_hits += 1;
-            }
-        }
-        let pre_sens_q7 = steer
-            .adapter
-            .last_lacuna_partition()
-            .boundary_sensitivity_q7;
-        let fetch_mode = gate.select_fetch_mode(
-            step_idx,
-            cfg.temperature,
-            tok_was_whole_bypass,
-            pre_sens_q7,
-            last_observed_entropy,
-        );
-        let t_tok = Instant::now();
-        let (next_outcome, _, _) = model.forward_tokens(
-            &[next],
-            offset,
-            Some(&mut steer),
-            cfg.use_steer,
-            false,
-            fetch_mode,
-        )?;
-        let tok_ms = t_tok.elapsed().as_secs_f64() * 1000.0;
-        let measured_q15 = ((tok_ms / 120.0).clamp(0.0, 1.0) * 32767.0) as u16;
-        if !matches!(cfg.pressure_sim, PressureSimMode::Off)
-            && gen_ids.len() == 4
-            && steer.adapter.compute_pool().baseline_pressure_q15 == 8192
-        {
-            steer
-                .adapter
-                .compute_pool_mut()
-                .reanchor_baseline_pressure(measured_q15);
-        }
-        let base_p = steer.adapter.compute_pool().baseline_pressure_q15;
-        let pressure_q15 = match cfg.pressure_sim {
-            PressureSimMode::Off => base_p,
-            PressureSimMode::Elevated => measured_q15.max(base_p.saturating_add(6144).min(32767)),
-            PressureSimMode::Surge => measured_q15.max(base_p.saturating_add(14336).min(32767)),
-        };
-        let repulsion_active = ((steer.trail.flags & TRAIL_FLAG_REPULSION_ACTIVE) != 0)
-            || ((((steer.trail.current_ptr >> 48) as u8) & ACTION_MODE_PHASE_REPULSE) != 0);
-        let sens_q7 = steer
-            .adapter
-            .last_lacuna_partition()
-            .boundary_sensitivity_q7;
-
-        let entropy_surge = match update_observed_entropy_stats(
-            &next_outcome,
-            &mut entropy_sum,
-            &mut entropy_count,
-            &mut last_observed_entropy,
-        ) {
-            Some(logit_entropy) => {
-                gate.record_observed();
-                if tok_was_whole_bypass {
-                    steer.adapter.substrate_mut().last_entropy_h_tilde = logit_entropy;
-                }
-                let exit_entropy_q7 =
-                    ((logit_entropy - 0.15).max(0.0) * 127.0).clamp(0.0, 127.0) as u8;
-                let guard_prox_q7 = if repulsion_active { 88 } else { sens_q7 >> 2 };
-                let active_overdrive = repulsion_active && steer.adapter.ego_state().is_active();
-                steer.adapter.step_distortion_tension_hot_path(
-                    exit_entropy_q7,
-                    guard_prox_q7,
-                    active_overdrive,
-                );
-                let surge = logit_entropy > 0.85;
-                if surge {
-                    steer.adapter.signal_compute_instability();
-                    cfg.instability_recoveries += 1;
-                }
-                surge
-            }
-            None => {
-                // `Lacuna::Unobserved`: skip logits observation strictly without polluting
-                // `entropy_sum`, `entropy_count`, or distortion tension statistics.
-                gate.record_unobserved_skip();
-                cfg.logits_skips += 1;
-                false
-            }
-        };
-
-        let liminal_stationary = u8::from(last_observed_entropy < 0.78 && sens_q7 < 80);
-        if cfg.use_steer
-            && cfg.enable_pre_bypass
-            && steer.adapter.evaluate_transient_guard_relaxation(
-                last_observed_entropy,
-                liminal_stationary,
-                repulsion_active,
-                entropy_surge,
-                2,
-            )
-        {
-            cfg.guard_relaxations += 1;
-        }
-
-        let mut tok_dispatch = steer.adapter.step_compute_dispatch_with_spine(
-            SystemPressureReading {
-                frame_time_pressure_q15: pressure_q15,
-                bandwidth_pressure_q15: pressure_q15,
-                l3_load_pressure_q15: pressure_q15 >> 1,
-                irreversible_step: 0,
-                _pad: 0,
-            },
-            repulsion_active,
-        );
-        if cfg.use_steer && cfg.enable_pre_bypass {
-            let ego_active_boundary = steer.adapter.ego_state().is_active() && sens_q7 >= 80;
-            let obs = TokenBypassObservation {
-                irreversible_step: 0,
-                liminal_stationary,
-                boundary_sensitivity_q7: sens_q7,
-                repulsion_active: u8::from(repulsion_active),
-                exit_entropy_rising: u8::from(entropy_surge),
-                ego_active_boundary: u8::from(ego_active_boundary),
-                min_calm_dwell: 2,
-                _pad: 0,
-            };
-            let veto_mask = steer
-                .adapter
-                .evaluate_whole_token_bypass_with_spine(obs, &mut tok_dispatch);
-            if (veto_mask & SPINE_BYPASS_VETO_GUARD_ACTIVE) != 0 {
-                cfg.spine_veto_guard_hits += 1;
-            }
-            if (veto_mask & SPINE_BYPASS_VETO_REPULSION_ACTIVE) != 0 {
-                cfg.spine_veto_repulse_hits += 1;
-            }
-            if (veto_mask & SPINE_BYPASS_VETO_PINNED_LOCK) != 0 {
-                cfg.spine_veto_pin_hits += 1;
-            }
-        } else {
-            tok_dispatch.whole_token_steering_bypass = 0;
-        }
-        let exit_reward = if last_observed_entropy < 0.55 { 56 } else { 96 };
-        steer
-            .adapter
-            .commit_compute_exit_reward(tok_dispatch.execute_mask, exit_reward);
-        steer.compute_dispatch = Some(tok_dispatch);
-        pending_outcome = next_outcome;
-    }
-    let decode_secs = t_dec.elapsed().as_secs_f64();
-    if entropy_count > 0 {
-        steer.adapter.substrate_mut().last_entropy_h_tilde = entropy_sum / entropy_count as f32;
-    }
-    cfg.steer_bypass_hits += steer.steer_bypass_hits;
-    cfg.steer_eligible_layers += steer.steer_eligible_layers;
-    cfg.abstract_tokens += churn_tracker.abstract_tokens;
-    cfg.concrete_tokens += churn_tracker.concrete_tokens;
-    cfg.boundary_churn_transitions += churn_tracker.boundary_churn_transitions;
-    let text = tokenizer
-        .decode(&gen_ids, true)
-        .map_err(|e| format!("decode error: {e}"))?
-        .replace('\n', " ");
     let mut all_ids = ids;
     all_ids.extend_from_slice(&gen_ids);
-    Ok((
-        text,
-        all_ids,
-        ReplyTiming {
-            prefill_secs,
-            decode_secs,
-        },
-    ))
+    Ok((text, all_ids, timing))
+}
+
+/// Prefills pre-built multimodal `inputs_embeds` (`[1, prompt_len, hidden]`) at `start_offset`
+/// and runs greedy/steered token decode with full `SystemSpineState` decode control parity.
+pub(crate) fn generate_steered_reply_from_embeds_with_offset(
+    model: &mut CausalLmModel,
+    tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
+    adapter: &mut ModelSteeringAdapter,
+    inputs_embeds: &Tensor,
+    start_offset: usize,
+    cfg: &mut SteerDecodeConfig<'_, '_, '_>,
+) -> Result<(String, Vec<u32>, ReplyTiming), Box<dyn std::error::Error>> {
+    generate_steered_reply_core(
+        model,
+        tokenizer,
+        chat,
+        adapter,
+        SteerPrefillInput::Embeds(inputs_embeds),
+        start_offset,
+        cfg,
+    )
 }
 
 pub(crate) fn generate_steered_reply(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
+    chat: &ChatTemplate,
     adapter: &mut ModelSteeringAdapter,
     formatted_prompt: &str,
     cfg: &mut SteerDecodeConfig<'_, '_, '_>,
@@ -1303,14 +824,21 @@ pub(crate) fn generate_steered_reply(
         .map_err(|e| format!("encode error: {e}"))?
         .get_ids()
         .len();
-    let (text, all_ids, timing) =
-        generate_steered_reply_with_offset(model, tokenizer, adapter, formatted_prompt, 0, cfg)?;
+    let (text, all_ids, timing) = generate_steered_reply_with_offset(
+        model,
+        tokenizer,
+        chat,
+        adapter,
+        formatted_prompt,
+        0,
+        cfg,
+    )?;
     let gen_tokens = all_ids.len().saturating_sub(prompt_ids_len);
     Ok((text, prompt_ids_len, gen_tokens, timing))
 }
 
 pub(crate) fn critique_generated_draft(
-    model: &mut Phi3Model,
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
     adapter: &ModelSteeringAdapter,
     compiled: &CompiledTokenCorpus,
@@ -1330,7 +858,6 @@ pub(crate) fn critique_generated_draft(
     if draft_ids.is_empty() {
         return Ok(None);
     }
-    model.clear_cache();
     let (_, draft_tok_qs, _) = model.forward_tokens(
         &draft_ids,
         0,
@@ -1338,6 +865,7 @@ pub(crate) fn critique_generated_draft(
         false,
         true,
         LogitsFetchMode::FullLogits,
+        KvCacheMode::IsolatedProbe,
     )?;
     let draft_recall = compiled.recall_token_sequence(adapter, &draft_tok_qs, draft_ids.len())?;
     let draft_snap = TrajectoryManifoldSnapshot::from_recall(&draft_recall);
@@ -1399,17 +927,19 @@ mod tests {
     #[test]
     fn semantic_forbid_hits_handles_multibyte_utf8_at_slice_boundaries() {
         let forb = vec!["PyTorch".to_string(), "LoRA".to_string()];
-        // Place multibyte UTF-8 characters (`—` 3B, `’` 3B, Japanese 3B) right across the -96 prefix
-        // and +28 suffix byte offsets around forbidden keywords so raw byte offsets fall mid-char.
-        let prefix_pad = format!("{}—{}", "あ".repeat(31), "x");
-        let neg_reply = format!("{prefix_pad} does not use PyTorch’—あweights or LoRA—’あend.");
+        // Place multibyte UTF-8 characters (`\u{2014}` 3B, `\u{2019}` 3B, `\u{3042}` 3B) across
+        // the -96 prefix and +28 suffix byte offsets so raw byte offsets fall mid-char.
+        let prefix_pad = format!("{}\u{2014}{}", "\u{3042}".repeat(31), "x");
+        let neg_reply = format!(
+            "{prefix_pad} does not use PyTorch\u{2019}\u{2014}\u{3042}weights or LoRA\u{2014}\u{2019}\u{3042}end."
+        );
         assert_eq!(count_semantic_forbid_hits(&neg_reply, &forb), (2, 0));
 
         let aff_reply = format!(
-            "{}’—PyTorch’—{} and {}—’LoRA—あ",
-            "あ".repeat(31),
+            "{}\u{2019}\u{2014}PyTorch\u{2019}\u{2014}{} and {}\u{2014}\u{2019}LoRA\u{2014}\u{3042}",
+            "\u{3042}".repeat(31),
             "z".repeat(25),
-            "あ".repeat(33)
+            "\u{3042}".repeat(33)
         );
         assert_eq!(count_semantic_forbid_hits(&aff_reply, &forb), (2, 2));
     }
@@ -1432,8 +962,7 @@ mod tests {
     }
 
     #[test]
-    fn logits_observe_stride_gate_tightens_monotonically_from_8_to_2_and_observes_every_token_by_default(
-    ) {
+    fn cli_spine_and_probe_frame_parsers_enforce_defaults_and_bounds() {
         assert_eq!(parse_logits_observe_stride(["candle_eval"]), 1);
         assert_eq!(
             parse_logits_observe_stride(["candle_eval", "--logits-observe-stride=0"]),
@@ -1459,105 +988,99 @@ mod tests {
             parse_guard_hold_tokens(["candle_eval", "--guard-hold-tokens=12"]),
             12
         );
-
-        let mut prev_stride = usize::MAX;
-        for &(sens_q7, entropy) in &[(0u8, 0.0f32), (24, 0.25), (48, 0.50), (64, 0.78)] {
-            let stride = LogitsObserveStrideGate::compute_effective_stride(8, sens_q7, entropy);
-            assert!((2..=8).contains(&stride));
-            assert!(stride <= prev_stride);
-            prev_stride = stride;
-        }
         assert_eq!(
-            LogitsObserveStrideGate::compute_effective_stride(8, 0, 0.0),
-            8
+            parse_probe_frame(["candle_eval"]),
+            ProbeCoordinateFrame::PreRope
         );
         assert_eq!(
-            LogitsObserveStrideGate::compute_effective_stride(8, 126, 0.78),
-            2
+            parse_probe_frame(["candle_eval", "--probe-frame=pre-rope"]),
+            ProbeCoordinateFrame::PreRope
         );
         assert_eq!(
-            LogitsObserveStrideGate::compute_effective_stride(1, 0, 0.0),
-            1
+            parse_probe_frame(["candle_eval", "--probe-frame=post-rope"]),
+            ProbeCoordinateFrame::PostRope
         );
 
-        let clamped_gate = LogitsObserveStrideGate::new(0);
+        assert_eq!(parse_layer_mask_spec(["candle_eval"]), None);
         assert_eq!(
-            clamped_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
-            LogitsFetchMode::FullLogits
-        );
-        let default_gate = LogitsObserveStrideGate::new(1);
-        assert_eq!(
-            default_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
-            LogitsFetchMode::FullLogits
-        );
-
-        let active_gate = LogitsObserveStrideGate::new(8);
-        assert_eq!(
-            active_gate.select_fetch_mode(1, 0.7, true, 0, 0.0),
-            LogitsFetchMode::FullLogits
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=auto"]),
+            Some(LayerMaskSpec::Auto)
         );
         assert_eq!(
-            active_gate.select_fetch_mode(0, 0.0, true, 0, 0.0),
-            LogitsFetchMode::FullLogits
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=auto"]).map(|s| (
+                s.is_auto(),
+                s.resolve(32),
+                s.resolve(26)
+            )),
+            Some((true, 0xFFFF_0000, 0x03FF_E000))
         );
         assert_eq!(
-            active_gate.select_fetch_mode(1, 0.0, false, 0, 0.0),
-            LogitsFetchMode::FullLogits
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=top-half"])
+                .map(|s| (s.resolve(32), s.resolve(26))),
+            Some((0xFFFF_0000, 0x03FF_E000))
         );
         assert_eq!(
-            active_gate.select_fetch_mode(1, 0.0, true, 0, 0.0),
-            LogitsFetchMode::DeviceArgmaxOnly
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=top16"]).map(|s| s.resolve(32)),
+            Some(0xFFFF_0000)
         );
-    }
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=top16"]).map(|s| s.resolve(26)),
+            Some(0x03FF_0000)
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=mid12"]).map(|s| s.resolve(32)),
+            Some(0x003F_FC00)
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=mid16"]).map(|s| s.resolve(32)),
+            Some(0x03FF_FC00)
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=upper-mid12"])
+                .map(|s| s.resolve(32)),
+            Some(0x0FFF_0000)
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=all"])
+                .map(|s| (s.resolve(32), s.resolve(26))),
+            Some((0xFFFF_FFFF, 0x03FF_FFFF))
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=0x00FF_0000"])
+                .map(|s| s.resolve(32)),
+            Some(0x00FF_0000)
+        );
+        assert_eq!(
+            parse_layer_mask_spec(["candle_eval", "--layer-mask=0x0"]),
+            None
+        );
 
-    #[test]
-    fn unobserved_logits_skips_preserve_observed_mean_entropy_purity() {
-        let sharp = vec![12.0_f32, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let warm = vec![2.5_f32, 2.0, 1.8, 1.5, 0.2, 0.1];
-        let h1 = compute_top_k_logit_entropy(&sharp, 16);
-        let h2 = compute_top_k_logit_entropy(&warm, 16);
+        assert_eq!(parse_phase_clamp_rad(["candle_eval"]), None);
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=0.14"]),
+            Some(0.14)
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=0.0"]),
+            None
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=-0.1"]),
+            None
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=2.5"]),
+            None
+        );
+        assert_eq!(
+            parse_phase_clamp_rad(["candle_eval", "--phase-clamp-rad=NaN"]),
+            None
+        );
 
-        let mut entropy_sum = 0.0f32;
-        let mut entropy_count = 0u32;
-        let mut last_obs = 0.0f32;
-        let mut gate = LogitsObserveStrideGate::new(4);
-
-        let o1 = LogitsOutcome::ObservedFull(sharp);
-        assert!(update_observed_entropy_stats(
-            &o1,
-            &mut entropy_sum,
-            &mut entropy_count,
-            &mut last_obs
-        )
-        .is_some());
-        gate.record_observed();
-
-        let skip = LogitsOutcome::UnobservedDeviceArgmax(42);
-        assert!(update_observed_entropy_stats(
-            &skip,
-            &mut entropy_sum,
-            &mut entropy_count,
-            &mut last_obs
-        )
-        .is_none());
-        gate.record_unobserved_skip();
-        gate.record_unobserved_skip();
-
-        let o2 = LogitsOutcome::ObservedFull(warm);
-        assert!(update_observed_entropy_stats(
-            &o2,
-            &mut entropy_sum,
-            &mut entropy_count,
-            &mut last_obs
-        )
-        .is_some());
-        gate.record_observed();
-
-        assert_eq!(entropy_count, 2);
-        assert_eq!(gate.logits_skips, 2);
-        assert_eq!(gate.unobserved_bypass_run, 0);
-        assert!(((entropy_sum / entropy_count as f32) - ((h1 + h2) * 0.5)).abs() < 1e-6);
-        assert!((last_obs - h2).abs() < 1e-6);
+        assert_eq!(parse_max_tokens(["candle_eval"]), DEFAULT_MAX_GEN_TOKENS);
+        assert_eq!(parse_max_tokens(["candle_eval", "--max-tokens=0"]), 1);
+        assert_eq!(parse_max_tokens(["candle_eval", "--max-tokens=128"]), 128);
+        assert_eq!(parse_max_tokens(["candle_eval", "--max-tokens=9999"]), 512);
     }
 
     #[test]
@@ -1584,46 +1107,5 @@ mod tests {
             extract_device_argmax_token(&t_bf16).expect("bf16 argmax"),
             argmax(&bf16_cpu)
         );
-    }
-
-    #[test]
-    fn decode_churn_tracker_records_zero_flips_on_constant_concrete_sequence() {
-        let mut tracker = LiminalDecodeChurnTracker::new();
-        for _ in 0..8 {
-            tracker.record_token(false);
-        }
-        assert_eq!(tracker.abstract_tokens, 0);
-        assert_eq!(tracker.concrete_tokens, 8);
-        assert_eq!(tracker.total_tokens(), 8);
-        assert_eq!(tracker.boundary_churn_transitions, 0);
-    }
-
-    #[test]
-    fn decode_churn_tracker_counts_alternating_bypass_and_concrete_transitions() {
-        let mut tracker = LiminalDecodeChurnTracker::new();
-        for &is_bypass in &[false, true, true, false, true, false] {
-            tracker.record_token(is_bypass);
-        }
-        assert_eq!(tracker.abstract_tokens, 3);
-        assert_eq!(tracker.concrete_tokens, 3);
-        assert_eq!(tracker.total_tokens(), 6);
-        assert_eq!(tracker.boundary_churn_transitions, 4);
-    }
-
-    #[test]
-    fn decode_churn_tracker_resets_between_prompts_without_false_cross_prompt_flip() {
-        let mut tracker = LiminalDecodeChurnTracker::new();
-        tracker.record_token(false);
-        tracker.record_token(true);
-        assert_eq!(tracker.boundary_churn_transitions, 1);
-
-        // Prompt 2 starts in concrete mode after prompt 1 ended in abstract bypass.
-        tracker.reset_prompt();
-        tracker.record_token(false);
-        tracker.record_token(false);
-        assert_eq!(tracker.abstract_tokens, 1);
-        assert_eq!(tracker.concrete_tokens, 3);
-        assert_eq!(tracker.total_tokens(), 4);
-        assert_eq!(tracker.boundary_churn_transitions, 1);
     }
 }

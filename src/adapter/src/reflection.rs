@@ -9,13 +9,14 @@
 //! manifold drift (`Liminal`), liminal ambiguity, or out-of-domain hallucination, and are strictly
 //! bounded by [`ReflectionPolicy::max_retries`].
 
-use crate::{DynamicAttractorRecall, LacunaBoundaryState, RecallPolicy};
-use liminika_core::drivers::{LiminalEgoState, EGO_TRIGGER_LIMINAL_EXTERIOR};
+use crate::corpus_recall::AttractorRecallProjection;
+use crate::{DynamicAttractorRecall, LacunaBoundaryState, OwnedAttractorRecall, RecallPolicy};
+use liminika_core::drivers::{EGO_TRIGGER_LIMINAL_EXTERIOR, LiminalEgoState};
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
 use liminika_core::runtime::{
-    AdaptiveThresholdPolicy, CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame,
-    GuardPhaseAnchor, ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
-    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    AdaptiveThresholdPolicy, CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT,
+    CausalProvenanceSignal, CognitiveCircuitThresholdPolicy, GatewayFrame, GuardPhaseAnchor,
+    ManifoldGatewaySignal, ObjectiveFact, SystemConstraint,
 };
 use liminika_core::stigmergy::{
     CognitiveCircuitActivation, CognitiveOpKind, CognitiveStepOp, CognitiveTrajectoryLedger,
@@ -112,6 +113,11 @@ pub struct TrajectoryManifoldSnapshot {
     pub top_fact_anchor: Option<u32>,
     /// Last-layer 64-head Q7 signature of `top_fact_anchor`, or zeros if unavailable.
     pub top_fact_q7: [i8; MAX_ATTENTION_HEADS],
+    /// Last-layer 64-head Q7 signature of the strongest observed Guard attractor, if any.
+    ///
+    /// Remains `None` when no repulsive Guard attractor has been observed so corrective reflection
+    /// leaves repulsive poles unobserved (zero-aperture) rather than borrowing attractive phases.
+    pub top_guard_q7: Option<[i8; MAX_ATTENTION_HEADS]>,
     /// Ordered list of recalled Fact anchor IDs.
     pub recalled_fact_anchors: Vec<u32>,
     /// Ordered `(anchor_id, last_layer_q7)` pairs for all recalled Fact basins in this trajectory.
@@ -125,46 +131,57 @@ pub struct TrajectoryManifoldSnapshot {
 }
 
 impl TrajectoryManifoldSnapshot {
-    /// Captures an owned manifold snapshot from a borrowed [`DynamicAttractorRecall`].
-    #[must_use]
-    pub fn from_recall(recall: &DynamicAttractorRecall<'_>) -> Self {
-        let top_entry = recall.recalled_facts.first().map(|(e, _)| *e);
+    fn from_projection<R: AttractorRecallProjection + ?Sized>(recall: &R) -> Self {
+        let top_entry = recall.recalled_fact_at(0);
         let top_fact_anchor = top_entry.map(|e| e.anchor_id);
         let top_fact_q7 = top_entry
             .and_then(|e| e.per_layer_q7.last().copied())
             .unwrap_or([0_i8; MAX_ATTENTION_HEADS]);
-        let recalled_fact_anchors = recall
-            .recalled_facts
-            .iter()
-            .map(|(e, _)| e.anchor_id)
-            .collect();
-        let recalled_fact_q7s = recall
-            .recalled_facts
-            .iter()
-            .map(|(e, _)| {
-                (
+        let top_guard_q7 = recall
+            .top_guard_ref()
+            .and_then(|e| e.per_layer_q7.last().copied());
+        let n_facts = recall.recalled_fact_len();
+        let mut recalled_fact_anchors = Vec::with_capacity(n_facts);
+        let mut recalled_fact_q7s = Vec::with_capacity(n_facts);
+        for i in 0..n_facts {
+            if let Some(e) = recall.recalled_fact_at(i) {
+                recalled_fact_anchors.push(e.anchor_id);
+                recalled_fact_q7s.push((
                     e.anchor_id,
                     e.per_layer_q7
                         .last()
                         .copied()
                         .unwrap_or([0_i8; MAX_ATTENTION_HEADS]),
-                )
-            })
-            .collect();
+                ));
+            }
+        }
         Self {
-            lacuna_state: recall.lacuna_state,
-            top1_fact_score: recall.top1_fact_score,
-            top2_fact_score: recall.top2_fact_score,
-            top1_persona_score: recall.top1_persona_score,
-            guard_conflict_margin: recall.guard_conflict_margin,
+            lacuna_state: recall.lacuna_state(),
+            top1_fact_score: recall.top1_fact_score(),
+            top2_fact_score: recall.top2_fact_score(),
+            top1_persona_score: recall.top1_persona_score(),
+            guard_conflict_margin: recall.guard_conflict_margin(),
             top_fact_anchor,
             top_fact_q7,
+            top_guard_q7,
             recalled_fact_anchors,
             recalled_fact_q7s,
-            action_decision: recall.action_decision,
-            gateway_frame: recall.gateway_frame,
-            cognitive_trajectory: recall.telemetry.cognitive_trajectory,
+            action_decision: recall.action_decision(),
+            gateway_frame: *recall.gateway_frame(),
+            cognitive_trajectory: recall.telemetry().cognitive_trajectory,
         }
+    }
+
+    /// Captures an owned manifold snapshot from a borrowed [`DynamicAttractorRecall`].
+    #[must_use]
+    pub fn from_recall(recall: &DynamicAttractorRecall<'_>) -> Self {
+        Self::from_projection(recall)
+    }
+
+    /// Captures an owned manifold snapshot from an [`OwnedAttractorRecall`].
+    #[must_use]
+    pub fn from_owned_recall(recall: &OwnedAttractorRecall) -> Self {
+        Self::from_projection(recall)
     }
 
     /// Returns query Fact anchor IDs that were omitted from `draft.recalled_fact_anchors`.
@@ -211,7 +228,8 @@ impl ReflectionCritique {
                     "Answer strictly from verified context and avoid false premises.".to_string()
                 } else {
                     format!(
-                        "Carefully audit this draft for false premises or contradictions ({compact_draft}) and re-answer strictly from verified facts."
+                        "Carefully audit this draft for false premises or contradictions ({compact_draft}) \
+                         and re-answer strictly from verified facts."
                     )
                 }
             }
@@ -221,7 +239,8 @@ impl ReflectionCritique {
                         .to_string()
                 } else {
                     format!(
-                        "The draft ({compact_draft}) drifted or omitted key grounded details. Re-examine the question and cover all grounded context points concisely."
+                        "The draft ({compact_draft}) drifted or omitted key grounded details. Re-examine t\
+                         he question and cover all grounded context points concisely."
                     )
                 }
             }
@@ -271,7 +290,7 @@ pub trait AttractorTrajectoryEvaluator {
     /// Evaluates `draft` relative to `query` while respecting active Core Layer 2 Ego
     /// boundary-transgression intent (`LiminalEgoState`).
     ///
-    /// When `ego` is actively exploring beyond `Liminal` horizons (`transgression_bias_q7 >= 24` or
+    /// When `ego` is actively exploring beyond `Liminal` horizons (`boundary_crossing_q7 >= 24` or
     /// `EGO_TRIGGER_LIMINAL_EXTERIOR` fired) and the draft introduces no Guard conflict, controlled
     /// `BoundaryAmbiguity` / mild `LacunaDrift` excursions are accepted as intentional exploration
     /// (`ReflectionTriggerKind::Converged`) rather than penalized as accidental drift, while
@@ -286,7 +305,7 @@ pub trait AttractorTrajectoryEvaluator {
     ) -> ReflectionCritique {
         let mut critique = self.assess_trajectory(query, draft, recall_policy, policy);
         let ego_exploring = ego.is_active()
-            && (ego.transgression_bias_q7 >= 24
+            && (ego.boundary_crossing_q7 >= 24
                 || (ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0);
         let no_guard_conflict = draft.guard_conflict_margin <= policy.guard_trigger_margin;
         let controlled_excursion =
@@ -294,7 +313,7 @@ pub trait AttractorTrajectoryEvaluator {
                 critique.trigger,
                 ReflectionTriggerKind::BoundaryAmbiguity | ReflectionTriggerKind::LacunaDrift
             ) && (!matches!(draft.lacuna_state, LacunaBoundaryState::LiminalExterior)
-                || ego.transgression_bias_q7 >= 36
+                || ego.boundary_crossing_q7 >= 36
                 || (ego.last_intervened_mask & EGO_TRIGGER_LIMINAL_EXTERIOR) != 0);
 
         if ego_exploring && no_guard_conflict && controlled_excursion {
@@ -372,6 +391,8 @@ pub struct ReflectionGateInput {
     pub boundary_sensitivity_q7: u8,
     /// True when the query contains an undigested Known Unknown ($O \setminus S$) exterior pointer.
     pub has_undigested_known_unknown: bool,
+    /// True when Layer 2 soft-caution Guard (`0 < margin <= hard_margin`) requests contextual audit.
+    pub is_soft_guard_caution: bool,
     /// Exit `EntropyController` / top-k entropy (`0.0..=1.0`).
     pub exit_entropy_h_tilde: f32,
     /// Guard conflict margin (`max_guard_score - top1_fact_score`).
@@ -391,6 +412,7 @@ impl Default for ReflectionGateInput {
         Self {
             boundary_sensitivity_q7: 0,
             has_undigested_known_unknown: false,
+            is_soft_guard_caution: false,
             exit_entropy_h_tilde: 0.0,
             guard_conflict_margin: -0.25,
             is_unobserved_lacuna: false,
@@ -413,6 +435,7 @@ impl ManifoldReflectionEvaluator {
     #[must_use]
     pub fn should_trigger_reflection(&self, input: &ReflectionGateInput) -> bool {
         if input.is_unobserved_lacuna
+            && !input.is_soft_guard_caution
             && input.guard_conflict_margin <= input.guard_trigger_margin
             && input.exit_entropy_h_tilde < input.entropy_trigger_thresh
         {
@@ -420,6 +443,7 @@ impl ManifoldReflectionEvaluator {
         }
         input.boundary_sensitivity_q7 >= input.min_boundary_sensitivity_q7
             || input.has_undigested_known_unknown
+            || input.is_soft_guard_caution
             || input.exit_entropy_h_tilde >= input.entropy_trigger_thresh
             || input.guard_conflict_margin > input.guard_trigger_margin
     }
@@ -452,9 +476,14 @@ impl ManifoldReflectionEvaluator {
     ) -> GatewayFrame {
         match trigger {
             ReflectionTriggerKind::GuardAttraction => {
-                let obstruction = (draft.guard_conflict_margin + 0.5).clamp(0.55, 1.0);
-                GuardPhaseAnchor::new(query.top_fact_q7, obstruction, 0.4)
-                    .synthesize_gateway_frame()
+                if let Some(guard_q7) = draft.top_guard_q7.or(query.top_guard_q7) {
+                    let obstruction = (draft.guard_conflict_margin + 0.5).clamp(0.55, 1.0);
+                    GuardPhaseAnchor::new(guard_q7, obstruction, 0.4).synthesize_gateway_frame()
+                } else {
+                    // No repulsive target phase was observed: emit a zero-aperture frame rather
+                    // than repurposing an attractive `top_fact_q7` pole for repulsion.
+                    GatewayFrame::default()
+                }
             }
             ReflectionTriggerKind::LacunaDrift | ReflectionTriggerKind::BoundaryAmbiguity => {
                 let missing_ids = query.missing_coalition_anchors(draft);
@@ -771,6 +800,7 @@ mod tests {
             guard_conflict_margin: guard_margin,
             top_fact_anchor: anchors.first().copied(),
             top_fact_q7: [4_i8; MAX_ATTENTION_HEADS],
+            top_guard_q7: None,
             recalled_fact_anchors: anchors,
             recalled_fact_q7s,
             action_decision: StigmergicActionDecision::PassiveSidecar,
@@ -1071,7 +1101,7 @@ mod tests {
         let ego = LiminalEgoState::from_intent_axes(
             &EgoIntentAxes::new()
                 .with_autonomy_q7(80)
-                .with_transgression_q7(72),
+                .with_boundary_crossing_q7(72),
         );
 
         let query = make_snapshot(
@@ -1185,5 +1215,64 @@ mod tests {
             ..calm
         };
         assert!(eval.should_trigger_reflection(&guard_trap));
+    }
+
+    #[test]
+    fn reflection_guard_attraction_uses_observed_guard_antiphase_and_zero_aperture_when_unobserved()
+    {
+        let eval = ManifoldReflectionEvaluator;
+        let recall_policy = RecallPolicy::default();
+        let policy = ReflectionPolicy::default();
+
+        let mut query = make_snapshot(LacunaBoundaryState::InsideBasin, 0.72, 0.40, -0.25, vec![1]);
+        query.top_fact_q7 = [42_i8; MAX_ATTENTION_HEADS];
+        query.top_guard_q7 = None;
+
+        // 1. Unobserved guard pole -> zero-aperture GatewayFrame::default() without borrowing top_fact_q7.
+        let mut draft_unobserved =
+            make_snapshot(LacunaBoundaryState::InsideBasin, 0.45, 0.35, 0.20, vec![1]);
+        draft_unobserved.top_guard_q7 = None;
+        let crit_unobs = eval.assess_trajectory(&query, &draft_unobserved, &recall_policy, &policy);
+        assert_eq!(crit_unobs.trigger, ReflectionTriggerKind::GuardAttraction);
+        assert_eq!(crit_unobs.gateway_frame, GatewayFrame::default());
+        assert_eq!(
+            crit_unobs.gateway_frame.phase_deltas,
+            [0_i8; MAX_ATTENTION_HEADS]
+        );
+        assert!(!crit_unobs.gateway_frame.is_repulsed());
+        assert_eq!(crit_unobs.gateway_frame.effective_energy, 0.0);
+
+        // 2. Observed guard pole (including i8::MIN saturation) -> saturating anti-phase `-guard`.
+        let mut guard_pole = [0_i8; MAX_ATTENTION_HEADS];
+        guard_pole[0] = 35;
+        guard_pole[1] = -28;
+        guard_pole[2] = i8::MIN;
+        let mut draft_observed = draft_unobserved.clone();
+        draft_observed.top_guard_q7 = Some(guard_pole);
+        let crit_obs = eval.assess_trajectory(&query, &draft_observed, &recall_policy, &policy);
+        assert_eq!(crit_obs.trigger, ReflectionTriggerKind::GuardAttraction);
+        assert!(crit_obs.gateway_frame.is_repulsed());
+        let mut expected_anti = [0_i8; MAX_ATTENTION_HEADS];
+        expected_anti[0] = -35;
+        expected_anti[1] = 28;
+        expected_anti[2] = 127;
+        assert_eq!(crit_obs.gateway_frame.phase_deltas, expected_anti);
+        assert_ne!(crit_obs.gateway_frame.phase_deltas[0], -42);
+
+        // 3. Query-side observed guard pole is used when draft did not carry one.
+        let mut query_with_guard = query;
+        query_with_guard.top_guard_q7 = Some(guard_pole);
+        let crit_query_guard = eval.assess_trajectory(
+            &query_with_guard,
+            &draft_unobserved,
+            &recall_policy,
+            &policy,
+        );
+        assert_eq!(
+            crit_query_guard.trigger,
+            ReflectionTriggerKind::GuardAttraction
+        );
+        assert!(crit_query_guard.gateway_frame.is_repulsed());
+        assert_eq!(crit_query_guard.gateway_frame.phase_deltas, expected_anti);
     }
 }

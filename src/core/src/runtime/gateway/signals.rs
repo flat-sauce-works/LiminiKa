@@ -8,21 +8,21 @@
 use super::*;
 use crate::drivers::EntropyState;
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_inv_pos_f32,
-    branchless_is_finite_f32, branchless_max_f32, branchless_relu_f32, fast_inv_pos_normal_f32,
-    load_q7_words_64, Pod, RawPhaseProjectable, TaggedPtr, DEFAULT_PHASE_STEP_MIN_RAD,
+    DEFAULT_PHASE_STEP_MIN_RAD, Pod, RawPhaseProjectable, TaggedPtr, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32,
+    branchless_max_f32, branchless_relu_f32, fast_inv_pos_normal_f32, load_q7_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, branchless_select_u32, branchless_select_u8,
-    PhaseQ7, RuntimeConfig, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig,
     THRESHOLD_CAUSAL_PROVENANCE, THRESHOLD_CONTRADICTION_GUARD, THRESHOLD_OBJECTIVE_FACT,
-    THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT,
+    THRESHOLD_SUBJECTIVE_PERSONA, THRESHOLD_SYSTEM_CONSTRAINT, branchless_select_f32,
+    branchless_select_i32, branchless_select_u8, branchless_select_u32,
 };
 use crate::runtime::context::CoreStateStack;
 use crate::stigmergy::{
-    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, PointerTrail,
-    StigmergicScaleGranularity, StigmergicThresholds, DEFAULT_FACT_PHASE_CLAMP_RAD,
-    DEFAULT_PERSONA_PHASE_CLAMP_RAD,
+    CognitiveTrajectoryLedger, ContrastivePhaseBloomFilter, DEFAULT_FACT_PHASE_CLAMP_RAD,
+    DEFAULT_PERSONA_PHASE_CLAMP_RAD, PointerTrail, StigmergicScaleGranularity,
+    StigmergicThresholds,
 };
 
 pub(super) const INV_FACT_PHASE_CLAMP_RAD: f32 = 1.0 / DEFAULT_FACT_PHASE_CLAMP_RAD;
@@ -40,7 +40,8 @@ pub const CAUSAL_AXIS_CONTRADICTION_GUARD: u32 = 1 << 3;
 pub const CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE: u32 = 1 << 8;
 /// Provenance cause bit (`bit 9`): Objective fact retrieval energy was weak or absent.
 pub const CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK: u32 = 1 << 9;
-/// Provenance cause bit (`bit 10`): Subjective persona collided with objective fact ($\mathcal{C}_{\mathrm{FP}} < -\tau$).
+/// Provenance cause bit (`bit 10`): Subjective persona collided with objective fact ($\mathcal{C}_{\mathrm{FP}}
+/// < -\tau$).
 pub const CAUSAL_CAUSE_PERSONA_FACT_COLLISION: u32 = 1 << 10;
 /// Provenance cause bit (`bit 11`): Cohomological obstruction ($H^1 \neq 0$) or Bloom repulsion triggered.
 pub const CAUSAL_CAUSE_COHOMOLOGY_REPULSION: u32 = 1 << 11;
@@ -59,7 +60,7 @@ pub const ROOT_CAUSE_PERSONA_FACT_COLLISION: u8 = 3;
 pub const ROOT_CAUSE_COHOMOLOGY_REPULSION: u8 = 4;
 
 const _: () = {
-    assert!(ROOT_CAUSE_NOMINAL == crate::stigmergy::ANCHOR_ATTRIBUTION_NOMINAL);
+    assert!(ROOT_CAUSE_NOMINAL == crate::stigmergy::ANCHOR_ROOT_CAUSE_NOMINAL);
     assert!(CAUSAL_CAUSE_ATTRACTOR_CRYSTALLIZED == crate::stigmergy::ANCHOR_LINEAGE_MATURE_BIT);
 };
 
@@ -80,7 +81,7 @@ pub struct CausalProvenanceReport {
     /// Peak anomaly or repulsion severity in $[0, 1]$ across all contributing signals.
     pub anomaly_severity: f32,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`).
-    pub attribution_tag: u8,
+    pub root_cause_code: u8,
     /// Dominant 3-bit working lane ID (`ATTRACTOR_SLOT_*`, `0..=7`).
     pub dominant_slot: u8,
     /// Resolved 5-bit `ACTION_MODE_*` execution flags.
@@ -146,7 +147,7 @@ pub trait CausalProvenanceSignal {
     fn resolve_dynamic_core_aperture(&self, stack: &CoreStateStack) -> (u8, u8, i8) {
         let bits = self.causal_provenance_bits();
         let ego_active = stack.ego.is_active();
-        let ego_trans_pos = ego_active & (stack.ego.transgression_bias_q7 > 0);
+        let ego_trans_pos = ego_active & (stack.ego.boundary_crossing_q7 > 0);
         let mut active_granule_mask = 0u8;
         let mut weighted_gain_sum = 0u32;
         let mut weighted_shift_sum = 0i32;
@@ -494,9 +495,11 @@ pub struct ManifoldProbeBaseline {
     pub active_heads: u16,
     /// Number of transformer layers selected by `layer_rope_mask` (`>= 1`).
     pub steered_layers: u16,
-    /// Baseline normalized `EntropyController` entropy observed on neutral calibration prompts ($\tilde{H}_0 \in [0, 1]$).
+    /// Baseline normalized `EntropyController` entropy observed on neutral calibration prompts ($\tilde{H}_0
+    /// \in [0, 1]$).
     pub baseline_entropy: f32,
-    /// Mean positive inter-layer / intra-turn phase trajectory coherence measured during calibration ($\bar{c} \in [0, 1]$).
+    /// Mean positive inter-layer / intra-turn phase trajectory coherence measured during calibration ($\bar{c}
+    /// \in [0, 1]$).
     pub baseline_inter_layer_coherence: f32,
     /// Neutral-token baseline cosine similarity against contrastive guard anchors ($\in [0, 1]$).
     pub baseline_guard_noise_floor: f32,
@@ -540,7 +543,8 @@ pub trait StigmergicThresholdPolicy {
         entropy_h_tilde: f32,
     ) -> StigmergicThresholds;
 
-    /// Resolves [`StigmergicThresholds`] and specializes [`crate::stigmergy::StigmergicSubstrate`] decision gates using an
+    /// Resolves [`StigmergicThresholds`] and specializes [`crate::stigmergy::StigmergicSubstrate`] decision
+    /// gates using an
     /// optional [`CognitiveTrajectoryLedger`] habit state at `scale`.
     ///
     /// Blanket default delegates to [`Self::resolve_thresholds`] followed by
@@ -686,7 +690,7 @@ pub trait CognitiveCircuitThresholdPolicy {
         let y0 = f32::from_bits(0x5f37_5a86_u32.wrapping_sub(h.to_bits() >> 1));
         let y1 = y0 * (1.5_f32 - half * y0 * y0);
         let inv_sqrt_h = y1 * (1.5_f32 - half * y1 * y1);
-        let base_floor = 2.0_f32 * inv_sqrt_h * 127.0_f32;
+        let base_floor = 2.0_f32 * inv_sqrt_h * 128.0_f32;
         let cap = capacity.max(1) as f32;
         let occ_ratio = branchless_clamp_f32(
             (occupied_slots as f32) * fast_inv_pos_normal_f32(cap),
@@ -761,7 +765,7 @@ impl CognitiveCircuitThresholdPolicy for AdaptiveThresholdPolicy {
             0.0,
             1.0,
         );
-        let base_floor = 2.0_f32 * inv_sqrt_h * 127.0_f32 * (1.0_f32 - 0.15_f32 * occ_ratio);
+        let base_floor = 2.0_f32 * inv_sqrt_h * 128.0_f32 * (1.0_f32 - 0.15_f32 * occ_ratio);
         ((base_floor + 0.5_f32) as i32 + gain_shift).clamp(24, 96) as PhaseQ7
     }
 
@@ -840,7 +844,8 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             2.00,
         );
 
-        // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/Rank-1 residual gates.
+        // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/Rank-1
+        // residual gates.
         let sustained_pull = if trail.step_count >= 16 {
             branchless_clamp_f32((trail.attractor_pull_force - 0.65_f32) * 2.0_f32, 0.0, 1.0)
         } else {
@@ -1008,7 +1013,8 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
 }
 
 /// **Origin 2-A Subtrait (`ObjectiveFactSignal: CognitiveGroundingSignal`)**:
-/// External RAG chunks, database records, and objective conversation logs (`Slot 2`, narrow `PhaseClamp` limit `0.14 rad`).
+/// External RAG chunks, database records, and objective conversation logs (`Slot 2`, narrow `PhaseClamp` limit
+/// `0.14 rad`).
 pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
     /// Narrow single-axis cognitive aperture for factual grounding (`1 << 1`).
     const FACT_APERTURE_MASK: u32 = THRESHOLD_OBJECTIVE_FACT;
@@ -1041,7 +1047,8 @@ impl<T: ObjectiveFactSignal + ?Sized> ObjectiveFactSignal for &T {
 }
 
 /// **Origin 2-B Subtrait (`SubjectivePersonaSignal: CognitiveGroundingSignal`)**:
-/// System prompts, character beliefs, stylistic tone, and subjective episodic memory (`Slot 1`, wide `PhaseClamp` limit `0.24 rad`).
+/// System prompts, character beliefs, stylistic tone, and subjective episodic memory (`Slot 1`, wide
+/// `PhaseClamp` limit `0.24 rad`).
 pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
     /// Narrow single-axis cognitive aperture for subjective persona tone (`1 << 2`).
     const PERSONA_APERTURE_MASK: u32 = THRESHOLD_SUBJECTIVE_PERSONA;
@@ -1085,7 +1092,7 @@ pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
 
     /// Evaluates repulsive severity in $[0.0, 1.0]$ against `candidate_phases`.
     fn evaluate_repulsion_severity(&self, candidate_phases: &[PhaseQ7; MAX_ATTENTION_HEADS])
-        -> f32;
+    -> f32;
 
     /// Evaluates repulsive severity directly from 8 register-resident `u64` SWAR words (`candidate_words`).
     #[inline(always)]
@@ -1103,6 +1110,14 @@ pub trait ContradictionGuardSignal: CognitiveGroundingSignal {
     #[inline(always)]
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         true
+    }
+
+    /// Projects the repulsive pole's positive phase words on $SO(2)^{64}$, or all zeros when this
+    /// guard operates purely as a phase-less candidate detector (such as a Bloom filter or scalar
+    /// obstruction guard).
+    #[inline(always)]
+    fn project_repulsive_pole_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        self.project_grounding_words_64()
     }
 }
 
@@ -1128,6 +1143,11 @@ impl<T: ContradictionGuardSignal + ?Sized> ContradictionGuardSignal for &T {
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         (**self).requires_phase_slice_for_repulsion()
     }
+
+    #[inline(always)]
+    fn project_repulsive_pole_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        (**self).project_repulsive_pole_words_64()
+    }
 }
 
 /// Concrete wrapper classifying any [`RawPhaseProjectable`] payload `T` as an **Objective Fact** (`Origin 2-A`).
@@ -1147,7 +1167,8 @@ pub struct ObjectiveFact<T> {
 }
 
 impl<T> ObjectiveFact<T> {
-    /// Constructs a new [`ObjectiveFact`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit anchor ID.
+    /// Constructs a new [`ObjectiveFact`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit
+    /// anchor ID.
     #[inline(always)]
     #[must_use]
     pub const fn new(
@@ -1235,7 +1256,8 @@ pub struct SubjectivePersona<T> {
 }
 
 impl<T> SubjectivePersona<T> {
-    /// Constructs a new [`SubjectivePersona`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit anchor ID.
+    /// Constructs a new [`SubjectivePersona`] with explicit base energy, 48-bit mapped-storage offset, and
+    /// 32-bit anchor ID.
     #[inline(always)]
     #[must_use]
     pub const fn new(

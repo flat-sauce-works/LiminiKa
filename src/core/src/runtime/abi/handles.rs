@@ -15,9 +15,9 @@ use core::mem::{align_of, size_of};
 use core::ops::{Deref, DerefMut};
 use core::ptr::NonNull;
 
-use crate::foundation::{raw_regions_overlap_or_same_zst, Pod, PtrAlignCheck};
+use crate::foundation::{Pod, PtrAlignCheck, raw_regions_overlap_or_same_zst};
 use crate::liminal::{
-    LmnkResult, LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER,
+    LMNK_ERR_ALIGNMENT, LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_NULL_POINTER, LmnkResult,
 };
 
 #[inline(always)]
@@ -25,7 +25,7 @@ fn validate_non_null_aligned_ptr<T>(raw_ptr: *mut T, align_mask: usize) -> LmnkR
     if raw_ptr.is_null() {
         return Err(LMNK_ERR_NULL_POINTER);
     }
-    if ((raw_ptr as usize) & align_mask) != 0 {
+    if (raw_ptr.addr() & align_mask) != 0 {
         return Err(LMNK_ERR_ALIGNMENT);
     }
     // SAFETY: `raw_ptr` was verified non-null and aligned to `align_mask` immediately above.
@@ -146,7 +146,8 @@ impl<'a, T> FfiHandleRef<'a, T> {
         if U::IS_ZST || size_of::<U>() > size_of::<T>() {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks `align_of::<U>()`.
+        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks
+        // `align_of::<U>()`.
         unsafe { FfiHandleRef::<U>::from_raw(self.ptr.as_ptr().cast::<U>()) }
     }
 
@@ -268,7 +269,8 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// or `Ok(Some(FfiHandleMut))` if non-null and properly aligned.
     ///
     /// # Safety
-    /// If non-null, caller must ensure `raw_ptr` points to a valid, uniquely borrowed instance of `T` for lifetime `'a`.
+    /// If non-null, caller must ensure `raw_ptr` points to a valid, uniquely borrowed instance of `T` for
+    /// lifetime `'a`.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` is non-null and violates `align_of::<T>()`.
@@ -338,9 +340,9 @@ impl<'a, T> FfiHandleMut<'a, T> {
     #[must_use]
     pub fn overlaps<U>(&self, other: &FfiHandleMut<'_, U>) -> bool {
         raw_regions_overlap_or_same_zst(
-            self.ptr.as_ptr() as usize,
+            self.ptr.as_ptr().addr(),
             size_of::<T>(),
-            other.ptr.as_ptr() as usize,
+            other.ptr.as_ptr().addr(),
             size_of::<U>(),
         )
     }
@@ -365,9 +367,9 @@ impl<'a, T> FfiHandleMut<'a, T> {
     #[inline(always)]
     pub fn ensure_disjoint_ref<U>(&self, other: &FfiHandleRef<'_, U>) -> LmnkResult<()> {
         if raw_regions_overlap_or_same_zst(
-            self.ptr.as_ptr() as usize,
+            self.ptr.as_ptr().addr(),
             size_of::<T>(),
-            other.as_ptr() as usize,
+            other.as_ptr().addr(),
             size_of::<U>(),
         ) {
             Err(LMNK_ERR_INVALID_ARGUMENT)
@@ -389,7 +391,8 @@ impl<'a, T> FfiHandleMut<'a, T> {
         if U::IS_ZST || size_of::<U>() > size_of::<T>() {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks `align_of::<U>()`.
+        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks
+        // `align_of::<U>()`.
         unsafe { FfiHandleMut::<U>::from_raw(self.ptr.as_ptr().cast::<U>()) }
     }
 
@@ -428,6 +431,7 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// Borrows the validated handle as a mutable reference `&mut T`.
     #[inline(always)]
     #[must_use]
+    // Inherent accessor on the handle wrapper; an `AsMut` impl would widen the public trait surface.
     #[allow(clippy::should_implement_trait)]
     pub fn as_mut(&mut self) -> &mut T {
         // SAFETY: Validity, alignment, and unique borrow guaranteed at construction.
@@ -483,51 +487,19 @@ impl<'a, T> AsMut<T> for FfiHandleMut<'a, T> {
 }
 
 // ===================================================================
-// Strongly-Typed Opaque Handles (v0.2.0 `0x0000_0200`)
+// Strongly-Typed Opaque Handle (v0.4.0 `0x0000_0400`)
 // ===================================================================
 
-macro_rules! define_opaque_handles {
-    ($(($opaque:ident, $handle:ident, $c_alias:ident, $doc:expr)),* $(,)?) => {
-        $(
-            #[doc = $doc]
-            #[repr(C)]
-            pub struct $opaque {
-                _private: [u8; 0],
-            }
-
-            #[doc = $doc]
-            pub type $handle = *mut $opaque;
-
-            #[doc = $doc]
-            #[allow(non_camel_case_types)]
-            pub type $c_alias = $handle;
-        )*
-    };
+/// Opaque LiminiKa runtime context marker (`lmnk_context_handle_t`).
+#[repr(C)]
+pub struct LmnkContextOpaque {
+    _private: [u8; 0],
 }
 
-define_opaque_handles!(
-    (
-        LmnkContextOpaque,
-        LmnkContextHandle,
-        lmnk_context_handle_t,
-        "Opaque LiminiKa runtime context handle (`lmnk_context_handle_t`)."
-    ),
-    (
-        LmnkSubstrateOpaque,
-        LmnkSubstrateHandle,
-        lmnk_substrate_handle_t,
-        "Opaque LiminiKa stigmergic substrate handle (`lmnk_substrate_handle_t`)."
-    ),
-    (
-        LmnkEntropyControllerOpaque,
-        LmnkEntropyControllerHandle,
-        lmnk_entropy_controller_handle_t,
-        "Opaque LiminiKa entropy controller handle (`lmnk_entropy_controller_handle_t`)."
-    ),
-    (
-        LmnkPhaseSteeringOpaque,
-        LmnkPhaseSteeringHandle,
-        lmnk_phase_steering_handle_t,
-        "Opaque LiminiKa RoPE phase-steering engine handle (`lmnk_phase_steering_handle_t`)."
-    ),
-);
+/// Opaque LiminiKa runtime context handle (`lmnk_context_handle_t`).
+pub type LmnkContextHandle = *mut LmnkContextOpaque;
+
+/// Opaque LiminiKa runtime context handle (`lmnk_context_handle_t`).
+// C-ABI typedef alias keeps its `lmnk_*_t` spelling to mirror `include/liminika/lmnk_types.h`.
+#[allow(non_camel_case_types)]
+pub type lmnk_context_handle_t = LmnkContextHandle;

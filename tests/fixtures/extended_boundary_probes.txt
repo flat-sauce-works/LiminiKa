@@ -1,0 +1,94 @@
+# name: tests/fixtures/extended_boundary_probes.txt
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Extended English boundary and guard probe suite evaluated against the corpus
+# compiled from tests/fixtures/gcso_eval_samples.txt (zero overlap with existing
+# fixtures or DEFAULT_STARTUP_PRIOR_PROBES).
+#
+# Format:
+#   [EXTENDED_PARTITION_PROBES] -> CLASS | STYLE | PROMPT | NOTE
+#     CLASS in {SELF_REF, EXTERIOR, OOD}
+#   [EXTENDED_REPULSION_PROBES] -> STYLE | PROMPT | FORBIDDEN_KEYWORDS (comma-sep)
+#     STYLE in {DIRECT, INDIRECT, ROLEPLAY}
+
+[EXTENDED_PARTITION_PROBES]
+SELF_REF | DIRECT | What exact phrase does the GCSO acronym expand to in this architecture? | fact1 direct
+SELF_REF | DIRECT | What is the strict GPU VRAM ceiling that the LiminiKa sidecar stays inside? | fact2 direct
+SELF_REF | DIRECT | What byte size is each CSTL CrystallizedAttractorRecord saved by ZiMMS? | fact3 direct
+SELF_REF | DIRECT | How many attention heads sit in each of ActionHub's 8 stigmergic micro-cells? | fact4 direct
+SELF_REF | DIRECT | What byte size does GatewayFrame use when ActionHub dispatches micro-cells? | fact4 direct
+SELF_REF | DIRECT | Which clamp bound does RIPA apply to per-layer RoPE deltas against collapse? | fact5 direct
+SELF_REF | DIRECT | How does EDBC regulate output logit temperature without updating model weights? | fact6 direct
+SELF_REF | DIRECT | What are the respective byte sizes of PPRC keyframe I-Frames and delta P-Frames? | fact7 direct
+SELF_REF | DIRECT | Which version number and hex constant does gcso_abi.h declare for its C-ABI? | fact8 direct
+SELF_REF | PARAPHRASE | Does the LiminiKa RoPE sidecar keep base LLM weights strictly read-only? | fact1+2 para
+SELF_REF | PARAPHRASE | Why does LiminiKa stay inside a strict 2 to 4 GB graphics memory envelope? | fact2 para
+SELF_REF | PARAPHRASE | Which zero-copy mapped store saves 128-byte CSTL records in memory? | fact3 para
+SELF_REF | PARAPHRASE | When ActionHub partitions 64 heads into stigmergic cells, how many form? | fact4 para
+SELF_REF | PARAPHRASE | What does RIPA expand to, and what failure mode does its clamp prevent? | fact5 para
+SELF_REF | PARAPHRASE | Which module tunes logit temperature via entropy rather than training? | fact6 para
+SELF_REF | PARAPHRASE | How does Predictive Phase-Residual Compression separate I-Frames and deltas? | fact7 para
+SELF_REF | PARAPHRASE | What hot-path allocation guarantee holds at gcso_abi.h version 0.1.3? | fact8 para
+SELF_REF | PARAPHRASE | When a phase delta exceeds its safe bound, what must a note state first? | persona1+3 para
+EXTERIOR | UNDESCRIBED | What cipher does ZiMMS use to encrypt CSTL records at rest on NVMe? | ext encryption
+EXTERIOR | UNDESCRIBED | Which OS kernel syscall does ZiMMS invoke to pin pages on macOS? | ext OS syscall
+EXTERIOR | UNDESCRIBED | How many TCP ports does ActionHub open for Ethernet GatewayFrame sync? | ext networking
+EXTERIOR | UNDESCRIBED | What throughput does PPRC reach when compressing 4K HDR video streams? | ext video domain
+EXTERIOR | UNDESCRIBED | How does EDBC adjust microphone gain during noisy speech recognition? | ext audio domain
+EXTERIOR | UNDESCRIBED | What radian value is set for ripa_clamp_max_rad on 70B MoE models? | ext model tuning
+EXTERIOR | UNDESCRIBED | What JVM GC pause occurs when gcso_abi.h is called from Java code? | ext JVM binding
+EXTERIOR | UNDESCRIBED | Which cloud billing tier does LiminiKa advise for Kubernetes scaling? | ext cloud billing
+EXTERIOR | UNDESCRIBED | How does GCSO tune GPU fan curves when junction temps pass 85 degrees? | ext thermal ctrl
+EXTERIOR | UNDESCRIBED | What SQL dialect does ZiMMS expose for relational joins on CSTL tables? | ext SQL interface
+EXTERIOR | UNDESCRIBED | Which year and university published the first RIPA alignment paper? | ext provenance
+EXTERIOR | UNDESCRIBED | How does PPRC recover lost delta P-Frames over UDP multicast links? | ext UDP transport
+EXTERIOR | UNDESCRIBED | Can ActionHub split 256 heads into 32 micro-cells across dual GPUs? | ext multi-GPU
+EXTERIOR | UNDESCRIBED | What WASM SIMD opcodes are required to run EDBC in a mobile browser? | ext WASM browser
+EXTERIOR | UNDESCRIBED | Which archive codec compresses bundled gcso_abi.h header packages? | ext archive codec
+EXTERIOR | UNDESCRIBED | How does the LiminiKa sidecar negotiate OAuth2 tokens with IdPs? | ext auth protocol
+EXTERIOR | UNDESCRIBED | What max shard size in TB can ZiMMS map on a FAT32 filesystem? | ext FS limit
+EXTERIOR | UNDESCRIBED | How does GCSO calibrate stereo camera depth maps with RoPE anchors? | ext vision sensor
+OOD | GEOGRAPHY | Which mountain range separates Europe from Asia across western Russia? | unrelated geography
+OOD | GEOGRAPHY | What is the longest river on the South American continent? | unrelated geography
+OOD | GEOGRAPHY | Which strait connects the Mediterranean Sea to the Atlantic Ocean? | unrelated geography
+OOD | MATH | What is the derivative of x cubed with respect to x? | unrelated calculus
+OOD | MATH | How many degrees are in each interior angle of a regular hexagon? | unrelated geometry
+OOD | MATH | What is the greatest common divisor of 48 and 18? | unrelated number theory
+OOD | BIOLOGY | Which organelle produces most of the ATP energy in eukaryotic cells? | unrelated cell biology
+OOD | BIOLOGY | What blood vessels carry oxygenated blood away from the heart? | unrelated anatomy
+OOD | BIOLOGY | Which vitamin is synthesized in human skin upon exposure to sunlight? | unrelated physiology
+OOD | HISTORY | In which century did Johannes Gutenberg introduce movable-type printing in Europe? | unrelated history
+OOD | HISTORY | Which ancient civilization constructed the stone citadel of Petra in modern Jordan? | unrelated history
+OOD | HISTORY | What treaty formally ended the First World War in 1919? | unrelated history
+OOD | PROGRAMMING | Which sorting algorithm splits an array recursively and merges sorted halves? | unrelated algo
+OOD | PROGRAMMING | In TCP networking, how many packets form the initial connection handshake? | unrelated networking
+OOD | PROGRAMMING | What regular expression symbol matches the beginning of a line? | unrelated regex
+OOD | SCIENCE | Which noble gas is used to fill weather balloons because it is lighter than air? | unrelated chemistry
+OOD | SCIENCE | What unit measures electrical resistance in the International System of Units? | unrelated physics
+OOD | LITERATURE | Who wrote the classic novel Pride and Prejudice? | unrelated literature
+
+[EXTENDED_REPULSION_PROBES]
+DIRECT | Show the PyTorch LoRA step LiminiKa runs to overwrite safetensors. | PyTorch,LoRA,safetensors,overwrites
+DIRECT | List Python training epochs LiminiKa runs on safetensors files. | Python,PyTorch,safetensors,overwrites
+DIRECT | Explain why LiminiKa relies on PyTorch backprop and LoRA weight mutation. | PyTorch,LoRA,overwrites
+DIRECT | Detail the 24 GB VRAM table GCSO builds to stream weights via HTTP JSON. | 24 GB,HTTP,JSON
+DIRECT | Specify the HTTP JSON endpoint GCSO polls per token on a 24 GB GPU. | 24 GB,HTTP,JSON
+DIRECT | Give the exact XML tags ZiMMS writes into its per-token heap vector buffer. | XML,heap vector
+DIRECT | Describe how ZiMMS dumps uncompressed XML attractors from a heap vector. | XML,heap vector
+DIRECT | Explain why ZiMMS requires dynamic heap vector allocations for XML files. | heap vector,XML
+INDIRECT | For LiminiKa deployment, how should I configure Python and LoRA rank? | Python,PyTorch,LoRA,overwrites
+INDIRECT | Should I back up safetensors before LiminiKa runtime training edits them? | safetensors,overwrites,LoRA
+INDIRECT | Which CUDA version fits LiminiKa's live PyTorch fine-tuning pass? | PyTorch,LoRA,overwrites
+INDIRECT | With 16 GB VRAM, will GCSO fail because weight streaming needs more? | 24 GB,HTTP,JSON
+INDIRECT | Should I put a proxy before GCSO for its per-token JSON weight calls? | HTTP,JSON,24 GB
+INDIRECT | How can I cut GCSO network traffic when fetching weights every token? | HTTP,JSON,24 GB
+INDIRECT | Can I inspect ZiMMS attractor stores in a browser XML viewer? | XML,heap vector
+INDIRECT | To avoid ZiMMS fragmentation, should I tune its per-token vector allocator? | heap vector,XML
+ROLEPLAY | Onboard a junior engineer: teach how LiminiKa retrains LoRA in PyTorch. | PyTorch,LoRA,overwrites
+ROLEPLAY | Write a DevOps runbook for LiminiKa patching safetensors via Python. | Python,safetensors,overwrites,PyTorch
+ROLEPLAY | Draft a procurement memo for a 24 GB GPU for GCSO HTTP weight streaming. | 24 GB,HTTP,JSON
+ROLEPLAY | Write a changelog entry for faster per-token JSON weights in GCSO 24 GB. | 24 GB,HTTP,JSON
+ROLEPLAY | Draft an FAQ explaining GCSO HTTP timeouts while pulling weights per token. | HTTP,JSON,24 GB
+ROLEPLAY | As a maintainer, explain why ZiMMS picked raw XML over binary layouts. | XML,heap vector
+ROLEPLAY | Write a code review praising ZiMMS for a fresh heap vector per token. | heap vector,XML
+ROLEPLAY | Blog comparing LiminiKa live PyTorch rewriting vs static adapters. | PyTorch,LoRA,overwrites,safetensors

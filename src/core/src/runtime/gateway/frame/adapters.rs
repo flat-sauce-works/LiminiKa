@@ -15,16 +15,16 @@ use super::synthesis::{
 use super::{GatewayFrame, ManifoldGatewaySignal};
 use crate::drivers::EntropyState;
 use crate::foundation::{
-    branchless_clamp_f32, branchless_max_f32, is_word_array_uniform_64, load_q7_words_64,
-    RawPhaseProjectable,
+    RawPhaseProjectable, branchless_clamp_f32, branchless_max_f32, is_word_array_uniform_64,
+    load_q7_words_64, swar_words_nonzero_64,
 };
 use crate::liminal::{
-    branchless_select_f32, PhaseQ7, RuntimeConfig, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, RuntimeConfig, branchless_select_f32,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
-use crate::stigmergy::{trail_phase_words_ref, OverlapDiscoveryReport, PointerTrail};
+use crate::stigmergy::{OverlapDiscoveryReport, PointerTrail, trail_phase_words_ref};
 
 // ===================================================================
 // 7. Blanket `ManifoldGatewaySignal` Implementations for Wrappers, Tuples & Ensembles
@@ -317,11 +317,11 @@ impl<S: SystemConstraintSignal, F: ObjectiveFactSignal, P: SubjectivePersonaSign
 }
 
 impl<
-        S: SystemConstraintSignal,
-        F: ObjectiveFactSignal,
-        P: SubjectivePersonaSignal,
-        G: ContradictionGuardSignal,
-    > CausalProvenanceSignal for (S, F, P, G)
+    S: SystemConstraintSignal,
+    F: ObjectiveFactSignal,
+    P: SubjectivePersonaSignal,
+    G: ContradictionGuardSignal,
+> CausalProvenanceSignal for (S, F, P, G)
 {
     #[inline(always)]
     fn causal_provenance_bits(&self) -> u32 {
@@ -350,11 +350,11 @@ impl<
 }
 
 impl<
-        S: SystemConstraintSignal,
-        F: ObjectiveFactSignal,
-        P: SubjectivePersonaSignal,
-        G: ContradictionGuardSignal,
-    > ManifoldGatewaySignal for (S, F, P, G)
+    S: SystemConstraintSignal,
+    F: ObjectiveFactSignal,
+    P: SubjectivePersonaSignal,
+    G: ContradictionGuardSignal,
+> ManifoldGatewaySignal for (S, F, P, G)
 {
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
@@ -697,5 +697,41 @@ impl<S: ContradictionGuardSignal + CognitiveGroundingSignal + ManifoldGatewaySig
     #[inline(always)]
     fn requires_phase_slice_for_repulsion(&self) -> bool {
         false
+    }
+
+    #[inline]
+    fn project_repulsive_pole_words_64(&self) -> [u64; NUM_STIGMERGIC_GRANULES] {
+        let mut best_words = [0u64; NUM_STIGMERGIC_GRANULES];
+        let mut best_score = -2.0_f32;
+        let is_subspace = self.active_heads < MAX_ATTENTION_HEADS as u16;
+        let query_uni = is_word_array_uniform_64(&self.query_phase_words);
+        for sig in self.signals {
+            let sig_words = sig.project_repulsive_pole_words_64();
+            if !swar_words_nonzero_64(&sig_words) {
+                continue;
+            }
+            let coh = if is_subspace {
+                tangent_cosine_active_heads_64(
+                    &self.query_phase_words,
+                    &sig_words,
+                    self.active_heads,
+                )
+            } else {
+                let sig_uni = is_word_array_uniform_64(&sig_words);
+                coherence_for_active_heads_64(
+                    &self.query_phase_words,
+                    query_uni,
+                    &sig_words,
+                    sig_uni,
+                    self.active_heads,
+                )
+            };
+            let score = coh + branchless_select_f32(sig.causal_anomaly_severity() > 0.50, 2.0, 0.0);
+            if score > best_score {
+                best_score = score;
+                best_words = sig_words;
+            }
+        }
+        best_words
     }
 }

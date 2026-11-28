@@ -6,10 +6,17 @@
 
 use super::*;
 
+mod layer_selection;
 mod recall_sync;
 mod steering;
 mod telemetry;
 
+pub use layer_selection::{
+    AdaptiveLayerSelectConfig, DEFAULT_CANDIDATE_BAND_END_RATIO,
+    DEFAULT_CANDIDATE_BAND_START_RATIO, DEFAULT_TARGET_LAYER_RATIO, active_layers_mask,
+    clip_layer_mask, ratio_band_layer_mask, select_adaptive_layer_mask, top_half_layer_mask,
+};
+pub use steering::LayerRopeStepInput;
 pub use telemetry::LiminalBoundaryFlowSummary;
 
 /// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).
@@ -44,17 +51,25 @@ pub struct RopeGeometry {
 }
 
 impl RopeGeometry {
-    /// Returns the validated geometry preset for `microsoft/Phi-4-mini-instruct`.
+    /// Constructs an explicit per-model RoPE geometry descriptor.
     #[must_use]
-    pub const fn phi4_mini() -> Self {
+    pub const fn new(
+        layout: RopeLayout,
+        head_dim: usize,
+        rotary_dim: usize,
+        num_q_heads: usize,
+        num_kv_heads: usize,
+        num_layers: usize,
+        layer_rope_mask: u64,
+    ) -> Self {
         Self {
-            layout: RopeLayout::HalfSplit,
-            head_dim: 128,
-            rotary_dim: 96,
-            num_q_heads: 24,
-            num_kv_heads: 8,
-            num_layers: 32,
-            layer_rope_mask: 0xFFFF_FFFF,
+            layout,
+            head_dim,
+            rotary_dim,
+            num_q_heads,
+            num_kv_heads,
+            num_layers,
+            layer_rope_mask,
         }
     }
 
@@ -66,16 +81,13 @@ impl RopeGeometry {
     /// Returns an error string if `head_dim`, `rotary_dim`, head counts, or `num_layers`
     /// violate RoPE or GQA divisibility constraints.
     pub fn validate(&self) -> Result<(), String> {
-        if self.head_dim == 0 || !self.head_dim.is_multiple_of(2) {
+        if self.head_dim == 0 || (self.head_dim & 1) != 0 {
             return Err(format!(
                 "head_dim ({}) must be a positive even integer",
                 self.head_dim
             ));
         }
-        if self.rotary_dim == 0
-            || !self.rotary_dim.is_multiple_of(2)
-            || self.rotary_dim > self.head_dim
-        {
+        if self.rotary_dim == 0 || (self.rotary_dim & 1) != 0 || self.rotary_dim > self.head_dim {
             return Err(format!(
                 "rotary_dim ({}) must be even, > 0, and <= head_dim ({})",
                 self.rotary_dim, self.head_dim
@@ -317,7 +329,9 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
         if !req.trigger.is_destabilized() || self.corpus.entries().is_empty() {
             return Ok(None);
         }
-        let prefer_guard = req.trigger.epistemic_regime == EpistemicRegime::InternalConflict as u8
+        let repulsion_lane = (req.lane_flags & WORKBENCH_LANE_FLAG_REPULSION) != 0;
+        let prefer_guard = repulsion_lane
+            || req.trigger.epistemic_regime == EpistemicRegime::InternalConflict as u8
             || req.trigger.repulsion_severity > 0.25;
         let preferred_role = if prefer_guard {
             AttractorRole::Guard
@@ -332,11 +346,17 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
             .filter(|e| e.role == preferred_role && !e.per_layer_q7.is_empty())
             .max_by(|a, b| a.energy.total_cmp(&b.energy))
             .or_else(|| {
-                self.corpus
-                    .entries()
-                    .iter()
-                    .filter(|e| !e.per_layer_q7.is_empty())
-                    .max_by(|a, b| a.energy.total_cmp(&b.energy))
+                if repulsion_lane {
+                    // Never borrow an attractive Fact/Persona into a repulsion-flagged lane
+                    // when no repulsive Guard attractor has been observed in the corpus.
+                    None
+                } else {
+                    self.corpus
+                        .entries()
+                        .iter()
+                        .filter(|e| !e.per_layer_q7.is_empty())
+                        .max_by(|a, b| a.energy.total_cmp(&b.energy))
+                }
             });
 
         let Some(entry) = selected else {
@@ -358,8 +378,20 @@ impl HorizonEscalationProvider for CorpusRecallEscalationProvider<'_> {
             let a0 = &entry.per_layer_q7[idx0];
             let a1 = &entry.per_layer_q7[idx1];
             for (dst, (&v0, &v1)) in slot_phase_out.iter_mut().zip(a0.iter().zip(a1.iter())) {
-                let interp = (i32::from(v0) * w0 + i32::from(v1) * frac + 63) / 127;
+                let num = i32::from(v0) * w0 + i32::from(v1) * frac;
+                let interp = if num >= 0 {
+                    (num + 63) / 127
+                } else {
+                    (num - 63) / 127
+                };
                 *dst = interp.clamp(-127, 127) as lmnk_q7_t;
+            }
+        }
+        if entry.role == AttractorRole::Guard {
+            // Workbench lanes are strictly additive in core orchestration; convert Guard poles
+            // into saturating anti-phase (`-R`, `i8::MIN -> +127`) matching `auto_repulsion`.
+            for dst in slot_phase_out.iter_mut() {
+                *dst = dst.saturating_neg();
             }
         }
         self.escalation_calls = self.escalation_calls.saturating_add(1);
@@ -388,31 +420,30 @@ pub struct ModelSteeringAdapter {
     escalation_boundary_dirty: bool,
     last_escalated_regime: u8,
     active_workbench_preset: WorkbenchPreset,
-    baseline_pinned_compute_mask: u64,
     sandbox_settlement_streak: u8,
     prev_sandbox_coherence: f32,
     prev_sandbox_assim_drift: f32,
-    turn_guard_active: bool,
-    transient_guard_relaxed: bool,
-    guard_hold_tokens: u8,
-    passive_saturation_probe_steps: u8,
+    crystallized_anchors: Vec<PhaseAnchorRecord>,
 }
 
 impl Drop for ModelSteeringAdapter {
     fn drop(&mut self) {
-        self.turn_guard_active = false;
-        self.transient_guard_relaxed = false;
         self.ctx.zeroize_in_place();
         self.configured_ego = LiminalEgoState::new();
         self.residual_adapter = ResidualAdapterEngine::default();
         self.coherence_guard_slot = CoherenceHorizonGuardSlot::default();
         *self.residual_spillover = DefaultResidualSpilloverSlot::default();
         self.last_ensemble_report = None;
+        self.crystallized_anchors.clear();
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
 }
 
 impl ModelSteeringAdapter {
+    /// Maximum number of Cold-Path crystallized [`PhaseAnchorRecord`] entries retained in the
+    /// bounded FIFO capture queue before oldest entries are evicted.
+    pub const MAX_CRYSTALLIZED_ANCHOR_BUFFER: usize = 64;
+
     /// Default decode-token hold window before a transient contradiction-guard compute pin may
     /// relax toward low-cost bypass (`0` holds the entire turn; opt-in via `--guard-hold-tokens=<N>`).
     pub const DEFAULT_GUARD_HOLD_TOKENS: u8 = 0;
@@ -435,11 +466,23 @@ impl ModelSteeringAdapter {
         };
         let pinned_slots = if n_slots == 0 {
             0
-        } else if n_slots >= 12 {
-            // Protect head (0..4) and tail ((n-4)..n) layers as irreversible boundary anchors.
-            0x0000_000F_u64 | (0x0000_000F_u64 << (n_slots - 4))
-        } else {
+        } else if n_slots == 1 {
+            1
+        } else if n_slots < 12 {
             1_u64 | (1_u64 << (n_slots - 1))
+        } else {
+            // Proportionally protect head (`0..w`) and tail (`(n-w)..n`) boundary anchors with
+            // `w = clamp(n / 8, 2, 4)` (exact head-4 + tail-4 parity at 32 layers).
+            let raw = n_slots / 8;
+            let pin_width = if raw < 2 {
+                2
+            } else if raw > 4 {
+                4
+            } else {
+                raw
+            };
+            let low = (1_u64 << pin_width) - 1;
+            low | (low << (n_slots - pin_width))
         };
         let reversible_slots = active_slots & !pinned_slots;
         (active_slots, pinned_slots, reversible_slots)
@@ -480,7 +523,12 @@ impl ModelSteeringAdapter {
             Self::compute_slot_masks(geometry.num_layers);
         ctx.compute_pool_mut()
             .set_slot_masks(active_slots, pinned_slots, 0, reversible_slots);
-        ctx.apply_host_spine_pin_floor(pinned_slots);
+        ctx.set_baseline_pin_mask(pinned_slots);
+        {
+            let spine = ctx.system_spine_mut();
+            spine.guard_hold_tokens = Self::DEFAULT_GUARD_HOLD_TOKENS;
+            spine.set_max_observe_stride(1);
+        }
 
         *ctx.last_horizon_mut() = EpistemicHorizonReading {
             total_memory_support: 1.0,
@@ -504,14 +552,10 @@ impl ModelSteeringAdapter {
             escalation_boundary_dirty: true,
             last_escalated_regime: EpistemicRegime::KnownCoherent as u8,
             active_workbench_preset: WorkbenchPreset::BalancedDialog,
-            baseline_pinned_compute_mask: pinned_slots,
             sandbox_settlement_streak: 0,
             prev_sandbox_coherence: 0.0,
             prev_sandbox_assim_drift: 1.0,
-            turn_guard_active: false,
-            transient_guard_relaxed: false,
-            guard_hold_tokens: Self::DEFAULT_GUARD_HOLD_TOKENS,
-            passive_saturation_probe_steps: 0,
+            crystallized_anchors: Vec::new(),
         })
     }
 }

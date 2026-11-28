@@ -8,9 +8,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
-/// Default destructive phase coherence threshold (`0.25`) detecting Persona-vs-Fact collision ($\mathcal{C}_{\mathrm{FP}} < -0.25$).
+/// Default destructive phase coherence threshold (`0.25`) detecting Persona-vs-Fact collision
+/// ($\mathcal{C}_{\mathrm{FP}} < -0.25$).
 pub const DEFAULT_PERSONA_FACT_COLLISION_THRESH: f32 = 0.25;
 
 pub mod bridges;

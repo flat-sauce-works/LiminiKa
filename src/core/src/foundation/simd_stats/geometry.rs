@@ -222,7 +222,7 @@ pub(crate) fn rotate_so2_slice_unrolled16(buf: &mut [f32], sin_t: f32, cos_t: f3
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        for pair in buf.chunks_exact_mut(2) {
+        for pair in buf.as_chunks_mut::<2>().0 {
             (pair[0], pair[1]) = branchless_rotate_so2_pair(pair[0], pair[1], sin_t, cos_t);
         }
     }
@@ -283,16 +283,16 @@ pub(crate) fn diff_norm_sq_f32_unrolled4(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
         let mut s = [0.0_f32; 4];
-        let mut a_chunks = a[..len].chunks_exact(4);
-        let mut b_chunks = b[..len].chunks_exact(4);
-        for (ac, bc) in a_chunks.by_ref().zip(b_chunks.by_ref()) {
+        let (a_chunks, a_rem) = a[..len].as_chunks::<4>();
+        let (b_chunks, b_rem) = b[..len].as_chunks::<4>();
+        for (ac, bc) in a_chunks.iter().zip(b_chunks.iter()) {
             for k in 0..4 {
                 let d = ac[k] - bc[k];
                 s[k] += d * d;
             }
         }
         let mut total = (s[0] + s[1]) + (s[2] + s[3]);
-        for (&av, &bv) in a_chunks.remainder().iter().zip(b_chunks.remainder().iter()) {
+        for (&av, &bv) in a_rem.iter().zip(b_rem.iter()) {
             let d = av - bv;
             total += d * d;
         }
@@ -300,7 +300,8 @@ pub(crate) fn diff_norm_sq_f32_unrolled4(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Computes $(\|\mathbf{r} - \mathbf{p}\|_2^2, \langle \mathbf{r} - \mathbf{p}, \boldsymbol{\gamma} \rangle, \|\boldsymbol{\gamma}\|_2^2)$
+/// Computes $(\|\mathbf{r} - \mathbf{p}\|_2^2, \langle \mathbf{r} - \mathbf{p}, \boldsymbol{\gamma} \rangle,
+/// \|\boldsymbol{\gamma}\|_2^2)$
 /// in a single fused AVX2 memory pass while keeping peak live YMM usage `<= 5`
 /// (`0` Windows x64 `xmm6..xmm15` stack saves/restores).
 #[inline]
@@ -316,7 +317,8 @@ pub(crate) fn hodge_obstruction_and_dual_pairing_f32(
         let pr = r_slice.as_ptr();
         let pp = p_slice.as_ptr();
         let pg = g_slice.as_ptr();
-        // SAFETY: `target_feature = "avx2"` is enabled at compile time, and pointer offsets are bounds-checked against `n`.
+        // SAFETY: `target_feature = "avx2"` is enabled at compile time, and pointer offsets are bounds-checked
+        // against `n`.
         // Using 3 accumulator YMMs (`obs_all, dot_all, gam_all`) + 2 scratch YMMs (`d, g`) keeps peak live YMMs
         // at 5 (`ymm0..ymm4`), eliminating 8 `vmovaps` stack saves/restores of `xmm6..xmm13` on Windows x64 ABI
         // and cutting `hodge_obstruction_and_dual_homology_pairing_64` variance and latency.
@@ -404,11 +406,11 @@ pub(crate) fn hodge_obstruction_and_dual_pairing_f32(
         let mut s_dot = [0.0_f32; 4];
         let mut s_gam = [0.0_f32; 4];
 
-        let mut r_c = r_slice[..n].chunks_exact(4);
-        let mut p_c = p_slice[..n].chunks_exact(4);
-        let mut g_c = g_slice[..n].chunks_exact(4);
+        let (r_c, r_rem) = r_slice[..n].as_chunks::<4>();
+        let (p_c, p_rem) = p_slice[..n].as_chunks::<4>();
+        let (g_c, g_rem) = g_slice[..n].as_chunks::<4>();
 
-        for ((rc, pc), gc) in r_c.by_ref().zip(p_c.by_ref()).zip(g_c.by_ref()) {
+        for ((rc, pc), gc) in r_c.iter().zip(p_c.iter()).zip(g_c.iter()) {
             for k in 0..4 {
                 let r_obs = rc[k] - pc[k];
                 let gv = gc[k];
@@ -420,12 +422,7 @@ pub(crate) fn hodge_obstruction_and_dual_pairing_f32(
         let mut obs_sq = (s_obs[0] + s_obs[1]) + (s_obs[2] + s_obs[3]);
         let mut pair_dot = (s_dot[0] + s_dot[1]) + (s_dot[2] + s_dot[3]);
         let mut gam_sq = (s_gam[0] + s_gam[1]) + (s_gam[2] + s_gam[3]);
-        for ((&rv, &pv), &gv) in r_c
-            .remainder()
-            .iter()
-            .zip(p_c.remainder().iter())
-            .zip(g_c.remainder().iter())
-        {
+        for ((&rv, &pv), &gv) in r_rem.iter().zip(p_rem.iter()).zip(g_rem.iter()) {
             let r_obs = rv - pv;
             obs_sq += r_obs * r_obs;
             pair_dot += r_obs * gv;

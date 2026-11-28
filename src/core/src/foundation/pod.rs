@@ -2,18 +2,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Plain Old Data (`Pod`) zero-copy safety contracts, raw range overlap checks, and Level 1
-//! canonical Little-Endian binary structures (`TaggedPtr`, `PagedBitmask`, `SubheadConfig`,
-//! `Rank1Descriptor`, `KvMotionDeltaPacket`).
+//! canonical Little-Endian binary structures (`TaggedPtr`, `ArenaSpan`, `PagedBitmask`,
+//! `SubheadConfig`, `Rank1Descriptor`, `KvMotionDeltaPacket`).
 //!
-//! # Portable Device-Ready POD vs. Host FFI Descriptor Contract
-//! - **Portable Device-Ready PODs** (`TaggedPtr`, `PagedBitmask`, `SubheadConfig`,
-//!   `KvMotionDeltaPacket`): Canonical Little-Endian byte order, fixed-width primitives only (zero
-//!   `usize` / native pointers), 0 bytes implicit compiler padding, power-of-two `align`/`size`,
-//!   and 64 B-aligned `[PhaseQ7; 64]` vectors directly readable as `u32x16` / `u64x8` (WGSL,
-//!   Vulkan `std430`, Metal, CUDA, x86_64 64 B cache line, ARM64 / Apple Silicon 128 B cache line).
-//! - **Host FFI Descriptors** (`Rank1Descriptor`): Carry raw host buffer addresses (`u64` virtual
-//!   pointers `u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`) scoped to host CPU/FFI boundaries
-//!   rather than cross-device shader buffers.
+//! # Portable Device-Ready POD Contract
+//! - **Portable Device-Ready PODs** (`TaggedPtr`, `ArenaSpan`, `PagedBitmask`, `SubheadConfig`,
+//!   `Rank1Descriptor`, `KvMotionDeltaPacket`): Canonical Little-Endian byte order, fixed-width
+//!   primitives only (zero `usize` / native pointers), 0 bytes implicit compiler padding,
+//!   power-of-two `align`/`size`, and 64 B-aligned `[PhaseQ7; 64]` vectors directly readable as
+//!   `u32x16` / `u64x8` (WGSL, Vulkan `std430`, Metal, CUDA, x86_64 64 B cache line, ARM64 /
+//!   Apple Silicon 128 B cache line).
 
 use core::marker::PhantomData;
 use core::mem::{align_of, size_of, size_of_val};
@@ -22,9 +20,9 @@ use core::slice;
 
 use crate::foundation::scalar_math::{branchless_q7_add_sat, branchless_q7_neg_sat};
 use crate::liminal::{
-    AttributionTag, LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus, PhaseQ7,
-    RuntimeConfig, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_INVALID_ARGUMENT,
-    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
+    AttributionTag, BoundarySignal, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
+    LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, LiminalThresholdState, LmnkResult, LmnkStatus,
+    MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, PhaseQ7, RuntimeConfig,
 };
 
 /// Number of 64-bit words in a 256-bit [`PagedBitmask`] (`4`).
@@ -42,7 +40,8 @@ pub const ACTION_MODE_PHASE_STEER: u8 = 1 << 0;
 /// Action Mode Bit 1 (`0x02`): Enable intermediate layer skipping with SWAR phase compensation.
 pub const ACTION_MODE_LAYER_SKIP: u8 = 1 << 1;
 
-/// Action Mode Bit 2 (`0x04`): Enable Contrastive Phase Bloom Filter anti-phase repulsion ($-\boldsymbol{\Delta\theta}$).
+/// Action Mode Bit 2 (`0x04`): Enable Contrastive Phase Bloom Filter anti-phase repulsion
+/// ($-\boldsymbol{\Delta\theta}$).
 pub const ACTION_MODE_PHASE_REPULSE: u8 = 1 << 2;
 
 /// Action Mode Bit 3 (`0x08`): Enable single-pass sub-head group routing (Fact / Logic / Explore).
@@ -71,7 +70,8 @@ pub const ACTION_PRESET_FULL_ORCHESTRATION: u8 =
 /// Bitmask extracting the 5-bit Action Mode flags from an 8-bit [`TaggedPtr`] tag (`bits 0..=4`).
 pub const TAG_ACTION_MODE_MASK: u8 = 0x1F;
 
-/// Bit shift offset for encoding/extracting the 3-bit Target Attractor Slot ID (`0..=7`) in an 8-bit tag (`bits 5..=7`).
+/// Bit shift offset for encoding/extracting the 3-bit Target Attractor Slot ID (`0..=7`) in an 8-bit tag (`bits
+/// 5..=7`).
 pub const TAG_ATTRACTOR_SLOT_SHIFT: u32 = 5;
 
 /// Packs a 3-bit Target Attractor Slot ID (`0..=7`) and a 5-bit Action Mode mask (`0x00..=0x1F`)
@@ -121,7 +121,7 @@ pub fn validate_raw_slice_bounds<T>(ptr: *const T, len: usize) -> LmnkResult<usi
     if byte_len > isize::MAX as usize {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
-    if (ptr as usize).checked_add(byte_len).is_none() {
+    if ptr.addr().checked_add(byte_len).is_none() {
         return Err(LMNK_ERR_INVALID_ARGUMENT);
     }
     Ok(byte_len)
@@ -235,7 +235,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds and alignment for `Self: Pod` are verified above.
@@ -257,7 +257,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_mut_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds, unique borrow, and alignment for `Self: Pod` are verified above.
@@ -289,7 +289,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset + byte_len <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds and alignment for `count` elements of `Self: Pod` are verified above.
@@ -325,7 +325,7 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
         }
         // SAFETY: `offset + byte_len <= bytes.len()` verified above.
         let ptr = unsafe { bytes.as_mut_ptr().add(offset) };
-        if ((ptr as usize) & (align_of::<Self>() - 1)) != 0 {
+        if (ptr.addr() & (align_of::<Self>() - 1)) != 0 {
             return Err(LMNK_ERR_ALIGNMENT);
         }
         // SAFETY: Bounds, unique borrow, and alignment for `count` elements of `Self: Pod` verified above.
@@ -426,17 +426,17 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely reinterprets a slice of `Self` as a slice of another `Pod` type `U`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of
+    /// `size_of::<U>()`.
     /// Returns [`LMNK_ERR_ALIGNMENT`] if the slice base pointer violates `align_of::<U>()`.
     #[inline(always)]
     fn try_cast_slice<U: Pod>(slice: &[Self]) -> LmnkResult<&[U]> {
         let total_bytes = size_of_val(slice);
         let target_size = size_of::<U>();
-        if (target_size == 0) | ((total_bytes % target_size) != 0) {
+        if (target_size == 0) | !total_bytes.is_multiple_of(target_size) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let is_aligned =
-            slice.is_empty() | (((slice.as_ptr() as usize) & (align_of::<U>() - 1)) == 0);
+        let is_aligned = slice.is_empty() | ((slice.as_ptr().addr() & (align_of::<U>() - 1)) == 0);
         if !is_aligned {
             return Err(LMNK_ERR_ALIGNMENT);
         }
@@ -447,17 +447,17 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely reinterprets a mutable slice of `Self` as a mutable slice of another `Pod` type `U`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of
+    /// `size_of::<U>()`.
     /// Returns [`LMNK_ERR_ALIGNMENT`] if the slice base pointer violates `align_of::<U>()`.
     #[inline(always)]
     fn try_cast_slice_mut<U: Pod>(slice: &mut [Self]) -> LmnkResult<&mut [U]> {
         let total_bytes = size_of_val(slice);
         let target_size = size_of::<U>();
-        if (target_size == 0) | ((total_bytes % target_size) != 0) {
+        if (target_size == 0) | !total_bytes.is_multiple_of(target_size) {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        let is_aligned =
-            slice.is_empty() | (((slice.as_ptr() as usize) & (align_of::<U>() - 1)) == 0);
+        let is_aligned = slice.is_empty() | ((slice.as_ptr().addr() & (align_of::<U>() - 1)) == 0);
         if !is_aligned {
             return Err(LMNK_ERR_ALIGNMENT);
         }
@@ -609,32 +609,103 @@ pub struct SubheadConfig {
     pub reserved: [u8; 12],
 }
 
-/// Host FFI descriptor for Sparse Dynamic Rank-1 residual injection (64 bytes, 32-byte aligned).
-///
-/// Classified as a **Host FFI Descriptor** (not a cross-device buffer) because it carries raw
-/// 64-bit host pointer addresses (`u_vector_ptr`, `v_vector_ptr`, `gain_scalar_ptr`).
-#[repr(C, align(32))]
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Rank1Descriptor {
-    /// Index of target Transformer layer for Rank-1 residual injection.
-    pub layer_idx: u32,
-    /// Rank of low-rank adapter (fixed to `1` for Rank-1 residual).
-    pub rank: u32,
-    /// Raw 64-bit pointer to left column projection vector $\mathbf{u}$.
-    pub u_vector_ptr: u64,
-    /// Raw 64-bit pointer to right row projection vector $\mathbf{v}$.
-    pub v_vector_ptr: u64,
-    /// Raw 64-bit pointer to optional diagonal gain vector $\mathbf{s}$ (`0` if unused).
-    pub gain_scalar_ptr: u64,
-    /// Global scaling multiplier for Rank-1 residual injection.
-    pub scale_factor: f32,
-    /// Bitmask flags indicating precision format and activation state.
-    pub flags: u32,
-    /// Reserved space for 32-byte alignment requirements (24 bytes).
-    pub reserved: [u8; 24],
+/// Portable 8-byte (`#[repr(C)]`) offset-and-length span addressing a contiguous slice inside a
+/// caller-owned arena buffer without raw host pointers (identical layout across 32-bit, 64-bit,
+/// and GPU `std430`).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ArenaSpan {
+    /// Element offset from the start of the backing arena (`offset 0..4`).
+    pub offset: u32,
+    /// Number of contiguous elements referenced by this span (`offset 4..8`).
+    pub len: u32,
 }
 
-/// 64-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Predictive Motion Delta (P-Frame) Packet** (Section 4.3).
+impl ArenaSpan {
+    /// Constructs a new [`ArenaSpan`] from element `offset` and `len`.
+    #[inline(always)]
+    #[must_use]
+    pub const fn new(offset: u32, len: u32) -> Self {
+        Self { offset, len }
+    }
+
+    /// Computes `offset + len` with 32-bit overflow protection so 32-bit and 64-bit targets agree.
+    #[inline(always)]
+    #[must_use]
+    pub const fn checked_end(self) -> Option<usize> {
+        match self.offset.checked_add(self.len) {
+            Some(end) => Some(end as usize),
+            None => None,
+        }
+    }
+
+    /// Resolves this span to an immutable sub-slice of `arena`, returning `None` on overflow or OOB.
+    #[inline(always)]
+    #[must_use]
+    pub fn slice<T>(self, arena: &[T]) -> Option<&[T]> {
+        let end = self.checked_end()?;
+        arena.get(self.offset as usize..end)
+    }
+
+    /// Resolves this span to a mutable sub-slice of `arena`, returning `None` on overflow or OOB.
+    #[inline(always)]
+    #[must_use]
+    pub fn slice_mut<T>(self, arena: &mut [T]) -> Option<&mut [T]> {
+        let end = self.checked_end()?;
+        arena.get_mut(self.offset as usize..end)
+    }
+}
+
+/// Sentinel value for [`Rank1Descriptor::gain_offset`] indicating no per-output diagonal gain
+/// vector is applied (`u32::MAX`).
+pub const RANK1_GAIN_UNUSED: u32 = u32::MAX;
+
+/// Portable 32-byte (`#[repr(C, align(32))]`) [`Pod`] descriptor for Sparse Dynamic Rank-1
+/// residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T
+/// \mathbf{x})$),
+/// addressing all factor vectors via [`ArenaSpan`] element offsets inside a caller-owned `f32` arena.
+///
+/// Identical layout across 32-bit (`wasm32`), 64-bit CPUs, and GPU `std430` with zero raw pointers
+/// and zero implicit padding.
+///
+/// # Gain Length Convention
+/// When `gain_offset != RANK1_GAIN_UNUSED` (`u32::MAX`), the optional diagonal gain vector occupies
+/// `arena[gain_offset .. gain_offset + u_span.len]` (one gain scalar per output element, matching
+/// `u_span.len == d_out`). When `gain_offset == RANK1_GAIN_UNUSED`, diagonal gain is omitted.
+#[repr(C, align(32))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rank1Descriptor {
+    /// Index of target layer for Rank-1 residual injection (`offset 0..4`).
+    pub layer_idx: u32,
+    /// Low-rank adapter rank (must equal `1` for Rank-1 kernels, `offset 4..8`).
+    pub rank: u32,
+    /// Element span of left column projection vector $\mathbf{u}$ (`len == d_out`, `offset 8..16`).
+    pub u_span: ArenaSpan,
+    /// Element span of right row projection vector $\mathbf{v}$ (`len == d_in`, `offset 16..24`).
+    pub v_span: ArenaSpan,
+    /// Element offset of optional diagonal gain vector $\mathbf{g}$ of length `u_span.len`
+    /// ([`RANK1_GAIN_UNUSED`] = `u32::MAX` when unused, `offset 24..28`).
+    pub gain_offset: u32,
+    /// Global finite scaling multiplier $s$ for Rank-1 residual injection (`offset 28..32`).
+    pub scale_factor: f32,
+}
+
+impl Default for Rank1Descriptor {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            layer_idx: 0,
+            rank: 0,
+            u_span: ArenaSpan::default(),
+            v_span: ArenaSpan::default(),
+            gain_offset: RANK1_GAIN_UNUSED,
+            scale_factor: 0.0,
+        }
+    }
+}
+
+/// 64-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Predictive Motion Delta (P-Frame) Packet**
+/// (Section 4.3).
 ///
 /// Stores the 64-head inter-step Q7 phase motion vector $\boldsymbol{\Delta\theta}_t \in \mathrm{Q7}^{64}$
 /// (`offset 0..64`) between consecutive steps inside a Variable Group of Pictures (GOP) memory/persona stream.
@@ -679,9 +750,11 @@ impl_pod_for_primitives!(
     LmnkStatus,
     RuntimeConfig,
     AttributionTag,
+    BoundarySignal,
     LacunaPartition8,
     LiminalThresholdState,
     TaggedPtr,
+    ArenaSpan,
     PagedBitmask,
     SubheadConfig,
     Rank1Descriptor,
@@ -706,10 +779,29 @@ pub fn cascade_tagged_ptr(
 
 const _: () = {
     assert!(size_of::<TaggedPtr>() == 8 && align_of::<TaggedPtr>() == 8);
+    assert!(size_of::<ArenaSpan>() == 8 && align_of::<ArenaSpan>() == 4);
     assert!(size_of::<PagedBitmask>() == 32 && align_of::<PagedBitmask>() == 32);
     assert!(size_of::<SubheadConfig>() == 32 && align_of::<SubheadConfig>() == 16);
-    assert!(size_of::<Rank1Descriptor>() == 64 && align_of::<Rank1Descriptor>() == 32);
+    assert!(size_of::<Rank1Descriptor>() == 32 && align_of::<Rank1Descriptor>() == 32);
+    assert!(core::mem::offset_of!(Rank1Descriptor, layer_idx) == 0);
+    assert!(core::mem::offset_of!(Rank1Descriptor, rank) == 4);
+    assert!(core::mem::offset_of!(Rank1Descriptor, u_span) == 8);
+    assert!(core::mem::offset_of!(Rank1Descriptor, v_span) == 16);
+    assert!(core::mem::offset_of!(Rank1Descriptor, gain_offset) == 24);
+    assert!(core::mem::offset_of!(Rank1Descriptor, scale_factor) == 28);
     assert!(size_of::<KvMotionDeltaPacket>() == 64 && align_of::<KvMotionDeltaPacket>() == 64);
+    assert!(size_of::<BoundarySignal>() == 32 && align_of::<BoundarySignal>() == 32);
+    assert!(core::mem::offset_of!(BoundarySignal, partition) == 0);
+    assert!(core::mem::offset_of!(BoundarySignal, pressure_q15) == 16);
+    assert!(core::mem::offset_of!(BoundarySignal, delta_q15) == 18);
+    assert!(core::mem::offset_of!(BoundarySignal, attribution_tag) == 20);
+    assert!(core::mem::offset_of!(BoundarySignal, contraction_q7) == 21);
+    assert!(core::mem::offset_of!(BoundarySignal, chatter_q7) == 22);
+    assert!(core::mem::offset_of!(BoundarySignal, signal_flags) == 23);
+    assert!(core::mem::offset_of!(BoundarySignal, dominant_lane) == 24);
+    assert!(core::mem::offset_of!(BoundarySignal, root_cause_code) == 25);
+    assert!(core::mem::offset_of!(BoundarySignal, reserved) == 26);
+    assert!(core::mem::offset_of!(BoundarySignal, epoch_id) == 28);
     assert!((ATTRACTOR_SLOT_ID_MASK as usize) == (MAX_ATTRACTOR_DOMAINS - 1));
     assert!(pack_action_slot_tag(7, 0x1F) == 0xFF);
     assert!(unpack_attractor_slot_from_tag(pack_action_slot_tag(5, 0x13)) == 5);

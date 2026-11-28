@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0
 
 cmake_minimum_required(VERSION 3.18)
-project(LiminiKa VERSION 0.2.0 LANGUAGES C CXX)
+project(LiminiKa VERSION 0.4.0 LANGUAGES C CXX)
 
 # Enforce C11 and C++20 specifications for LiminiKa C-ABI compilation
 set(CMAKE_C_STANDARD 11)

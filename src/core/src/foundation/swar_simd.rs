@@ -6,10 +6,10 @@
 use core::f32::consts::FRAC_PI_2;
 
 use crate::foundation::lut_crc32::{
-    sincos_phase_clamp_poly, Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF,
-    Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_REF, Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF,
-    SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_32, SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64, SWAR_SIGN_MASK_32,
-    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, SWAR_SUM_U16_64,
+    Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF, Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_REF,
+    Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF, SWAR_EVEN_BYTES_64, SWAR_LOW7_MASK_32,
+    SWAR_LOW7_MASK_64, SWAR_ODD_BYTES_64, SWAR_SIGN_MASK_32, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    SWAR_SUM_U16_64, sincos_phase_clamp_poly,
 };
 use crate::foundation::scalar_math::{
     branchless_abs_f32, branchless_is_finite_f32, branchless_is_nan_f32,
@@ -19,9 +19,9 @@ use crate::foundation::scalar_math::{
     eval_phase_clamp_theta_rad_preinv, sincos_reduced_pi,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_select_usize, PhaseQ7,
-    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_i8, branchless_select_i32, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64, branchless_select_usize,
 };
 
 /// Packs 8 `PhaseQ7` lanes into a single 64-bit little-endian SWAR word.
@@ -295,7 +295,8 @@ pub(crate) const fn swar_q7_phase_step_filter_with_thresh_x8(
     packed & keep_mask & valid_step_mask
 }
 
-/// True bit-parallel SWAR 8-lane discrete phase-step cutoff filter (`PhaseStepFilter`) in strictly constant time (`0` branches).
+/// True bit-parallel SWAR 8-lane discrete phase-step cutoff filter (`PhaseStepFilter`) in strictly constant
+/// time (`0` branches).
 #[inline(always)]
 pub const fn swar_q7_phase_step_filter_x8(packed: u64, min_step_q7: u8) -> u64 {
     let thresh_x8 = ((min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
@@ -463,9 +464,9 @@ pub(crate) unsafe fn avx2_q7_mean_i8_from_vec64(
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_add_epi64, _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_sad_epu8,
-            _mm256_set1_epi8, _mm256_setzero_si256, _mm256_xor_si256, _mm_add_epi64,
-            _mm_cvtsi128_si64, _mm_unpackhi_epi64,
+            _mm_add_epi64, _mm_cvtsi128_si64, _mm_unpackhi_epi64, _mm256_add_epi64,
+            _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_sad_epu8, _mm256_set1_epi8,
+            _mm256_setzero_si256, _mm256_xor_si256,
         };
         let sign = _mm256_set1_epi8(-128i8);
         let zero = _mm256_setzero_si256();
@@ -873,11 +874,15 @@ pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
     }
 }
 
-/// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}), \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}))$
+/// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}),
+/// \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}))$
 /// for a single attention head, using two 1-cycle LUT loads when both `PhaseClamp` limits equal
-/// [`crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
+/// [`crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian
+/// angles and evaluating
 /// `sincos_phase_clamp_poly` **once** instead of twice when custom `PhaseClamp` limits are active.
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) const fn eval_fused_phase_clamp_subhead_sincos_q7_fast(
     base_q7: PhaseQ7,
     geodesic_base: bool,

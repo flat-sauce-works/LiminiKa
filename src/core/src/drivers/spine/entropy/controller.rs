@@ -10,22 +10,21 @@ use crate::drivers::spine::entropy::kernels::{
     compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_temperature_for_mode,
 };
 use crate::drivers::spine::entropy::{
-    EntropyState, DEFAULT_BIFURCATION_THRESHOLD, DEFAULT_HYSTERESIS_BAND,
-    DEFAULT_SAMPLE_TEMPERATURE, DEFAULT_SINGULARITY_EPS, DEFAULT_TAU_FLUX, EMA_ALPHA_ENTROPY,
-    ENTROPY_GATE_MODE_NORMAL_ENTROPY, ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION,
-    ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION, ENTROPY_GATE_SLIDING_WINDOW_HORIZON,
-    ENTROPY_GATE_WINDOW_RING_CAPACITY, INV_LN_2, LUT_REPULSION_GAIN, LUT_SAMPLE_TEMPERATURE,
-    MAX_BARRIER_CEILING, MAX_VALID_TOKEN_Z_SCORE,
+    DEFAULT_BIFURCATION_THRESHOLD, DEFAULT_HYSTERESIS_BAND, DEFAULT_SAMPLE_TEMPERATURE,
+    DEFAULT_SINGULARITY_EPS, DEFAULT_TAU_FLUX, EMA_ALPHA_ENTROPY, ENTROPY_GATE_MODE_NORMAL_ENTROPY,
+    ENTROPY_GATE_MODE_PHASE_CONJUGATE_REPULSION, ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION,
+    ENTROPY_GATE_SLIDING_WINDOW_HORIZON, ENTROPY_GATE_WINDOW_RING_CAPACITY, EntropyState, INV_LN_2,
+    LUT_REPULSION_GAIN, LUT_SAMPLE_TEMPERATURE, MAX_BARRIER_CEILING, MAX_VALID_TOKEN_Z_SCORE,
 };
 use crate::foundation::{
+    ATTRACTOR_SLOT_ID_MASK, AlignedSlice32, F32_MIN_POSITIVE_NORMAL, Pod, TaggedPtr,
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
     branchless_max_f32, branchless_min_f32, branchless_relu_f32, branchless_sanitize_z_score_f32,
-    fast_inv_len_f32, fast_inv_pos_normal_f32, sum_sq_f32_simd8, AlignedSlice32, Pod, TaggedPtr,
-    ATTRACTOR_SLOT_ID_MASK, F32_MIN_POSITIVE_NORMAL,
+    fast_inv_len_f32, fast_inv_pos_normal_f32, sum_sq_f32_simd8,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u8, LmnkResult,
-    LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT,
+    LMNK_ERR_ENTROPY_SINGULARITY, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, branchless_select_f32,
+    branchless_select_u8, branchless_select_u32,
 };
 
 /// `EntropyController` stateful engine (128 bytes = 2 cache lines, 64B aligned).
@@ -36,7 +35,8 @@ pub struct EntropyController {
     pub state: EntropyState,
     /// Total stateful evaluation steps processed (`offset 32..40`).
     pub step_count: u64,
-    /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds (`offset 40..44`).
+    /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds (`offset
+    /// 40..44`).
     pub hysteresis_band: f32,
     /// Threshold for sliding-window entropy rate flux ($\tau_{\mathrm{flux}}$, `offset 44..48`).
     pub tau_flux: f32,
@@ -488,6 +488,8 @@ impl EntropyController {
     /// Internal register-pipelined implementation of `eval_stateful_with_lacuna_and_pointer`
     /// assuming `token_z_score` and `lacuna_score` have already been verified finite.
     #[inline]
+    // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+    #[allow(clippy::too_many_arguments)]
     fn eval_stateful_with_lacuna_and_pointer_finite(
         &mut self,
         token_z_score: f32,
@@ -580,33 +582,27 @@ impl EntropyController {
     /// $\mathcal{O}(1)$ [`TaggedPtr`] mode evolution.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if `token_z_score` or `lacuna_score` is non-finite.
+    /// Returns [`LMNK_ERR_ENTROPY_SINGULARITY`] if `input.token_z_score` or `input.lacuna_score` is non-finite.
     #[inline(always)]
     pub fn eval_stateful_with_lacuna_and_pointer(
         &mut self,
-        token_z_score: f32,
-        lacuna_score: f32,
-        alpha: f32,
-        beta: f32,
-        d0: f32,
-        input_ptr: TaggedPtr,
-        trail_density: f32,
-        dominant_attractor_slot: u8,
-        high_density_rank1_thresh: f32,
+        input: LacunaPointerInput,
     ) -> LmnkResult<(EntropyState, TaggedPtr)> {
-        if !branchless_is_finite_f32(token_z_score) || !branchless_is_finite_f32(lacuna_score) {
+        if !branchless_is_finite_f32(input.token_z_score)
+            || !branchless_is_finite_f32(input.lacuna_score)
+        {
             return Err(LMNK_ERR_ENTROPY_SINGULARITY);
         }
         Ok(self.eval_stateful_with_lacuna_and_pointer_finite(
-            token_z_score,
-            lacuna_score,
-            alpha,
-            beta,
-            d0,
-            input_ptr,
-            trail_density,
-            dominant_attractor_slot,
-            high_density_rank1_thresh,
+            input.token_z_score,
+            input.lacuna_score,
+            input.alpha,
+            input.beta,
+            input.d0,
+            input.input_ptr,
+            input.trail_density,
+            input.dominant_attractor_slot,
+            input.high_density_rank1_thresh,
         ))
     }
 
@@ -620,28 +616,64 @@ impl EntropyController {
     #[inline(always)]
     pub fn eval_surrogate_and_step(
         &mut self,
-        p_max: f32,
-        p_2nd: f32,
-        cosine_dist: f32,
-        mu_dist: f32,
-        sigma_dist: f32,
-        alpha_z: f32,
-        gamma_mod: f32,
+        input: SurrogateEntropyInput,
         state_out: &mut EntropyState,
     ) -> LmnkResult<f32> {
         let eps = self.state.singularity_eps;
-        let h_surr = compute_sparse_surrogate_entropy(p_max, p_2nd, eps);
+        let h_surr = compute_sparse_surrogate_entropy(input.p_max, input.p_2nd, eps);
         let h_tilde = compute_moving_z_score_entropy(
             h_surr,
-            cosine_dist,
-            mu_dist,
-            sigma_dist,
+            input.cosine_dist,
+            input.mu_dist,
+            input.sigma_dist,
             eps,
-            alpha_z,
-            gamma_mod,
+            input.alpha_z,
+            input.gamma_mod,
         );
         Ok(self.eval_stateful_finite_into(h_tilde, state_out))
     }
+}
+
+/// Inputs for [`EntropyController::eval_stateful_with_lacuna_and_pointer`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LacunaPointerInput {
+    /// Current token Z-score entropy observation.
+    pub token_z_score: f32,
+    /// Current lacuna ambiguity score.
+    pub lacuna_score: f32,
+    /// Eyring-Kramers temperature scaling factor $\alpha$.
+    pub alpha: f32,
+    /// Eyring-Kramers damping exponent $\beta$.
+    pub beta: f32,
+    /// Baseline energy offset $d_0$.
+    pub d0: f32,
+    /// Incoming tagged pointer to evolve.
+    pub input_ptr: TaggedPtr,
+    /// Accumulated stigmergic trail density.
+    pub trail_density: f32,
+    /// Preferred attractor working slot (`0..=7`).
+    pub dominant_attractor_slot: u8,
+    /// High-density threshold activating Rank-1 residual injection.
+    pub high_density_rank1_thresh: f32,
+}
+
+/// Inputs for [`EntropyController::eval_surrogate_and_step`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurrogateEntropyInput {
+    /// Highest token probability $p_{\max}$.
+    pub p_max: f32,
+    /// Second-highest token probability $p_{\mathrm{2nd}}$.
+    pub p_2nd: f32,
+    /// Current inter-layer cosine distance.
+    pub cosine_dist: f32,
+    /// Running mean cosine distance $\mu$.
+    pub mu_dist: f32,
+    /// Running standard deviation $\sigma$.
+    pub sigma_dist: f32,
+    /// Mixing weight for surrogate entropy vs distance Z-score.
+    pub alpha_z: f32,
+    /// Modulation scaling factor $\gamma$.
+    pub gamma_mod: f32,
 }
 
 impl Default for EntropyController {
@@ -718,7 +750,8 @@ impl EntropyController {
     }
 
     /// Calculates Eyring-Kramers potential barrier height:
-    /// $\Delta V = \min\left(\frac{\tau_{\mathrm{eff}}}{\max(0, \mathcal{E}_{\mathrm{lat}}) + \epsilon_{\mathrm{log}}}, \Delta V_{\max}\right)$
+    /// $\Delta V = \min\left(\frac{\tau_{\mathrm{eff}}}{\max(0, \mathcal{E}_{\mathrm{lat}}) +
+    /// \epsilon_{\mathrm{log}}}, \Delta V_{\max}\right)$
     /// in division-free (`0 fdiv`) mode, clamping `denom` to `F32_MIN_POSITIVE_NORMAL` and
     /// evaluating `fast_inv_pos_normal_f32` to eliminate subnormal-branch jitter near epsilon singularities.
     ///
@@ -756,7 +789,8 @@ impl EntropyController {
     /// Branchlessly evaluates the next `EntropyController` branch mode (`0`, `1`, `2`).
     #[inline(always)]
     #[must_use]
-    pub fn evaluate_branch_mode_transition(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn evaluate_branch_mode_transition(
         &self,
         current_mode: u32,
         moving_z_entropy: f32,
@@ -778,30 +812,5 @@ impl EntropyController {
 
         let active_target = branchless_select_u32(lacuna_score >= bifurcation_threshold, 1, 2);
         branchless_select_u32(active_non_normal, active_target, 0)
-    }
-
-    /// Evaluates the energy-guided dynamic sampling temperature modifier (`sample_temperature`).
-    #[inline(always)]
-    #[must_use]
-    pub fn eval_energy_guided_temperature(
-        &self,
-        base_temperature: f32,
-        moving_z_entropy: f32,
-        lacuna_score: f32,
-        tau_eff: f32,
-        alpha: f32,
-        beta: f32,
-        d0: f32,
-    ) -> f32 {
-        eval_temperature_for_mode(
-            self.state.active_branch_mode,
-            base_temperature,
-            moving_z_entropy,
-            lacuna_score,
-            tau_eff,
-            alpha,
-            beta,
-            d0,
-        )
     }
 }

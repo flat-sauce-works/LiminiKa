@@ -200,9 +200,9 @@ pub fn run_angle_sweep(
             sum_kl += kl_divergence_from_logits(&base.logits, &step.logits);
             sum_logprob_delta += step.target_logprob - base.target_logprob;
 
-            let gen =
+            let generated_text =
                 backend.generate_text(&probe.prompt, angle, &profile.phase_deltas, max_tokens)?;
-            let (eh, et, fh, ft) = score_probe_text(probe, &gen);
+            let (eh, et, fh, ft) = score_probe_text(probe, &generated_text);
             expected_hits += eh;
             expected_total += et;
             forbidden_hits += fh;

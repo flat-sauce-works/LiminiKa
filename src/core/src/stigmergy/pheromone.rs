@@ -9,24 +9,27 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
+#[cfg(test)]
+use crate::foundation::load_q7_words_64;
 use crate::foundation::{
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP, ACTION_PRESET_REPULSION_ESCAPE,
+    ATTRACTOR_SLOT_ID_MASK, Pod, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TaggedPtr,
     branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_min_f32, branchless_relu_f32, is_word_array_uniform_64, load_q7_words_64,
-    swar_q7_abs_u8_x8, swar_q7_add_sat_x8, swar_q7_avg_round_x8, swar_q7_circular_add_x8,
-    swar_q7_circular_diff_x8, swar_q7_scale_le128_with_bias_x8, swar_u8_mean_round_x8,
-    swar_words_nonzero_64, Pod, TaggedPtr, ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_STEER,
-    ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_FULL_ORCHESTRATION, ACTION_PRESET_INERTIAL_SKIP,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    branchless_min_f32, branchless_relu_f32, is_word_array_uniform_64, swar_q7_abs_u8_x8,
+    swar_q7_add_sat_x8, swar_q7_avg_round_x8, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
+    swar_q7_scale_le128_with_bias_x8, swar_u8_mean_round_x8, swar_words_nonzero_64,
 };
+#[cfg(test)]
+use crate::liminal::{MAX_ATTENTION_HEADS, PhaseQ7};
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    NUM_STIGMERGIC_GRANULES, branchless_select_f32, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64,
 };
 use crate::stigmergy::circuit::StigmergicScaleGranularity;
 use crate::stigmergy::ledger::ContrastivePhaseBloomFilter;
-use crate::stigmergy::trail::{trail_phase_words_mut, trail_phase_words_ref, PointerTrail};
+use crate::stigmergy::trail::{PointerTrail, trail_phase_words_mut, trail_phase_words_ref};
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, DEFAULT_STIGMERGIC_QUORUM_THRESHOLD, DEFAULT_STIGMERGIC_TOLERANCE_Q7,
     MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE,
@@ -45,7 +48,8 @@ pub trait PheromoneDensityOps {
     /// Updates the stored pheromone density scalar for this record.
     fn set_pheromone_density(&mut self, density: f32);
 
-    /// Applies subnormal-safe temporal evaporative decay ($\rho \gets \min(\rho \cdot \lambda_{\mathrm{retain}}, \rho_{\max})$).
+    /// Applies subnormal-safe temporal evaporative decay ($\rho \gets \min(\rho \cdot
+    /// \lambda_{\mathrm{retain}}, \rho_{\max})$).
     #[inline(always)]
     fn evaporate_pheromone(&mut self, retain_factor: f32) -> f32 {
         let clean_decay =
@@ -98,6 +102,8 @@ impl PheromoneDensityOps for PointerTrail {
 /// when `step_gain_u7 <= 128`.
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) const fn swar_subswarm_resolve_with_bias_x8(
     current_word: u64,
     target_word: u64,
@@ -167,6 +173,8 @@ pub(crate) const fn precompute_swarm_step_params(
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 unsafe fn avx2_subswarm_resolve_words_64(
     cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
     cur_is_uniform: bool,
@@ -185,13 +193,13 @@ unsafe fn avx2_subswarm_resolve_words_64(
     unsafe {
         use core::arch::x86_64::_mm256_testz_si256;
         use core::arch::x86_64::{
-            __m256i, _mm256_abs_epi8, _mm256_add_epi64, _mm256_add_epi8, _mm256_adds_epi8,
-            _mm256_and_si256, _mm256_castsi256_pd, _mm256_castsi256_si128, _mm256_cmpeq_epi8,
-            _mm256_cmpgt_epi64, _mm256_extracti128_si256, _mm256_max_epu8, _mm256_movemask_pd,
-            _mm256_mulhi_epi16, _mm256_or_si256, _mm256_sad_epu8, _mm256_set1_epi16,
-            _mm256_set1_epi64x, _mm256_set1_epi8, _mm256_setzero_si256, _mm256_slli_epi16,
-            _mm256_srli_epi64, _mm256_sub_epi8, _mm_add_epi64, _mm_cvtsi128_si64,
-            _mm_unpackhi_epi64,
+            __m256i, _mm_add_epi64, _mm_cvtsi128_si64, _mm_unpackhi_epi64, _mm256_abs_epi8,
+            _mm256_add_epi8, _mm256_add_epi64, _mm256_adds_epi8, _mm256_and_si256,
+            _mm256_castsi256_pd, _mm256_castsi256_si128, _mm256_cmpeq_epi8, _mm256_cmpgt_epi64,
+            _mm256_extracti128_si256, _mm256_max_epu8, _mm256_movemask_pd, _mm256_mulhi_epi16,
+            _mm256_or_si256, _mm256_sad_epu8, _mm256_set1_epi8, _mm256_set1_epi16,
+            _mm256_set1_epi64x, _mm256_setzero_si256, _mm256_slli_epi16, _mm256_srli_epi64,
+            _mm256_sub_epi8,
         };
         let _ = core::mem::size_of::<__m256i>();
         let (vc0, vc1) =
@@ -290,6 +298,8 @@ unsafe fn avx2_subswarm_resolve_words_64(
 
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn swar_subswarm_resolve_words_64(
     cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
     cur_is_uniform: bool,
@@ -305,7 +315,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: Guarded by `cfg(target_feature = "avx2")`.
-        return unsafe {
+        unsafe {
             avx2_subswarm_resolve_words_64(
                 cur_w,
                 cur_is_uniform,
@@ -318,7 +328,7 @@ pub(super) fn swar_subswarm_resolve_words_64(
                 min_step_q7,
                 tolerance_q7,
             )
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     let _ = (cur_is_uniform, tgt_is_uniform);
@@ -437,6 +447,33 @@ pub const fn swar_subswarm_resolve_x8(
     )
 }
 
+/// Parameters for [`PointerTrail::try_resolve_action_in_swarm_from_words`].
+#[derive(Debug, Clone, Copy)]
+pub struct SwarmResolveParams<'a> {
+    /// Incoming tagged pointer describing target slot and action mode.
+    pub action_ptr: TaggedPtr,
+    /// Bitmask of active 8-head micro-swarm cells (`0xFF` for all 8 cells).
+    pub active_cell_mask: u8,
+    /// Per-cell phase step gain (`0..=128`).
+    pub step_gain_u7: u8,
+    /// Minimum Q7 phase step filter threshold.
+    pub min_step_q7: u8,
+    /// Maximum residual Q7 tolerance for cell convergence.
+    pub tolerance_q7: u8,
+    /// Minimum number of converged cells required for hot-path quorum (`1..=8`).
+    pub quorum_threshold: u8,
+    /// Current normalized entropy observation $\tilde{H}$.
+    pub entropy_h_tilde: f32,
+    /// Low-entropy inertial skip threshold.
+    pub low_entropy_skip_thresh: f32,
+    /// Optional contrastive phase Bloom filter for repulsion gating.
+    pub bloom_filter: Option<&'a ContrastivePhaseBloomFilter>,
+    /// Bloom repulsion density threshold (`0..=255`).
+    pub repulsion_threshold: u8,
+    /// Repulsion conjugate blend scale (`0..=128`).
+    pub repulsion_scale_u7: u8,
+}
+
 /// Approximation-first trait framing the 3-stage stigmergic compute pipeline:
 /// 1. **Fragmentation (Granulate)**: decompose a 64-head phase trajectory into 8 myopic `u64` SWAR granules.
 impl PointerTrail {
@@ -444,8 +481,10 @@ impl PointerTrail {
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches),
     /// returning both `(StigmergicReconstitutionReport, resolved_swar_words)` so downstream RoPE/`PhaseClamp` kernels
     /// can steer directly from registers without re-loading `accumulated_phase_delta`.
+    #[cfg(test)]
     #[inline(always)]
-    pub fn try_resolve_action_in_swarm_to_words(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_resolve_action_in_swarm_to_words(
         &mut self,
         action_ptr: TaggedPtr,
         target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -465,25 +504,29 @@ impl PointerTrail {
     ) {
         let tgt_w = load_q7_words_64(target_phases);
         self.try_resolve_action_in_swarm_from_words(
-            action_ptr,
             &tgt_w,
-            active_cell_mask,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
+            SwarmResolveParams {
+                action_ptr,
+                active_cell_mask,
+                step_gain_u7,
+                min_step_q7,
+                tolerance_q7,
+                quorum_threshold,
+                entropy_h_tilde,
+                low_entropy_skip_thresh,
+                bloom_filter,
+                repulsion_threshold,
+                repulsion_scale_u7,
+            },
         )
     }
 
     /// Subdivides the Stigmergic Substrate's target 64-head phase command into **8 parallel 8-head SWAR
     /// Micro-Swarm cells** gated by `active_cell_mask` in strictly constant time (`0` branches).
+    #[cfg(test)]
     #[inline(always)]
-    pub fn try_resolve_action_in_swarm_masked(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_resolve_action_in_swarm_masked(
         &mut self,
         action_ptr: TaggedPtr,
         target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -515,43 +558,12 @@ impl PointerTrail {
         .0
     }
 
-    /// Subdivides the Stigmergic Substrate's target 64-head phase command across all 8 Micro-Swarm cells (`0xFF`).
-    #[inline(always)]
-    pub fn try_resolve_action_in_swarm(
-        &mut self,
-        action_ptr: TaggedPtr,
-        target_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
-        step_gain_u7: u8,
-        min_step_q7: u8,
-        tolerance_q7: u8,
-        quorum_threshold: u8,
-        entropy_h_tilde: f32,
-        low_entropy_skip_thresh: f32,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-        repulsion_threshold: u8,
-        repulsion_scale_u7: u8,
-    ) -> StigmergicReconstitutionReport {
-        self.try_resolve_action_in_swarm_masked(
-            action_ptr,
-            target_phases,
-            0xFF,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
-        )
-    }
-
     /// Fragments the trail across 8 myopic granules, drifts each along `target_words` gated by
     /// `active_granule_mask`, and reconstitutes the resulting state transition into
     /// `(StigmergicReconstitutionReport, reconstituted_words)` in branchless constant time.
     #[inline(always)]
-    pub fn reconstitute_from_stigmergy_words(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reconstitute_from_stigmergy_words(
         &mut self,
         action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -570,22 +582,26 @@ impl PointerTrail {
         [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         self.try_resolve_action_in_swarm_from_words(
-            action_ptr,
             target_words,
-            active_granule_mask,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
+            SwarmResolveParams {
+                action_ptr,
+                active_cell_mask: active_granule_mask,
+                step_gain_u7,
+                min_step_q7,
+                tolerance_q7,
+                quorum_threshold,
+                entropy_h_tilde,
+                low_entropy_skip_thresh,
+                bloom_filter,
+                repulsion_threshold,
+                repulsion_scale_u7,
+            },
         )
     }
 
     #[inline]
+    // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_resolve_action_in_swarm_with_cur_words(
         &mut self,
         action_ptr: TaggedPtr,
@@ -615,17 +631,15 @@ impl PointerTrail {
         let mut next_words = cur_w;
         let quorum_mask: u8;
         let residual_sum: u32;
-        if use_explicit_tgt
+        if (use_explicit_tgt
             && (cur_w[0] == tgt_base_w[0])
             && ((((cur_w[1] ^ tgt_base_w[1]) | (cur_w[2] ^ tgt_base_w[2]))
                 | ((cur_w[3] ^ tgt_base_w[3]) | (cur_w[4] ^ tgt_base_w[4]))
                 | ((cur_w[5] ^ tgt_base_w[5]) | (cur_w[6] ^ tgt_base_w[6]))
                 | (cur_w[7] ^ tgt_base_w[7]))
-                == 0)
+                == 0))
+            || active_cell_mask == 0
         {
-            quorum_mask = 0xFF;
-            residual_sum = 0;
-        } else if active_cell_mask == 0 {
             quorum_mask = 0xFF;
             residual_sum = 0;
         } else {
@@ -820,43 +834,34 @@ impl PointerTrail {
     }
 
     /// Resolves a Stigmergic Substrate command across all 8 SWAR Micro-Swarm cells directly from
+    /// Subdivides the Stigmergic Substrate's target 64-head phase command directly from
     /// pre-loaded target SWAR words (`target_words`), avoiding any 64-byte stack reload when
     /// chained after `ManifoldGatewaySignal::synthesize_gateway_frame_with_words`.
     #[inline(always)]
     pub fn try_resolve_action_in_swarm_from_words(
         &mut self,
-        action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        active_cell_mask: u8,
-        step_gain_u7: u8,
-        min_step_q7: u8,
-        tolerance_q7: u8,
-        quorum_threshold: u8,
-        entropy_h_tilde: f32,
-        low_entropy_skip_thresh: f32,
-        bloom_filter: Option<&ContrastivePhaseBloomFilter>,
-        repulsion_threshold: u8,
-        repulsion_scale_u7: u8,
+        params: SwarmResolveParams<'_>,
     ) -> (
         StigmergicReconstitutionReport,
         [u64; NUM_STIGMERGIC_GRANULES],
     ) {
         let cur_w = *trail_phase_words_ref(self);
         self.try_resolve_action_in_swarm_with_cur_words(
-            action_ptr,
+            params.action_ptr,
             &cur_w,
             target_words,
             false,
-            active_cell_mask,
-            step_gain_u7,
-            min_step_q7,
-            tolerance_q7,
-            quorum_threshold,
-            entropy_h_tilde,
-            low_entropy_skip_thresh,
-            bloom_filter,
-            repulsion_threshold,
-            repulsion_scale_u7,
+            params.active_cell_mask,
+            params.step_gain_u7,
+            params.min_step_q7,
+            params.tolerance_q7,
+            params.quorum_threshold,
+            params.entropy_h_tilde,
+            params.low_entropy_skip_thresh,
+            params.bloom_filter,
+            params.repulsion_threshold,
+            params.repulsion_scale_u7,
         )
     }
 
@@ -911,7 +916,8 @@ impl PointerTrail {
     /// Resolves `target_words` inside the 8-cell SWAR Micro-Swarm using parameters derived
     /// structurally from `(granularity, layer_index, total_layers)` and optional Bloom guards.
     #[inline(always)]
-    pub fn resolve_swarm_with_scale_layer(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn resolve_swarm_with_scale_layer(
         &mut self,
         action_ptr: TaggedPtr,
         target_words: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -933,18 +939,20 @@ impl PointerTrail {
             active_cell_mask
         };
         self.try_resolve_action_in_swarm_from_words(
-            action_ptr,
             target_words,
-            mask,
-            gain_q7,
-            2,
-            tol_q7,
-            quorum,
-            0.40,
-            0.15,
-            bloom_filter,
-            3,
-            96,
+            SwarmResolveParams {
+                action_ptr,
+                active_cell_mask: mask,
+                step_gain_u7: gain_q7,
+                min_step_q7: 2,
+                tolerance_q7: tol_q7,
+                quorum_threshold: quorum,
+                entropy_h_tilde: 0.40,
+                low_entropy_skip_thresh: 0.15,
+                bloom_filter,
+                repulsion_threshold: 3,
+                repulsion_scale_u7: 96,
+            },
         )
     }
 }

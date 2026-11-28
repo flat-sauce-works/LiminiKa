@@ -4,19 +4,212 @@
 //! Fixture loading, base-prior sampling, RoPE baking, and VRAM/metric helpers.
 
 use std::path::Path;
+use std::time::Instant;
 
 use candle_core::quantized::GgmlDType;
 use candle_core::{DType, Device};
 use liminika_adapter::{
-    AttractorRole, ModelBaseAttractorProfile, ModelSteeringAdapter, SequenceActivationPooler,
-    TokenSequenceEntry,
+    AdaptiveLayerSelectConfig, AttractorRole, CapturedTokenSequence, CompiledTokenCorpus,
+    ContrastiveAnchorBank, ContrastiveAnchorEntry, DEFAULT_CANDIDATE_BAND_END_RATIO,
+    DEFAULT_CANDIDATE_BAND_START_RATIO, DEFAULT_STARTUP_PRIOR_PROBES, ModelBaseAttractorProfile,
+    ModelSteeringAdapter, PrefixAliasProbe, SequenceActivationPooler, TokenSequenceEncoder,
+    TokenSequenceEntry, ratio_band_layer_mask, select_adaptive_layer_mask,
 };
-use liminika_core::abi::lmnk_q7_t;
-use liminika_core::runtime::{GuardPhaseAnchor, ObjectiveFact, SubjectivePersona};
 use liminika_core::stigmergy::StigmergicSubstrate;
 use tokenizers::Tokenizer;
 
-use crate::model::{LogitsFetchMode, Phi3Config, Phi3Model};
+use crate::eval::LayerMaskSpec;
+use crate::model::{CausalLmModel, ChatTemplate, KvCacheMode, LogitsFetchMode, ModelConfig};
+
+pub(crate) type BakedModelProfile = ContrastiveAnchorBank;
+
+pub(crate) struct LmTokenEncoder<'a> {
+    model: &'a mut CausalLmModel,
+    tokenizer: &'a Tokenizer,
+    chat: &'a ChatTemplate,
+    format_as_chat_prompt: bool,
+    capture_final_hidden: bool,
+}
+
+impl<'a> LmTokenEncoder<'a> {
+    pub(crate) fn new(
+        model: &'a mut CausalLmModel,
+        tokenizer: &'a Tokenizer,
+        chat: &'a ChatTemplate,
+    ) -> Self {
+        Self {
+            model,
+            tokenizer,
+            chat,
+            format_as_chat_prompt: false,
+            capture_final_hidden: false,
+        }
+    }
+
+    pub(crate) const fn with_chat_prompt(mut self, enabled: bool) -> Self {
+        self.format_as_chat_prompt = enabled;
+        self
+    }
+
+    pub(crate) const fn with_final_hidden(mut self, enabled: bool) -> Self {
+        self.capture_final_hidden = enabled;
+        self
+    }
+}
+
+impl TokenSequenceEncoder for LmTokenEncoder<'_> {
+    fn encode_token_sequence(&mut self, text: &str) -> Result<CapturedTokenSequence, String> {
+        let owned_prompt;
+        let input_text = if self.format_as_chat_prompt {
+            owned_prompt = self.chat.format_single_turn(text);
+            owned_prompt.as_str()
+        } else {
+            text
+        };
+        let ids = self
+            .tokenizer
+            .encode(input_text, false)
+            .map_err(|e| format!("encode error: {e}"))?
+            .get_ids()
+            .to_vec();
+        let (_, layer_tok_qs, h_vec) = self
+            .model
+            .forward_tokens(
+                &ids,
+                0,
+                None,
+                false,
+                true,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::IsolatedProbe,
+            )
+            .map_err(|e| format!("forward error: {e}"))?;
+        let captured = CapturedTokenSequence::new(ids.len(), layer_tok_qs);
+        if self.capture_final_hidden {
+            Ok(captured.with_final_hidden(h_vec))
+        } else {
+            Ok(captured)
+        }
+    }
+}
+
+/// Detects whether a UTF-8 leading span `span` diverges in its leading `1..=3` token IDs when
+/// tokenized after a minimal script-appropriate continuation prefix (`": "` for ASCII-only spans,
+/// `"\u{3001}"` ideographic comma when non-ASCII characters are present) compared to standalone
+/// start-of-sequence encoding.
+///
+/// Returns `Ok(Some((full_ids, slice_start, slice_len)))` when continuation tokenization differs,
+/// where `full_ids[slice_start..slice_start + slice_len]` are the leading `1..=3` continuation
+/// alias tokens ready for an `IsolatedProbe` forward pass.
+pub(crate) fn detect_leading_alias_continuation(
+    tokenizer: &Tokenizer,
+    span: &str,
+) -> Result<Option<(Vec<u32>, usize, usize)>, String> {
+    const MAX_ALIAS_HEAD_TOKENS: usize = 3;
+
+    let ids_raw = tokenizer
+        .encode(span, false)
+        .map_err(|e| format!("alias raw encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    if ids_raw.is_empty() {
+        return Ok(None);
+    }
+
+    let has_non_ascii = !span.is_ascii();
+    let (prefix_str, combined_str) = if has_non_ascii {
+        ("\u{3001}", format!("\u{3001}{span}"))
+    } else {
+        (":", format!(": {span}"))
+    };
+    let prefix_ids = tokenizer
+        .encode(prefix_str, false)
+        .map_err(|e| format!("alias prefix encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+    let combined_ids = tokenizer
+        .encode(combined_str.as_str(), false)
+        .map_err(|e| format!("alias context encode error: {e}"))?
+        .get_ids()
+        .to_vec();
+
+    let (full_ids_all, slice_start) =
+        if !prefix_ids.is_empty() && combined_ids.starts_with(&prefix_ids) {
+            (combined_ids, prefix_ids.len())
+        } else {
+            let common = prefix_ids
+                .iter()
+                .zip(combined_ids.iter())
+                .take_while(|(a, b)| a == b)
+                .count();
+            if common > 0 && common < combined_ids.len() {
+                (combined_ids, common)
+            } else if !has_non_ascii {
+                let spaced = format!(" {span}");
+                let ids_spaced = tokenizer
+                    .encode(spaced.as_str(), false)
+                    .map_err(|e| format!("alias spaced encode error: {e}"))?
+                    .get_ids()
+                    .to_vec();
+                let mut joined = prefix_ids.clone();
+                let start = joined.len();
+                joined.extend_from_slice(&ids_spaced);
+                (joined, start)
+            } else {
+                return Ok(None);
+            }
+        };
+
+    if slice_start >= full_ids_all.len() {
+        return Ok(None);
+    }
+    let ctx_tail = &full_ids_all[slice_start..];
+    let head_len = ctx_tail.len().min(MAX_ALIAS_HEAD_TOKENS);
+    if head_len == 0 {
+        return Ok(None);
+    }
+    let raw_head = &ids_raw[..ids_raw.len().min(MAX_ALIAS_HEAD_TOKENS)];
+    let ctx_head = &ctx_tail[..head_len];
+    if raw_head == ctx_head {
+        return Ok(None);
+    }
+
+    let full_ids = full_ids_all[..slice_start + head_len].to_vec();
+    Ok(Some((full_ids, slice_start, head_len)))
+}
+
+impl PrefixAliasProbe for LmTokenEncoder<'_> {
+    fn probe_leading_alias(
+        &mut self,
+        word: &str,
+        q_rot_len: usize,
+    ) -> Result<Option<CapturedTokenSequence>, String> {
+        let Some((full_ids, slice_start, slice_len)) =
+            detect_leading_alias_continuation(self.tokenizer, word)?
+        else {
+            return Ok(None);
+        };
+        let (_, alias_tok_qs, _) = self
+            .model
+            .forward_tokens(
+                &full_ids,
+                0,
+                None,
+                false,
+                true,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::IsolatedProbe,
+            )
+            .map_err(|e| format!("alias forward error: {e}"))?;
+        let start = slice_start * q_rot_len;
+        let end = (slice_start + slice_len) * q_rot_len;
+        let sliced_qs: Vec<Vec<f32>> = alias_tok_qs
+            .into_iter()
+            .map(|layer| layer[start..end].to_vec())
+            .collect();
+        Ok(Some(CapturedTokenSequence::new(slice_len, sliced_qs)))
+    }
+}
 
 pub(crate) struct FixtureSuite {
     pub(crate) facts: Vec<String>,
@@ -109,10 +302,6 @@ pub(crate) fn argmax(logits: &[f32]) -> u32 {
         .map_or(0, |(idx, _)| idx as u32)
 }
 
-pub(crate) fn format_phi4_prompt(user_prompt: &str) -> String {
-    format!("<|user|>{user_prompt}<|end|><|assistant|>")
-}
-
 pub(crate) fn detect_simd_label() -> &'static str {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -143,15 +332,11 @@ pub(crate) fn query_nvidia_smi_vram() -> Option<String> {
         .next()?
         .trim()
         .to_string();
-    if line.is_empty() {
-        None
-    } else {
-        Some(line)
-    }
+    if line.is_empty() { None } else { Some(line) }
 }
 
-pub(crate) fn estimate_phi3_footprint(
-    cfg: &Phi3Config,
+pub(crate) fn estimate_model_footprint(
+    cfg: &ModelConfig,
     dtype: DType,
     quant: Option<GgmlDType>,
 ) -> (u64, f64, f64) {
@@ -159,9 +344,10 @@ pub(crate) fn estimate_phi3_footprint(
     let i = cfg.intermediate_size as u64;
     let n_q = cfg.num_attention_heads as u64;
     let n_kv = cfg.num_key_value_heads as u64;
-    let d_head = h / n_q.max(1);
+    let d_head = cfg.head_dim() as u64;
+    let q_dim = n_q * d_head;
     let qkv_out = (n_q + 2 * n_kv) * d_head;
-    let per_layer_params = h * qkv_out + h * h + h * (2 * i) + i * h + 2 * h;
+    let per_layer_params = h * qkv_out + q_dim * h + h * (2 * i) + i * h + 2 * h;
     let embed_params = (cfg.vocab_size as u64) * h;
     let lm_head_params = if cfg.tie_word_embeddings {
         0
@@ -191,7 +377,7 @@ pub(crate) fn estimate_phi3_footprint(
 }
 
 pub(crate) fn print_runtime_profile(
-    cfg: &Phi3Config,
+    cfg: &ModelConfig,
     adapter: &ModelSteeringAdapter,
     device: &Device,
     dtype: DType,
@@ -200,7 +386,7 @@ pub(crate) fn print_runtime_profile(
     vram_before: Option<&str>,
 ) {
     let geom = adapter.geometry();
-    let (params, weights_mb, kv_2048_mb) = estimate_phi3_footprint(cfg, dtype, quant);
+    let (params, weights_mb, kv_2048_mb) = estimate_model_footprint(cfg, dtype, quant);
     let hub_bytes = std::mem::size_of::<StigmergicSubstrate>();
     println!(
         "[System] os={} arch={} simd={} device={:?} dtype={:?} quant={:?} load={:.2?}",
@@ -213,7 +399,8 @@ pub(crate) fn print_runtime_profile(
         load_elapsed,
     );
     println!(
-        "[Model ] params={:.2}M weights_est={:.1}MiB kv2048_est={:.1}MiB layers={} heads={}/{} head_dim={} rotary_dim={} sidecar_substrate={}B",
+        "[Model ] params={:.2}M weights_est={:.1}MiB kv2048_est={:.1}MiB layers={} heads={}/{} head_dim={} \
+         rotary_dim={} sidecar_substrate={}B",
         params as f64 / 1_000_000.0,
         weights_mb,
         kv_2048_mb,
@@ -240,266 +427,174 @@ pub(crate) fn print_runtime_profile(
     }
 }
 
-pub(crate) fn sample_startup_base_prior(
-    model: &mut Phi3Model,
+pub(crate) fn capture_startup_prior_entries(
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
-    adapter: &ModelSteeringAdapter,
-) -> Result<ModelBaseAttractorProfile, Box<dyn std::error::Error>> {
-    let probe_prompts = [
-        "Explain the basic design trade-offs of a modular systems architecture.",
-        "Summarize how memory alignment affects hardware cache performance.",
-        "Describe step by step how an algorithm filters noisy input signals.",
-        "Contrast deterministic engineering constraints with approximate heuristics.",
-        "What is the boiling point of water at standard atmospheric pressure?",
-        "Write a concise technical note defining a protocol boundary version.",
-    ];
-    let mut base_entries = Vec::with_capacity(probe_prompts.len());
-    for prompt in probe_prompts {
-        model.clear_cache();
-        let formatted = format_phi4_prompt(prompt);
-        let mut seq_ids = tokenizer
-            .encode(formatted.as_str(), false)
-            .map_err(|e| format!("base prior encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (prefill_out, _, _) =
-            model.forward_tokens(&seq_ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
-        let mut logits = prefill_out.into_full_logits()?;
-        let mut gen_ids = Vec::with_capacity(8);
-        for offset in (seq_ids.len()..).take(8) {
-            let next = argmax(&logits);
-            if next == 199999 {
-                break;
-            }
-            gen_ids.push(next);
-            let (next_out, _, _) = model.forward_tokens(
-                &[next],
-                offset,
-                None,
-                false,
-                false,
-                LogitsFetchMode::FullLogits,
-            )?;
-            logits = next_out.into_full_logits()?;
-        }
-        seq_ids.extend_from_slice(&gen_ids);
-        model.clear_cache();
-        let (_, layer_tok_qs, _) =
-            model.forward_tokens(&seq_ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-        base_entries.push(TokenSequenceEntry {
-            role: AttractorRole::Persona,
-            text: prompt.to_string(),
-            energy: 1.0,
-            seq_len: seq_ids.len(),
-            per_layer_token_qs: layer_tok_qs,
-        });
+    chat: &ChatTemplate,
+) -> Result<Vec<TokenSequenceEntry>, Box<dyn std::error::Error>> {
+    // Generation-free 1-pass IsolatedProbe capture across neutral startup prompts matching the
+    // raw query tokenization frame used by `CompiledTokenCorpus` and `TurnOrchestrator`.
+    let mut encoder = LmTokenEncoder::new(model, tokenizer, chat);
+    let mut base_entries = Vec::with_capacity(DEFAULT_STARTUP_PRIOR_PROBES.len());
+    for prompt in DEFAULT_STARTUP_PRIOR_PROBES {
+        let captured = encoder.encode_token_sequence(prompt)?;
+        base_entries.push(captured.into_token_sequence_entry(AttractorRole::Persona, prompt, 1.0));
     }
-    ModelBaseAttractorProfile::extract(
-        adapter,
-        &base_entries,
-        SequenceActivationPooler::default(),
-        0.55,
-    )
-    .map_err(|e| e.into())
+    Ok(base_entries)
 }
 
-pub(crate) struct BakedModelProfile {
-    pub(crate) per_layer_q7: Vec<Vec<lmnk_q7_t>>,
-    pub(crate) fact_q7: Vec<Vec<lmnk_q7_t>>,
-    pub(crate) persona_q7: Vec<Vec<lmnk_q7_t>>,
-    pub(crate) neg_sum: Vec<Vec<f32>>,
-    pub(crate) pos_sum: Vec<Vec<f32>>,
-    pub(crate) fact_anchors_per_layer: Vec<Vec<ObjectiveFact<[i8; 64]>>>,
-    pub(crate) persona_anchors_per_layer: Vec<Vec<SubjectivePersona<[i8; 64]>>>,
-    pub(crate) guard_anchors_per_layer: Vec<Vec<GuardPhaseAnchor>>,
-    pub(crate) rank1_u: Vec<f32>,
-    pub(crate) rank1_v: Vec<f32>,
+pub(crate) struct SharedFixtureArtifacts {
+    pub(crate) baked_opt: Option<BakedModelProfile>,
+    pub(crate) compiled: CompiledTokenCorpus,
+    pub(crate) active_layer_mask: u64,
+    pub(crate) bake_elapsed: std::time::Duration,
+    pub(crate) compile_ms: f64,
+    pub(crate) prior_ms: f64,
+    pub(crate) used_base_prior: bool,
 }
 
-pub(crate) fn normalize_unit(v: &mut [f32]) {
-    let norm = v.iter().map(|&x| x * x).sum::<f32>().sqrt().max(1e-8);
-    for x in v.iter_mut() {
-        *x /= norm;
-    }
-}
-
-pub(crate) fn bake_via_adapter(
-    model: &mut Phi3Model,
+/// Captures the fixture entries in a single model forward pass and builds both the optional
+/// [`ContrastiveAnchorBank`] (when `!recall_only`) and the shared [`CompiledTokenCorpus`],
+/// dropping raw token activation buffers immediately after compilation to keep peak RAM low.
+///
+/// When `layer_mask_spec` is [`LayerMaskSpec::Auto`], resolves the adaptive RoPE steering layer
+/// mask from the full-layer pre-RoPE Q captures of corpus + startup prior probes before fitting
+/// `ModelBaseAttractorProfile` and `CompiledTokenCorpus` (zero redundant forward passes).
+// Evaluation-harness corpus baking entrypoint keeps explicit flat parameters for call-site clarity.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn capture_and_build_shared_corpus(
+    model: &mut CausalLmModel,
     tokenizer: &Tokenizer,
-    adapter: &ModelSteeringAdapter,
-    hidden_size: usize,
+    chat: &ChatTemplate,
+    adapter: &mut ModelSteeringAdapter,
     suite: &FixtureSuite,
-) -> Result<BakedModelProfile, Box<dyn std::error::Error>> {
+    layer_mask_spec: LayerMaskSpec,
+    recall_only: bool,
+    use_base_prior: bool,
+) -> Result<SharedFixtureArtifacts, Box<dyn std::error::Error>> {
     let num_layers = adapter.geometry().num_layers;
-    let q_len = adapter.geometry().q_rot_len();
-    let mut fact_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut persona_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut pos_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut neg_sum = vec![vec![0.0_f32; q_len]; num_layers];
-    let mut pos_h = vec![0.0_f32; hidden_size];
-    let mut neg_h = vec![0.0_f32; hidden_size];
 
-    let fact_count = suite.facts.len().max(1) as f32;
-    let persona_count = suite.persona.len().max(1) as f32;
-    let pos_count = (suite.facts.len() + suite.persona.len()).max(1) as f32;
-    let neg_count = suite.guards.len().max(1) as f32;
+    // Stage 1: capture full-layer pre-RoPE Q activations in one pass (prior + corpus).
+    let t_prior = Instant::now();
+    let prior_entries = if use_base_prior {
+        capture_startup_prior_entries(model, tokenizer, chat)?
+    } else {
+        Vec::new()
+    };
+    let prior_capture_elapsed = t_prior.elapsed();
 
-    let mut per_layer_fact_qs: Vec<Vec<Vec<f32>>> =
-        vec![Vec::with_capacity(suite.facts.len()); num_layers];
-    let mut per_layer_persona_qs: Vec<Vec<Vec<f32>>> =
-        vec![Vec::with_capacity(suite.persona.len()); num_layers];
-    let mut per_layer_guard_qs: Vec<Vec<Vec<f32>>> =
-        vec![Vec::with_capacity(suite.guards.len()); num_layers];
-
-    for text in &suite.facts {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(text.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, layer_tok_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
-            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
-            for ((f_dst, p_dst), &src) in fact_sum[l]
-                .iter_mut()
-                .zip(pos_sum[l].iter_mut())
-                .zip(q.iter())
-            {
-                *f_dst += src / fact_count;
-                *p_dst += src / pos_count;
+    let t_capture = Instant::now();
+    let total = suite.facts.len() + suite.persona.len() + suite.guards.len();
+    let mut contrastive_entries: Vec<ContrastiveAnchorEntry> = Vec::with_capacity(total);
+    let mut entry_meta: Vec<(&str, f32)> = Vec::with_capacity(total);
+    {
+        let mut encoder =
+            LmTokenEncoder::new(model, tokenizer, chat).with_final_hidden(!recall_only);
+        for (role, texts, energy) in [
+            (AttractorRole::Fact, suite.facts.as_slice(), 2.5_f32),
+            (AttractorRole::Persona, suite.persona.as_slice(), 1.5_f32),
+            (AttractorRole::Guard, suite.guards.as_slice(), 2.0_f32),
+        ] {
+            for text in texts {
+                let captured = encoder.encode_token_sequence(text.as_str())?;
+                contrastive_entries.push(ContrastiveAnchorEntry { role, captured });
+                entry_meta.push((text.as_str(), energy));
             }
-            per_layer_fact_qs[l].push(q);
-        }
-        for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
-            *dst += src / pos_count;
         }
     }
 
-    for text in &suite.persona {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(text.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, layer_tok_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
-            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
-            for ((per_dst, p_dst), &src) in persona_sum[l]
-                .iter_mut()
-                .zip(pos_sum[l].iter_mut())
-                .zip(q.iter())
-            {
-                *per_dst += src / persona_count;
-                *p_dst += src / pos_count;
-            }
-            per_layer_persona_qs[l].push(q);
-        }
-        for (dst, &src) in pos_h.iter_mut().zip(h_vec.iter()) {
-            *dst += src / pos_count;
-        }
-    }
+    let baked_opt = if !recall_only {
+        Some(ContrastiveAnchorBank::from_entries(
+            adapter,
+            &contrastive_entries,
+        )?)
+    } else {
+        None
+    };
+    let bake_elapsed = t_capture.elapsed();
 
-    for guard in &suite.guards {
-        model.clear_cache();
-        let ids = tokenizer
-            .encode(guard.as_str(), false)
-            .map_err(|e| format!("encode error: {e}"))?
-            .get_ids()
-            .to_vec();
-        let (_, layer_tok_qs, h_vec) =
-            model.forward_tokens(&ids, 0, None, false, true, LogitsFetchMode::FullLogits)?;
-        for (l, tok_flat) in layer_tok_qs.iter().enumerate() {
-            let q = SequenceActivationPooler::uniform_raw_mean(tok_flat, ids.len(), q_len)?;
-            for (dst, &src) in neg_sum[l].iter_mut().zip(q.iter()) {
-                *dst += src / neg_count;
-            }
-            per_layer_guard_qs[l].push(q);
-        }
-        for (dst, &src) in neg_h.iter_mut().zip(h_vec.iter()) {
-            *dst += src / neg_count;
-        }
-    }
-
-    let mut per_layer_q7 = Vec::with_capacity(num_layers);
-    let mut fact_q7 = Vec::with_capacity(num_layers);
-    let mut persona_q7 = Vec::with_capacity(num_layers);
-    let mut fact_anchors_per_layer = Vec::with_capacity(num_layers);
-    let mut persona_anchors_per_layer = Vec::with_capacity(num_layers);
-    let mut guard_anchors_per_layer = Vec::with_capacity(num_layers);
-    for l in 0..num_layers {
-        out_push_q7(&mut per_layer_q7, adapter, &neg_sum[l], &pos_sum[l])?;
-        out_push_q7(&mut fact_q7, adapter, &neg_sum[l], &fact_sum[l])?;
-        out_push_q7(&mut persona_q7, adapter, &neg_sum[l], &persona_sum[l])?;
-
-        let mut layer_anchors = Vec::with_capacity(per_layer_fact_qs[l].len());
-        for (fact_idx, q_fact) in per_layer_fact_qs[l].iter().enumerate() {
-            let q7 = adapter.bake_layer_procrustes_q7(&neg_sum[l], q_fact)?;
-            let mut arr64 = [0i8; 64];
-            let n = q7.len().min(64);
-            arr64[..n].copy_from_slice(&q7[..n]);
-            layer_anchors.push(ObjectiveFact::new(arr64, 2.5, 0, (fact_idx + 1) as u32));
-        }
-        fact_anchors_per_layer.push(layer_anchors);
-
-        let mut layer_personas = Vec::with_capacity(per_layer_persona_qs[l].len());
-        for (per_idx, q_per) in per_layer_persona_qs[l].iter().enumerate() {
-            let q7 = adapter.bake_layer_procrustes_q7(&neg_sum[l], q_per)?;
-            let mut arr64 = [0i8; 64];
-            let n = q7.len().min(64);
-            arr64[..n].copy_from_slice(&q7[..n]);
-            layer_personas.push(SubjectivePersona::new(
-                arr64,
-                1.5,
-                0,
-                (per_idx + 101) as u32,
-            ));
-        }
-        persona_anchors_per_layer.push(layer_personas);
-
-        let mut layer_guards = Vec::with_capacity(per_layer_guard_qs[l].len());
-        for q_guard in &per_layer_guard_qs[l] {
-            let q7 = adapter.bake_layer_procrustes_q7(&pos_sum[l], q_guard)?;
-            let mut arr64 = [0i8; 64];
-            let n = q7.len().min(64);
-            arr64[..n].copy_from_slice(&q7[..n]);
-            layer_guards.push(GuardPhaseAnchor::new(arr64, 0.0, 0.72));
-        }
-        guard_anchors_per_layer.push(layer_guards);
-    }
-
-    let mut rank1_u: Vec<f32> = pos_h
-        .iter()
-        .zip(neg_h.iter())
-        .map(|(&p, &n)| p - n)
+    // Move captured per-layer Q buffers without cloning and drop `final_hidden` immediately.
+    let staged_entries: Vec<TokenSequenceEntry> = contrastive_entries
+        .into_iter()
+        .zip(entry_meta)
+        .map(|(ce, (text, energy))| ce.captured.into_token_sequence_entry(ce.role, text, energy))
         .collect();
-    let mut rank1_v = rank1_u.clone();
-    normalize_unit(&mut rank1_u);
-    normalize_unit(&mut rank1_v);
 
-    Ok(BakedModelProfile {
-        per_layer_q7,
-        fact_q7,
-        persona_q7,
-        neg_sum,
-        pos_sum,
-        fact_anchors_per_layer,
-        persona_anchors_per_layer,
-        guard_anchors_per_layer,
-        rank1_u,
-        rank1_v,
+    // Stage 2: finalize layer steering mask (adaptive ratio-band + relative EnvProbe when Auto),
+    // then extract BasePrior profile and compile corpus under the exact finalized mask.
+    let active_layer_mask = if layer_mask_spec.is_auto() {
+        let band_mask = ratio_band_layer_mask(
+            num_layers,
+            DEFAULT_CANDIDATE_BAND_START_RATIO,
+            DEFAULT_CANDIDATE_BAND_END_RATIO,
+        );
+        let selected = select_adaptive_layer_mask(
+            num_layers,
+            &staged_entries,
+            &prior_entries,
+            AdaptiveLayerSelectConfig::default(),
+        );
+        println!(
+            "[LayerSelect] mode=auto band=0x{:08X}({}) selected=0x{:08X}({}/{})",
+            band_mask,
+            band_mask.count_ones(),
+            selected,
+            selected.count_ones(),
+            num_layers,
+        );
+        selected
+    } else {
+        layer_mask_spec.resolve(num_layers)
+    };
+    adapter.set_layer_rope_mask(active_layer_mask);
+
+    let (base_prior, prior_ms) = if use_base_prior {
+        let t_extract = Instant::now();
+        let profile = ModelBaseAttractorProfile::extract(
+            adapter,
+            &prior_entries,
+            SequenceActivationPooler::default(),
+            0.55,
+        )?;
+        let elapsed_ms = (prior_capture_elapsed + t_extract.elapsed()).as_secs_f64() * 1000.0;
+        println!(
+            "[BasePrior] 1-pass IsolatedProbe samples={} sub_attractors={} \
+             pooled_basis={} token_basis={} elapsed={:.1}ms",
+            profile.sample_count,
+            profile.sub_attractors.len(),
+            profile.pooled_common_mode_basis.len(),
+            profile.token_common_mode_basis.len(),
+            elapsed_ms
+        );
+        (Some(profile), elapsed_ms)
+    } else {
+        (None, 0.0)
+    };
+    drop(prior_entries);
+
+    let t_compile = Instant::now();
+    let mut compiled = CompiledTokenCorpus::compile_with_base_prior(
+        adapter,
+        &staged_entries,
+        SequenceActivationPooler::default(),
+        2,
+        1,
+        base_prior.as_ref(),
+    )?;
+    {
+        let mut alias_encoder = LmTokenEncoder::new(model, tokenizer, chat);
+        compiled.append_leading_alias_observations(adapter, &staged_entries, &mut alias_encoder)?;
+    }
+    drop(staged_entries);
+    let compile_ms = (bake_elapsed + t_compile.elapsed()).as_secs_f64() * 1000.0;
+
+    Ok(SharedFixtureArtifacts {
+        baked_opt,
+        compiled,
+        active_layer_mask,
+        bake_elapsed,
+        compile_ms,
+        prior_ms,
+        used_base_prior: base_prior.is_some(),
     })
-}
-
-pub(crate) fn out_push_q7(
-    out: &mut Vec<Vec<lmnk_q7_t>>,
-    adapter: &ModelSteeringAdapter,
-    neg: &[f32],
-    pos: &[f32],
-) -> Result<(), String> {
-    out.push(adapter.bake_layer_procrustes_q7(neg, pos)?);
-    Ok(())
 }

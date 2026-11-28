@@ -8,12 +8,12 @@ use crate::drivers::spine::entropy::{
     ENTROPY_GATE_MODE_PITCHFORK_BIFURCATION, INV_LN_2, MAX_VALID_TOKEN_Z_SCORE,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_eyring_kramers_escape, branchless_flush_subnormal_f32,
-    branchless_is_finite_f32, branchless_max_f32, branchless_min_f32, branchless_relu_f32,
-    fast_inv_pos_normal_f32, tanh_lut_eval_nonneg, F32_MIN_POSITIVE_NORMAL,
+    F32_MIN_POSITIVE_NORMAL, branchless_clamp_f32, branchless_eyring_kramers_escape,
+    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_max_f32,
+    branchless_min_f32, branchless_relu_f32, fast_inv_pos_normal_f32, tanh_lut_eval_nonneg,
 };
 use crate::liminal::{
-    branchless_select_f32, LmnkResult, LMNK_ERR_ENTROPY_SINGULARITY, MAX_SURROGATE_ENTROPY_LN2,
+    LMNK_ERR_ENTROPY_SINGULARITY, LmnkResult, MAX_SURROGATE_ENTROPY_LN2, branchless_select_f32,
 };
 
 // ===================================================================
@@ -76,7 +76,8 @@ pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, eps: f32) 
 /// constant-time mode (`0` branches, `0 fdiv`)** via `fast_inv_pos_normal_f32` and
 /// [`tanh_lut_eval_nonneg`] (Eq. 3.1).
 ///
-/// The inter-layer cosine modulation factor $1 + \gamma_{\mathrm{mod}} \tanh(\alpha_z \operatorname{ReLU}(z_{\mathrm{dist}}))$
+/// The inter-layer cosine modulation factor $1 + \gamma_{\mathrm{mod}} \tanh(\alpha_z
+/// \operatorname{ReLU}(z_{\mathrm{dist}}))$
 /// is evaluated with zero data dependency on `h_surrogate`, allowing out-of-order CPU execution units
 /// to overlap `fast_inv_pos_normal_f32(eff_sigma)` and `tanh_lut_eval_nonneg` in parallel with
 /// [`compute_sparse_surrogate_entropy`].
@@ -134,7 +135,8 @@ pub const fn compute_moving_z_score_entropy(
 }
 
 /// Evaluates scale-invariant Pitchfork Bifurcation potential barrier height
-/// $\Delta V = \frac{\alpha^2 (\max(0, \mathcal{E}_{\mathrm{lat}} - \tau_{\mathrm{eff}}))^2}{4 \beta d_{\mathrm{head}}}$
+/// $\Delta V = \frac{\alpha^2 (\max(0, \mathcal{E}_{\mathrm{lat}} - \tau_{\mathrm{eff}}))^2}{4 \beta
+/// d_{\mathrm{head}}}$
 /// in division-free (`0 fdiv`) mode (Lemma 3.1).
 ///
 /// # Errors
@@ -177,6 +179,8 @@ pub const fn eval_barrier_pitchfork(
 /// time (`0` branches)** across all 3 modes.
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) const fn eval_temperature_for_mode(
     mode: u32,
     base_temperature: f32,

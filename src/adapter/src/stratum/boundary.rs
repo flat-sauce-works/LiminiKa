@@ -7,7 +7,7 @@
 use super::{RecallStratum, StratumContext, StratumDirective, StratumSignal};
 use crate::{
     AttractorRole, LacunaBoundaryState, RecallBoundaryGate, RecallBoundaryMetrics,
-    TextAttractorEntry,
+    TextAttractorEntry, effective_guard_hard_margin,
 };
 use liminika_core::abi::lmnk_pointer_trail_t;
 use liminika_core::liminal::MAX_ATTENTION_HEADS;
@@ -54,7 +54,25 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
         let top1_fact_score = fact_scores.first().copied().unwrap_or(-1.0);
         let top2_fact_score = fact_scores.get(1).copied().unwrap_or(-1.0);
         let top1_persona_score = persona_scores.first().copied().unwrap_or(-1.0);
-        let guard_conflict_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
+        let raw_guard_margin = max_guard_score - top1_fact_score.max(top1_persona_score);
+        // Require both the Guard activation floor and corpus token grounding (either Fact or Guard
+        // tokens explained) so complete foreign-OOD queries never trigger Layer 1 or Layer 2 Guard.
+        let foreign_ood_for_guard = ctx.query_seq_len > 0
+            && signal.telemetry.unexplained_token_ratio >= ctx.u_foreign
+            && signal.telemetry.unexplained_corpus_token_ratio >= ctx.u_foreign;
+        let guard_floor = ctx.policy.min_coherence * 0.70;
+        let guard_conflict_margin = if !foreign_ood_for_guard && max_guard_score >= guard_floor {
+            raw_guard_margin
+        } else {
+            raw_guard_margin.min(0.0)
+        };
+
+        let hard_margin = effective_guard_hard_margin(
+            ctx.policy.guard_suppress_margin,
+            ctx.coalition_thresholds.coherence_scale,
+        );
+        let mut eval_policy = *ctx.policy;
+        eval_policy.guard_suppress_margin = hard_margin;
 
         let metrics = RecallBoundaryMetrics {
             top1_fact_score,
@@ -63,11 +81,13 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
             max_guard_score,
             guard_conflict_margin,
         };
-        let decision = self.gate.evaluate(&metrics, ctx.policy);
+        let decision = self.gate.evaluate(&metrics, &eval_policy);
         signal.boundary_metrics = metrics;
         signal.gate_decision = decision;
 
-        let repulsed_by_guard = guard_conflict_margin > ctx.policy.guard_suppress_margin;
+        let repulsed_by_guard = !foreign_ood_for_guard
+            && max_guard_score >= guard_floor
+            && guard_conflict_margin > hard_margin;
         if repulsed_by_guard {
             signal.action_decision = StigmergicActionDecision::RepulsionEscape;
         }
@@ -197,11 +217,13 @@ impl RecallStratum for SubstrateBoundaryStratum<'_> {
         if let Ok((proj, mut ledger, _rep)) = boundary_substrate.orchestrate_adaptive_depth_n(
             &scale_stack,
             scale_stack.len(),
-            liminika_core::foundation::TaggedPtr(frame.tagged_ptr),
-            frame.phase_words_ref(),
+            liminika_core::ScaleCascadeInput {
+                input_ptr: liminika_core::foundation::TaggedPtr(frame.tagged_ptr),
+                input_words: frame.phase_words_ref(),
+                bloom_filter: None,
+            },
             &mut ledger_slot,
             &mut boundary_trail,
-            None,
         ) {
             let final_op = match action_decision {
                 StigmergicActionDecision::RepulsionEscape => CognitiveOpKind::RepulseAudit,
@@ -365,7 +387,12 @@ impl StratumSignal {
                 .get(layer_idx)
                 .copied()
                 .or_else(|| entry.per_layer_q7.last().copied())?;
-            let obs = (self.boundary_metrics.guard_conflict_margin + 0.5).max(0.0);
+            let raw_obs = (self.boundary_metrics.guard_conflict_margin + 0.5).max(0.0);
+            let obs = if is_repulsion {
+                raw_obs.max(0.55)
+            } else {
+                raw_obs
+            };
             Some(GuardPhaseAnchor::new(q7, obs, 0.5))
         });
 

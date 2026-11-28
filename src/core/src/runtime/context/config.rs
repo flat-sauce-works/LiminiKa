@@ -4,16 +4,16 @@
 //! Safe high-level configuration wrapper ([`Config`]) and fluent builder.
 
 use super::{
-    Result, DEFAULT_BLOOM_REPULSION_SCALE_U7, DEFAULT_BLOOM_REPULSION_THRESHOLD,
+    DEFAULT_BLOOM_REPULSION_SCALE_U7, DEFAULT_BLOOM_REPULSION_THRESHOLD,
     DEFAULT_ENTROPY_GATE_BIFURCATION_THRESHOLD, DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND,
-    DEFAULT_ENTROPY_GATE_TAU_FLUX, DEFAULT_PAGED_BLOCK_SIZE,
+    DEFAULT_ENTROPY_GATE_TAU_FLUX, DEFAULT_PAGED_BLOCK_SIZE, Result,
 };
 use crate::foundation::{
-    branchless_is_finite_f32, DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, branchless_is_finite_f32,
 };
 use crate::liminal::{
-    RuntimeConfig, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    Q7_PHASE_SCALE_RAD,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, Q7_PHASE_SCALE_RAD,
+    RuntimeConfig,
 };
 use crate::stigmergy::{
     DEFAULT_SLOT_COUPLING_MATRIX_8X8, DEFAULT_SUBSTRATE_CAPACITY, MAX_PHASE_ANCHORS,
@@ -56,6 +56,7 @@ impl Config {
     pub const fn new() -> Self {
         Self {
             raw: RuntimeConfig {
+                struct_size: core::mem::size_of::<RuntimeConfig>() as u32,
                 head_dim: 128,
                 num_heads: 32,
                 paged_block_size: DEFAULT_PAGED_BLOCK_SIZE,
@@ -70,7 +71,9 @@ impl Config {
                 ledger_mode: 0,
                 rotary_dim: 0,
                 rope_layout: 0,
-                reserved: [0; 20],
+                guard_hold_tokens: 0,
+                max_observe_stride: 1,
+                reserved: [0; 14],
             },
             hysteresis_band: DEFAULT_ENTROPY_GATE_HYSTERESIS_BAND,
             tau_flux: DEFAULT_ENTROPY_GATE_TAU_FLUX,
@@ -199,6 +202,26 @@ impl Config {
         self
     }
 
+    /// Sets the opening decode token hold window (`0` = hold entire turn) for transient guard pins.
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_guard_hold_tokens(mut self, guard_hold_tokens: u8) -> Self {
+        self.raw.guard_hold_tokens = guard_hold_tokens;
+        self
+    }
+
+    /// Sets the maximum dynamic logits observation stride (`1` = observe every token; `0` normalized to `1`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn with_max_observe_stride(mut self, max_observe_stride: u8) -> Self {
+        self.raw.max_observe_stride = if max_observe_stride == 0 {
+            1
+        } else {
+            max_observe_stride
+        };
+        self
+    }
+
     /// Sets the `EntropyController` hysteresis band width ($\delta_{\mathrm{hyst}}$).
     #[inline(always)]
     #[must_use]
@@ -260,6 +283,9 @@ impl Config {
             & ((self.raw.head_dim & 1) == 0)
             & (self.raw.num_heads != 0)
             & ((self.raw.num_heads as usize) <= MAX_ATTENTION_HEADS)
+            & (self.raw.rotary_dim <= self.raw.head_dim)
+            & ((self.raw.rotary_dim & 1) == 0)
+            & (self.raw.rope_layout <= 1)
             & ((self.raw.paged_block_size == 16) | (self.raw.paged_block_size == 32));
 
         let valid_scales = branchless_is_finite_f32(self.raw.q7_phase_scale)

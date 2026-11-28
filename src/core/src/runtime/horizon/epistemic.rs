@@ -5,33 +5,32 @@
 //! relative perspective Gateway synthesis, and dynamic threshold/granule horizon bridges.
 
 use crate::foundation::{
+    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE,
+    ACTION_PRESET_PASSIVE_SIDECAR, ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TaggedPtr,
     branchless_clamp_f32, branchless_inv_pos_f32, branchless_max_f32, branchless_min_f32,
     branchless_q7_inhibit_words_64, branchless_rad_to_phase_step_u8, branchless_relu_f32,
     branchless_sincos_q7, coherence_from_word_arrays_with_both_uniform_flags_64,
     fast_mean_q7_tag_from_words_64, is_word_array_uniform_64, pack_action_slot_tag,
-    swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
-    ACTION_MODE_SUBHEAD_ROUTE, ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR,
-    ACTION_PRESET_REPULSION_ESCAPE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_STEP_MIN_RAD,
-    SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64,
+    swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i8, branchless_select_u32, branchless_select_u64,
-    branchless_select_u8, BitCut32, EpistemicRegime, LiminalThresholdState, DEFAULT_ENTROPY_EPS,
-    MAX_ATTENTION_HEADS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
-    THRESHOLD_STIGMERGY_WIDE,
+    BitCut32, DEFAULT_ENTROPY_EPS, EpistemicRegime, LiminalThresholdState, MAX_ATTENTION_HEADS,
+    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, THRESHOLD_STIGMERGY_WIDE,
+    branchless_select_f32, branchless_select_i8, branchless_select_u8, branchless_select_u32,
+    branchless_select_u64,
 };
 use crate::runtime::gateway::{
-    CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal, CAUSAL_AXIS_CONTRADICTION_GUARD,
-    CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
-    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, ROOT_CAUSE_COHOMOLOGY_REPULSION,
-    ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
+    CAUSAL_AXIS_CONTRADICTION_GUARD, CAUSAL_AXIS_OBJECTIVE_FACT, CAUSAL_CAUSE_COHOMOLOGY_REPULSION,
+    CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK, CausalProvenanceSignal, GatewayFrame, ManifoldGatewaySignal,
+    ROOT_CAUSE_COHOMOLOGY_REPULSION, ROOT_CAUSE_FACT_RETRIEVAL_MISS, ROOT_CAUSE_NOMINAL,
 };
 use crate::stigmergy::{
-    evaluate_stigmergic_overlap_and_discovery_words_64, fold_fractal_nodes_words_64,
-    fold_sincos64_to_words, CognitiveOpKind, CognitiveTrajectoryLedger, DissipativeOverflowReport,
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, CognitiveOpKind, CognitiveTrajectoryLedger,
+    DEFAULT_FACT_PHASE_CLAMP_RAD, DissipativeOverflowReport, MAX_ATTRACTOR_PULL_FORCE,
     OverlapDiscoveryReport, RelativeAttractorNode, StigmergicGranuleState,
-    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_REPULSION, DEFAULT_FACT_PHASE_CLAMP_RAD,
-    MAX_ATTRACTOR_PULL_FORCE,
+    evaluate_stigmergic_overlap_and_discovery_words_64, fold_fractal_nodes_words_64,
+    fold_sincos64_to_words,
 };
 
 /// Branchless epistemic horizon measurement over a finite local memory manifold (`16`-byte aligned).
@@ -111,13 +110,13 @@ impl EpistemicHorizonReading {
                 frame.action_mode_flags,
             ),
         );
-        frame.attribution_tag = branchless_select_u8(
+        frame.root_cause_code = branchless_select_u8(
             is_unobserved,
             ROOT_CAUSE_FACT_RETRIEVAL_MISS,
             branchless_select_u8(
                 high_repulse,
                 ROOT_CAUSE_COHOMOLOGY_REPULSION,
-                frame.attribution_tag,
+                frame.root_cause_code,
             ),
         );
         frame.lineage_flags = branchless_select_u32(
@@ -251,7 +250,7 @@ pub fn evaluate_epistemic_horizon_words_64<Node: RelativeAttractorNode>(
         let is_att = (w_i32 > 0) | coupling_row_q7.is_none();
         let rel_mag = branchless_select_f32(
             coupling_row_q7.is_some(),
-            (w_i32.unsigned_abs() as f32) * (1.0 / 127.0),
+            (w_i32.unsigned_abs() as f32) * (1.0 / 128.0),
             1.0,
         );
 
@@ -360,7 +359,7 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
         let w_i32 = coupling_row_q7[idx] as i32;
         let is_rep = w_i32 < 0;
         let is_att = w_i32 > 0;
-        let mag = (w_i32.unsigned_abs() as f32) * (1.0 / 127.0);
+        let mag = (w_i32.unsigned_abs() as f32) * (1.0 / 128.0);
 
         let node = &nodes[idx];
         let e = branchless_relu_f32(node.relative_energy());
@@ -463,7 +462,7 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
         fact_persona_coherence: base_coh,
         repulsion_severity: norm_rep_sev,
         lineage_flags: horizon.causal_provenance_bits(),
-        attribution_tag: branchless_select_u8(
+        root_cause_code: branchless_select_u8(
             rep_dominates,
             ROOT_CAUSE_COHOMOLOGY_REPULSION,
             ROOT_CAUSE_NOMINAL,
@@ -483,20 +482,6 @@ pub fn synthesize_relative_gateway_from_perspective_words_64<Node: RelativeAttra
 
 /// Blanket-implemented epistemic & relative-coupling trait over any [`RelativeAttractorNode`].
 pub trait EpistemicManifoldOps: RelativeAttractorNode {
-    /// Evaluates [`EpistemicHorizonReading`] for a slice of `Self` relative to `query_words`.
-    #[inline(always)]
-    fn evaluate_slice_epistemic_horizon(
-        slice: &[Self],
-        query_words: &[u64; NUM_STIGMERGIC_GRANULES],
-        coupling_row_q7: Option<&[i8]>,
-        horizon_floor: f32,
-    ) -> EpistemicHorizonReading
-    where
-        Self: Sized,
-    {
-        evaluate_epistemic_horizon_words_64(slice, query_words, coupling_row_q7, horizon_floor)
-    }
-
     /// Self-similarly folds a slice of `Self` on $SO(2)^{64}$ into `(phase_words, total_energy, dominant_anchor_id)`.
     #[inline(always)]
     fn fold_slice_as_fractal_node(slice: &[Self]) -> ([u64; NUM_STIGMERGIC_GRANULES], f32, u32)

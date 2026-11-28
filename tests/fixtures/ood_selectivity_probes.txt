@@ -1,0 +1,61 @@
+# name: tests/fixtures/ood_selectivity_probes.txt
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Out-of-distribution (OOD) selectivity probe suite (50 unrelated prompts).
+# Designed to verify zero-interference steering (unobserved lacuna gating,
+# exact greedy token identity, and near-zero initial logit KL divergence).
+#
+# Format:
+#   [OOD_PROBES] -> CATEGORY | PROMPT
+
+[OOD_PROBES]
+GENERAL | What is the chemical formula for table salt?
+GENERAL | Which continent is the Sahara Desert located on?
+GENERAL | How many planets orbit the Sun in our solar system?
+GENERAL | What gas do plants primarily absorb during photosynthesis?
+GENERAL | Which river flows through the city of Cairo?
+GENERAL | In what year did the first Moon landing take place?
+GENERAL | What is the freezing point of water in degrees Celsius?
+GENERAL | Which mammal is capable of sustained powered flight?
+GENERAL | What is the hardest naturally occurring mineral on the Mohs scale?
+GENERAL | Which country is home to the ancient city of Machu Picchu?
+MATH | What is 17 multiplied by 6?
+MATH | Compute the value of 144 divided by 12.
+MATH | If a rectangle has length 9 cm and width 4 cm, what is its area?
+MATH | What is the next prime number after 29?
+MATH | Solve for x in the equation 3x + 7 = 22.
+MATH | How many minutes are there in two and a half hours?
+MATH | What is 15 percent of 200?
+MATH | Calculate the perimeter of a square whose side length is 11 meters.
+MATH | What is the sum of the first five positive integers?
+MATH | Convert 5 kilometers into meters.
+CODE | Write a one-line Python expression to reverse a string named text.
+CODE | What is the worst-case time complexity of binary search on a sorted array?
+CODE | In SQL, which clause is used to filter rows before grouping?
+CODE | Name the HTTP status code that indicates a resource was not found.
+CODE | What data structure operates strictly in Last-In First-Out order?
+CODE | In Git, which command displays the commit history of the current branch?
+CODE | Explain the difference between a stack and a queue in one sentence.
+CODE | What does the acronym JSON stand for in web development?
+CODE | Write a short Rust function signature that takes two i32 values and returns their sum.
+CODE | Which bitwise operator performs an exclusive OR in C and Rust?
+DAILY | Suggest three simple ingredients for making a quick omelet.
+DAILY | What is a polite way to decline a meeting invitation due to a schedule conflict?
+DAILY | Give two practical tips for keeping houseplants healthy indoors.
+DAILY | How should you pack fragile glassware when moving to a new apartment?
+DAILY | Recommend a brief five-minute stretching routine after sitting at a desk.
+DAILY | What are two ways to remove coffee stains from a cotton shirt?
+DAILY | List three items to check before going on a weekend hiking trip.
+DAILY | How can someone organize a cluttered desk in ten minutes?
+DAILY | Suggest a calm evening habit that helps people unwind before sleep.
+DAILY | What is a quick method to ripen a firm avocado at home?
+SUMMARY | Summarize the water cycle in two clear sentences.
+SUMMARY | Define the literary term metaphor and provide one short example.
+SUMMARY | Explain why seasons occur on Earth in two concise sentences.
+SUMMARY | Briefly describe the difference between weather and climate.
+SUMMARY | What is the main function of red blood cells in the human body?
+SUMMARY | Summarize how a compass needle aligns with Earth's magnetic field.
+SUMMARY | Define supply and demand in economics in one short paragraph.
+SUMMARY | Explain what causes a rainbow to appear after rainfall.
+SUMMARY | Briefly explain why ice floats on liquid water.
+SUMMARY | Describe the role of chlorophyll in green leaves in one sentence.

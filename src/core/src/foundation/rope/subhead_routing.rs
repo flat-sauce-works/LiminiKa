@@ -87,6 +87,8 @@ pub(super) const fn compute_subhead_eff_word_x8(
 }
 
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
@@ -161,6 +163,8 @@ pub(super) fn dispatch_subhead_profiles_core(
 /// on the cells actually spanned by each subgroup (`8` word transforms total for aligned splits).
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) const fn build_subhead_eff_words_64(
     fact_w: &[u64; NUM_SWARM_CELLS],
     fact_h: usize,
@@ -280,6 +284,8 @@ pub(super) const fn build_subhead_eff_words_64(
 /// `compute_subhead_eff_word_x8` in registers.
 #[inline]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_subhead_eff_words_from_profiles_64(
     fact_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
     fact_h: usize,
@@ -422,6 +428,8 @@ pub(super) const fn byte_uniform_word_u8(w: &[u64; NUM_SWARM_CELLS]) -> Option<u
 /// fast-pathing default `PhaseClamp` limits (`0.24 rad`) via `.rodata` LUTs.
 #[inline(always)]
 #[must_use]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
     b_u8: u8,
     s_u8: u8,
@@ -463,6 +471,8 @@ pub(super) fn eval_fused_phase_clamp_subhead_pair_u8(
 /// constant effective Q7 bytes `(f_u8, l_u8, e_u8)`, coalescing adjacent subgroups when their
 /// effective bytes match (`1..=3` calls to `rotate_phase_clamp_upper_heads_uniform_sincos`).
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn rotate_fused_phase_clamp_and_subhead_uniform_subgroups(
     t_slice: &mut [f32],
     b_u8: u8,
@@ -747,7 +757,8 @@ pub(crate) fn rotate_fused_self_phase_clamp_and_subhead_default_words(
     );
 }
 
-/// Rotates `q_slice` via `Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$)
+/// Rotates `q_slice` via `Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}} +
+/// \theta_{\mathrm{subhead}}$)
 /// and `k_slice` via `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}}$), checking SWAR phase
 /// uniformity once and streaming `q_slice` then `k_slice` in 4-head-unrolled passes to eliminate
 /// 2-stream 4KB page-offset Load-Store Queue aliasing on 32KB (`128x64`) tensors.
@@ -802,6 +813,8 @@ pub(crate) fn rotate_fused_self_phase_clamp_subhead_q_and_clamp_k_default_words(
 /// `base_clamp_words` and pre-transformed `subhead_eff_words` in a single flat loop
 /// (`0` subgroup or cell loop exits).
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
     t_slice: &mut [f32],
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
@@ -820,25 +833,25 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
     if limit == 0 {
         return;
     }
-    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words) {
-        if let Some(s_u8) = byte_uniform_word_u8(subhead_eff_words) {
-            if (b_u8 | s_u8) != 0 {
-                let (sin_comb, cos_comb) = eval_fused_phase_clamp_subhead_pair_u8(
-                    b_u8,
-                    s_u8,
-                    base_is_def,
-                    base_eff_max,
-                    base_scale,
-                    subhead_is_def,
-                    subhead_eff_max,
-                    subhead_scale,
-                );
-                rotate_phase_clamp_upper_heads_uniform_sincos(
-                    t_slice, 0, limit, head_dim, rot_dim, sin_comb, cos_comb,
-                );
-            }
-            return;
+    if let Some(b_u8) = byte_uniform_word_u8(base_clamp_words)
+        && let Some(s_u8) = byte_uniform_word_u8(subhead_eff_words)
+    {
+        if (b_u8 | s_u8) != 0 {
+            let (sin_comb, cos_comb) = eval_fused_phase_clamp_subhead_pair_u8(
+                b_u8,
+                s_u8,
+                base_is_def,
+                base_eff_max,
+                base_scale,
+                subhead_is_def,
+                subhead_eff_max,
+                subhead_scale,
+            );
+            rotate_phase_clamp_upper_heads_uniform_sincos(
+                t_slice, 0, limit, head_dim, rot_dim, sin_comb, cos_comb,
+            );
         }
+        return;
     }
     let upper_off = head_dim - rot_dim;
     if base_is_def & subhead_is_def {
@@ -1005,6 +1018,8 @@ pub(super) fn rotate_fused_phase_clamp_and_subhead_eff_words_core(
 }
 
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
@@ -1162,6 +1177,8 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_words_core(
     Ok(())
 }
 
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_words: &[u64; NUM_SWARM_CELLS],
@@ -1243,6 +1260,8 @@ pub(crate) fn dispatch_fused_phase_clamp_words_and_subhead_profiles_core(
 /// over `tensor` by loading `base_clamp_phases` into 8 `u64` SWAR registers and delegating to
 /// `dispatch_fused_phase_clamp_words_and_subhead_profiles_core`.
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn dispatch_fused_phase_clamp_and_subhead_profiles_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     base_clamp_phases: &[PhaseQ7; MAX_ATTENTION_HEADS],
@@ -1273,6 +1292,8 @@ pub(crate) fn dispatch_fused_phase_clamp_and_subhead_profiles_core(
 }
 
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn dispatch_subhead_slot_ensemble_core(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
@@ -1415,13 +1436,30 @@ pub fn dispatch_single_pass(
     Ok(())
 }
 
+/// Slot-binding and geometry parameters for sub-head attractor ensemble routing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SubheadSlotBinding {
+    /// Working slot index (`0..8`) supplying the `Fact` sub-head profile.
+    pub fact_slot_id: u8,
+    /// Working slot index (`0..8`) supplying the `Logic` sub-head profile.
+    pub logic_slot_id: u8,
+    /// Working slot index (`0..8`) supplying the `Explore` sub-head profile.
+    pub explore_slot_id: u8,
+    /// Maximum sub-head angular rotation clamp in radians (`> 0.0`).
+    pub max_rad: f32,
+    /// Q7 phase pulse added to the `Explore` sub-head partition.
+    pub explore_pulse_q7: PhaseQ7,
+    /// Per-head attention dimension (`head_dim`).
+    pub head_dim: usize,
+}
+
 /// Executes **Single-Pass $SO(2)$ Group-Closure Fused `PhaseClamp` + 8-Slot Ensemble Sub-Head
 /// Routing**, rotating the shared upper $\frac{1}{4}d_{\mathrm{head}}$ low-frequency pairs by
 /// the composite angle $\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$ in a single traversal.
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if slot IDs `>= 8`, `slot_phase_bank.len() < 512`,
-/// `head_dim` is invalid, `base_clamp_max_rad <= 0.0`, `subhead_max_rad <= 0.0`, or `tensor` is too small.
+/// `binding.head_dim` is invalid, `base_clamp_max_rad <= 0.0`, `binding.max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
 pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
     tensor: &mut AlignedSliceMut32<'_, f32>,
@@ -1429,17 +1467,12 @@ pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
     base_clamp_max_rad: f32,
     config: &SubheadConfig,
     slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
-    fact_slot_id: u8,
-    logic_slot_id: u8,
-    explore_slot_id: u8,
-    subhead_max_rad: f32,
-    explore_pulse_q7: PhaseQ7,
-    head_dim: usize,
+    binding: SubheadSlotBinding,
     fold_geodesic: bool,
 ) -> LmnkResult<()> {
-    let f_id = usize::from(fact_slot_id);
-    let l_id = usize::from(logic_slot_id);
-    let e_id = usize::from(explore_slot_id);
+    let f_id = usize::from(binding.fact_slot_id);
+    let l_id = usize::from(binding.logic_slot_id);
+    let e_id = usize::from(binding.explore_slot_id);
     if f_id >= MAX_ATTRACTOR_DOMAINS
         || l_id >= MAX_ATTRACTOR_DOMAINS
         || e_id >= MAX_ATTRACTOR_DOMAINS
@@ -1455,42 +1488,37 @@ pub fn dispatch_phase_clamp_and_subhead_slot_ensemble_fused(
         &bank_2d[f_id],
         &bank_2d[l_id],
         &bank_2d[e_id],
-        subhead_max_rad,
-        explore_pulse_q7,
-        head_dim,
+        binding.max_rad,
+        binding.explore_pulse_q7,
+        binding.head_dim,
         fold_geodesic,
     )
 }
 
 /// Executes **Single-Pass Sub-Head Attractor Slot Ensemble Routing** (Section 2.4):
-/// simultaneously binds `Fact` heads to `fact_slot_id`, `Logic` heads to `logic_slot_id`,
-/// and `Explore` heads to `explore_slot_id` from a 512-byte `slot_phase_bank`.
+/// simultaneously binds `Fact` heads to `binding.fact_slot_id`, `Logic` heads to `binding.logic_slot_id`,
+/// and `Explore` heads to `binding.explore_slot_id` from a 512-byte `slot_phase_bank`.
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
-/// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
+/// `binding.head_dim` is invalid, `binding.max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
 pub fn dispatch_subhead_slot_ensemble(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
     slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
-    fact_slot_id: u8,
-    logic_slot_id: u8,
-    explore_slot_id: u8,
-    max_rad: f32,
-    explore_pulse_q7: PhaseQ7,
-    head_dim: usize,
+    binding: SubheadSlotBinding,
 ) -> LmnkResult<()> {
     dispatch_subhead_slot_ensemble_core(
         tensor,
         config,
         slot_phase_bank,
-        fact_slot_id,
-        logic_slot_id,
-        explore_slot_id,
-        max_rad,
-        explore_pulse_q7,
-        head_dim,
+        binding.fact_slot_id,
+        binding.logic_slot_id,
+        binding.explore_slot_id,
+        binding.max_rad,
+        binding.explore_pulse_q7,
+        binding.head_dim,
         false,
     )
 }
@@ -1499,29 +1527,24 @@ pub fn dispatch_subhead_slot_ensemble(
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slot ID `>= 8`, `slot_phase_bank.len() < 512`,
-/// `head_dim` is invalid, `max_rad <= 0.0`, or `tensor` is too small.
+/// `binding.head_dim` is invalid, `binding.max_rad <= 0.0`, or `tensor` is too small.
 #[inline]
 pub fn dispatch_subhead_slot_ensemble_geodesic(
     tensor: &mut AlignedSliceMut32<'_, f32>,
     config: &SubheadConfig,
     slot_phase_bank: &AlignedSlice16<'_, PhaseQ7>,
-    fact_slot_id: u8,
-    logic_slot_id: u8,
-    explore_slot_id: u8,
-    max_rad: f32,
-    explore_pulse_q7: PhaseQ7,
-    head_dim: usize,
+    binding: SubheadSlotBinding,
 ) -> LmnkResult<()> {
     dispatch_subhead_slot_ensemble_core(
         tensor,
         config,
         slot_phase_bank,
-        fact_slot_id,
-        logic_slot_id,
-        explore_slot_id,
-        max_rad,
-        explore_pulse_q7,
-        head_dim,
+        binding.fact_slot_id,
+        binding.logic_slot_id,
+        binding.explore_slot_id,
+        binding.max_rad,
+        binding.explore_pulse_q7,
+        binding.head_dim,
         true,
     )
 }

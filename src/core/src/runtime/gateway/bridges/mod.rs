@@ -8,22 +8,23 @@
 
 use super::*;
 use crate::drivers::{
-    DistortionTension, EgoDifferentialNet, FrameDirective, LiminalEgoState,
-    SpineFrameTransitionInput, SystemSpineState, EGO_TRIGGER_BASIN_CAPTURE,
-    EGO_TRIGGER_BOUNDARY_CHATTER, EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT,
-    EGO_TRIGGER_LAYER_DISTORTION, EGO_TRIGGER_LIMINAL_EXTERIOR,
+    DistortionTension, EGO_TRIGGER_BASIN_CAPTURE, EGO_TRIGGER_BOUNDARY_CHATTER,
+    EGO_TRIGGER_BOUNDARY_STAGNATION, EGO_TRIGGER_INTERNAL_CONFLICT, EGO_TRIGGER_LAYER_DISTORTION,
+    EGO_TRIGGER_LIMINAL_EXTERIOR, EgoDifferentialNet, EnvelopeState, FrameDirective,
+    LiminalEgoState, SpineFrameTransitionInput, SpinePinSnapshot, SystemSpineState,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_max_f32, branchless_relu_f32, pack_action_slot_tag,
-    swar_q7_avg_round_x8, swar_q7_mean_i8_from_words_64, AlignedSlice32, AlignedSliceMut32,
-    TaggedPtr, ATTRACTOR_SLOT_ID_MASK, SWAR_SIGN_MASK_64, SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK,
+    ATTRACTOR_SLOT_ID_MASK, AlignedSlice32, AlignedSliceMut32, SWAR_SIGN_MASK_64,
+    SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK, TaggedPtr, branchless_clamp_f32, branchless_max_f32,
+    branchless_relu_f32, pack_action_slot_tag, swar_q7_avg_round_x8, swar_q7_mean_i8_from_words_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u64,
-    branchless_select_u8, BitCut8, Lacuna, LacunaPartition8, LiminalThresholdState, LmnkResult,
-    PhaseQ7, MAX_ATTRACTOR_DOMAINS, NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES,
+    BitCut8, Lacuna, LacunaPartition8, LiminalThresholdState, LmnkResult, MAX_ATTRACTOR_DOMAINS,
+    NUM_LIMINAL_THRESHOLD_CHANNELS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_i8, branchless_select_i32, branchless_select_u8, branchless_select_u64,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
+#[cfg(test)]
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
@@ -34,6 +35,8 @@ use crate::stigmergy::{
 mod anchor_bridge;
 mod ledger_bridge;
 mod substrate_bridge;
+
+pub use substrate_bridge::SandboxLifecycleInput;
 
 impl ResidualAdapterEngine {
     /// Applies norm-adaptive fused Rank-1 residual injection driven by `frame`.
@@ -53,7 +56,7 @@ impl ResidualAdapterEngine {
     }
 }
 
-impl SystemSpineState {
+impl EnvelopeState {
     /// Physical `pinned` isolation barrier executed without branching after Ego modulates `ego_frame`.
     ///
     /// - Under `unobserved_locked != 0` or `irreversible_step_lock != 0`, returns `*baseline_frame`.
@@ -94,7 +97,7 @@ impl SystemSpineState {
 }
 
 #[inline(always)]
-fn pframe_transition_allowed(spine: &SystemSpineState, partition: &LacunaPartition8) -> bool {
+fn pframe_transition_allowed(envelope: &EnvelopeState, partition: &LacunaPartition8) -> bool {
     let all_zero = (partition.self_ref_mask
         | partition.interior_mask
         | partition.exterior_mask
@@ -112,7 +115,14 @@ fn pframe_transition_allowed(spine: &SystemSpineState, partition: &LacunaPartiti
     } else if input.candidate_granule_mask == 0 {
         input.candidate_granule_mask = 0xFF;
     }
-    let (directive, _) = spine.evaluate_frame_transition_branchless(input);
+    let pins = SpinePinSnapshot {
+        pinned_compute_mask: envelope.pinned_compute_mask,
+        pinned_slot_mask: envelope.pinned_slot_mask,
+        unobserved_locked: envelope.unobserved_locked,
+        irreversible_step_lock: envelope.irreversible_step_lock,
+        reserved: [0; 5],
+    };
+    let (directive, _) = SystemSpineState::new().evaluate_frame_transition_branchless(pins, input);
     matches!(
         directive,
         FrameDirective::EmitDelta | FrameDirective::ReAnchorKeyframe
@@ -124,76 +134,22 @@ impl EgoDifferentialNet {
     /// (1-hop parallel perspective ensemble when `max_hops == 1`, or sequential chain up to 4 hops
     /// when `max_hops >= 2`; `0` heap alloc, `0 fdiv`) and returns `(delta_norm_q7, hops_traversed)`.
     ///
-    /// When Ego is inactive, tension scale is 0, or `spine` enforces `unobserved_locked` /
+    /// When Ego is inactive, tension scale is 0, or `envelope` enforces `unobserved_locked` /
     /// `irreversible_step_lock`, leaves `frame` untouched and returns `(0, 0)` (zero-copy bypass).
     #[inline]
     pub fn evaluate_pframe_chain_branchless(
         &self,
         ego: &LiminalEgoState,
-        spine: &SystemSpineState,
+        envelope: &EnvelopeState,
         partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         frame: &mut GatewayFrame,
     ) -> (u8, u8) {
         let (norm, hops, _mask) = self.evaluate_pframe_chain_with_mask_branchless(
-            ego, spine, partition, stigmergy, tension, frame,
+            ego, envelope, partition, stigmergy, tension, frame,
         );
         (norm, hops)
-    }
-
-    /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network in-place on `frame`
-    /// and returns `(delta_norm_q7, hops_traversed, entry_idx)` (`entry_idx` in `0..8`) for
-    /// reinforcement telemetry tracking.
-    #[inline]
-    pub fn evaluate_pframe_chain_with_entry_branchless(
-        &self,
-        ego: &LiminalEgoState,
-        spine: &SystemSpineState,
-        partition: &LacunaPartition8,
-        stigmergy: &StigmergicGranuleState,
-        tension: &DistortionTension,
-        frame: &mut GatewayFrame,
-    ) -> (u8, u8, u8) {
-        if !pframe_transition_allowed(spine, partition) {
-            return (0, 0, 0);
-        }
-        let (acc_words, avg_delta, hops_traversed, entry_idx, matched_mask) = self
-            .evaluate_pframe_words_branchless(
-                ego,
-                partition,
-                stigmergy,
-                tension.effective_ego_scale_q7,
-                frame.phase_words_ref(),
-            );
-        if matched_mask == 0 {
-            return (0, 0, 0);
-        }
-        let (full_lock, eff_slot, eff_modes) = spine.isolate_slot_and_modes_branchless(
-            frame.dominant_slot,
-            frame.action_mode_flags,
-            frame.dominant_slot,
-            frame.action_mode_flags,
-        );
-        if full_lock {
-            return (avg_delta, hops_traversed, entry_idx);
-        }
-        frame.dominant_slot = eff_slot;
-        frame.action_mode_flags = eff_modes;
-        *frame.phase_words_mut() = acc_words;
-        frame.mean_phase_tag_q7 = swar_q7_mean_i8_from_words_64(&acc_words);
-        let ptr_tag = pack_action_slot_tag(
-            frame.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
-            frame.action_mode_flags,
-        );
-        frame.frame_flags = u16::from(ptr_tag);
-        frame.tagged_ptr = TaggedPtr::pack(
-            frame.mapped_section_offset48,
-            ptr_tag,
-            frame.mean_phase_tag_q7,
-        )
-        .raw();
-        (avg_delta, hops_traversed, entry_idx)
     }
 
     /// Evaluates the fixed-length [`crate::drivers::DistortionDelta`] network in-place on `frame`
@@ -203,13 +159,13 @@ impl EgoDifferentialNet {
     pub fn evaluate_pframe_chain_with_mask_branchless(
         &self,
         ego: &LiminalEgoState,
-        spine: &SystemSpineState,
+        envelope: &EnvelopeState,
         partition: &LacunaPartition8,
         stigmergy: &StigmergicGranuleState,
         tension: &DistortionTension,
         frame: &mut GatewayFrame,
     ) -> (u8, u8, u8) {
-        if !pframe_transition_allowed(spine, partition) {
+        if !pframe_transition_allowed(envelope, partition) {
             return (0, 0, 0);
         }
         let (acc_words, avg_delta, hops_traversed, _entry_idx, matched_mask) = self
@@ -223,7 +179,7 @@ impl EgoDifferentialNet {
         if matched_mask == 0 {
             return (0, 0, 0);
         }
-        let (full_lock, eff_slot, eff_modes) = spine.isolate_slot_and_modes_branchless(
+        let (full_lock, eff_slot, eff_modes) = envelope.isolate_slot_and_modes_branchless(
             frame.dominant_slot,
             frame.action_mode_flags,
             frame.dominant_slot,
@@ -272,8 +228,8 @@ impl LiminalEgoState {
             127.0,
         ) as u8;
         let t_basin = ((self.trigger_mask & EGO_TRIGGER_BASIN_CAPTURE) != 0)
-            & (pull_q7 >= self.basin_escape_floor_q7)
-            & (self.counter_basin_thrust_q7 > 0);
+            & (pull_q7 >= self.escape_floor_q7)
+            & (self.basin_resistance_q7 > 0);
         let t_conflict = ((self.trigger_mask & EGO_TRIGGER_INTERNAL_CONFLICT) != 0)
             & horizon.is_internal_conflict()
             & (horizon.conflict_severity > 0.35);
@@ -293,28 +249,28 @@ impl LiminalEgoState {
             | branchless_select_u8(t_distortion, EGO_TRIGGER_LAYER_DISTORTION, 0);
         let any_fired = fired_mask != 0;
 
-        // Modulate GatewayFrame phases with counter-basin orbital thrust / transgressive leap
+        // Modulate GatewayFrame phases with counter-basin thrust / transgressive leap
         let scale_to_word = |q7: PhaseQ7, w_u8: u8| -> u64 {
             let scaled_i32 = (i32::from(q7) * i32::from(w_u8.min(128))) >> 7;
             let clamped_i8 = scaled_i32.clamp(-128, 127) as i8;
             (clamped_i8 as u8 as u64).wrapping_mul(SWAR_SPLAT_BYTE_64)
         };
 
-        let trans_pos = self.transgression_bias_q7 > 0;
-        let trans_abs = self.transgression_bias_q7.unsigned_abs();
+        let trans_pos = self.boundary_crossing_q7 > 0;
+        let trans_abs = self.boundary_crossing_q7.unsigned_abs();
         let strong_trans =
             (t_liminal | t_distortion | (t_chatter & (delta.phase_transition_pulse != 0)))
                 & trans_pos
                 & (trans_abs >= 20);
         let apply_phase_override = t_basin | t_stagnate | strong_trans | t_distortion;
-        let thrust_q7 = self.counter_basin_thrust_q7.min(127);
+        let thrust_q7 = self.basin_resistance_q7.min(127);
         {
             let pw = frame.phase_words_mut();
             let mut cell = 0usize;
             while cell < NUM_STIGMERGIC_GRANULES {
                 let w = pw[cell];
                 let sov_word = scale_to_word(
-                    self.sovereign_granule_phase_q7[cell],
+                    self.preferred_granule_phase_q7[cell],
                     self.granule_autonomy_q7[cell],
                 );
                 // Antipodal pi-radian SO(2) flip (`^ SWAR_SIGN_MASK_64`) blended with sovereign heading.
@@ -390,8 +346,9 @@ impl LiminalEgoState {
         fired_mask
     }
 
-    /// Branchlessly evaluates active Ego triggers directly across Liminal (`liminal`), Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, updating both
-    /// sub-layers and injecting counter-basin orbital thrust or transgressive phase steering into `frame`
+    /// Branchlessly evaluates active Ego triggers directly across Liminal (`liminal`), Stigmergic
+    /// (`stigmergy`), temporal velocity (`delta`), and `overlap`, updating both
+    /// sub-layers and injecting counter-basin thrust or transgressive phase steering into `frame`
     /// in-place.
     #[inline]
     pub fn intervene_on_sublayers_and_frame_branchless(
@@ -437,8 +394,8 @@ impl LiminalEgoState {
                 branchless_select_u8(any_fired, next_sg, stigmergy.granule_step_gain_q7[g]);
             g += 1;
         }
-        let trans_pos = self.transgression_bias_q7 > 0;
-        let trans_abs = self.transgression_bias_q7.unsigned_abs();
+        let trans_pos = self.boundary_crossing_q7 > 0;
+        let trans_abs = self.boundary_crossing_q7.unsigned_abs();
         let trans_step = trans_abs >> 3;
         stigmergy.discovery_floor_q7 = branchless_select_u8(
             t_liminal & trans_pos,
@@ -456,8 +413,9 @@ impl LiminalEgoState {
     /// Branchlessly evaluates active Ego triggers across `stack`'s Layer 0 (`liminal`),
     /// Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, modulating `frame`
     /// in-place and synchronizing `self` onto `stack.ego` after intervention.
+    #[cfg(test)]
     #[inline]
-    pub fn intervene_on_layers_and_frame_branchless(
+    pub(crate) fn intervene_on_layers_and_frame_branchless(
         &mut self,
         stack: &mut CoreStateStack,
         delta: &LiminalBoundaryDelta,
@@ -477,7 +435,8 @@ impl LiminalEgoState {
     }
 }
 
-/// Composable receptor trait invoked by [`crate::stigmergy::StigmergicSubstrate`] when Swarm consensus and mapped-storage
+/// Composable receptor trait invoked by [`crate::stigmergy::StigmergicSubstrate`] when Swarm consensus and
+/// mapped-storage
 /// attractor pull elevate a pointer trail's stigmergic pheromone density across an action regime.
 ///
 /// Instead of writing ad-hoc `if/else` semantic branches (e.g., `if needs_web_search { ... }`),

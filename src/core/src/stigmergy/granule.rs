@@ -9,26 +9,26 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use core::mem::{align_of, offset_of, size_of};
 
 use crate::foundation::{
-    atan2_to_q7_word_x8_simd, branchless_mask8_min_delta, branchless_max_f32, branchless_relu_f32,
-    branchless_sincos_q7, coherence_from_uniform_words_x8, is_word_array_uniform_64,
-    store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, swar_u8_mean_round_x8, Pod,
+    Pod, atan2_to_q7_word_x8_simd, branchless_mask8_min_delta, branchless_max_f32,
+    branchless_relu_f32, branchless_sincos_q7, coherence_from_uniform_words_x8,
+    is_word_array_uniform_64, store_q7_words_64, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8,
+    swar_u8_mean_round_x8,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_i32, branchless_select_i8, branchless_select_u32,
-    branchless_select_u64, branchless_select_u8, branchless_select_usize, LiminalThresholdState,
-    LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
-    NUM_STIGMERGIC_GRANULES, THRESHOLD_RELATIVE_COUPLING,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LiminalThresholdState, LmnkResult,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, THRESHOLD_RELATIVE_COUPLING,
+    branchless_select_f32, branchless_select_i8, branchless_select_i32, branchless_select_u8,
+    branchless_select_u32, branchless_select_u64, branchless_select_usize,
 };
+use crate::stigmergy::DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
 use crate::stigmergy::anchor::{DissipativeOverflowReport, PhaseAnchorRecord};
 use crate::stigmergy::circuit::{CognitiveOpKind, CognitiveTrajectoryLedger};
 use crate::stigmergy::pheromone::StigmergicReconstitutionReport;
-use crate::stigmergy::trail::{trail_phase_words_ref, PagedBitmask, PointerTrail, TaggedPtr};
-use crate::stigmergy::DEFAULT_STIGMERGIC_QUORUM_THRESHOLD;
+use crate::stigmergy::trail::{PagedBitmask, PointerTrail, TaggedPtr, trail_phase_words_ref};
 
 /// 64-byte cacheline-aligned Plain Old Data (`Pod`) state engine for the 8-granule SWAR
 /// stigmergic approximation-and-reconstitution field and QDPT/CPT hierarchical pointer cascade.
@@ -70,7 +70,8 @@ impl StigmergicGranuleEngine {
     #[inline(always)]
     #[must_use]
     pub const fn words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
-        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
+        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is
+        // at offset 0.
         unsafe {
             &*(self
                 .cell_phases
@@ -83,7 +84,8 @@ impl StigmergicGranuleEngine {
     #[inline(always)]
     #[must_use]
     pub const fn words_mut(&mut self) -> &mut [u64; NUM_STIGMERGIC_GRANULES] {
-        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
+        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is
+        // at offset 0.
         unsafe {
             &mut *(self
                 .cell_phases
@@ -93,7 +95,7 @@ impl StigmergicGranuleEngine {
     }
 
     /// Fragments, stigmergically drifts, and reconstitutes `trail` against this engine's 8 myopic
-    /// granules via [`PointerTrail::reconstitute_from_stigmergy_words`], keeping
+    /// granules via `PointerTrail::reconstitute_from_stigmergy_words`, keeping
     /// `self.cell_phases` synchronized with the reconstituted SWAR words in $\mathcal{O}(1)$.
     #[inline(always)]
     pub fn reconstitute_trail_stigmergically(
@@ -187,7 +189,8 @@ pub struct OverlapDiscoveryReport {
     pub overlap_fringe_mask: u8,
     /// 8-bit mask where bit `g == 1` iff granule `g` lies outside all attractors (`overlap == 0`, `offset 26`).
     pub lacuna_exterior_mask: u8,
-    /// 8-bit mask where bit `g == 1` iff granule `g` lies in `lacuna_exterior_mask` with drift `>= floor` (`offset 27`).
+    /// 8-bit mask where bit `g == 1` iff granule `g` lies in `lacuna_exterior_mask` with drift `>= floor`
+    /// (`offset 27`).
     pub discovery_excursion_mask: u8,
     /// Maximum number of attractors overlapping on any single granule (`offset 28`).
     pub max_overlap_depth: u8,
@@ -300,7 +303,7 @@ pub fn evaluate_stigmergic_overlap_and_discovery_words_64<Node: RelativeAttracto
         let disc_hit = is_lacuna & (drift_q7 >= safe_discovery_floor);
         discovery_excursion_mask |= branchless_select_u8(disc_hit, bit, 0);
         lacuna_excursion_energy +=
-            branchless_select_f32(is_lacuna, f32::from(drift_q7) * (1.0 / 127.0), 0.0);
+            branchless_select_f32(is_lacuna, f32::from(drift_q7) * (1.0 / 128.0), 0.0);
 
         let take_serendip = disc_hit & (drift_q7 > best_serendip_q7);
         best_serendip_q7 = branchless_select_u8(take_serendip, drift_q7, best_serendip_q7);
@@ -479,8 +482,8 @@ impl StigmergicGranuleState {
 
     /// Evaluates the branchless self-differentiable boundary sensitivity gate $4p(1-p)$ in Q0.7 (`0 fdiv`).
     ///
-    /// Vanishes at both ignorance (`p_q7 == 0`) and saturation (`p_q7 >= 127`) while peaking at the
-    /// transition boundary (`p_q7 == 64`, returning `126`).
+    /// Vanishes at both ignorance (`p_q7 == 0`) and full saturation (`p_q7 >= 128`), returns `3` at
+    /// `p_q7 == 127`, and peaks at the transition boundary (`p_q7 == 64`, returning `127`).
     #[inline(always)]
     #[must_use]
     pub const fn boundary_sensitivity_gate_q7(p_q7: u8) -> u8 {

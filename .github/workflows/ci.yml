@@ -78,7 +78,10 @@ jobs:
             rust:
               - 'include/**'
               - 'src/**'
+              - 'xtask/**'
+              - '.cargo/**'
               - 'examples/**'
+              - 'fuzz/**'
               - 'tests/**'
               - 'benches/**'
               - 'Cargo.toml'
@@ -108,10 +111,13 @@ jobs:
               - 'deny.toml'
               - 'LICENSE*'
               - 'src/**'
+              - 'xtask/**'
+              - '.cargo/**'
               - 'include/**'
               - 'scripts/**'
               - 'tests/**'
               - 'examples/**'
+              - 'fuzz/**'
               - 'benches/**'
               - 'cmake/**'
               - 'CMakeLists.txt'
@@ -193,6 +199,9 @@ jobs:
           if [ -f "examples/candle_eval/Cargo.toml" ]; then
             cargo fmt --manifest-path examples/candle_eval/Cargo.toml
           fi
+          if [ -d "fuzz/fuzz_targets" ]; then
+            rustfmt --edition 2024 fuzz/fuzz_targets/*.rs
+          fi
           if [ -f "Cargo.toml" ]; then
             cargo update --workspace --offline 2>/dev/null || true
           fi
@@ -271,6 +280,11 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Enable Rust caching (xtask)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: xtask-linux
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@cargo-deny
@@ -396,6 +410,7 @@ jobs:
 
           ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("Cargo.toml"), "Cargo.toml version").group(1)
           candle_ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("examples/candle_eval/Cargo.toml"), "examples/candle_eval/Cargo.toml version").group(1)
+          fuzz_ver = must_match(r'(?m)^version\s*=\s*"([^"]+)"', read("fuzz/Cargo.toml"), "fuzz/Cargo.toml version").group(1)
           root_cmake = must_match(r'project\(LiminiKa\s+VERSION\s+(\d+\.\d+\.\d+)', read("CMakeLists.txt"), "CMakeLists.txt project VERSION").group(1)
 
           types_h = read("include/liminika/lmnk_types.h")
@@ -418,6 +433,7 @@ jobs:
 
           checks = [
               ("examples/candle_eval/Cargo.toml", candle_ver == ver),
+              ("fuzz/Cargo.toml", fuzz_ver == ver),
               ("CMakeLists.txt", root_cmake == ver),
               ("lmnk_types.h tuple", (c_maj, c_min, c_pat) == parts),
               ("lmnk_types.h string", c_str == ver),
@@ -435,7 +451,7 @@ jobs:
           PY
 
       - name: Verify 5-Layer Unidirectional DAG, Driver Isolation & Axiom Orthogonality
-        run: python3 scripts/verify_architecture.py --check
+        run: cargo xtask --check
 
   # =========================================================================
   # 4. C/C++ FFI & CTEST BUILD MATRIX
@@ -728,11 +744,15 @@ jobs:
           if [ -f "examples/candle_eval/Cargo.toml" ]; then
             cargo fmt --manifest-path examples/candle_eval/Cargo.toml -- --check
           fi
+          if [ -d "fuzz/fuzz_targets" ]; then
+            rustfmt --edition 2024 --check fuzz/fuzz_targets/*.rs
+          fi
 
       - name: Run cargo check/clippy (no_std core, default, and all-features) (Unix)
         if: runner.os != 'Windows'
         run: |
           cargo metadata --format-version 1 --locked >/dev/null
+          cargo metadata --manifest-path examples/candle_eval/Cargo.toml --format-version 1 --locked >/dev/null
           cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
           cargo clippy --locked --workspace --all-targets -- -D warnings
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -744,6 +764,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           cargo metadata --format-version 1 --locked > $null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo metadata --manifest-path examples/candle_eval/Cargo.toml --format-version 1 --locked > $null
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -801,6 +823,89 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo nextest run --locked --workspace --all-targets --all-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  # =========================================================================
+  # 5B. MIRI UNDEFINED BEHAVIOR VERIFICATION (PINNED NIGHTLY)
+  # =========================================================================
+  miri:
+    name: Miri UB Verification (liminika-core & dsl)
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
+
+      - name: Install pinned nightly Rust toolchain with Miri
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-11-20
+          components: miri, rust-src
+
+      - name: Enable Rust caching (Miri)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: miri-linux-nightly-2026-11-20
+
+      - name: Cache Miri sysroot
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/miri
+          key: miri-sysroot-${{ runner.os }}-nightly-2026-11-20-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            miri-sysroot-${{ runner.os }}-nightly-2026-11-20-
+
+      - name: Run Miri on liminika-core and liminika-dsl
+        env:
+          MIRIFLAGS: "-Zmiri-symbolic-alignment-check -Zmiri-strict-provenance"
+        run: |
+          cargo miri setup
+          cargo miri test --locked -p liminika-core --lib
+          cargo miri test --locked -p liminika-core --test test_abi_layout
+          cargo miri test --locked -p liminika-core --test test_zero_alloc
+          cargo miri test --locked -p liminika-core --test test_security_adversarial
+          cargo miri test --locked -p liminika-dsl --lib
+          cargo miri test --locked -p liminika-adapter --lib -- host::path_guard
+
+  # =========================================================================
+  # 5C. MSRV VERIFICATION (RUST 1.100.0)
+  # =========================================================================
+  msrv-check:
+    name: MSRV 1.100.0 Verification (Workspace & no_std core)
+    needs: [changes, auto-format]
+    if: ${{ always() && !cancelled() && needs.changes.result == 'success' && (needs.auto-format.result == 'success' || needs.auto-format.result == 'skipped') && (needs.changes.outputs.rust == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.auto-format.outputs.formatted_sha || '' }}
+
+      - name: Install MSRV Rust toolchain (1.100.0)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.100.0"
+
+      - name: Enable Rust caching (MSRV 1.100.0)
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-1.100.0-linux
+
+      - name: Verify MSRV 1.100.0 across no_std core and full workspace
+        run: |
+          cargo rustc -j 1 --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
+          cargo check -j 1 --locked --workspace --all-targets
+          cargo check -j 1 --locked --workspace --all-targets --all-features
 
   # =========================================================================
   # 6. DSL SPEC & EXAMPLES VALIDATION
@@ -879,9 +984,6 @@ jobs:
           if [ -f "scripts/run_benchmarks.py" ]; then
             python scripts/run_benchmarks.py --help >/dev/null
             python scripts/run_benchmarks.py --dry-run >/dev/null
-          fi
-          if [ -f "scripts/verify_architecture.py" ]; then
-            python scripts/verify_architecture.py --help >/dev/null
           fi
 
           if [ -d "tests" ]; then

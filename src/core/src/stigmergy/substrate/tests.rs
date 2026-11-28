@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::*;
-use crate::foundation::{pack_action_slot_tag, AlignedBuffer32};
+use crate::foundation::{AlignedBuffer32, pack_action_slot_tag};
 use crate::liminal::LMNK_ERR_SUBSTRATE_FULL;
 use crate::stigmergy::trail::PointerSubstrate;
 use crate::stigmergy::{
@@ -105,7 +105,7 @@ fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
     };
 
     let report = substrate
-        .orchestrate_next_action_step(
+        .orchestrate_next_action_step_core(
             ptr0,
             0.35,
             ATTRACTOR_SLOT_PERSONA,
@@ -114,6 +114,10 @@ fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
             Some(&mut q_buf.as_aligned_slice_mut()),
             Some(&mut k_buf.as_aligned_slice_mut()),
             Some(&mut logits.as_aligned_slice_mut()),
+            true,
+            None,
+            crate::foundation::DEFAULT_PHASE_STEP_MIN_RAD,
+            crate::foundation::DEFAULT_PHASE_CLAMP_MAX_RAD,
         )
         .unwrap();
 
@@ -147,9 +151,11 @@ fn test_substrate_engine_stigmergic_orchestration_and_gateway_kmeans() {
     let mut chain_trail = PointerTrail::default();
     let (chain_rep, hops, term_idx, term_aid, chain_coh) = substrate
         .traverse_pointer_chain_and_orchestrate(
-            0,
-            8,
-            0.25,
+            ChainTraverseParams {
+                start_trail_idx: 0,
+                max_hops: 8,
+                entropy_h_tilde: 0.25,
+            },
             &mut chain_trail,
             None,
             Some(&mut q_buf.as_aligned_slice_mut()),
@@ -278,10 +284,16 @@ fn test_workbench_free_by_default_allocator_pin_evict_decay_and_sandbox() {
 fn test_stigmergic_calculus_convex_combination_and_boundary_gate() {
     use crate::stigmergy::granule::StigmergicGranuleState;
 
-    // 1. 4p(1-p) boundary sensitivity gate vanishes at ignorance (0) and saturation (127), peaks at 64.
+    // 1. 4p(1-p) boundary sensitivity gate vanishes at ignorance (0) and saturation (>= 128),
+    //    returns 3 at 127, and peaks at 64 (127).
     assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(0), 0);
-    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(127), 0);
-    assert!(StigmergicGranuleState::boundary_sensitivity_gate_q7(64) >= 120);
+    assert_eq!(
+        StigmergicGranuleState::boundary_sensitivity_gate_q7(64),
+        127
+    );
+    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(127), 3);
+    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(128), 0);
+    assert_eq!(StigmergicGranuleState::boundary_sensitivity_gate_q7(255), 0);
 
     // 2. alpha = 0 reduces identically to pure integral density.
     let (eff_zero, _) =

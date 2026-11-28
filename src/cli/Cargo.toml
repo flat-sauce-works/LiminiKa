@@ -5,6 +5,7 @@
 name = "liminika-cli"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 
@@ -22,3 +23,7 @@ liminika-dsl = { path = "../dsl" }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "fuzz_regression"
+path = "../../tests/integration/fuzz_regression.rs"

@@ -25,13 +25,13 @@ use crate::foundation::lut_crc32::SWAR_SPLAT_BYTE_64;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::foundation::lut_crc32::{INV_8_Q14_F32, Q14_BIAS_X8_I32};
 use crate::foundation::pod::KvMotionDeltaPacket;
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+use crate::foundation::scalar_math::{VON_MISES_KAPPA_AT_MAX_R, fast_sqrt_unit_f32};
 use crate::foundation::scalar_math::{
     branchless_abs_f32, branchless_clamp_f32, branchless_flush_subnormal_f32,
     branchless_is_finite_f32, branchless_rad_to_q7, branchless_relu_f32,
     branchless_von_mises_kappa, fast_inv_pos_normal_f32,
 };
-#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
-use crate::foundation::scalar_math::{fast_sqrt_unit_f32, VON_MISES_KAPPA_AT_MAX_R};
 use crate::foundation::swar_simd::{
     is_word_array_uniform_64, load_q7_words_64, store_q7_words_64, swar_q7_circular_add_x8,
     swar_q7_circular_diff_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
@@ -40,18 +40,20 @@ use crate::foundation::swar_simd::{
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 use crate::liminal::Q7_PHASE_INV_SCALE_RAD;
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u8, LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_INVALID_ARGUMENT, LmnkResult, MAX_ATTENTION_HEADS, PhaseQ7,
+    branchless_select_f32, branchless_select_u8,
 };
 
 /// Executes an **Online Toroidal $k$-Means M-Step Centroid Update** in 8 register-resident `u64`
 /// SWAR words (`centroid_words`, `sample_words`) with an optional precomputed E-step phase
 /// coherence `precomputed_coh_opt` and pre-evaluated word-uniformity flags `(c_uni, sample_uni)`,
 /// in strictly constant time (`0` data-dependent branches on phase stationarity, normalized
-/// directional cosine weighting $w_{\mathrm{coh}} = \operatorname{clamp}(0.5(1 + \mathcal{C}_{\mathrm{phase}}), 0.25, 1.0)$).
+/// directional cosine weighting $w_{\mathrm{coh}} = \operatorname{clamp}(0.5(1 + \mathcal{C}_{\mathrm{phase}}),
+/// 0.25, 1.0)$).
 ///
 /// Returns `(updated_centroid_words, next_base_energy, resultant_r_bar, von_mises_kappa, words_changed)`.
 #[inline]
+// Register-resident hot-path SWAR kernel keeps flat word/scalar arguments to avoid stack packing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn step_toroidal_centroid_words_cached_64(
     centroid_words: &[u64; 8],
@@ -208,12 +210,12 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
         // SAFETY: Guarded by `target_feature = "avx2"`. Keeps `va0..vb1`, `vd0..vd1`, `sc0..sc1`,
         // and `out0..out1` 100% resident in YMM registers across coherence, SLERP, stationarity,
         // rigid SO(2) invariance, and circular resultant evaluation (`0` GPR-to-YMM or YMM-to-GPR STLF stalls).
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
-                _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastb_epi8, _mm256_castsi256_si128,
-                _mm256_mulhrs_epi16, _mm256_or_si256, _mm256_permute4x64_epi64, _mm256_set1_epi16,
-                _mm256_slli_epi16, _mm256_sub_epi8, _mm256_testz_si256, _mm256_xor_si256,
-                _mm_cvtsi128_si64,
+                _mm_cvtsi128_si64, _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastb_epi8,
+                _mm256_castsi256_si128, _mm256_mulhrs_epi16, _mm256_or_si256,
+                _mm256_permute4x64_epi64, _mm256_set1_epi16, _mm256_slli_epi16, _mm256_sub_epi8,
+                _mm256_testz_si256, _mm256_xor_si256,
             };
             let (va0, va1) = avx2_words64_to_vec64_with_uniform(centroid_words, c_uni);
             let (vb0, vb1) = avx2_words64_to_vec64_with_uniform(sample_words, sample_uni);
@@ -297,13 +299,13 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
             };
             let rb = fast_sqrt_unit_f32(mean_sin * mean_sin + mean_cos * mean_cos);
             (next_w, next_e, rb, branchless_von_mises_kappa(rb), true)
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
         let coh = match precomputed_coh_opt {
             Some(c) => c,
-            None => coherence_from_diff_words_64(
+            None => coherence_from_diff_words_64([
                 d0,
                 d1,
                 swar_q7_circular_diff_x8(sample_words[2], centroid_words[2]),
@@ -312,7 +314,7 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
                 swar_q7_circular_diff_x8(sample_words[5], centroid_words[5]),
                 swar_q7_circular_diff_x8(sample_words[6], centroid_words[6]),
                 swar_q7_circular_diff_x8(sample_words[7], centroid_words[7]),
-            ),
+            ]),
         };
         let eff_sample_e = clean_e * branchless_clamp_f32(0.5 * (1.0 + coh), 0.25, 1.0);
         let next_e = prev_e + 0.5 * eff_sample_e;
@@ -365,7 +367,7 @@ pub(crate) fn step_toroidal_centroid_words_cached_64(
 #[inline(always)]
 #[must_use]
 #[allow(clippy::too_many_arguments)]
-pub fn branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
+pub(crate) fn branchless_toroidal_centroid_step_words_with_coh_and_uni_64(
     centroid_words: &[u64; 8],
     prev_sample_count: u32,
     prev_base_energy: f32,
@@ -538,13 +540,13 @@ pub fn branchless_q7_synergy_fuse_words_64(
             let (va0, va1) = avx2_words64_to_vec64(a);
             let fused_w =
                 avx2_vec64_to_words64(_mm256_add_epi8(va0, vst0), _mm256_add_epi8(va1, vst1));
-            return (fused_w, effective_pull, coherence);
+            (fused_w, effective_pull, coherence)
         }
     }
 
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        let coherence = coherence_from_diff_words_64(d0, d1, d2, d3, d4, d5, d6, d7);
+        let coherence = coherence_from_diff_words_64([d0, d1, d2, d3, d4, d5, d6, d7]);
         let pos_resonance = branchless_relu_f32(coherence);
         let liminal_beat = branchless_relu_f32(-coherence);
         let effective_pull = base_sum + safe_gain * base_sum * pos_resonance;
@@ -683,7 +685,7 @@ pub fn branchless_q7_inhibit_words_64(
             let (vs0, vs1) = avx2_scale_vec64(vt0, vt1, s);
             *target_words = avx2_vec64_to_words64(vs0, vs1);
         }
-        return clean_w * retain_factor;
+        clean_w * retain_factor
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -950,7 +952,7 @@ pub fn apply_pframe_motion_step_words_64(
     safe_thresh: f32,
 ) -> (f32, bool) {
     let dw = load_q7_words_64(&pframe.motion_deltas);
-    let coh = coherence_from_diff_words_64(dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7]);
+    let coh = coherence_from_diff_words_64(dw);
     let log_p = branchless_fast_transition_log_prob(coh);
     let repulsed = coh < -safe_thresh;
     if repulsed {

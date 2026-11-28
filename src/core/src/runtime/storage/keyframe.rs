@@ -5,6 +5,8 @@
 
 use super::KvKeyframeHeader;
 use crate::foundation::{
+    ACTION_MODE_PHASE_REPULSE, ATTRACTOR_SLOT_ID_MASK, AlignedSlice16, AlignedSlice32,
+    AlignedSlice64, AlignedSliceMut64, KvMotionDeltaPacket, Pod, TaggedPtr,
     apply_pframe_motion_step_words_64, branchless_abs_f32, branchless_atan2_f32,
     branchless_clamp_f32, branchless_copysign_f32, branchless_fast_transition_log_prob,
     branchless_flush_subnormal_f32, branchless_inv_pos_f32, branchless_is_finite_f32,
@@ -13,21 +15,19 @@ use crate::foundation::{
     branchless_sqrt_f32, branchless_von_mises_kappa, circular_r_bar_from_words_64,
     circular_resultant_from_words_64, coherence_from_diff_words_64, compute_crc32_ieee,
     crc32_block64_zero_seed_words, encode_pframe_motion_delta_64, finalize_pframe_chain_words_64,
-    load_q7_words_64, pack_action_slot_tag, seek_pframe_chain_words_64, store_q7_words_64,
-    swar_q7_add_sat_x8, swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
+    load_q7_words_64, pack_action_slot_tag, store_q7_words_64, swar_q7_add_sat_x8,
+    swar_q7_circular_add_x8, swar_q7_fold_s1_geodesic_x8, swar_q7_neg_sat_x8,
     swar_q7_phase_step_filter_words_64, unpack_action_mode_from_tag,
-    unpack_attractor_slot_from_tag, AlignedSlice16, AlignedSlice32, AlignedSlice64,
-    AlignedSliceMut64, KvMotionDeltaPacket, Pod, TaggedPtr, ACTION_MODE_PHASE_REPULSE,
-    ATTRACTOR_SLOT_ID_MASK,
+    unpack_attractor_slot_from_tag,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, LmnkResult, PhaseQ7, DEFAULT_ENTROPY_EPS,
-    LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT,
-    LMNK_ERR_INVALID_STATE, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS, Q7_PHASE_SCALE_RAD,
+    DEFAULT_ENTROPY_EPS, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
+    LMNK_ERR_INVALID_ARGUMENT, LMNK_ERR_INVALID_STATE, LmnkResult, MAX_ATTENTION_HEADS,
+    MAX_ATTRACTOR_DOMAINS, PhaseQ7, Q7_PHASE_SCALE_RAD, branchless_select_f32,
 };
 use crate::stigmergy::{
-    trail_phase_words_mut, ContrastivePhaseBloomFilter, LedgerSlot, PointerTrail,
-    ATTRACTOR_SLOT_REPULSION, MAX_ATTRACTOR_PULL_FORCE, TRAIL_FLAG_REPULSION_ACTIVE,
+    ATTRACTOR_SLOT_REPULSION, ContrastivePhaseBloomFilter, LedgerSlot, MAX_ATTRACTOR_PULL_FORCE,
+    PointerTrail, TRAIL_FLAG_REPULSION_ACTIVE, trail_phase_words_mut,
 };
 
 /// 128-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Keyframe (I-Frame) Packet** (Section 4.3).
@@ -73,6 +73,29 @@ impl Default for KvKeyframePacket {
     }
 }
 
+/// Construction fields for [`KvKeyframePacket::new`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KvKeyframeSpec {
+    /// Token index at which the I-Frame keyframe was anchored.
+    pub token_index: u32,
+    /// Variable GOP length associated with this keyframe (`>= 1`).
+    pub gop_length: u32,
+    /// Circular resultant vector length $\bar{R}_c$.
+    pub composite_vector_length: f32,
+    /// Estimated von Mises concentration $\kappa_c$.
+    pub von_mises_kappa: f32,
+    /// Sparse scalar residual or mean phase summary.
+    pub sparse_scalar_residual: f32,
+    /// Causal provenance lineage flags.
+    pub lineage_flags: u32,
+    /// Target macro cluster / anchor identifier.
+    pub cluster_id: u32,
+    /// Target working slot identifier (`0..=7`).
+    pub slot_id: u8,
+    /// 64-head Q7 anchor phase profile.
+    pub anchor_phases: [PhaseQ7; MAX_ATTENTION_HEADS],
+}
+
 impl KvKeyframePacket {
     /// Computes the IEEE 802.3 CRC32 checksum over the 64-head `anchor_phases` payload in `const fn` mode.
     #[inline(always)]
@@ -91,17 +114,18 @@ impl KvKeyframePacket {
     /// CRC32 integrity protection and causal provenance metadata.
     #[inline(always)]
     #[must_use]
-    pub const fn new(
-        token_index: u32,
-        gop_length: u32,
-        composite_vector_length: f32,
-        von_mises_kappa: f32,
-        sparse_scalar_residual: f32,
-        lineage_flags: u32,
-        cluster_id: u32,
-        slot_id: u8,
-        anchor_phases: [PhaseQ7; MAX_ATTENTION_HEADS],
-    ) -> Self {
+    pub const fn new(spec: KvKeyframeSpec) -> Self {
+        let KvKeyframeSpec {
+            token_index,
+            gop_length,
+            composite_vector_length,
+            von_mises_kappa,
+            sparse_scalar_residual,
+            lineage_flags,
+            cluster_id,
+            slot_id,
+            anchor_phases,
+        } = spec;
         let crc = Self::compute_anchor_crc32(&anchor_phases);
         let crc_le = crc.to_le_bytes();
         let prov_le = lineage_flags.to_le_bytes();
@@ -302,38 +326,6 @@ pub trait KvKeyframeCache: Send + Sync {
         )
     }
 
-    /// Evaluates the **Variable Group of Pictures (GOP) Structure** keyframe classification
-    /// (`0` = I-Frame Keyframe Anchor, `1` = P-Frame Phase Motion Delta) and effective GOP length (Section 4.3).
-    #[inline(always)]
-    #[must_use]
-    fn evaluate_variable_gop_trigger(
-        &self,
-        moving_z_entropy: f32,
-        sliding_flux: f32,
-        steps_since_keyframe: u32,
-        min_gop: u32,
-        max_gop: u32,
-        entropy_surge_thresh: f32,
-        flux_surge_thresh: f32,
-    ) -> (u32, u32) {
-        let safe_min = branchless_select_u32(min_gop > 0, min_gop, 1);
-        let safe_max = branchless_select_u32(max_gop >= safe_min, max_gop, safe_min);
-        let clean_h = branchless_select_f32(
-            branchless_is_finite_f32(moving_z_entropy),
-            moving_z_entropy,
-            0.0,
-        );
-        let clean_flux =
-            branchless_select_f32(branchless_is_finite_f32(sliding_flux), sliding_flux, 0.0);
-
-        let surge = (clean_h > entropy_surge_thresh) | (clean_flux > flux_surge_thresh);
-        let is_iframe =
-            (steps_since_keyframe >= safe_max) | ((steps_since_keyframe >= safe_min) & surge);
-        let frame_type = branchless_select_u32(is_iframe, 0, 1);
-        let gop_len = branchless_select_u32(is_iframe, steps_since_keyframe.max(1), safe_max);
-        (frame_type, gop_len)
-    }
-
     /// Executes **Zero-Forward Latency Seek (Instantaneous Replay)** phase reconstruction (Section 4.3)
     /// using 8-lane SWAR saturating addition and SWAR `PhaseStepFilter` filtering without forward passes.
     ///
@@ -438,9 +430,7 @@ pub trait KvKeyframeCache: Send + Sync {
             // Because `next_w = cur_w (+) dw` in Z_256^64 and cos(-d) = cos(d), the transition
             // coherence C(cur_w, next_w) depends purely on `dw` against zero, avoiding a
             // tentative 8-word addition + 8-word subtraction before checking repulsion.
-            let coh = coherence_from_diff_words_64(
-                dw[0], dw[1], dw[2], dw[3], dw[4], dw[5], dw[6], dw[7],
-            );
+            let coh = coherence_from_diff_words_64(dw);
             let log_p = branchless_fast_transition_log_prob(coh);
             if coh < -safe_thresh {
                 cur_w = [
@@ -512,17 +502,17 @@ pub trait KvKeyframeCache: Send + Sync {
         let words = load_q7_words_64(anchor_phases);
         let (r_bar, mean_q7, kappa_c) = circular_resultant_from_words_64(&words);
         let theta_bar = branchless_flush_subnormal_f32((mean_q7 as f32) * Q7_PHASE_SCALE_RAD);
-        KvKeyframePacket::new(
+        KvKeyframePacket::new(KvKeyframeSpec {
             token_index,
-            gop_length.max(1),
-            r_bar,
-            kappa_c,
-            theta_bar,
+            gop_length: gop_length.max(1),
+            composite_vector_length: r_bar,
+            von_mises_kappa: kappa_c,
+            sparse_scalar_residual: theta_bar,
             lineage_flags,
             cluster_id,
             slot_id,
-            *anchor_phases,
-        )
+            anchor_phases: *anchor_phases,
+        })
     }
 
     /// Encodes a 64-byte [`KvMotionDeltaPacket`] (**P-Frame Predictive Phase-Motion Delta**
@@ -541,63 +531,6 @@ pub trait KvKeyframeCache: Send + Sync {
         phase_step_min_q7: u8,
     ) -> LmnkResult<KvMotionDeltaPacket> {
         encode_pframe_motion_delta_64(prev_phases, curr_phases, phase_step_min_q7)
-    }
-
-    /// Executes **Zero-Forward Latency Seek (Instantaneous Persona & Memory Replay)** over a
-    /// lightweight KV-keyframe Variable GOP stream (`keyframe` I-Frame + `pframes[..seek_pframe_steps]`
-    /// P-Frame deltas), reconstructing the historical 64-head persona & episodic memory state
-    /// directly onto `trail_out` without running any LLM forward pass (Section 4.3).
-    ///
-    /// Returns `(joint_log_prob, r_bar, kappa_c, virtual_pos_shift, repulsed_pframe_count)`.
-    ///
-    /// # Errors
-    /// Returns [`LMNK_ERR_CONTAINER_CORRUPTED`] if `keyframe.verify_integrity()` fails, or
-    /// [`LMNK_ERR_INVALID_ARGUMENT`] if `seek_pframe_steps > pframes.len()`,
-    /// `phase_step_min_q7 > 127`, or `contradiction_threshold` is non-finite.
-    #[inline]
-    fn seek_and_reconstruct_persona_from_gop(
-        &self,
-        keyframe: &KvKeyframePacket,
-        pframes: &[KvMotionDeltaPacket],
-        seek_pframe_steps: usize,
-        phase_step_min_q7: u8,
-        contradiction_threshold: f32,
-        mean_base_rope_freq: f32,
-        trail_out: &mut PointerTrail,
-    ) -> LmnkResult<(f32, f32, f32, f32, u32)> {
-        keyframe.verify_integrity()?;
-        let (filt_w, clean_lp, repulsed_count) = seek_pframe_chain_words_64(
-            &keyframe.anchor_phases,
-            pframes,
-            seek_pframe_steps,
-            phase_step_min_q7,
-            contradiction_threshold,
-        )?;
-        store_q7_words_64(&mut trail_out.accumulated_phase_delta, &filt_w);
-
-        let (r_bar, mean_q7, kappa_c) = circular_resultant_from_words_64(&filt_w);
-        let mean_rad = (mean_q7 as f32) * Q7_PHASE_SCALE_RAD;
-        let virtual_pos_shift = self.compute_virtual_position_shift(mean_rad, mean_base_rope_freq);
-
-        let cur_mode = unpack_action_mode_from_tag(TaggedPtr(trail_out.current_ptr).unpack_tag());
-        let target_token = keyframe
-            .header
-            .token_index
-            .wrapping_add(seek_pframe_steps as u32);
-        trail_out.current_ptr = TaggedPtr::pack_action(
-            u64::from(target_token),
-            keyframe.slot_id(),
-            cur_mode,
-            mean_q7,
-        )
-        .raw();
-        trail_out.user_data |= u64::from(keyframe.lineage_flags());
-        trail_out.target_anchor_id = keyframe.cluster_id();
-        trail_out.cluster_id = keyframe.cluster_id();
-        if trail_out.stigmergic_density < r_bar {
-            trail_out.stigmergic_density = r_bar;
-        }
-        Ok((clean_lp, r_bar, kappa_c, virtual_pos_shift, repulsed_count))
     }
 
     /// Serializes a lightweight KV-keyframe Variable GOP stream (`1` 128-byte [`KvKeyframePacket`] +

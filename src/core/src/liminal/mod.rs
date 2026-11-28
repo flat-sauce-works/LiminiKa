@@ -12,13 +12,15 @@
 
 pub mod axiom;
 pub mod bitcut;
+pub mod boundary;
 pub mod constants;
 pub mod partition;
 pub mod select;
 pub mod threshold;
 
 pub use self::axiom::*;
-pub use self::bitcut::{BitCut, BitCut32, BitCut64, BitCut8};
+pub use self::bitcut::{BitCut, BitCut8, BitCut32, BitCut64};
+pub use self::boundary::*;
 pub use self::constants::*;
 pub use self::partition::*;
 pub use self::select::*;
@@ -31,7 +33,7 @@ const _: () = {
                 | (LMNK_ABI_VERSION_MINOR << 8)
                 | LMNK_ABI_VERSION_PATCH)
     );
-    assert!(LMNK_ABI_VERSION_HEX >= 0x0000_0200);
+    assert!(LMNK_ABI_VERSION_HEX >= 0x0000_0400);
     assert!(MAX_ATTRACTOR_DOMAINS == 8);
     assert!(MAX_ATTENTION_HEADS == 64);
     assert!(NUM_STIGMERGIC_GRANULES * HEADS_PER_STIGMERGIC_GRANULE == MAX_ATTENTION_HEADS);

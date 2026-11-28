@@ -10,9 +10,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::manual_unwrap_or)]
 
 pub mod aligned;
 pub mod cohomology;
@@ -32,12 +29,11 @@ pub use self::cohomology::*;
 pub use self::lora::*;
 pub use self::lut_crc32::*;
 pub(crate) use self::lut_crc32::{
+    CRC32_IEEE_SLICE16_REF, Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
     branchless_popcount_rsqrt_u32, branchless_q7_default_gravity_from_diff_u8,
     compute_aligned64_payload_crc32_ieee, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
     crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
     crc32_step_block64_words, crc32_step_l3, crc32_step_l4, crc32_step_l5, crc32_step_l6,
-    CRC32_IEEE_SLICE16_REF, MAX_BAYESIAN_STIGMERGIC_DENSITY, POPCOUNT_RSQRT_LUT_257_REF,
-    Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
 };
 pub use self::phase_ops::*;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
@@ -46,8 +42,7 @@ pub(crate) use self::phase_ops::{
     avx2_words64_to_vec64, avx2_words64_to_vec64_with_uniform,
 };
 pub(crate) use self::phase_ops::{
-    branchless_q7_unified_manifold_fold_words_with_flags_64, coherence_from_uniform_words_x8,
-    step_toroidal_centroid_words_cached_64,
+    coherence_from_uniform_words_x8, step_toroidal_centroid_words_cached_64,
 };
 pub use self::pod::*;
 pub use self::projection::*;

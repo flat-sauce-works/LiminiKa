@@ -8,38 +8,31 @@
 //!   contrastive Bloom filter self-normalization, Chebyshev spectral filtering,
 //!   Hodge obstruction pairing, and non-finite / odd-remainder boundary cases.
 
-#![allow(missing_docs)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_precision_loss)]
-#![allow(clippy::cast_sign_loss)]
-
 use criterion::{
-    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+    BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
 };
 use liminika_core::abi::{
     lmnk_entropy_state_t, lmnk_paged_bitmask_t, lmnk_q7_t, lmnk_tagged_ptr_t,
 };
 use liminika_core::drivers::spine::entropy::{
-    compute_moving_z_score_entropy, compute_sparse_surrogate_entropy, eval_barrier_pitchfork,
-    EntropyController,
+    EntropyController, compute_moving_z_score_entropy, compute_sparse_surrogate_entropy,
+    eval_barrier_pitchfork,
 };
 use liminika_core::foundation::{
+    ACTION_PRESET_EXPRESS_PHASE, AlignedBuffer32, AlignedSlice32,
     compute_tikhonov_chebyshev_coeffs_deg3, eval_chebyshev_spectral_filter_deg3,
-    evaluate_hodge_obstruction_and_dual_pairing, AlignedBuffer32, AlignedSlice32,
-    ACTION_PRESET_EXPRESS_PHASE,
+    evaluate_hodge_obstruction_and_dual_pairing,
 };
 use liminika_core::liminal::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
 use liminika_core::stigmergy::{
+    ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA, ContrastivePhaseBloomFilter,
     eval_stigmergic_block_degrees, resolve_dyadic_qdpt_and_cascade_ptr,
-    ContrastivePhaseBloomFilter, ATTRACTOR_SLOT_KNOWLEDGE, ATTRACTOR_SLOT_PERSONA,
 };
 use std::hint::black_box;
 use std::time::Duration;
 
 mod common;
-use common::{configured_noise_threshold, AlignedHeapBuffer, ScopedFtzdazGuard};
+use common::{AlignedHeapBuffer, ScopedFtzdazGuard, configured_noise_threshold};
 
 /// Generates a deterministic 64-supernode f32 field with non-zero spatial coboundary gradients
 /// across adjacent supernodes so Sheaf Cohomology and Hodge Obstruction kernels evaluate genuine
@@ -211,7 +204,18 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
         let mut state_out = lmnk_entropy_state_t::default();
         for _ in 0..8 {
             engine
-                .eval_surrogate_and_step(0.68, 0.24, 0.35, 0.15, 0.09, 1.0, 0.5, &mut state_out)
+                .eval_surrogate_and_step(
+                    liminika_core::drivers::spine::entropy::SurrogateEntropyInput {
+                        p_max: 0.68,
+                        p_2nd: 0.24,
+                        cosine_dist: 0.35,
+                        mu_dist: 0.15,
+                        sigma_dist: 0.09,
+                        alpha_z: 1.0,
+                        gamma_mod: 0.5,
+                    },
+                    &mut state_out,
+                )
                 .unwrap();
         }
 
@@ -220,13 +224,15 @@ fn bench_entropy_control_stateful_eval(c: &mut Criterion) {
             let (alpha, beta, d0, d_tau) = black_box((0.15f32, 0.09f32, 1.0f32, 0.5f32));
             let h = engine
                 .eval_surrogate_and_step(
-                    p_max,
-                    p_2nd,
-                    cos_d,
-                    alpha,
-                    beta,
-                    d0,
-                    d_tau,
+                    liminika_core::drivers::spine::entropy::SurrogateEntropyInput {
+                        p_max,
+                        p_2nd,
+                        cosine_dist: cos_d,
+                        mu_dist: alpha,
+                        sigma_dist: beta,
+                        alpha_z: d0,
+                        gamma_mod: d_tau,
+                    },
                     black_box(&mut state_out),
                 )
                 .unwrap();
@@ -367,7 +373,7 @@ fn bench_entropy_control_long_dialogue_reliability(c: &mut Criterion) {
     let mut group = c.benchmark_group("EntropyControl_Long_Dialogue_Reliability");
     group.noise_threshold(configured_noise_threshold());
 
-    // 1. Ultra-Long Token Stream Simulation (500,000 Tokens)
+    // 1. Very Long Token Stream Simulation (500,000 Tokens)
     group.sampling_mode(SamplingMode::Flat);
     group.sample_size(30);
     group.warm_up_time(Duration::from_millis(350));
@@ -535,15 +541,17 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
             reset_engine_fast(&mut engine, &base_engine);
             let res = engine
                 .eval_stateful_with_lacuna_and_pointer(
-                    black_box(2.2f32),
-                    black_box(0.35f32),
-                    black_box(1.2f32),
-                    black_box(0.8f32),
-                    black_box(0.5f32),
-                    black_box(ptr),
-                    black_box(1.1f32),
-                    black_box(ATTRACTOR_SLOT_KNOWLEDGE),
-                    black_box(1.5f32),
+                    liminika_core::drivers::spine::entropy::LacunaPointerInput {
+                        token_z_score: black_box(2.2f32),
+                        lacuna_score: black_box(0.35f32),
+                        alpha: black_box(1.2f32),
+                        beta: black_box(0.8f32),
+                        d0: black_box(0.5f32),
+                        input_ptr: black_box(ptr),
+                        trail_density: black_box(1.1f32),
+                        dominant_attractor_slot: black_box(ATTRACTOR_SLOT_KNOWLEDGE),
+                        high_density_rank1_thresh: black_box(1.5f32),
+                    },
                 )
                 .unwrap();
             black_box(res);
@@ -639,11 +647,13 @@ fn bench_entropy_control_pointer_tunneling_and_cohomology(c: &mut Criterion) {
                 black_box(parent_ptr),
                 black_box(&curr_mask),
                 black_box(&anchor_mask),
-                black_box(0.15f32),
-                black_box(3u32),
-                black_box(0.10f32),
-                black_box(&offsets),
-                black_box(&deltas),
+                liminika_core::stigmergy::QdptCascadeParams {
+                    w_key: black_box(0.15f32),
+                    current_level: black_box(3u32),
+                    hysteresis_band: black_box(0.10f32),
+                    addr_offsets: black_box(&offsets),
+                    phase_deltas: black_box(&deltas),
+                },
             )
             .unwrap();
             black_box(res);

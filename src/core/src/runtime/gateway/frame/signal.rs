@@ -4,30 +4,31 @@
 //! [`ManifoldGatewaySignal`] trait, granule voting, aperture shaping, and SWAR active-head folding.
 
 use super::super::*;
-use super::synthesis::combine_pair_aperture_frame_pure;
 use super::GatewayFrame;
+use super::synthesis::combine_pair_aperture_frame_pure;
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_lerp_f32, branchless_max_f32,
-    branchless_min_f32, branchless_rad_to_phase_step_u8, branchless_relu_f32,
-    coherence_from_word_arrays_with_both_uniform_flags_64, fast_inv_pos_normal_f32,
-    is_word_array_uniform_64, pack_action_slot_tag, swar_q7_avg_round_x8, swar_q7_circular_add_x8,
-    swar_q7_mean_i8_from_words_64, swar_q7_mean_i8_from_words_with_uniform_flag_64,
-    swar_q7_scale_le128_with_bias_x8, swar_slerp_words_with_uniform_flag_64, swar_words_equal_64,
-    swar_words_nonzero_64, words_to_q7_array_64, TaggedPtr, ACTION_MODE_LAYER_SKIP,
-    ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_CLAMP_MAX_RAD,
-    DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64, TAG_ACTION_MODE_MASK,
+    ACTION_MODE_LAYER_SKIP, ACTION_PRESET_EXPRESS_PHASE, ATTRACTOR_SLOT_ID_MASK,
+    DEFAULT_PHASE_CLAMP_MAX_RAD, DEFAULT_PHASE_STEP_MIN_RAD, SWAR_SPLAT_BYTE_64,
+    TAG_ACTION_MODE_MASK, TaggedPtr, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_lerp_f32, branchless_max_f32, branchless_min_f32, branchless_rad_to_phase_step_u8,
+    branchless_relu_f32, coherence_from_word_arrays_with_both_uniform_flags_64,
+    fast_inv_pos_normal_f32, is_word_array_uniform_64, pack_action_slot_tag, swar_q7_avg_round_x8,
+    swar_q7_circular_add_x8, swar_q7_mean_i8_from_words_64,
+    swar_q7_mean_i8_from_words_with_uniform_flag_64, swar_q7_scale_le128_with_bias_x8,
+    swar_slerp_words_with_uniform_flag_64, swar_words_equal_64, swar_words_nonzero_64,
+    words_to_q7_array_64,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
     BitCut32, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, MAX_ATTRACTOR_DOMAINS,
-    NUM_STIGMERGIC_GRANULES, THRESHOLD_MANIFOLD_GATEWAY,
+    NUM_STIGMERGIC_GRANULES, THRESHOLD_MANIFOLD_GATEWAY, branchless_select_f32,
+    branchless_select_u8, branchless_select_u32, branchless_select_u64,
 };
 use crate::runtime::boundary_delta::LiminalBoundaryDelta;
 use crate::runtime::context::CoreStateStack;
 use crate::runtime::horizon::EpistemicHorizonReading;
 use crate::stigmergy::{
-    OverlapDiscoveryReport, StigmergicFragmentEnsembleReport, ATTRACTOR_SLOT_SYSTEM_BASELINE,
-    MAX_ATTRACTOR_PULL_FORCE,
+    ATTRACTOR_SLOT_SYSTEM_BASELINE, MAX_ATTRACTOR_PULL_FORCE, OverlapDiscoveryReport,
+    StigmergicFragmentEnsembleReport,
 };
 
 /// **The Single Composite Manifold Gateway Trait (`ManifoldGatewaySignal: CausalProvenanceSignal`)**.
@@ -53,7 +54,8 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
 
     /// Synthesizes `self` into both a 128-byte [`GatewayFrame`] and its register-resident 8 `u64`
     /// SWAR phase words (`[u64; 8]`), eliminating stack store-to-load forwarding stalls across
-    /// downstream ensemble folding, [`crate::stigmergy::StigmergicSubstrate`] steering, and Online Toroidal $k$-Means steps.
+    /// downstream ensemble folding, [`crate::stigmergy::StigmergicSubstrate`] steering, and Online Toroidal
+    /// $k$-Means steps.
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -347,7 +349,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             let ego_tie = contested & ego_can_break;
             ego_tiebreak_mask |= branchless_select_u8(ego_tie, bit, 0);
 
-            let ego_pref_pos = stack.ego.sovereign_granule_phase_q7[g] >= 0;
+            let ego_pref_pos = stack.ego.preferred_granule_phase_q7[g] >= 0;
             let e_pref_pos = pos_energy[g] >= neg_energy[g];
             let choose_pos = branchless_select_u8(
                 contested,
@@ -356,7 +358,7 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
             ) != 0;
 
             let chosen_w = branchless_select_u64(choose_pos, pos_words[g], neg_words[g]);
-            let ego_word = (stack.ego.sovereign_granule_phase_q7[g] as u8 as u64)
+            let ego_word = (stack.ego.preferred_granule_phase_q7[g] as u8 as u64)
                 .wrapping_mul(SWAR_SPLAT_BYTE_64);
             let damped_contested = swar_q7_scale_le128_with_bias_x8(
                 chosen_w,
@@ -617,7 +619,8 @@ pub(crate) fn tangent_cosine_active_heads_64(
     branchless_clamp_f32((dot as f32) * inv_denom, -1.0, 1.0)
 }
 
-/// Linearly interpolates two 64-lane signed Q7 tangent arrays in $[-\theta_{\mathrm{clamp}}, +\theta_{\mathrm{clamp}}]^{64}$
+/// Linearly interpolates two 64-lane signed Q7 tangent arrays in $[-\theta_{\mathrm{clamp}},
+/// +\theta_{\mathrm{clamp}}]^{64}$
 /// (`[-127, +127]`) without modular $\pm 128$ wrapping overflow when $|b_h - a_h| > 127$.
 #[inline(always)]
 pub(super) fn swar_tangent_lerp_words_with_uniform_flag_64(
@@ -751,7 +754,7 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                 fp_coh = f.fact_persona_coherence;
                 rep_sev = f.repulsion_severity;
                 prov_bits = f.lineage_flags;
-                dom_cause = f.attribution_tag;
+                dom_cause = f.root_cause_code;
                 dom_slot = f.dominant_slot;
                 action_flags = f.action_mode_flags;
                 swarm_mask = f.active_swarm_cell_mask;
@@ -821,8 +824,8 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
                 swarm_mask &= f.active_swarm_cell_mask;
                 prov_bits |= f.lineage_flags;
                 rep_sev = branchless_max_f32(rep_sev, f.repulsion_severity);
-                if f.attribution_tag > dom_cause {
-                    dom_cause = f.attribution_tag;
+                if f.root_cause_code > dom_cause {
+                    dom_cause = f.root_cause_code;
                 }
             }
         }
@@ -854,7 +857,7 @@ pub(super) fn fold_gateway_slice_with_query_words_and_heads_core<S: ManifoldGate
             fact_persona_coherence: fp_coh,
             repulsion_severity: rep_sev,
             lineage_flags: prov_bits,
-            attribution_tag: dom_cause,
+            root_cause_code: dom_cause,
             dominant_slot: dom_slot,
             action_mode_flags: action_flags,
             active_swarm_cell_mask: swarm_mask,

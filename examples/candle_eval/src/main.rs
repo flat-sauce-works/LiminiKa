@@ -28,23 +28,36 @@ pub(crate) type LayerResonantSlices<'a> = (
 
 mod bake;
 mod cli;
+mod equilibrium_bench;
 mod eval;
+mod eval_common;
+mod eval_profiles;
+mod eval_suites;
+mod extended_eval;
+mod long_doc_bench;
+mod metrics;
 mod model;
 mod multi_turn;
+mod physics_eval;
 mod step2;
+mod vision;
+mod vlm_eval;
 
 use bake::{
-    argmax, bake_via_adapter, format_phi4_prompt, kl_div, load_fixture, print_runtime_profile,
-    query_nvidia_smi_vram, token_logprob, BakedModelProfile,
+    BakedModelProfile, argmax, capture_and_build_shared_corpus, kl_div, load_fixture,
+    print_runtime_profile, query_nvidia_smi_vram, token_logprob,
 };
 use cli::{EvalCliConfig, EvalRuntime};
 use eval::{
-    apply_ego_mode, build_preset_circuit, resolve_persona_circuit, CircuitProfileMode,
-    HorizonAblationMode,
+    CircuitProfileMode, HorizonAblationMode, apply_ego_mode, build_preset_circuit,
+    resolve_persona_circuit,
 };
-use model::{ForwardSteer, LogitsFetchMode, Phi3Config, Phi3Model, ProbeTrace, ResonantAnchors};
+use model::{
+    CausalLmModel, ChatTemplate, ChatTemplateArg, ChatTemplateKind, ForwardSteer, KvCacheMode,
+    LogitsFetchMode, ModelConfig, ProbeTrace, ResonantAnchors,
+};
 
-fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
+pub(crate) fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
     match cli.fixture_path.as_ref() {
         Some(p) if p.is_absolute() || p.exists() => p.clone(),
         Some(p) => repo_root.join(p),
@@ -52,7 +65,7 @@ fn resolve_fixture_path(repo_root: &Path, cli: &EvalCliConfig) -> PathBuf {
     }
 }
 
-fn build_persona_bank(
+pub(crate) fn build_persona_bank(
     circuit_mode: CircuitProfileMode,
     active_persona_circuit: Option<CognitiveTrajectoryLedger>,
 ) -> Option<StandardCognitiveBank> {
@@ -71,8 +84,36 @@ fn build_persona_bank(
     })
 }
 
-fn configure_trial_adapter(
-    cfg: &Phi3Config,
+fn resolve_model_dir(repo_root: &Path, cli: &EvalCliConfig) -> Result<PathBuf, String> {
+    let models_root = repo_root.join("models");
+    if !models_root.exists() {
+        std::fs::create_dir_all(&models_root).map_err(|e| e.to_string())?;
+    }
+    let model_dir = match cli.model_path.as_ref() {
+        Some(p) if p.is_absolute() || p.exists() => p.clone(),
+        Some(p) => repo_root.join(p),
+        None => models_root.join("Phi-4-mini-instruct"),
+    };
+    if !model_dir.is_dir() {
+        return Err(format!(
+            "model directory '{}' not found (base '{}' is ready; place model weights there)",
+            model_dir.display(),
+            models_root.display()
+        ));
+    }
+    Ok(model_dir)
+}
+
+fn resolve_tokenizer_path(repo_root: &Path, model_dir: &Path, cli: &EvalCliConfig) -> PathBuf {
+    match cli.tokenizer_path.as_ref() {
+        Some(p) if p.is_absolute() || p.exists() => p.clone(),
+        Some(p) => repo_root.join(p),
+        None => model_dir.join("tokenizer.json"),
+    }
+}
+
+pub(crate) fn configure_trial_adapter(
+    cfg: &ModelConfig,
     cli: &EvalCliConfig,
 ) -> Result<ModelSteeringAdapter, Box<dyn std::error::Error>> {
     let mut adapter = ModelSteeringAdapter::new(cfg.to_rope_geometry())?;
@@ -82,14 +123,23 @@ fn configure_trial_adapter(
     Ok(adapter)
 }
 
-fn calibrate_trial_adapter(
+pub(crate) fn calibrate_trial_adapter(
     adapter: &mut ModelSteeringAdapter,
     baked: &BakedModelProfile,
     base_entropies: &[f32],
+    layer_mask: u64,
 ) -> Result<liminika_core::runtime::ManifoldProbeBaseline, Box<dyn std::error::Error>> {
-    adapter.set_layer_rope_mask(0xFFFF_0000);
-    let pos_slices: Vec<&[f32]> = baked.pos_sum.iter().map(Vec::as_slice).collect();
-    let neg_slices: Vec<&[f32]> = baked.neg_sum.iter().map(Vec::as_slice).collect();
+    adapter.set_layer_rope_mask(layer_mask);
+    let pos_slices: Vec<&[f32]> = baked
+        .attractive_centroid_per_layer
+        .iter()
+        .map(Vec::as_slice)
+        .collect();
+    let neg_slices: Vec<&[f32]> = baked
+        .repulsive_centroid_per_layer
+        .iter()
+        .map(Vec::as_slice)
+        .collect();
     Ok(adapter.calibrate_manifold_probe(&pos_slices, &neg_slices, base_entropies)?)
 }
 
@@ -112,24 +162,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         suite.probes.len()
     );
 
-    let models_root = repo_root.join("models");
-    if !models_root.exists() {
-        std::fs::create_dir_all(&models_root)?;
-    }
-    let model_dir = models_root.join("Phi-4-mini-instruct");
-    if !model_dir.is_dir() {
-        return Err(format!(
-            "model directory '{}' not found (base '{}' is ready; place Phi-4-mini-instruct weights there)",
-            model_dir.display(),
-            models_root.display()
-        )
-        .into());
-    }
-
-    let cfg: Phi3Config =
-        serde_json::from_str(&std::fs::read_to_string(model_dir.join("config.json"))?)?;
-    let tokenizer = Tokenizer::from_file(model_dir.join("tokenizer.json"))
-        .map_err(|e| format!("tokenizer load error: {e}"))?;
+    let model_dir = resolve_model_dir(&repo_root, &cli)?;
+    let cfg = ModelConfig::load_from_dir(&model_dir, cli.model_arch)?;
+    let tokenizer_path = resolve_tokenizer_path(&repo_root, &model_dir, &cli);
+    let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        .map_err(|e| format!("tokenizer load error ({}): {e}", tokenizer_path.display()))?;
+    let chat_kind = match cli.chat_template {
+        ChatTemplateArg::Auto => ChatTemplateKind::from_arch(cfg.arch),
+        ChatTemplateArg::Phi4 => ChatTemplateKind::Phi4,
+        ChatTemplateArg::Mistral3 => ChatTemplateKind::Mistral3,
+    };
+    let chat = ChatTemplate::new(chat_kind, &cfg, &tokenizer);
+    let active_layer_mask = cli.resolve_layer_mask(cfg.num_hidden_layers);
+    let vlm_cfg_opt = if cli.vlm_eval {
+        Some(vision::VisionConfig::load_from_dir(&model_dir, &tokenizer)?)
+    } else {
+        None
+    };
 
     let mut adapter = configure_trial_adapter(&cfg, &cli)?;
     let recall_only = cli.recall_only;
@@ -141,9 +190,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if adapter.ego_state().is_active() {
         println!(
             "[Ego   ] active: thrust={} escape_floor={} transgress={} defiance={} trigger=0x{:02X} hash=0x{:08X}",
-            adapter.ego_state().counter_basin_thrust_q7,
-            adapter.ego_state().basin_escape_floor_q7,
-            adapter.ego_state().transgression_bias_q7,
+            adapter.ego_state().basin_resistance_q7,
+            adapter.ego_state().escape_floor_q7,
+            adapter.ego_state().boundary_crossing_q7,
             adapter.ego_state().irrational_defiance_q7,
             adapter.ego_state().trigger_mask,
             adapter.ego_state().ego_signature_hash,
@@ -158,7 +207,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let vram_before = query_nvidia_smi_vram();
     println!(
-        "LiminiKa Candle Eval (RoPE + Entropy Gate + Rank-1 residual via liminika-adapter) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (RoPE + Entropy Gate + Rank-1 residual via liminika-adapter) | model={} arch\
+         ={} chat={} stops={:?} layer_mask=0x{:08X}({}/{}) | device={:?} | layers={} heads={}/{} head_dim=\
+         {} rotary_dim={}",
+        cfg.model_name,
+        cfg.arch.label(),
+        chat.kind.label(),
+        chat.stop_token_ids,
+        active_layer_mask,
+        active_layer_mask.count_ones(),
+        cfg.num_hidden_layers,
         device,
         adapter.geometry().num_layers,
         adapter.geometry().num_q_heads,
@@ -168,9 +226,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let t0 = Instant::now();
-    let mut model = Phi3Model::load(&model_dir, &cfg, &device, quant_mode)?;
+    let mut model = CausalLmModel::load(&model_dir, &cfg, &device, quant_mode)?;
     let load_elapsed = t0.elapsed();
-    println!("Loaded Phi-4-mini-instruct in {:.2?}", load_elapsed);
+    println!("Loaded {} in {:.2?}", cfg.model_name, load_elapsed);
     print_runtime_profile(
         &cfg,
         &adapter,
@@ -180,7 +238,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         load_elapsed,
         vram_before.as_deref(),
     );
+    if cli.smoke_test {
+        eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+        eval::run_steer_off_smoke_test(&mut model, &tokenizer, &chat, cli.max_tokens)?;
+        return Ok(());
+    }
+    if let Some(ref doc_arg) = cli.long_doc_bench {
+        let doc_path = if doc_arg.is_absolute() || doc_arg.exists() {
+            doc_arg.clone()
+        } else {
+            repo_root.join(doc_arg)
+        };
+        if !recall_only {
+            eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+        }
+        long_doc_bench::run_long_doc_benchmark(
+            &doc_path,
+            cli.prefill_chunk_size,
+            active_layer_mask,
+            &mut model,
+            &tokenizer,
+            &chat,
+            &mut adapter,
+        )?;
+        return Ok(());
+    }
     let active_persona_circuit = resolve_persona_circuit(circuit_mode, persona_lmnk_in.as_deref());
+    if let Some(vis_cfg) = vlm_cfg_opt {
+        if !recall_only {
+            eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+        }
+        vlm_eval::run_vlm_eval(vlm_eval::VlmEvalRunArgs {
+            cli: &cli,
+            repo_root: &repo_root,
+            model_dir: &model_dir,
+            cfg: &cfg,
+            vis_cfg,
+            chat: &chat,
+            device: &device,
+            active_layer_mask,
+            model: &mut model,
+            tokenizer: &tokenizer,
+            active_persona_circuit,
+            circuit_mode,
+        })?;
+        return Ok(());
+    }
+    if cli.extended_eval || cli.ja_eval {
+        if !recall_only {
+            eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+        }
+        extended_eval::run_extended_suites(extended_eval::ExtendedSuiteRunCtx {
+            cli: &cli,
+            repo_root: &repo_root,
+            cfg: &cfg,
+            chat: &chat,
+            active_layer_mask,
+            model: &mut model,
+            tokenizer: &tokenizer,
+            active_persona_circuit,
+            circuit_mode,
+        })?;
+        return Ok(());
+    }
     let init_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
     if let Some(ref bank) = init_persona_bank {
         let cons = bank.to_consolidated_ledger();
@@ -189,17 +309,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             circuit_mode, cons.steps
         );
     }
-    let (baked_opt, base_entropies): (Option<BakedModelProfile>, Vec<f32>) = if !recall_only {
-        let t_bake = Instant::now();
-        let baked = bake_via_adapter(&mut model, &tokenizer, &adapter, cfg.hidden_size, &suite)?;
+    let shared = capture_and_build_shared_corpus(
+        &mut model,
+        &tokenizer,
+        &chat,
+        &mut adapter,
+        &suite,
+        cli.effective_layer_mask_spec(),
+        recall_only,
+        cli.use_base_prior,
+    )?;
+    let active_layer_mask = shared.active_layer_mask;
+    if let Some(ref baked) = shared.baked_opt {
         println!(
             "Baked {} x {} Q7 phase deltas + {}-dim Rank-1 residual vectors via ModelSteeringAdapter in {:.2?}.",
             baked.per_layer_q7.len(),
             adapter.geometry().num_q_heads,
             cfg.hidden_size,
-            t_bake.elapsed(),
+            shared.bake_elapsed,
         );
+    }
+    let null_note = match shared.compiled.null_calibration {
+        Some(env) => format!(
+            " | null_cal(n={} offdiag={:.3} null_mean={:.3} null_max={:.3} null_hi={:.3} tok_exp={:.3} prior={:.1}ms)",
+            env.sample_count,
+            env.corpus_offdiag_floor,
+            env.ood_null_mean,
+            env.ood_null_max,
+            env.ood_null_high,
+            env.token_explain_threshold,
+            shared.prior_ms,
+        ),
+        None => String::new(),
+    };
+    println!(
+        "Compiled {} natural-language attractors (single-pass shared capture, two-pass novelty SIF + Strat\
+         um pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}{}",
+        shared.compiled.corpus.entries().len(),
+        shared.used_base_prior,
+        shared.compile_ms,
+        shared.compiled.recall_policy.min_coherence,
+        shared.compiled.recall_policy.boundary_margin,
+        null_note,
+    );
 
+    let baked_opt = shared.baked_opt;
+    let compiled = shared.compiled;
+    let compile_ms = shared.compile_ms;
+
+    let base_entropies: Vec<f32> = if let Some(ref baked) = baked_opt {
         let mut target_toks: Vec<Option<u32>> = Vec::with_capacity(suite.probes.len());
         for (_, _, expected, _) in &suite.probes {
             let tok = expected.first().and_then(|kw| {
@@ -214,24 +372,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut baselines: Vec<Vec<f32>> = Vec::with_capacity(suite.probes.len());
         let mut base_entropies: Vec<f32> = Vec::with_capacity(suite.probes.len());
         for (_, prompt, _, _) in &suite.probes {
-            model.clear_cache();
-            let formatted = format_phi4_prompt(prompt);
+            let formatted = chat.format_single_turn(prompt);
             let ids = tokenizer
                 .encode(formatted.as_str(), false)
                 .map_err(|e| format!("encode error: {e}"))?
                 .get_ids()
                 .to_vec();
-            let (logits_out, _, _) =
-                model.forward_tokens(&ids, 0, None, false, false, LogitsFetchMode::FullLogits)?;
+            let (logits_out, _, _) = model.forward_tokens(
+                &ids,
+                0,
+                None,
+                false,
+                false,
+                LogitsFetchMode::FullLogits,
+                KvCacheMode::IsolatedProbe,
+            )?;
             let logits = logits_out.into_full_logits()?;
             let h_t = adapter.measure_entropy_state(&logits)?.moving_z_entropy;
             base_entropies.push(h_t);
             baselines.push(logits);
         }
 
-        let probe_res = calibrate_trial_adapter(&mut adapter, &baked, &base_entropies)?;
+        let probe_res =
+            calibrate_trial_adapter(&mut adapter, baked, &base_entropies, active_layer_mask)?;
         println!(
-            "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} rank1_rho={:.3}",
+            "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H=\
+             {:.3} rank1_rho={:.3}",
             probe_res.probe_epoch,
             probe_res.active_heads,
             probe_res.steered_layers,
@@ -242,22 +408,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             adapter.substrate().thresholds.rank1_inject_density_thresh,
         );
 
-        if !step2_only {
+        if !step2_only && !cli.physics_eval && !cli.equilibrium_bench {
+            let all_mask = cfg.active_layers_mask();
             // Compare manual max_rad vs Gateway structural hyperparameters vs Resonant slice vs StigmergicSubstrate.
             // tuple: (label, layer_mask, rope_rad, rank1_scale, use_resonant_slice)
             let configs: [(&str, u64, f32, f32, bool); 6] = [
-                ("Baseline", 0xFFFF_FFFF, 0.00, 0.00, false),
-                ("RoPE (Top16, 0.10)", 0xFFFF_0000, 0.10, 0.00, false),
-                ("Top16 + GW(Fact)", 0xFFFF_0000, -1.00, 0.00, false),
+                ("Baseline", all_mask, 0.00, 0.00, false),
+                ("RoPE (Top, 0.10)", active_layer_mask, 0.10, 0.00, false),
+                ("Top + GW(Fact)", active_layer_mask, -1.00, 0.00, false),
                 (
-                    "Top16 + GW(Fact+Rank-1 residual)",
-                    0xFFFF_0000,
+                    "Top + GW(Fact+Rank-1 residual)",
+                    active_layer_mask,
                     -1.00,
                     -1.00,
                     false,
                 ),
-                ("Top16 + GW(Resonant)", 0xFFFF_0000, -1.00, -1.00, true),
-                ("Top16 + Substrate", 0xFFFF_0000, -2.00, -1.00, true),
+                ("Top + GW(Resonant)", active_layer_mask, -1.00, -1.00, true),
+                ("Top + Substrate", active_layer_mask, -2.00, -1.00, true),
             ];
 
             println!(
@@ -284,7 +451,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 {
                     model.clear_cache();
                     let counts_before = *adapter.substrate_decision_counts();
-                    let formatted = format_phi4_prompt(prompt);
+                    let formatted = chat.format_single_turn(prompt);
                     let ids = tokenizer
                         .encode(formatted.as_str(), false)
                         .map_err(|e| format!("encode error: {e}"))?
@@ -298,8 +465,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             facts: baked.fact_anchors_per_layer.as_slice(),
                             personas: baked.persona_anchors_per_layer.as_slice(),
                             guards: baked.guard_anchors_per_layer.as_slice(),
-                            negs: baked.neg_sum.as_slice(),
-                            poss: baked.pos_sum.as_slice(),
+                            negs: baked.repulsive_centroid_per_layer.as_slice(),
+                            poss: baked.attractive_centroid_per_layer.as_slice(),
                         })
                     } else {
                         None
@@ -324,6 +491,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
+                        layer_steer_mask: Some(layer_mask),
+                        probe_frame: cli.probe_frame,
+                        phase_clamp_override: cli.phase_clamp_rad,
+                        random_push_seed: cli.random_push_control.then_some(cli.rng_seed),
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
@@ -334,6 +505,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         use_entropy_gate,
                         false,
                         LogitsFetchMode::FullLogits,
+                        KvCacheMode::Append,
                     )?;
                     let mut logits = prefill_out.into_full_logits()?;
                     sum_kl += kl_div(base_logits, &logits);
@@ -348,7 +520,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut gen_ids = Vec::with_capacity(48);
                     for offset in (ids.len()..).take(48) {
                         let next = argmax(&logits);
-                        if next == 199999 || next == 200020 {
+                        if chat.is_stop_token(next) {
                             break;
                         }
                         gen_ids.push(next);
@@ -359,6 +531,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             use_entropy_gate,
                             false,
                             LogitsFetchMode::FullLogits,
+                            KvCacheMode::Append,
                         )?;
                         logits = next_out.into_full_logits()?;
                     }
@@ -425,54 +598,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if rope_rad <= -1.5 {
                     let snap = adapter.telemetry_snapshot();
                     println!(
-                    "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
-                    snap.spine.continuous_standard_steps,
-                    snap.decision_ratios_pct[0],
-                    snap.decision_ratios_pct[1],
-                    snap.decision_ratios_pct[2],
-                    snap.decision_ratios_pct[3],
-                    snap.decision_ratios_pct[4],
-                    snap.decision_ratios_pct[5],
-                    snap.decision_ratios_pct[6],
-                );
+                        "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router\
+                         ={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
+                        snap.spine.continuous_standard_steps,
+                        snap.decision_ratios_pct[0],
+                        snap.decision_ratios_pct[1],
+                        snap.decision_ratios_pct[2],
+                        snap.decision_ratios_pct[3],
+                        snap.decision_ratios_pct[4],
+                        snap.decision_ratios_pct[5],
+                        snap.decision_ratios_pct[6],
+                    );
                     let guard_slot = adapter.coherence_guard_slot();
                     let dwell = adapter.horizon_dwell();
                     println!(
-                    "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% guard_act={} guard_ret={} dwell=({},{})",
-                    snap.mode,
-                    snap.spine.total_steps,
-                    snap.spine.continuous_standard_steps,
-                    snap.liminal_excursion_ratio * 100.0,
-                    snap.ego_intervention_ratio * 100.0,
-                    guard_slot.activations,
-                    guard_slot.retractions,
-                    dwell.unstable_dwell_steps,
-                    dwell.quiescent_dwell_steps,
-                );
+                        "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}\
+                         % guard_act={} guard_ret={} dwell=({},{})",
+                        snap.mode,
+                        snap.spine.total_steps,
+                        snap.spine.continuous_standard_steps,
+                        snap.liminal_excursion_ratio * 100.0,
+                        snap.ego_intervention_ratio * 100.0,
+                        guard_slot.activations,
+                        guard_slot.retractions,
+                        dwell.unstable_dwell_steps,
+                        dwell.quiescent_dwell_steps,
+                    );
                 }
-                if label == "Baseline" || label == "Top16 + Substrate" {
+                if label == "Baseline" || label == "Top + Substrate" {
                     println!("   --- Per-Probe Trace ({label}) ---");
                     for (idx, tr) in probe_traces.iter().enumerate() {
                         if rope_rad <= -1.5 {
                             println!(
-                            "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={} | {}",
-                            idx + 1,
-                            tr.slot,
-                            tr.d_lp,
-                            tr.p_exp,
-                            tr.p_forb,
-                            tr.rho,
-                            tr.steps,
-                            tr.h_tilde,
-                            tr.delta[0],
-                            tr.delta[1],
-                            tr.delta[2],
-                            tr.delta[3],
-                            tr.delta[4],
-                            tr.delta[5],
-                            tr.delta[6],
-                            tr.text
-                        );
+                                "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas=\
+                                 {} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={} | {}",
+                                idx + 1,
+                                tr.slot,
+                                tr.d_lp,
+                                tr.p_exp,
+                                tr.p_forb,
+                                tr.rho,
+                                tr.steps,
+                                tr.h_tilde,
+                                tr.delta[0],
+                                tr.delta[1],
+                                tr.delta[2],
+                                tr.delta[3],
+                                tr.delta[4],
+                                tr.delta[5],
+                                tr.delta[6],
+                                tr.text
+                            );
                         } else {
                             println!(
                                 "   [P{}:{}] hit={}/forb={} | {}",
@@ -497,17 +673,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ];
             for &(mode_label, layer_mask, rope_rad, rank1_scale, use_entropy_gate, use_resonant) in
                 &[
-                    (
-                        "Baseline",
-                        0xFFFF_FFFF_u64,
-                        0.00_f32,
-                        0.00_f32,
-                        false,
-                        false,
-                    ),
+                    ("Baseline", all_mask, 0.00_f32, 0.00_f32, false, false),
                     (
                         "Substrate",
-                        0xFFFF_0000_u64,
+                        active_layer_mask,
                         -2.00_f32,
                         -1.00_f32,
                         true,
@@ -524,9 +693,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for (turn_name, prompt) in turns {
                     let counts_before = *adapter.substrate_decision_counts();
                     let turn_text = if offset == 0 {
-                        format_phi4_prompt(prompt)
+                        chat.format_single_turn(prompt)
                     } else {
-                        format!("<|end|><|user|>{prompt}<|end|><|assistant|>")
+                        chat.format_followup_turn(prompt)
                     };
                     let ids = tokenizer
                         .encode(turn_text.as_str(), false)
@@ -548,8 +717,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             facts: baked.fact_anchors_per_layer.as_slice(),
                             personas: baked.persona_anchors_per_layer.as_slice(),
                             guards: baked.guard_anchors_per_layer.as_slice(),
-                            negs: baked.neg_sum.as_slice(),
-                            poss: baked.pos_sum.as_slice(),
+                            negs: baked.repulsive_centroid_per_layer.as_slice(),
+                            poss: baked.attractive_centroid_per_layer.as_slice(),
                         })
                     } else {
                         None
@@ -574,6 +743,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         horizon_mode: HorizonAblationMode::Core3,
                         escalation_provider: None,
                         compute_dispatch: None,
+                        layer_steer_mask: Some(layer_mask),
+                        probe_frame: cli.probe_frame,
+                        phase_clamp_override: cli.phase_clamp_rad,
+                        random_push_seed: cli.random_push_control.then_some(cli.rng_seed),
                         steer_bypass_hits: 0,
                         steer_eligible_layers: 0,
                     };
@@ -584,6 +757,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         use_entropy_gate,
                         false,
                         LogitsFetchMode::FullLogits,
+                        KvCacheMode::Append,
                     )?;
                     let mut logits = mt_prefill_out.into_full_logits()?;
                     offset += ids.len();
@@ -598,10 +772,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             use_entropy_gate,
                             false,
                             LogitsFetchMode::FullLogits,
+                            KvCacheMode::Append,
                         )?;
                         logits = next_out.into_full_logits()?;
                         offset += 1;
-                        if next == 199999 || next == 200020 {
+                        if chat.is_stop_token(next) {
                             break;
                         }
                     }
@@ -615,22 +790,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         d[i] = counts_after[i].saturating_sub(counts_before[i]);
                     }
                     println!(
-                    "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={}] => {text}",
-                    trail.stigmergic_density,
-                    trail.step_count,
-                    adapter.substrate().last_entropy_h_tilde,
-                    d[0], d[1], d[2], d[3], d[4], d[5], d[6],
-                );
+                        "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head r\
+                         outer={} Rank-1 residual={} Cry={} Rep={}] => {text}",
+                        trail.stigmergic_density,
+                        trail.step_count,
+                        adapter.substrate().last_entropy_h_tilde,
+                        d[0],
+                        d[1],
+                        d[2],
+                        d[3],
+                        d[4],
+                        d[5],
+                        d[6],
+                    );
                 }
             }
         }
-        (Some(baked), base_entropies)
+        base_entropies
     } else {
-        (None, Vec::new())
+        Vec::new()
     };
 
     if !recall_only {
-        eval::run_gpu_warmup(&mut model, &tokenizer)?;
+        eval::run_gpu_warmup(&mut model, &tokenizer, &chat)?;
+    }
+
+    if cli.physics_eval {
+        model.clear_cache();
+        let mut phys_adapter = configure_trial_adapter(&cfg, &cli)?;
+        if let Some(ref baked) = baked_opt {
+            calibrate_trial_adapter(&mut phys_adapter, baked, &base_entropies, active_layer_mask)?;
+        }
+        let mut phys_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
+        let mut rt = EvalRuntime {
+            cfg: &cfg,
+            chat: &chat,
+            active_layer_mask,
+            tokenizer: &tokenizer,
+            model: &mut model,
+            adapter: &mut phys_adapter,
+            baked_opt: baked_opt.as_ref(),
+            compiled: &compiled,
+            compile_ms,
+            active_persona_bank: &mut phys_persona_bank,
+        };
+        physics_eval::run_physics_eval(&cli, &repo_root, &mut rt)?;
+        return Ok(());
+    }
+
+    if cli.equilibrium_bench {
+        let Some(ref baked) = baked_opt else {
+            return Err(
+                "--equilibrium-bench requires live model weights (disable --recall-only)".into(),
+            );
+        };
+        let work_dir = repo_root.join(".scratch/bench/equilibrium");
+        std::fs::create_dir_all(&work_dir)?;
+        equilibrium_bench::run_equilibrium_benchmark(
+            &cli,
+            &cfg,
+            &chat,
+            active_layer_mask,
+            baked,
+            &compiled,
+            &base_entropies,
+            &mut model,
+            &tokenizer,
+            &work_dir,
+        )?;
+        return Ok(());
     }
 
     let mut all_trial_metrics: Vec<Vec<cli::TrialPassMetrics>> =
@@ -646,15 +874,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         model.clear_cache();
         let mut trial_adapter = configure_trial_adapter(&cfg, &cli)?;
         if let Some(ref baked) = baked_opt {
-            calibrate_trial_adapter(&mut trial_adapter, baked, &base_entropies)?;
+            calibrate_trial_adapter(
+                &mut trial_adapter,
+                baked,
+                &base_entropies,
+                active_layer_mask,
+            )?;
         }
         let mut trial_persona_bank = build_persona_bank(circuit_mode, active_persona_circuit);
         let mut rt = EvalRuntime {
             cfg: &cfg,
+            chat: &chat,
+            active_layer_mask,
             tokenizer: &tokenizer,
             model: &mut model,
             adapter: &mut trial_adapter,
             baked_opt: baked_opt.as_ref(),
+            compiled: &compiled,
+            compile_ms,
             active_persona_bank: &mut trial_persona_bank,
         };
         let mut step2_out = step2::run_step2_evaluation(&cli, &suite, &mut rt)?;

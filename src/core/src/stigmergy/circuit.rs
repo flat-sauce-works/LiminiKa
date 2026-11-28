@@ -8,13 +8,12 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use crate::foundation::{
-    branchless_clamp_f32, swar_q7_abs_u8_x8, swar_q7_circular_diff_x8, words_to_q7_array_64, Pod,
-    RawPhaseProjectable, SWAR_SPLAT_BYTE_64,
+    Pod, RawPhaseProjectable, SWAR_SPLAT_BYTE_64, branchless_clamp_f32, swar_q7_abs_u8_x8,
+    swar_q7_circular_diff_x8, words_to_q7_array_64,
 };
-use crate::liminal::{PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES};
+use crate::liminal::{MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7};
 use crate::stigmergy::ledger::LedgerSlot;
 use crate::stigmergy::substrate::StigmergicThresholds;
 use crate::stigmergy::{LEDGER_FLAG_COGNITIVE_TRAJECTORY, LEDGER_HISTORY_LEN};
@@ -84,18 +83,10 @@ impl StigmergicScaleGranularity {
             Self::TypeGateway => safe_base,
             Self::MacroCoalition => {
                 let v = safe_base.saturating_add(1);
-                if v > 7 {
-                    7
-                } else {
-                    v
-                }
+                if v > 7 { 7 } else { v }
             }
         };
-        if adj < 2 {
-            2
-        } else {
-            adj
-        }
+        if adj < 2 { 2 } else { adj }
     }
 
     /// Derives the scale-adjusted Q7 circular phase tolerance (`4..=32`).
@@ -109,11 +100,7 @@ impl StigmergicScaleGranularity {
             Self::TypeGateway => safe.saturating_add(8),
             Self::MacroCoalition => safe.saturating_add(14),
         };
-        if scaled > 40 {
-            40
-        } else {
-            scaled
-        }
+        if scaled > 40 { 40 } else { scaled }
     }
 
     /// Derives the stigmergic peeling strength in Q0.7 (`24..=128`) from this scale and `layer_index / total_layers`.
@@ -130,11 +117,7 @@ impl StigmergicScaleGranularity {
         let clamped_idx = if layer_index > 8 { 8 } else { layer_index } as u8;
         let depth_decay = (clamped_idx.saturating_mul(96)) / (safe_total as u8);
         let out = base_q7.saturating_sub(depth_decay >> 2);
-        if out < 24 {
-            24
-        } else {
-            out
-        }
+        if out < 24 { 24 } else { out }
     }
 }
 
@@ -377,13 +360,6 @@ impl CognitiveTrajectoryLedger {
         } else {
             Some(CognitiveStepOp(self.steps[0]))
         }
-    }
-
-    /// Returns the `age`-th newest recorded [`CognitiveStepOp`] (`0..8`).
-    #[inline(always)]
-    #[must_use]
-    pub const fn step_at(&self, age: usize) -> CognitiveStepOp {
-        CognitiveStepOp(self.steps[age & 7])
     }
 
     /// Returns a constant-time histogram of [`CognitiveOpKind`] counts (`[u8; 8]`) and active step count.
@@ -709,7 +685,8 @@ impl CognitiveTrajectoryLedger {
     ///
     /// Keeps all regime thresholds strictly positive and monotonic
     /// (`express <= subhead <= rank1 <= crystallize`) while allowing identical runtime inputs
-    /// to fire different [`crate::stigmergy::StigmergicSubstrate`] regimes according to learned/preset cognitive habits.
+    /// to fire different [`crate::stigmergy::StigmergicSubstrate`] regimes according to learned/preset
+    /// cognitive habits.
     #[inline]
     #[must_use]
     pub fn bias_stigmergic_thresholds(
@@ -819,13 +796,14 @@ impl CognitiveTrajectoryLedger {
             let op = activation.op_kind();
             let scale = activation.next_scale();
             let target_intensity = (3 + ((activation.intensity_q7 >> 5) & 3)).min(7);
-            if let Some(latest) = self.latest_step() {
-                if latest.op() == op && latest.granularity() == scale {
-                    // Homeostatic saturation: strengthen in-place rather than flooding all 8 slots.
-                    let boosted = latest.intensity().saturating_add(1).min(7);
-                    self.steps[0] = CognitiveStepOp::pack(scale, op, boosted).0;
-                    return;
-                }
+            if let Some(latest) = self.latest_step()
+                && latest.op() == op
+                && latest.granularity() == scale
+            {
+                // Homeostatic saturation: strengthen in-place rather than flooding all 8 slots.
+                let boosted = latest.intensity().saturating_add(1).min(7);
+                self.steps[0] = CognitiveStepOp::pack(scale, op, boosted).0;
+                return;
             }
             self.push_step(CognitiveStepOp::pack(scale, op, target_intensity));
         } else if !converged {
@@ -938,17 +916,19 @@ pub trait CognitiveCircuitBankOps {
             return;
         }
         units[0].reinforce_from_activation(activation, converged);
-        if converged && units.len() > 1 && activation.circuit_resonance_q7 >= 24 {
-            if let Some(latest) = units[0].latest_step() {
-                units[1].reinforce_from_activation(
-                    &CognitiveCircuitActivation {
-                        selected_op: latest.op() as u8,
-                        preferred_next_scale: latest.granularity() as u8,
-                        ..*activation
-                    },
-                    true,
-                );
-            }
+        if converged
+            && units.len() > 1
+            && activation.circuit_resonance_q7 >= 24
+            && let Some(latest) = units[0].latest_step()
+        {
+            units[1].reinforce_from_activation(
+                &CognitiveCircuitActivation {
+                    selected_op: latest.op() as u8,
+                    preferred_next_scale: latest.granularity() as u8,
+                    ..*activation
+                },
+                true,
+            );
         }
     }
 

@@ -10,19 +10,19 @@ use core::arch::x86_64::*;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::lut_crc32::Q14_BIAS_X64_I32;
 use crate::foundation::lut_crc32::{
-    INV_64_Q14_F32, INV_8_Q14_F32, Q14_BIAS_X8_I32, Q7_FULL_COS_I16_REF, Q7_FULL_COS_REF,
-    Q7_FULL_SINCOS_BIASED_U64_REF,
+    INV_8_Q14_F32, INV_64_Q14_F32, Q7_FULL_COS_I16_REF, Q7_FULL_COS_REF,
+    Q7_FULL_SINCOS_BIASED_U64_REF, Q14_BIAS_X8_I32,
 };
 use crate::foundation::scalar_math::{
-    branchless_atan2_to_q7_fast, branchless_clamp_f32, branchless_flush_subnormal_f32,
-    branchless_relu_f32, branchless_sincos_q7, branchless_von_mises_kappa, fast_sqrt_unit_f32,
-    VON_MISES_KAPPA_AT_MAX_R,
+    VON_MISES_KAPPA_AT_MAX_R, branchless_atan2_to_q7_fast, branchless_clamp_f32,
+    branchless_flush_subnormal_f32, branchless_relu_f32, branchless_sincos_q7,
+    branchless_von_mises_kappa, fast_sqrt_unit_f32,
 };
 use crate::foundation::swar_simd::{
     is_word_array_uniform_64, load_q7_words_64, swar_q7_circular_add_x8, swar_q7_circular_diff_x8,
     swar_q7_scale_le128_with_bias_x8,
 };
-use crate::liminal::{branchless_select_i8, PhaseQ7, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
+use crate::liminal::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, PhaseQ7, branchless_select_i8};
 
 /// Unchecked 8-lane SWAR shortest-arc $S^1$ geodesic interpolation for `1 <= s <= 127` and
 /// precomputed `bias_restore = (128 - s) * 0x0101_0101_0101_0101` (`0` branches).
@@ -53,6 +53,8 @@ pub const fn swar_slerp_word_with_bias_x8(a: u64, b: u64, s: u64, bias_restore: 
 /// on recently stored 64-bit word arrays.
 #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
 #[inline(always)]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) unsafe fn avx2_u64x8_to_vec64(
     w0: u64,
     w1: u64,
@@ -66,7 +68,7 @@ pub(crate) unsafe fn avx2_u64x8_to_vec64(
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_castsi128_si256, _mm256_inserti128_si256, _mm_cvtsi64_si128, _mm_insert_epi64,
+            _mm_cvtsi64_si128, _mm_insert_epi64, _mm256_castsi128_si256, _mm256_inserti128_si256,
         };
         let lo0 = _mm_insert_epi64(_mm_cvtsi64_si128(w0 as i64), w1 as i64, 1);
         let hi0 = _mm_insert_epi64(_mm_cvtsi64_si128(w2 as i64), w3 as i64, 1);
@@ -102,7 +104,7 @@ pub(crate) unsafe fn avx2_words64_to_vec64_with_uniform(
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_broadcastq_epi64, _mm256_setzero_si256, _mm_cvtsi64_si128,
+            _mm_cvtsi64_si128, _mm256_broadcastq_epi64, _mm256_setzero_si256,
         };
         if w_is_uniform {
             let w0 = w[0];
@@ -129,7 +131,7 @@ pub(crate) unsafe fn avx2_vec64_to_words64(
     // SAFETY: Caller guarantees `target_feature = "avx2"`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_castsi256_si128, _mm256_extracti128_si256, _mm_cvtsi128_si64, _mm_extract_epi64,
+            _mm_cvtsi128_si64, _mm_extract_epi64, _mm256_castsi256_si128, _mm256_extracti128_si256,
         };
         let lo0 = _mm256_castsi256_si128(v0);
         let hi0 = _mm256_extracti128_si256(v0, 1);
@@ -355,10 +357,10 @@ pub(crate) unsafe fn avx2_coherence_from_diff_vec64_with_floor(
     // cutting per-pair rejection work in `merge_and_prune_centroids_64` and $k$-Means E-steps in half.
     unsafe {
         use core::arch::x86_64::{
+            _mm_add_epi64, _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_unpackhi_epi64,
             _mm256_abs_epi8, _mm256_add_epi64, _mm256_broadcastb_epi8, _mm256_broadcastq_epi64,
             _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_or_si256, _mm256_sad_epu8,
-            _mm256_setzero_si256, _mm256_testz_si256, _mm256_xor_si256, _mm_add_epi64,
-            _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_unpackhi_epi64,
+            _mm256_setzero_si256, _mm256_testz_si256, _mm256_xor_si256,
         };
         let raw_abs0 = _mm256_abs_epi8(vd0);
         let raw_abs1 = _mm256_abs_epi8(vd1);
@@ -424,9 +426,9 @@ pub(crate) unsafe fn avx2_coherence_from_diff_vec64(
     // `vpbroadcastq + vptest` before running the 16-knot trigonometric pipeline.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_abs_epi8, _mm256_broadcastb_epi8, _mm256_broadcastq_epi64,
-            _mm256_castsi256_si128, _mm256_or_si256, _mm256_testz_si256, _mm256_xor_si256,
-            _mm_cvtsi128_si32, _mm_cvtsi128_si64,
+            _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm256_abs_epi8, _mm256_broadcastb_epi8,
+            _mm256_broadcastq_epi64, _mm256_castsi256_si128, _mm256_or_si256, _mm256_testz_si256,
+            _mm256_xor_si256,
         };
         let lo128 = _mm256_castsi256_si128(vd0);
         let splat_b0 = _mm256_broadcastb_epi8(lo128);
@@ -465,12 +467,12 @@ unsafe fn avx2_coherence_from_raw_abs_vec64(
     // via 16-knot `vpshufb` + `vpsadbw` + saturation-free `vpmaddubsw` trigonometric angle-addition.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_add_epi16, _mm256_add_epi32, _mm256_add_epi64, _mm256_and_si256,
-            _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_madd_epi16,
-            _mm256_maddubs_epi16, _mm256_min_epu8, _mm256_sad_epu8, _mm256_set1_epi16,
-            _mm256_set1_epi8, _mm256_setr_epi8, _mm256_setzero_si256, _mm256_shuffle_epi8,
-            _mm256_slli_epi64, _mm256_srli_epi16, _mm_add_epi32, _mm_add_epi64, _mm_cvtsi128_si32,
-            _mm_cvtsi128_si64, _mm_shuffle_epi32, _mm_unpackhi_epi64,
+            _mm_add_epi32, _mm_add_epi64, _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_shuffle_epi32,
+            _mm_unpackhi_epi64, _mm256_add_epi16, _mm256_add_epi32, _mm256_add_epi64,
+            _mm256_and_si256, _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_madd_epi16,
+            _mm256_maddubs_epi16, _mm256_min_epu8, _mm256_sad_epu8, _mm256_set1_epi8,
+            _mm256_set1_epi16, _mm256_setr_epi8, _mm256_setzero_si256, _mm256_shuffle_epi8,
+            _mm256_slli_epi64, _mm256_srli_epi16,
         };
         let max_127 = _mm256_set1_epi8(127);
         let abs0 = _mm256_min_epu8(raw_abs0, max_127);
@@ -593,20 +595,11 @@ pub(crate) const fn coherence_from_uniform_words_x8(wa: u64, wb: u64) -> f32 {
 }
 
 /// Evaluates normalized 64-head phase coherence $\mathcal{C}_{\mathrm{phase}} \in [-1.0, 1.0]$
-/// directly from 8 SWAR Q7 circular difference words `(d0..=d7)`.
+/// directly from 8 SWAR Q7 circular difference words `diff_words`.
 #[inline(always)]
 #[must_use]
-#[allow(clippy::too_many_arguments)]
-pub fn coherence_from_diff_words_64(
-    d0: u64,
-    d1: u64,
-    d2: u64,
-    d3: u64,
-    d4: u64,
-    d5: u64,
-    d6: u64,
-    d7: u64,
-) -> f32 {
+pub fn coherence_from_diff_words_64(diff_words: [u64; 8]) -> f32 {
+    let [d0, d1, d2, d3, d4, d5, d6, d7] = diff_words;
     if (((d0 ^ d1) | (d0 ^ d2)) | ((d0 ^ d3) | (d0 ^ d4)) | ((d0 ^ d5) | (d0 ^ d6)) | (d0 ^ d7))
         == 0
     {
@@ -616,10 +609,10 @@ pub fn coherence_from_diff_words_64(
     {
         // SAFETY: Guarded by `target_feature = "avx2"`. Value-level `[u64; 8] -> [__m256i; 2]`
         // transmute avoids `_mm256_setr_epi64x` 4-to-1 Store-to-Load Forwarding stalls.
-        return unsafe {
+        unsafe {
             let (vd0, vd1) = avx2_u64x8_to_vec64(d0, d1, d2, d3, d4, d5, d6, d7);
             avx2_coherence_from_diff_vec64(vd0, vd1)
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -651,16 +644,16 @@ pub fn coherence_from_word_arrays_with_both_uniform_flags_64(
     {
         // SAFETY: Guarded by `target_feature = "avx2"`. Value-level `[u64; 8] -> [__m256i; 2]`
         // bitcast avoids 4-to-1 GPR-to-YMM Store-to-Load Forwarding stalls on stack-resident word arrays.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::_mm256_sub_epi8;
             let (va0, va1) = avx2_words64_to_vec64_with_uniform(a, a_is_uniform);
             let (vb0, vb1) = avx2_words64_to_vec64_with_uniform(b, b_is_uniform);
             avx2_coherence_from_diff_vec64(_mm256_sub_epi8(va0, vb0), _mm256_sub_epi8(va1, vb1))
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
-        coherence_from_diff_words_64(
+        coherence_from_diff_words_64([
             swar_q7_circular_diff_x8(a[0], b[0]),
             swar_q7_circular_diff_x8(a[1], b[1]),
             swar_q7_circular_diff_x8(a[2], b[2]),
@@ -669,14 +662,15 @@ pub fn coherence_from_word_arrays_with_both_uniform_flags_64(
             swar_q7_circular_diff_x8(a[5], b[5]),
             swar_q7_circular_diff_x8(a[6], b[6]),
             swar_q7_circular_diff_x8(a[7], b[7]),
-        )
+        ])
     }
 }
 
 /// Evaluates normalized 64-head phase coherence $\mathcal{C}_{\mathrm{phase}}(a, b) \in [-1.0, 1.0]$
 /// when $\mathcal{C}_{\mathrm{phase}}(a, b) \ge \text{floor\_coh}$ is possible, or returns `-2.0`
 /// in 5 AVX2 instructions (`vpabsb + vpsadbw`) when the exact Lagrangian $L_1$ upper bound
-/// $\mathcal{C}_{64}(a, b) \le 1.21052 - \frac{1}{4096}\sum_{h=0}^{63}|d_h|$ proves $\mathcal{C}_{64}(a, b) < \text{floor\_coh}$.
+/// $\mathcal{C}_{64}(a, b) \le 1.21052 - \frac{1}{4096}\sum_{h=0}^{63}|d_h|$ proves $\mathcal{C}_{64}(a, b) <
+/// \text{floor\_coh}$.
 #[inline(always)]
 #[must_use]
 pub fn coherence_above_floor_from_word_arrays_64(
@@ -692,7 +686,7 @@ pub fn coherence_above_floor_from_word_arrays_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: Guarded by `target_feature = "avx2"`.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::_mm256_sub_epi8;
             let (va0, va1) = avx2_words64_to_vec64_with_uniform(a, a_is_uniform);
             let (vb0, vb1) = avx2_words64_to_vec64_with_uniform(b, b_is_uniform);
@@ -701,7 +695,7 @@ pub fn coherence_above_floor_from_word_arrays_64(
                 _mm256_sub_epi8(va1, vb1),
                 floor_coh,
             )
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -759,7 +753,7 @@ pub fn branchless_q7_coherence_64(
     {
         // SAFETY: `phases_a` and `phases_b` are 64-byte arrays and AVX2 is enabled.
         // Direct `_mm256_loadu_si256` avoids 64-bit GPR stack copies and 4-to-1 STLF stalls.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
             let pa = phases_a.as_ptr().cast::<__m256i>();
             let pb = phases_b.as_ptr().cast::<__m256i>();
@@ -768,7 +762,7 @@ pub fn branchless_q7_coherence_64(
             let vb0 = _mm256_loadu_si256(pb);
             let vb1 = _mm256_loadu_si256(pb.add(1));
             avx2_coherence_from_diff_vec64(_mm256_sub_epi8(va0, vb0), _mm256_sub_epi8(va1, vb1))
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -881,13 +875,13 @@ pub(super) unsafe fn avx2_mean_sincos_from_vec64(
     // registers via 16-nibble `vpshufb` + `vpsadbw` + `vpmaddubsw` with packed horizontal reduction.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_add_epi16, _mm256_add_epi32, _mm256_add_epi64, _mm256_and_si256,
-            _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_madd_epi16,
-            _mm256_maddubs_epi16, _mm256_or_si256, _mm256_sad_epu8, _mm256_set1_epi16,
-            _mm256_set1_epi8, _mm256_setr_epi8, _mm256_setzero_si256, _mm256_shuffle_epi8,
-            _mm256_slli_epi64, _mm256_srli_epi16, _mm256_sub_epi16, _mm_add_epi32, _mm_add_epi64,
-            _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_extract_epi32, _mm_shuffle_epi32,
-            _mm_unpackhi_epi64, _mm_unpacklo_epi64,
+            _mm_add_epi32, _mm_add_epi64, _mm_cvtsi128_si32, _mm_cvtsi128_si64, _mm_extract_epi32,
+            _mm_shuffle_epi32, _mm_unpackhi_epi64, _mm_unpacklo_epi64, _mm256_add_epi16,
+            _mm256_add_epi32, _mm256_add_epi64, _mm256_and_si256, _mm256_castsi256_si128,
+            _mm256_extracti128_si256, _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256,
+            _mm256_sad_epu8, _mm256_set1_epi8, _mm256_set1_epi16, _mm256_setr_epi8,
+            _mm256_setzero_si256, _mm256_shuffle_epi8, _mm256_slli_epi64, _mm256_srli_epi16,
+            _mm256_sub_epi16,
         };
 
         let mask_15 = _mm256_set1_epi8(0x0F);
@@ -1049,7 +1043,7 @@ pub(super) fn mean_sincos_from_words_with_uniform_flag_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: Guarded by `target_feature = "avx2"`.
-        return unsafe { avx2_mean_sincos_from_words_64(w) };
+        unsafe { avx2_mean_sincos_from_words_64(w) }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {
@@ -1073,7 +1067,8 @@ pub fn circular_r_bar_from_words_with_uniform_flag_64(w: &[u64; 8], w_is_uniform
 }
 
 /// Evaluates the circular resultant vector length
-/// $\bar{R} = \sqrt{\left(\frac{1}{64}\sum_{h=0}^{63}\sin\theta_h\right)^2 + \left(\frac{1}{64}\sum_{h=0}^{63}\cos\theta_h\right)^2} \in [0.0, 1.0]$
+/// $\bar{R} = \sqrt{\left(\frac{1}{64}\sum_{h=0}^{63}\sin\theta_h\right)^2 +
+/// \left(\frac{1}{64}\sum_{h=0}^{63}\cos\theta_h\right)^2} \in [0.0, 1.0]$
 /// directly from all 8 packed 64-bit SWAR words (`w`) in strictly constant time (`0` branches, `0 fdiv`).
 #[inline(always)]
 pub fn circular_r_bar_from_words_64(w: &[u64; 8]) -> f32 {
@@ -1126,7 +1121,7 @@ pub fn branchless_q7_coherence_and_resultant_64(
     #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         // SAFETY: `phases_a` and `phases_b` are 64 bytes each and `target_feature = "avx2"` is enabled.
-        return unsafe {
+        unsafe {
             use core::arch::x86_64::{
                 __m256i, _mm256_broadcastb_epi8, _mm256_castsi256_si128, _mm256_loadu_si256,
                 _mm256_or_si256, _mm256_sub_epi8, _mm256_testz_si256, _mm256_xor_si256,
@@ -1171,7 +1166,7 @@ pub fn branchless_q7_coherence_and_resultant_64(
             let r_bar = fast_sqrt_unit_f32(mean_sin * mean_sin + mean_cos * mean_cos);
             let mean_q7 = branchless_atan2_to_q7_fast(mean_sin, mean_cos);
             (coherence, r_bar, mean_q7, branchless_von_mises_kappa(r_bar))
-        };
+        }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
     {

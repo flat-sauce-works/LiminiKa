@@ -11,8 +11,8 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
-use crate::foundation::{compute_crc32_ieee, Pod};
-use crate::liminal::{BitCut8, LMNK_ABI_VERSION_HEX};
+use crate::foundation::{Pod, compute_crc32_ieee};
+use crate::liminal::{BitCut8, LMNK_ABI_COMPAT_VERSION_HEX};
 
 /// Binary magic constant for [`LiminalTopologyMatrix`] (`0x504F_544C` = ASCII `"LTOP"`).
 pub const LMNK_TOPOLOGY_MAGIC: u32 = 0x504F_544C;
@@ -35,11 +35,15 @@ pub const LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL: u16 = 1 << 2;
 /// DAG invariant bit `3`: `liminika-core` enforces `#![no_std]` zero-allocation boundaries.
 pub const LMNK_DAG_FLAG_NO_STD_CORE: u16 = 1 << 3;
 
-/// Canonical composite DAG invariant flags for `LiminiKa` `v0.2.0`.
+/// DAG invariant bit `4`: all 3 Lv.3 driver siblings (`spine`, `ego`, `envelope`) are mutually isolated (6 pairs).
+pub const LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED: u16 = 1 << 4;
+
+/// Canonical composite DAG invariant flags for `LiminiKa` `v0.4.0`.
 pub const LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL: u16 = LMNK_DAG_FLAG_Y_SHAPED_PARALLEL_ROOTS
     | LMNK_DAG_FLAG_SPINE_EGO_ISOLATED
     | LMNK_DAG_FLAG_AXIOM_CUT_LACUNA_ORTHOGONAL
-    | LMNK_DAG_FLAG_NO_STD_CORE;
+    | LMNK_DAG_FLAG_NO_STD_CORE
+    | LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED;
 
 /// Canonical 5-layer unidirectional DAG upstream bitmasks (`dag_edge_matrix[layer]`).
 ///
@@ -74,7 +78,7 @@ pub const LMNK_TOPOLOGY_SANDBOX_CHANNEL_MASK: u8 = 1 << 7;
 pub struct LiminalTopologyMatrix {
     /// Structure identifier magic constant ([`LMNK_TOPOLOGY_MAGIC`] = `"LTOP"`, `offset 0..4`).
     pub magic: u32,
-    /// ABI version matching [`LMNK_ABI_VERSION_HEX`] (`offset 4..8`).
+    /// `MAJOR.MINOR` ABI compatibility prefix matching [`LMNK_ABI_COMPAT_VERSION_HEX`] (`offset 4..8`).
     pub version: u32,
     /// Architectural layer count (`5`, `offset 8`).
     pub layer_count: u8,
@@ -106,7 +110,7 @@ unsafe impl Pod for LiminalTopologyMatrix {}
 impl Default for LiminalTopologyMatrix {
     #[inline(always)]
     fn default() -> Self {
-        Self::canonical_v0_2_0()
+        Self::canonical()
     }
 }
 
@@ -195,17 +199,17 @@ impl LiminalTopologyMatrix {
     #[must_use]
     pub const fn verify_crc32(&self) -> bool {
         (self.magic == LMNK_TOPOLOGY_MAGIC)
-            & (self.version == LMNK_ABI_VERSION_HEX)
+            & (self.version == LMNK_ABI_COMPAT_VERSION_HEX)
             & (self.topology_crc32 == self.compute_crc32())
     }
 
-    /// Constructs the canonical `LiminiKa` `v0.2.0` topology matrix with stamped compile-time CRC32.
+    /// Constructs the canonical `LiminiKa` `v0.4.0` topology matrix with stamped compile-time CRC32.
     #[inline(always)]
     #[must_use]
-    pub const fn canonical_v0_2_0() -> Self {
+    pub const fn canonical() -> Self {
         let mut matrix = Self {
             magic: LMNK_TOPOLOGY_MAGIC,
-            version: LMNK_ABI_VERSION_HEX,
+            version: LMNK_ABI_COMPAT_VERSION_HEX,
             layer_count: LMNK_TOPOLOGY_LAYER_COUNT,
             channel_count: LMNK_TOPOLOGY_CHANNEL_COUNT,
             dag_flags: LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL,
@@ -257,8 +261,8 @@ impl LiminalTopologyMatrix {
     }
 }
 
-/// Canonical compile-time `LiminiKa` `v0.2.0` topology matrix.
-pub const CORE_TOPOLOGY: LiminalTopologyMatrix = LiminalTopologyMatrix::canonical_v0_2_0();
+/// Canonical compile-time `LiminiKa` `v0.4.0` topology matrix.
+pub const CORE_TOPOLOGY: LiminalTopologyMatrix = LiminalTopologyMatrix::canonical();
 
 const _: () = {
     assert!(size_of::<LiminalTopologyMatrix>() == 64);
@@ -289,6 +293,11 @@ mod tests {
         assert_eq!(CORE_TOPOLOGY.magic, LMNK_TOPOLOGY_MAGIC);
         assert_eq!(CORE_TOPOLOGY.layer_count, 5);
         assert_eq!(CORE_TOPOLOGY.channel_count, 8);
+        assert_ne!(
+            CORE_TOPOLOGY.dag_flags & LMNK_DAG_FLAG_THREE_DRIVERS_ISOLATED,
+            0
+        );
+        assert_eq!(CORE_TOPOLOGY.dag_flags, LMNK_TOPOLOGY_DAG_FLAGS_CANONICAL);
         assert_eq!(
             CORE_TOPOLOGY.topology_crc32,
             compute_crc32_ieee(&CORE_TOPOLOGY.to_prefix_le_bytes())

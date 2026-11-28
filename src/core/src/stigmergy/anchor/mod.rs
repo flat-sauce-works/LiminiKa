@@ -9,41 +9,43 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(clippy::missing_safety_doc)]
 #![warn(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
 
 use core::mem::{align_of, offset_of, size_of};
 
 use self::crc32_delta::{
-    crc32_anchor_be24_final_u32, crc32_anchor_gm36_final_u32, crc32_anchor_zoff16_final_u32,
-    crc32_update_anchor_absorption_delta, crc32_update_anchor_stationary_fields_delta,
     ANCHOR_CRC32_DEFAULT_W5_FINAL_CONTRIB, ANCHOR_CRC32_KAPPA_AT_MAX_R_FINAL_CONTRIB,
     ANCHOR_CRC32_KAPPA_MAX_FINAL_CONTRIB, ANCHOR_CRC32_RBAR_ONE_FINAL_CONTRIB,
-    ANCHOR_CRC32_W0_FINAL_CONTRIB, CRC32_ANCHOR_ACTION_BYTE57_REF, CRC32_ANCHOR_AID_BYTE0_REF,
-    CRC32_ANCHOR_AID_BYTE1_REF, CRC32_ANCHOR_PROV_BYTE0_REF, CRC32_ANCHOR_PROV_BYTE1_REF,
-    CRC32_ANCHOR_SC_BYTE0_REF, CRC32_ANCHOR_SLOT_BYTE56_LUT_8, CRC32_ANCHOR_ZOFF_BYTE1_REF,
-    CRC32_ANCHOR_ZOFF_BYTE2_REF, CRC32_ANCHOR_ZOFF_BYTE3_REF,
-};
-use crate::foundation::{
-    atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast, branchless_clamp_f32,
-    branchless_flush_subnormal_f32, branchless_is_finite_f32, branchless_maturity_scale_u32,
-    branchless_min_f32, branchless_relu_f32, branchless_sincos_q7, branchless_von_mises_kappa,
-    circular_r_bar_from_words_64, coherence_above_floor_from_word_arrays_64,
-    coherence_from_uniform_words_x8, crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32,
-    crc32_slice16_indep_hi1_u32, crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2,
-    crc32_step_block64_words, crc32_step_l3, crc32_step_l4, crc32_step_l5, crc32_step_l6,
-    is_aligned_to, is_word_array_uniform_64, load_q7_words_64,
-    step_toroidal_centroid_words_cached_64, store_q7_words_64, Pod, RawPhaseProjectable, TaggedPtr,
-    CRC32_IEEE_SLICE16_REF, Q7_FULL_COS_REF, VON_MISES_KAPPA_AT_MAX_R_BITS,
+    ANCHOR_CRC32_W0_FINAL_CONTRIB, AnchorHeaderDelta, CRC32_ANCHOR_ACTION_BYTE57_REF,
+    CRC32_ANCHOR_AID_BYTE0_REF, CRC32_ANCHOR_AID_BYTE1_REF, CRC32_ANCHOR_PROV_BYTE0_REF,
+    CRC32_ANCHOR_PROV_BYTE1_REF, CRC32_ANCHOR_SC_BYTE0_REF, CRC32_ANCHOR_SLOT_BYTE56_LUT_8,
+    CRC32_ANCHOR_ZOFF_BYTE1_REF, CRC32_ANCHOR_ZOFF_BYTE2_REF, CRC32_ANCHOR_ZOFF_BYTE3_REF,
+    crc32_anchor_be24_final_u32, crc32_anchor_gm36_final_u32, crc32_anchor_zoff16_final_u32,
+    crc32_update_anchor_absorption_delta, crc32_update_anchor_stationary_fields_delta,
 };
 use crate::foundation::{
     ACTION_PRESET_EXPRESS_PHASE, ACTION_PRESET_PASSIVE_SIDECAR, ATTRACTOR_SLOT_ID_MASK,
     DEFAULT_PHASE_CLAMP_MAX_RAD,
 };
+use crate::foundation::{
+    CRC32_IEEE_SLICE16_REF, Pod, Q7_FULL_COS_REF, RawPhaseProjectable, TaggedPtr,
+    VON_MISES_KAPPA_AT_MAX_R_BITS, atan2_to_q7_word_x8_simd, branchless_atan2_to_q7_fast,
+    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
+    branchless_maturity_scale_u32, branchless_min_f32, branchless_relu_f32, branchless_sincos_q7,
+    branchless_von_mises_kappa, circular_r_bar_from_words_64,
+    coherence_above_floor_from_word_arrays_64, coherence_from_uniform_words_x8,
+    crc32_slice16_dep_lo0, crc32_slice16_indep_hi0_u32, crc32_slice16_indep_hi1_u32,
+    crc32_slice16_indep_lo1_u32, crc32_slice16_step_u64x2, crc32_step_block64_words, crc32_step_l3,
+    crc32_step_l4, crc32_step_l5, crc32_step_l6, is_aligned_to, is_word_array_uniform_64,
+    load_q7_words_64, step_toroidal_centroid_words_cached_64, store_q7_words_64,
+};
 use crate::liminal::{
-    branchless_select_f32, branchless_select_q7, branchless_select_usize, AbstractDomain, Grounded,
-    Indivisible, LmnkResult, PhaseQ7, Scoped, DEFAULT_ENTROPY_EPS, LMNK_ABI_VERSION_HEX,
-    LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL, LMNK_ERR_CONTAINER_CORRUPTED,
-    LMNK_ERR_INVALID_ARGUMENT, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    AbstractDomain, AttributionTag, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT,
+    BOUNDARY_SIGNAL_FLAG_FAULT, BOUNDARY_SIGNAL_FLAG_OBSERVED,
+    BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, BoundarySignal, DEFAULT_ENTROPY_EPS, Grounded,
+    Indivisible, LMNK_ABI_VERSION_HEX, LMNK_ERR_ALIGNMENT, LMNK_ERR_BUFFER_TOO_SMALL,
+    LMNK_ERR_CONTAINER_CORRUPTED, LMNK_ERR_INVALID_ARGUMENT, LacunaPartition8, LmnkResult,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, Scoped, branchless_select_f32,
+    branchless_select_q7, branchless_select_u8, branchless_select_usize, is_compatible_abi_version,
 };
 
 /// Zero-byte domain-tagged 64-head Q7 phase profile for grounded crystallization (`Grounded` phase).
@@ -64,7 +66,8 @@ impl AbstractDomain for PhaseProfileRef64<'_> {
     const DOMAIN_ID: &'static str = "stigmergy.phase_profile_ref_64";
 }
 
-/// Zero-byte domain-tagged borrowed 8-granule SWAR phase-word array for register-resident grounded absorption (`Grounded` phase).
+/// Zero-byte domain-tagged borrowed 8-granule SWAR phase-word array for register-resident grounded absorption
+/// (`Grounded` phase).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhaseWordsRef64<'a>(pub &'a [u64; NUM_STIGMERGIC_GRANULES]);
@@ -96,11 +99,11 @@ const _: () = {
             == align_of::<&[u64; NUM_STIGMERGIC_GRANULES]>()
     );
 };
-use crate::stigmergy::trail::{trail_phase_words_ref, PointerTrail};
+use crate::stigmergy::trail::{PointerTrail, trail_phase_words_ref};
 use crate::stigmergy::{ATTRACTOR_SLOT_PERSONA, MAX_ATTRACTOR_PULL_FORCE, MAX_STIGMERGIC_DENSITY};
 
-/// Nominal cause code (`0`) stored in [`PhaseAnchorRecord::attribution_tag`].
-pub const ANCHOR_ATTRIBUTION_NOMINAL: u8 = 0;
+/// Nominal cause code (`0`) stored in [`PhaseAnchorRecord::root_cause_code`].
+pub const ANCHOR_ROOT_CAUSE_NOMINAL: u8 = 0;
 
 /// Provenance maturity flag (`bit 12`) stamped on [`PhaseAnchorRecord::lineage_flags`]
 /// once sample count and circular coherence cross the crystallization gate.
@@ -143,6 +146,7 @@ pub mod routing;
 /// Episodic phase sample projection and steering traits.
 pub mod sample_steering;
 
+pub use self::routing::CoarseToFineParams;
 pub use self::sample_steering::*;
 
 /// Outcome emitted by branchless dissipative overflow, residual scatter, and autonomous
@@ -160,13 +164,15 @@ pub struct DissipativeOverflowReport {
     pub primary_coherence: f32,
     /// Residual phase coherence against the best secondary scatter candidate.
     pub scatter_coherence: f32,
-    /// Saturation/dispersion pressure subtracted from `primary_coherence` (`(1 - r_bar) * 0.35 + ln(1 + count) * 0.06`).
+    /// Saturation/dispersion pressure subtracted from `primary_coherence` (`(1 - r_bar) * 0.35 + ln(1 + count)
+    /// * 0.06`).
     pub overflow_pressure: f32,
     /// Updated phase-gravity mass of `landed_idx`.
     pub updated_gravity_mass: f32,
     /// Nearest primary attractor slot index evaluated before overflow pressure.
     pub primary_idx: u16,
-    /// Slot index where the sample or its peeled residual settled (`primary_idx`, secondary scatter target, or spawned daughter).
+    /// Slot index where the sample or its peeled residual settled (`primary_idx`, secondary scatter target, or
+    /// spawned daughter).
     pub landed_idx: u16,
     /// `true` when `primary_idx` overflowed its capacity/coherence bound.
     pub overflowed: bool,
@@ -226,7 +232,8 @@ pub struct PhaseAnchorRecord {
     pub resultant_r_bar: f32,
     /// von Mises concentration parameter $\kappa_c \ge 0$ of the crystallized centroid (`offset 32..36`).
     pub von_mises_kappa: f32,
-    /// Phase-Proximity Gravity mass $M_{\mathrm{grav}} = E_{\mathrm{base}} \cdot \bar{R}_c (1 + 0.1 \ln(1 + N))$ (`offset 36..40`).
+    /// Phase-Proximity Gravity mass $M_{\mathrm{grav}} = E_{\mathrm{base}} \cdot \bar{R}_c (1 + 0.1 \ln(1 +
+    /// N))$ (`offset 36..40`).
     pub phase_gravity_mass: f32,
     /// Effective `PhaseClamp` limit in radians ($\theta_{\max}$, `offset 40..44`).
     pub phase_clamp_rad: f32,
@@ -243,7 +250,7 @@ pub struct PhaseAnchorRecord {
     /// Active 8-cell Micro-Swarm mask (`0x00..=0xFF`, `offset 58`).
     pub active_swarm_mask: u8,
     /// Primary root-cause classification code (`ROOT_CAUSE_*`, `offset 59`).
-    pub attribution_tag: u8,
+    pub root_cause_code: u8,
     /// Reserved 32-bit zero field aligning `phase_profile` to exact byte offset `64` (`offset 60..64`).
     pub reserved_align64: u32,
     /// Crystallized 64-head Q7 centroid phase profile on $SO(2)^{64}$ (`64` bytes at `offset 64..128`).
@@ -264,8 +271,6 @@ impl PhaseAnchorRecord {
     /// Borrows `self.phase_profile` (`offset 64` of `#[repr(C, align(64))]` [`Self`], guaranteed
     /// 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR reference on little-endian targets,
     /// eliminating 64-byte stack copies and 256-bit YMM-to-GPR Store-to-Load Forwarding (STLF) stalls.
-    /// Borrows `self.phase_profile` (`offset 64` of `#[repr(C, align(64))]`
-    /// [`PhaseAnchorRecord`], guaranteed 64-byte aligned) as a zero-copy `&[u64; 8]` SWAR array.
     #[inline(always)]
     #[must_use]
     pub const fn phase_words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
@@ -326,7 +331,7 @@ impl PhaseAnchorRecord {
             dominant_slot: dominant_slot & ATTRACTOR_SLOT_ID_MASK,
             action_mode_flags: ACTION_PRESET_PASSIVE_SIDECAR,
             active_swarm_mask: 0xFF,
-            attribution_tag: ANCHOR_ATTRIBUTION_NOMINAL,
+            root_cause_code: ANCHOR_ROOT_CAUSE_NOMINAL,
             reserved_align64: 0,
             phase_profile: [0i8; MAX_ATTENTION_HEADS],
         }
@@ -339,7 +344,7 @@ impl PhaseAnchorRecord {
             self.dominant_slot,
             self.action_mode_flags,
             self.active_swarm_mask,
-            self.attribution_tag,
+            self.root_cause_code,
         ])
     }
 
@@ -469,12 +474,12 @@ impl PhaseAnchorRecord {
             crc32_slice16_dep_lo0(self.lineage_flags)
         };
         const DEFAULT_W7_MASK_CAUSE_CRC_C3: u32 = CRC32_IEEE_SLICE16_REF[5][0xFF]
-            ^ CRC32_IEEE_SLICE16_REF[4][ANCHOR_ATTRIBUTION_NOMINAL as usize];
+            ^ CRC32_IEEE_SLICE16_REF[4][ANCHOR_ROOT_CAUSE_NOMINAL as usize];
         const DEFAULT_W7_MASK_CAUSE_FINAL_CONTRIB: u32 =
             crc32_step_l4(DEFAULT_W7_MASK_CAUSE_CRC_C3);
         let slot_fast = (self.dominant_slot & 0xF8) == 0;
         let mask_cause_default =
-            (self.active_swarm_mask == 0xFF) & (self.attribution_tag == ANCHOR_ATTRIBUTION_NOMINAL);
+            (self.active_swarm_mask == 0xFF) & (self.root_cause_code == ANCHOR_ROOT_CAUSE_NOMINAL);
         let w7_c = if slot_fast & mask_cause_default {
             final_acc ^= CRC32_ANCHOR_SLOT_BYTE56_LUT_8[(self.dominant_slot & 7) as usize]
                 ^ CRC32_ANCHOR_ACTION_BYTE57_REF[self.action_mode_flags as usize]
@@ -485,7 +490,7 @@ impl PhaseAnchorRecord {
                 ^ if mask_cause_default {
                     DEFAULT_W7_MASK_CAUSE_CRC_C3
                 } else {
-                    lut[5][self.active_swarm_mask as usize] ^ lut[4][self.attribution_tag as usize]
+                    lut[5][self.active_swarm_mask as usize] ^ lut[4][self.root_cause_code as usize]
                 }
         };
         let res_c = if self.reserved_align64 == 0 {
@@ -615,6 +620,57 @@ impl PhaseAnchorRecord {
         self.checksum_crc32 = self.compute_payload_crc32();
     }
 
+    /// Projects this 128-byte [`PhaseAnchorRecord`] (`64 B` header + `64 B` RoPE phase payload)
+    /// into a 32-byte domain-agnostic [`BoundarySignal`] in $\mathcal{O}(1)$ without mutating or
+    /// copying the 64-head phase profile (`0 alloc`, `0 fdiv`).
+    #[inline(always)]
+    #[must_use]
+    pub const fn to_boundary_signal(
+        &self,
+        partition: LacunaPartition8,
+        pressure_q15: u16,
+        epoch_id: u32,
+    ) -> BoundarySignal {
+        let r_bar_finite = branchless_is_finite_f32(self.resultant_r_bar);
+        let energy_finite = branchless_is_finite_f32(self.base_energy);
+        let is_fault = (!r_bar_finite) | (!energy_finite) | partition.has_undefined_bottom();
+        let r_bar_clamped = branchless_select_f32(
+            r_bar_finite,
+            branchless_clamp_f32(self.resultant_r_bar, 0.0, 1.0),
+            0.0,
+        );
+        let disp_q15_raw = ((1.0 - r_bar_clamped) * 32_768.0 + 0.5) as u32;
+        let disp_q15 = if self.sample_count == 0 {
+            0
+        } else if disp_q15_raw > 32_768 {
+            32_768
+        } else {
+            disp_q15_raw as u16
+        };
+
+        let has_ext = (!is_fault) & partition.has_exterior_gap();
+        let is_obs = (!is_fault) & ((self.sample_count > 0) | (partition.observed_mask != 0));
+        let is_stat = (!is_fault) & (!has_ext) & (self.sample_count >= 2) & (r_bar_clamped >= 0.45);
+        let signal_flags = branchless_select_u8(is_obs, BOUNDARY_SIGNAL_FLAG_OBSERVED, 0)
+            | branchless_select_u8(is_fault, BOUNDARY_SIGNAL_FLAG_FAULT, 0)
+            | branchless_select_u8(has_ext, BOUNDARY_SIGNAL_FLAG_EXTERIOR_ALERT, 0)
+            | branchless_select_u8(is_stat, BOUNDARY_SIGNAL_FLAG_STATIONARY_READY, 0);
+
+        BoundarySignal {
+            partition,
+            pressure_q15,
+            delta_q15: disp_q15,
+            attribution_tag: AttributionTag::STIGMERGY_SYSTEM.raw(),
+            contraction_q7: 128,
+            chatter_q7: 0,
+            signal_flags,
+            dominant_lane: self.dominant_slot & ATTRACTOR_SLOT_ID_MASK,
+            root_cause_code: self.root_cause_code,
+            reserved: [0; 2],
+            epoch_id,
+        }
+    }
+
     /// Restores `self` from `src` using width-matched scalar writes and 64-bit GPR stores
     /// (`*self.phase_words_mut() = *src.phase_words_ref()`), avoiding 256-bit YMM-to-GPR
     /// Store-to-Load Forwarding (STLF) pipeline stalls inside tight loops.
@@ -636,20 +692,24 @@ impl PhaseAnchorRecord {
         self.dominant_slot = src.dominant_slot;
         self.action_mode_flags = src.action_mode_flags;
         self.active_swarm_mask = src.active_swarm_mask;
-        self.attribution_tag = src.attribution_tag;
+        self.root_cause_code = src.root_cause_code;
         self.reserved_align64 = src.reserved_align64;
         *self.phase_words_mut() = *src.phase_words_ref();
     }
 
-    /// Verifies `magic`, `version`, and the IEEE 802.3 `checksum_crc32` integrity of this record.
+    /// Verifies `magic`, ABI-compatible `version` (`MAJOR.MINOR` strict match, `file_patch <= runtime_patch`),
+    /// and the IEEE 802.3 `checksum_crc32` integrity of this record.
     #[inline(always)]
     #[must_use]
     pub const fn verify_integrity(&self) -> bool {
-        if (self.magic != LMNK_PHASE_ANCHOR_MAGIC) | (self.version != LMNK_PHASE_ANCHOR_VERSION) {
+        if (self.magic != LMNK_PHASE_ANCHOR_MAGIC)
+            | !is_compatible_abi_version(self.version, LMNK_PHASE_ANCHOR_VERSION)
+        {
             return false;
         }
         let pw = self.phase_words_ref();
-        if self.sample_count == 0
+        if self.version == LMNK_PHASE_ANCHOR_VERSION
+            && self.sample_count == 0
             && ((self.anchor_id
                 | self.base_energy.to_bits()
                 | self.resultant_r_bar.to_bits()
@@ -664,7 +724,7 @@ impl PhaseAnchorRecord {
             && ((self.dominant_slot & !ATTRACTOR_SLOT_ID_MASK) == 0)
             && (self.action_mode_flags == ACTION_PRESET_PASSIVE_SIDECAR)
             && (self.active_swarm_mask == 0xFF)
-            && (self.attribution_tag == ANCHOR_ATTRIBUTION_NOMINAL)
+            && (self.root_cause_code == ANCHOR_ROOT_CAUSE_NOMINAL)
             && ((((pw[0] | pw[1]) | (pw[2] | pw[3])) | ((pw[4] | pw[5]) | (pw[6] | pw[7]))) == 0)
         {
             return self.checksum_crc32
@@ -676,7 +736,6 @@ impl PhaseAnchorRecord {
     /// Internal register-resident M-step helper accepting the already-loaded `cur_w` in registers
     /// and an optional `precomputed_coh_opt` from the E-step to eliminate duplicate 64-head coherence evaluation.
     #[inline(always)]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn absorb_sample_words_with_cur_coh_and_uni_unstamped(
         &mut self,
         cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
@@ -749,73 +808,107 @@ impl PhaseAnchorRecord {
         }
         (next_w, grav_mass, words_changed)
     }
+}
+
+/// Return tuple from [`PhaseAnchorRecord::find_nearest_toroidal_centroid_with_cache_64`].
+pub(crate) type NearestCentroidMatch = (
+    usize,
+    f32,
+    f32,
+    Option<usize>,
+    usize,
+    [u64; NUM_STIGMERGIC_GRANULES],
+    bool,
+    bool,
+    Option<u8>,
+);
+
+/// Snapshot of [`PhaseAnchorRecord`] header fields captured before an absorption step for
+/// incremental GF(2) CRC32 updates.
+#[derive(Clone, Copy)]
+pub(crate) struct AnchorHeaderSnapshot {
+    pub crc: u32,
+    pub anchor_id: u32,
+    pub sample_count: u32,
+    pub mapped_offset48: u64,
+    pub base_energy_bits: u32,
+    pub r_bar_bits: u32,
+    pub kappa_bits: u32,
+    pub gravity_mass_bits: u32,
+    pub clamp_bits: u32,
+    pub inv_temp_bits: u32,
+    pub provenance_bits: u32,
+    pub w7_lo: u32,
+}
+
+impl PhaseAnchorRecord {
+    #[inline(always)]
+    pub(crate) fn capture_header_snapshot(&self) -> AnchorHeaderSnapshot {
+        AnchorHeaderSnapshot {
+            crc: self.checksum_crc32,
+            anchor_id: self.anchor_id,
+            sample_count: self.sample_count,
+            mapped_offset48: self.mapped_section_offset48,
+            base_energy_bits: self.base_energy.to_bits(),
+            r_bar_bits: self.resultant_r_bar.to_bits(),
+            kappa_bits: self.von_mises_kappa.to_bits(),
+            gravity_mass_bits: self.phase_gravity_mass.to_bits(),
+            clamp_bits: self.phase_clamp_rad.to_bits(),
+            inv_temp_bits: self.effective_inv_temp.to_bits(),
+            provenance_bits: self.lineage_flags,
+            w7_lo: self.pack_w7_lo(),
+        }
+    }
 
     #[inline(always)]
     pub(crate) fn stamp_or_update_absorption_crc32(
         &mut self,
-        prev_crc: u32,
-        prev_aid: u32,
-        prev_count: u32,
-        prev_zoff: u64,
-        prev_be_bits: u32,
-        prev_rb_bits: u32,
-        prev_kp_bits: u32,
-        prev_gm_bits: u32,
-        prev_clamp_bits: u32,
-        prev_temp_bits: u32,
-        prev_prov: u32,
-        prev_w7_lo: u32,
+        prev: AnchorHeaderSnapshot,
         cur_w: &[u64; NUM_STIGMERGIC_GRANULES],
         next_w: &[u64; NUM_STIGMERGIC_GRANULES],
         words_changed: bool,
     ) {
-        if prev_crc != 0 {
-            let delta_aid = prev_aid ^ self.anchor_id;
-            let delta_zoff = prev_zoff ^ self.mapped_section_offset48;
-            let delta_rb = prev_rb_bits ^ self.resultant_r_bar.to_bits();
-            let delta_kp = prev_kp_bits ^ self.von_mises_kappa.to_bits();
-            let delta_cl = prev_clamp_bits ^ self.phase_clamp_rad.to_bits();
-            let delta_tm = prev_temp_bits ^ self.effective_inv_temp.to_bits();
-            let delta_w7 = prev_w7_lo ^ self.pack_w7_lo();
+        if prev.crc != 0 {
+            let delta = AnchorHeaderDelta {
+                anchor_id: prev.anchor_id ^ self.anchor_id,
+                sample_count: prev.sample_count ^ self.sample_count,
+                mapped_offset48: prev.mapped_offset48 ^ self.mapped_section_offset48,
+                base_energy_bits: prev.base_energy_bits ^ self.base_energy.to_bits(),
+                r_bar_bits: prev.r_bar_bits ^ self.resultant_r_bar.to_bits(),
+                kappa_bits: prev.kappa_bits ^ self.von_mises_kappa.to_bits(),
+                gravity_mass_bits: prev.gravity_mass_bits ^ self.phase_gravity_mass.to_bits(),
+                clamp_bits: prev.clamp_bits ^ self.phase_clamp_rad.to_bits(),
+                inv_temp_bits: prev.inv_temp_bits ^ self.effective_inv_temp.to_bits(),
+                provenance_bits: prev.provenance_bits ^ self.lineage_flags,
+                w7_lo: prev.w7_lo ^ self.pack_w7_lo(),
+            };
             if (!words_changed)
-                & (delta_aid == 0)
-                & (delta_zoff == 0)
-                & ((delta_rb | delta_kp) == 0)
-                & ((delta_w7 >> 16) == 0)
+                & (delta.anchor_id == 0)
+                & (delta.mapped_offset48 == 0)
+                & ((delta.r_bar_bits | delta.kappa_bits) == 0)
+                & ((delta.w7_lo >> 16) == 0)
             {
                 self.checksum_crc32 = crc32_update_anchor_stationary_fields_delta(
-                    prev_crc,
-                    prev_count ^ self.sample_count,
-                    prev_be_bits ^ self.base_energy.to_bits(),
-                    prev_gm_bits ^ self.phase_gravity_mass.to_bits(),
-                    delta_cl,
-                    delta_tm,
-                    prev_prov ^ self.lineage_flags,
-                    delta_w7,
+                    prev.crc,
+                    delta.sample_count,
+                    delta.base_energy_bits,
+                    delta.gravity_mass_bits,
+                    delta.clamp_bits,
+                    delta.inv_temp_bits,
+                    delta.provenance_bits,
+                    delta.w7_lo,
                 );
             } else {
-                self.checksum_crc32 = crc32_update_anchor_absorption_delta(
-                    prev_crc,
-                    delta_aid,
-                    prev_count ^ self.sample_count,
-                    delta_zoff,
-                    prev_be_bits ^ self.base_energy.to_bits(),
-                    delta_rb,
-                    delta_kp,
-                    prev_gm_bits ^ self.phase_gravity_mass.to_bits(),
-                    delta_cl,
-                    delta_tm,
-                    prev_prov ^ self.lineage_flags,
-                    delta_w7,
-                    cur_w,
-                    next_w,
-                );
+                self.checksum_crc32 =
+                    crc32_update_anchor_absorption_delta(prev.crc, delta, cur_w, next_w);
             }
         } else {
             self.stamp_crc32_with_words(next_w);
         }
     }
+}
 
+impl PhaseAnchorRecord {
     /// Absorbs a [`Grounded`] 64-head sample point (`sample_phases`, `sample_energy`) into this
     /// centroid on $SO(2)^{64}$, updates $(\bar{R}_c, \kappa_c, M_{\mathrm{grav}})$, and stamps
     /// `checksum_crc32`.
@@ -830,16 +923,7 @@ impl PhaseAnchorRecord {
         sample_phases: Indivisible<Grounded, PhaseProfileRef64<'_>>,
         sample_energy: f32,
     ) -> f32 {
-        let prev_crc = self.checksum_crc32;
-        let prev_count = self.sample_count;
-        let prev_be_bits = self.base_energy.to_bits();
-        let prev_rb_bits = self.resultant_r_bar.to_bits();
-        let prev_kp_bits = self.von_mises_kappa.to_bits();
-        let prev_gm_bits = self.phase_gravity_mass.to_bits();
-        let prev_clamp_bits = self.phase_clamp_rad.to_bits();
-        let prev_temp_bits = self.effective_inv_temp.to_bits();
-        let prev_prov = self.lineage_flags;
-        let prev_w7_lo = self.pack_w7_lo();
+        let prev = self.capture_header_snapshot();
         let cur_w = *self.phase_words_ref();
         let sample_w = load_q7_words_64(sample_phases.as_ref().0);
         let grounded_w = Scoped::interior(PhaseWordsRef64(&sample_w)).into_grounded();
@@ -852,23 +936,7 @@ impl PhaseAnchorRecord {
                 sample_energy,
                 1,
             );
-        self.stamp_or_update_absorption_crc32(
-            prev_crc,
-            self.anchor_id,
-            prev_count,
-            self.mapped_section_offset48,
-            prev_be_bits,
-            prev_rb_bits,
-            prev_kp_bits,
-            prev_gm_bits,
-            prev_clamp_bits,
-            prev_temp_bits,
-            prev_prov,
-            prev_w7_lo,
-            &cur_w,
-            &next_w,
-            words_changed,
-        );
+        self.stamp_or_update_absorption_crc32(prev, &cur_w, &next_w, words_changed);
         mass
     }
 
@@ -901,17 +969,7 @@ impl PhaseAnchorRecord {
             u16,
             u16,
         )>,
-    ) -> (
-        usize,
-        f32,
-        f32,
-        Option<usize>,
-        usize,
-        [u64; NUM_STIGMERGIC_GRANULES],
-        bool,
-        bool,
-        Option<u8>,
-    ) {
+    ) -> NearestCentroidMatch {
         let k_len = centroids.len();
         if k_len == 0 {
             return (
@@ -1064,7 +1122,7 @@ impl PhaseAnchorRecord {
         self.dominant_slot = slot;
         self.action_mode_flags = ACTION_PRESET_PASSIVE_SIDECAR;
         self.active_swarm_mask = 0xFF;
-        self.attribution_tag = ANCHOR_ATTRIBUTION_NOMINAL;
+        self.root_cause_code = ANCHOR_ROOT_CAUSE_NOMINAL;
         self.reserved_align64 = 0;
         if was_active {
             *self.phase_words_mut() = [0u64; NUM_STIGMERGIC_GRANULES];
@@ -1132,11 +1190,12 @@ impl PhaseAnchorRecord {
             // 256-bit-to-64-bit Store-to-Load Forwarding (STLF) stalls.
             let expected_w0 =
                 (LMNK_PHASE_ANCHOR_MAGIC as u64) | ((LMNK_PHASE_ANCHOR_VERSION as u64) << 32);
-            let dst_ptr = dst_bytes.as_mut_ptr().cast::<u64>();
+            let dst_base = dst_bytes.as_mut_ptr();
             let mut idx = 0usize;
             while idx < records.len() {
                 let r = &records[idx];
-                // SAFETY: `PhaseAnchorRecord` is a 128-byte `Pod` with `align >= 8`, so reading as `[u64; 16]` is valid.
+                // SAFETY: `PhaseAnchorRecord` is a 128-byte `Pod` with `align >= 8`, so reading as `[u64; 16]`
+                // is valid.
                 let src_w = unsafe { &*core::ptr::from_ref(r).cast::<[u64; 16]>() };
                 let mut w0 = src_w[0];
                 let mut w6 = src_w[6];
@@ -1153,24 +1212,19 @@ impl PhaseAnchorRecord {
                     };
                     w6 = (w6 & 0xFFFF_FFFFu64) | ((crc as u64) << 32);
                 }
-                // SAFETY: `dst_bytes` is 8-byte aligned with `dst_bytes.len() >= records.len() * 128` (`idx < records.len()`).
-                let out_w = unsafe { &mut *dst_ptr.add(idx * 16).cast::<[u64; 16]>() };
-                out_w[0] = w0;
-                out_w[1] = src_w[1];
-                out_w[2] = src_w[2];
-                out_w[3] = src_w[3];
-                out_w[4] = src_w[4];
-                out_w[5] = src_w[5];
-                out_w[6] = w6;
-                out_w[7] = src_w[7];
-                out_w[8] = src_w[8];
-                out_w[9] = src_w[9];
-                out_w[10] = src_w[10];
-                out_w[11] = src_w[11];
-                out_w[12] = src_w[12];
-                out_w[13] = src_w[13];
-                out_w[14] = src_w[14];
-                out_w[15] = src_w[15];
+                let out_words = [
+                    w0, src_w[1], src_w[2], src_w[3], src_w[4], src_w[5], w6, src_w[7], src_w[8],
+                    src_w[9], src_w[10], src_w[11], src_w[12], src_w[13], src_w[14], src_w[15],
+                ];
+                // SAFETY: `dst_bytes.len() >= records.len() * 128` (`idx < records.len()`). Using
+                // `write_unaligned` avoids constructing a `&mut [u64; 16]` reference when `dst_bytes`
+                // comes from a 1-byte-aligned `[u8; N]` or `Vec<u8>` whose address happens to be 8-byte aligned.
+                unsafe {
+                    dst_base
+                        .add(idx * size_of::<Self>())
+                        .cast::<[u64; 16]>()
+                        .write_unaligned(out_words);
+                }
                 idx += 1;
             }
             return Ok(total_bytes);
@@ -1221,7 +1275,7 @@ const _: () = {
     assert!(offset_of!(PhaseAnchorRecord, lineage_flags) == 48);
     assert!(offset_of!(PhaseAnchorRecord, checksum_crc32) == 52);
     assert!(offset_of!(PhaseAnchorRecord, dominant_slot) == 56);
-    assert!(offset_of!(PhaseAnchorRecord, attribution_tag) == 59);
+    assert!(offset_of!(PhaseAnchorRecord, root_cause_code) == 59);
     assert!(offset_of!(PhaseAnchorRecord, reserved_align64) == 60);
     assert!(offset_of!(PhaseAnchorRecord, phase_profile) == 64);
 };

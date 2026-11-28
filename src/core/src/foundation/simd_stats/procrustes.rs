@@ -12,7 +12,7 @@ use crate::foundation::scalar_math::branchless_sincos_f32;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use crate::foundation::scalar_math::{branchless_atan2_to_q7_fast, branchless_is_finite_f32};
 use crate::foundation::swar_simd::{store_q7_words_64, store_q7_x8_slice};
-use crate::liminal::{PhaseQ7, DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS};
+use crate::liminal::{DEFAULT_ENTROPY_EPS, MAX_ATTENTION_HEADS, PhaseQ7};
 
 /// Evaluates the $SO(2)$ Procrustes inner and exterior cross products using a 32-float (4-YMM)
 /// unrolled dual-accumulator AVX2 tree reduction.
@@ -50,8 +50,10 @@ pub(crate) fn procrustes_sincos_f32_simd(src_head: &[f32], tgt_head: &[f32]) -> 
         let mut sum_cos = 0.0_f32;
         let mut sum_sin = 0.0_f32;
         for (s_pair, t_pair) in src_head[..len]
-            .chunks_exact(2)
-            .zip(tgt_head[..len].chunks_exact(2))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(tgt_head[..len].as_chunks::<2>().0.iter())
         {
             sum_cos += s_pair[0] * t_pair[0] + s_pair[1] * t_pair[1];
             sum_sin += s_pair[0] * t_pair[1] - s_pair[1] * t_pair[0];
@@ -73,7 +75,7 @@ unsafe fn avx2_procrustes_head_rc128(
     // `xmm6..xmm15` stack saves), then folds to `[R_even, R_odd, C_even, C_odd]` in a single XMM register.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_castps256_ps128, _mm256_extractf128_ps, _mm_add_ps, _mm_movehl_ps, _mm_movelh_ps,
+            _mm_add_ps, _mm_movehl_ps, _mm_movelh_ps, _mm256_castps256_ps128, _mm256_extractf128_ps,
         };
         let mut cos0 = _mm256_setzero_ps();
         let mut crs0 = _mm256_setzero_ps();
@@ -134,8 +136,8 @@ unsafe fn avx2_procrustes_cell8_sincos_vec256(
     // stalls, `0` XMM<->GPR domain transfers), and merges the upper 4 heads via `_mm256_insertf128_ps::<1>`.
     unsafe {
         use core::arch::x86_64::{
-            _mm256_castps128_ps256, _mm256_insertf128_ps, _mm_addsub_ps, _mm_loadu_ps,
-            _mm_shuffle_ps, _mm_storeu_ps,
+            _mm_addsub_ps, _mm_loadu_ps, _mm_shuffle_ps, _mm_storeu_ps, _mm256_castps128_ps256,
+            _mm256_insertf128_ps,
         };
         let mut sin_lo_buf = [0.0_f32; 4];
         let mut cos_lo_buf = [0.0_f32; 4];
@@ -274,7 +276,7 @@ pub(crate) fn atan2_to_q7_word_x8_simd(sin_arr: &[f32; 8], cos_arr: &[f32; 8]) -
         unsafe {
             let vy = _mm256_loadu_ps(sin_arr.as_ptr());
             let vx = _mm256_loadu_ps(cos_arr.as_ptr());
-            return avx2_atan2_to_q7_word_x8_vec(vy, vx);
+            avx2_atan2_to_q7_word_x8_vec(vy, vx)
         }
     }
     #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
@@ -492,6 +494,9 @@ pub(crate) fn sincos_f32_x8_simd(angles: &[f32], sin_out: &mut [f32; 8], cos_out
             if _mm256_movemask_ps(in_fast_range) == 0xFF {
                 let k =
                     _mm256_round_ps::<0x08>(_mm256_mul_ps(v_in, _mm256_set1_ps(0.159_154_94_f32)));
+                // Cody-Waite double-split `2*pi = 6.283185 + 3.0717959e-7` requires the truncated
+                // high part verbatim (`f32::consts::TAU` would degrade range-reduction accuracy).
+                #[allow(clippy::approx_constant, clippy::excessive_precision)]
                 let x = _mm256_sub_ps(
                     _mm256_sub_ps(v_in, _mm256_mul_ps(k, _mm256_set1_ps(6.283_185_f32))),
                     _mm256_mul_ps(k, _mm256_set1_ps(3.071_795_9e-7_f32)),
@@ -519,6 +524,8 @@ pub(crate) fn sincos_f32_x8_simd(angles: &[f32], sin_out: &mut [f32; 8], cos_out
                 sp = _mm256_add_ps(_mm256_mul_ps(x2, sp), _mm256_set1_ps(-0.166_666_67_f32));
                 let sin_v = _mm256_mul_ps(x_folded, _mm256_add_ps(_mm256_mul_ps(x2, sp), one_v));
 
+                // Exact minimax cosine polynomial coefficient `-1/10!` in f32 rounding.
+                #[allow(clippy::excessive_precision)]
                 let mut cp = _mm256_add_ps(
                     _mm256_mul_ps(x2, _mm256_set1_ps(-0.000_000_275_573_19_f32)),
                     _mm256_set1_ps(0.000_024_801_587_f32),

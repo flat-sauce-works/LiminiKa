@@ -8,25 +8,22 @@ use super::eval_candidate_trail_avx2_with_macro_fast;
 #[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
 use super::eval_candidate_trail_words_with_macro_fast;
 use super::{
-    precompute_bayesian_trail_scales, trail_phase_words_mut, trail_phase_words_ref, PointerTrail,
+    PointerTrail, precompute_bayesian_trail_scales, trail_phase_words_mut, trail_phase_words_ref,
 };
 use crate::foundation::{
-    branchless_clamp_f32, branchless_flush_subnormal_f32, branchless_is_finite_f32,
-    branchless_min_f32, branchless_phase_proximity_gravity_f32, branchless_relu_f32,
-    circular_resultant_from_words_64, coherence_from_word_arrays_64, fast_inv_len_f32,
-    is_word_array_uniform_64, load_q7_words_64, pack_action_slot_tag,
-    swar_or_avx2_q7_add_sat_words_64, swar_q7_add_sat_x8, swar_q7_neg_sat_x8,
+    ACTION_MODE_LAYER_SKIP, ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER,
+    ACTION_MODE_RANK1_INJECT, ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK,
+    SWAR_SPLAT_BYTE_64, TaggedPtr, branchless_clamp_f32, branchless_flush_subnormal_f32,
+    branchless_is_finite_f32, branchless_min_f32, branchless_relu_f32,
+    coherence_from_word_arrays_64, fast_inv_len_f32, is_word_array_uniform_64, load_q7_words_64,
+    pack_action_slot_tag, swar_or_avx2_q7_add_sat_words_64, swar_q7_add_sat_x8, swar_q7_neg_sat_x8,
     swar_slerp_words_with_bias_64, swar_slerp_words_with_uniform_flag_64,
-    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag, TaggedPtr, ACTION_MODE_LAYER_SKIP,
-    ACTION_MODE_PHASE_REPULSE, ACTION_MODE_PHASE_STEER, ACTION_MODE_RANK1_INJECT,
-    ACTION_MODE_SUBHEAD_ROUTE, ATTRACTOR_SLOT_ID_MASK, DEFAULT_PHASE_GRAVITY_EPS,
-    SWAR_SPLAT_BYTE_64,
+    unpack_action_mode_from_tag, unpack_attractor_slot_from_tag,
 };
 use crate::liminal::{
-    branchless_select_f32, branchless_select_u32, branchless_select_u64, branchless_select_u8,
-    PhaseQ7, MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES,
+    MAX_ATTENTION_HEADS, NUM_STIGMERGIC_GRANULES, PhaseQ7, branchless_select_f32,
+    branchless_select_u8, branchless_select_u32, branchless_select_u64,
 };
-use crate::stigmergy::pheromone::PheromoneDensityOps;
 use crate::stigmergy::{
     ATTRACTOR_SLOT_REPULSION, MAX_STIGMERGIC_DENSITY, TRAIL_FLAG_CRYSTALLIZED_CANDIDATE,
     TRAIL_FLAG_INERTIAL_SKIP_ACTIVE, TRAIL_FLAG_PHASE_STEER_ACTIVE, TRAIL_FLAG_REPULSION_ACTIVE,
@@ -133,6 +130,8 @@ impl TaggedPtr {
 /// bridger, and Attention score modulator accepting `self_w` directly in 8 `u64` SWAR registers
 /// and returning the post-bridged 8 `u64` SWAR words (`0` redundant stack/memory reloads).
 #[inline]
+// Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
     trail: &mut PointerTrail,
     mut self_w: [u64; NUM_STIGMERGIC_GRANULES],
@@ -250,11 +249,11 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
                 clean_cluster_bonus,
             );
 
-        if let Some(ref mut scores) = attention_scores_opt {
-            if idx < scores.len() {
-                let penalty = branchless_select_f32(is_coherent, 0.0, clean_penalty);
-                scores[idx] = branchless_flush_subnormal_f32(scores[idx] + bayes_delta - penalty);
-            }
+        if let Some(ref mut scores) = attention_scores_opt
+            && idx < scores.len()
+        {
+            let penalty = branchless_select_f32(is_coherent, 0.0, clean_penalty);
+            scores[idx] = branchless_flush_subnormal_f32(scores[idx] + bayes_delta - penalty);
         }
 
         let take = is_coherent & ((!found_valid) | (bayes_delta > best_score));
@@ -350,10 +349,11 @@ pub(crate) fn select_rewire_bridge_and_modulate_with_preloaded_words_64(
             trail.cluster_id,
         );
 
-        if let Some(scores) = attention_scores_opt {
-            if best_idx < scores.len() && cur_linked_id != best_id {
-                scores[best_idx] = branchless_flush_subnormal_f32(scores[best_idx] + clean_link);
-            }
+        if let Some(scores) = attention_scores_opt
+            && best_idx < scores.len()
+            && cur_linked_id != best_id
+        {
+            scores[best_idx] = branchless_flush_subnormal_f32(scores[best_idx] + clean_link);
         }
     }
 
@@ -497,12 +497,6 @@ impl PointerTrail {
         self.flags |= TRAIL_FLAG_REPULSION_ACTIVE;
     }
 
-    /// Applies subnormal-safe temporal evaporative decay (`decay_factor` $\in [0, 1]$) to trail density.
-    #[inline(always)]
-    pub fn apply_trail_evaporation(&mut self, decay_factor: f32) {
-        let _ = self.evaporate_pheromone(decay_factor);
-    }
-
     /// Evaluates whether the trail's stigmergic density exceeds `anchor_threshold`.
     #[inline(always)]
     pub fn should_crystallize_branchless(&self, anchor_threshold: f32) -> bool {
@@ -611,20 +605,6 @@ impl PointerTrail {
     #[inline(always)]
     pub fn phase_coherence_with(&self, slot_phases: &[PhaseQ7; MAX_ATTENTION_HEADS]) -> f32 {
         coherence_from_word_arrays_64(trail_phase_words_ref(self), &load_q7_words_64(slot_phases))
-    }
-
-    /// Evaluates the trail's 64-head circular resultant statistics $(\bar{R}_c, \bar{\theta}_{\mathrm{Q7}}, \kappa_c)$
-    /// alongside its Phase-Proximity Gravity mass $M_{\mathrm{grav}} = \rho_{\mathrm{stigmergy}} / (1 - \bar{R}_c + \epsilon)$
-    /// in $\mathcal{O}(1)$ division-free (`0 fdiv`) mode.
-    #[inline(always)]
-    pub fn evaluate_trail_circular_stats_and_gravity(&self) -> (f32, PhaseQ7, f32, f32) {
-        let (r_bar, mean_q7, kappa) = circular_resultant_from_words_64(trail_phase_words_ref(self));
-        let gravity = branchless_phase_proximity_gravity_f32(
-            self.stigmergic_density,
-            r_bar,
-            DEFAULT_PHASE_GRAVITY_EPS,
-        );
-        (r_bar, mean_q7, kappa, gravity)
     }
 }
 
