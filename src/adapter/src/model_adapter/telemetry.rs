@@ -9,7 +9,7 @@ use super::ModelSteeringAdapter;
 /// Runtime observability summary projecting [`CoreTelemetrySnapshot`] counters onto
 /// the `liminal` Abstraction <-> Concretion coordinate system.
 ///
-/// Every counter maps directly onto `v0.3.0` [`CoreTelemetryBank`] fields via [`CoreTelemetrySnapshot`].
+/// Every counter maps directly onto `v0.4.0` [`CoreTelemetryBank`] fields via [`CoreTelemetrySnapshot`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct LiminalBoundaryFlowSummary {
     /// Total monotonic runtime steps (`spine.total_steps`).

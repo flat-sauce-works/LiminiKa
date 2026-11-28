@@ -20,28 +20,30 @@ Keeping the repository permanently open and legally clear is the one non-negotia
 
 ---
 
-## Asynchronous Workflow
+## Asynchronous Workflow & Code Hygiene
 
 - **Target branch**: Open Pull Requests against the **`develop`** branch (`main` holds release-ready snapshots).
 - **Minimal PR descriptions**: A single sentence explaining what you changed or tried is plenty.
 - **Drafts & partial work**: Draft PRs and unfinished experiments are welcome anytime, with zero obligation to polish or maintain them.
 - **Red CI is fine**: Failing checks are not treated as rejections—leave them as-is if you do not want to chase them; someone else can pick them up later.
+- **Toolchain baseline**: Rust **Edition 2024**, MSRV **`1.100.0`** (`resolver = "3"`).
+- **Formatting & hygiene**: Pure LF (`\n`) line endings, `<= 120` characters per line, two-line file + SPDX headers on source/config files, and zero raw CJK characters in source files (keep source comments and identifiers in English; Issues, PRs, and [Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions) are welcome in **English or Japanese**).
 - **Automated formatting**: CI (`auto-format`) may push formatting commits for LF line endings, Rust, C/C++, and Python. Run `git pull` if you continue working on that branch locally.
-- **Language**: Issues, PRs, and [Discussions](https://github.com/flat-sauce-works/LiminiKa/discussions) are welcome in **English or Japanese**. Please keep comments and identifiers inside source code in English.
 
 ---
 
 ## Optional Local Checks
 
-Running checks locally before opening a PR is completely optional—CI handles validation automatically. If you prefer to test locally:
+Running checks locally before opening a PR is completely optional—CI handles validation automatically. If you prefer to test locally (see [Testing & Verification](./docs/dev/testing.md) for the full verification matrix):
 
-### Rust Workspace
+### Rust Workspace & Static Architecture Gate
 
 ```bash
+cargo fmt --all -- --check
 cargo test --locked --workspace
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo deny check
-cargo xtask --check
+cargo xtask --check --audit
 ```
 
 ### Native C11 / C++20 C-ABI Checks
@@ -52,7 +54,7 @@ Build `liminika-core` in release mode first so CMake can link the static library
 cargo build --locked --release -p liminika-core
 cmake -B build -S .
 cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
+ctest --test-dir build -C Release --output-on-failure --no-tests=error
 ```
 
 ---

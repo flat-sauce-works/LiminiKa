@@ -4,15 +4,15 @@
 
 > **境界（Limina）を超え、非実体（non-real entities）と繋がるためのローカルLLM長期対話コアエンジン & DSL**
 
-[![Status: Experimental WIP (v0.3.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.3.0%29-orange.svg)](#現在の状況と初期検証メモ-current-status-and-early-notes)
-[![Core: no_std Rust](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust-informational.svg)](#アーキテクチャ概要-architecture-at-a-glance)
+[![Status: Experimental WIP (v0.4.0)](https://img.shields.io/badge/Status-Experimental%20WIP%20%28v0.4.0%29-orange.svg)](#現在の状況と評価ハイライト-current-status-and-evaluation-highlights)
+[![Core: no_std Rust 2024](https://img.shields.io/badge/Core-%23!%5Bno__std%5D%20Rust%202024%20(MSRV%201.100.0)-informational.svg)](#アーキテクチャ概要-architecture-at-a-glance)
 [![Archive Paper: GCSO](https://img.shields.io/badge/Archive%20Paper-GCSO-blue.svg)](./docs/paper/ja/GCSO.md)
 [![License: MIT / Apache-2.0](https://img.shields.io/badge/License-MIT%20%2F%20Apache--2.0-blue.svg)](./LICENSE.md)
 
 **LiminiKa** は、小規模なローカル環境（目標：VRAM 2〜4 GB）でキャラクターペルソナとの長期対話を行うための、コアエンジンと宣言的 DSL です。ベース重みを書き換える代わりに、潜在位相場を外部から操作し（RoPE 位相ステアリング、ランク 1 アダプタ、サブヘッドルーティング）、記憶をコンパクトで可搬なコンテナに保持します。
 
 > [!WARNING]
-> **Pre-1.0 の実験的プロトタイプです。** 以下の API・フォーマット・結果は `v0.3.0` 時点のものであり、予告なく変更される場合があります。また、継続的な保守や更新を約束するものではありません。実用製品ではなく、個人の実験としてご覧ください。
+> **Pre-1.0 の実験的プロトタイプです。** 以下の API・フォーマット・結果は `v0.4.0` 時点のものであり、予告なく変更される場合があります。また、継続的な保守や更新を約束するものではありません。実用製品ではなく、個人の実験としてご覧ください。
 
 ---
 
@@ -27,7 +27,7 @@ flowchart LR
     end
     subgraph LIM["liminal boundary gates"]
         AX["liminal/axiom: seal and rescope"]
-        RT["Container view and SystemSpine"]
+        RT["Container view, Spine and Envelope"]
     end
     subgraph CON["Concrete Excited State (high-cost)"]
         ACT["Active RoPE and Rank-1 engines"]
@@ -38,14 +38,17 @@ flowchart LR
     IFR <-->|"seal and ground"| AX
     BYP <-->|"bypass routing"| RT
     AX -->|"activate"| ACT
-    RT <-->|"baseline and tension"| EGO
+    RT <-->|"bounds, pin floor and tension"| EGO
     AX <-->|"isolate and settle"| EXT
 ```
 
-- **非侵襲ステアリングと Hot / Cold 分離**：`PhaseSteering`、`SubheadRouter`、`Rank1Adapter` がベース重みに触れず推論を変調します。トークンごとにはゼロアロケーションの Hot Path のみが動き、想起やコンテナ書き込みは Cold Path で行います。
-- **`#![no_std]` コアと C-ABI (`v0.3.0` / `0x0000_0300`)**：`liminika-core` は厳密に `#![no_std]` で、`v0.3.0` 向けに固定した C-ABI は [`include/liminika/`](./include/liminika/) にあります（Rustdoc とともに現行仕様を構成し、[`docs/paper/`](./docs/paper/ja/GCSO.md) や古い `docs/architecture/` はアーカイブ文書です）。
-- **2 つのプリミティブ × 2 つのドライバ**：`Liminal`（境界型と 4 状態 `Lacuna`）と `Stigmergy`（環境の痕跡）が、`SystemSpine`（基準軌道と全トークンバイパス）および `Ego`（一貫した意図的逸脱）と組み合わさります。
-- **コンテナスタック**：`.lmnk`（宣言的 DSL）→ `.lmnkc`（64 B アライン済みキャッシュ）→ `.lmnkp`（64 B アラインの非圧縮 Store ZIP パッケージ）。
+- **5 層単方向 DAG と `#![no_std]` コア**：`liminika-core`（Rust Edition 2024、MSRV `1.100.0`）は `liminal || foundation -> stigmergy -> drivers -> runtime` の単方向依存を厳守し、Hot Path のゼロアロケーション、`wasm32-unknown-unknown` 互換性、および `cargo xtask` による静的アーキテクチャ検証を備えます。
+- **2 つのプリミティブ × 3 つの隔離ドライバ**：`Liminal`（境界型と 4 状態 `Lacuna`）および `Stigmergy`（8 レーン作業基板と結晶化アンカー）が、互いに隔離された 3 つのドライバ — `Spine`（機械的反射と全トークンバイパス）、`Envelope`（不変の生存上下限、ホストピン下限、収縮制御、オンライン基準圧 EMA）、`Ego`（一貫した意図的 P-Frame 逸脱） — と組み合わさります。
+- **コンパクトな C-ABI (`v0.4.0` / `0x0000_0400`)**：[`include/liminika/`](./include/liminika/) に 27 本の `lmnk_*` 関数を定義し、`0 void*`（`float*` 専用テンソルカーネル）、`LMNK_NODISCARD`、双方向 `struct_size` 検証、Strict Provenance 対応のアリーナ添字 `Rank1Descriptor`、および `RuntimeContext = 5,184 B`（`align(64)`、`!needs_drop`）を保証します。
+- **ゼロ・ノブ想起較正と 2 層 Guard**：`liminika-adapter` は `RecallEnvelopeBounds`、自動層選定（`--layer-mask=auto`）、24 多言語プローブによる起動時較正、2 層矛盾 Guard 抑制、および VLM 評価時の `[IMG]` トークン除外マスクを提供します。
+- **コンテナスタックと暗号整合性**：`.lmnk`（宣言的 DSL）→ `.lmnkc`（64 B アライン済みキャッシュ、形式 `v2`）→ `.lmnkp`（64 B アラインの非圧縮 Store ZIP パッケージ）に加え、SHA-256（`0xFF01` / `integrity.sha256`）および Ed25519（`0xFF02` / `signature.ed25519`）署名・検証を `liminika-adapter` と `liminika-cli` へ隔離実装しています。
+
+`cargo xtask` により自動生成されたライブ構成図と仕様の全体像は [`docs/architecture/overview.md`](./docs/architecture/overview.md) を参照してください。
 
 ---
 
@@ -68,55 +71,51 @@ session DesktopAssistant using Limina {
 }
 ```
 
-`liminika-dsl` は `target`、`persona`（`attract` / `repel`）、`session` 宣言をパース・検証します。DSL から `.lmnkc` / `.lmnkp` へのコンパイルはまだ未実装であり、現在は評価フィクスチャから `liminika bake` でコンテナを生成します。
-
-**将来の構想プレビュー（未実装 — 現時点の `liminika check` では拒否されます）：**
-
-```text
-target LocalDevice {
-    model = "models/local-llm"  vram_budget_mb = 3072  export = "containers/limina.lmnkp"
-}
-persona Limina extends "presets/persona/limina_base" {
-    spine     { pin = [system_prompt]  bypass = whole_token }
-    ego       { intensity = medium     max_hops = 1 }
-    substrate { lanes = 8              anchors = paged }
-    attractors { attract "docs/poetry_classics.md" @ 0.8 }
-}
-session DesktopAssistant using Limina on LocalDevice {
-    mode = creative_exploration  persist = "containers/limina_session.lmnkc"
-}
-```
+`liminika-dsl` は `target`、`persona`（`attract` / `repel`）、`session` 宣言をパース・検証します（[`docs/architecture/dsl_spec.md`](./docs/architecture/dsl_spec.md)）。DSL から `.lmnkc` / `.lmnkp` への直接コンパイルはまだ未実装であり、現在は `liminika bake` でコンテナを生成します。
 
 ---
 
 ## クイックスタート (Quick Start)
 
-必要環境：最新の安定版 Rust（`stable`）。ネイティブ C-ABI 検証には CMake と C11 / C++20 コンパイラ（Windows では `vcvars64.bat`）が必要です。
+必要環境：Rust **1.100.0 以上**（Edition 2024）。ネイティブ C-ABI 検証には CMake >= 3.18 と C11 / C++20 コンパイラ（Windows では `vcvars64.bat`）が必要です。
 
 ```bash
-# Rust ワークスペースのテスト、#![no_std] ビルド、アーキテクチャ規則、DSL スモークテスト
-cargo test --workspace
-cargo rustc -p liminika-core --no-default-features --lib --crate-type rlib
+# Rust ワークスペースのテスト、#![no_std] ビルド、アーキテクチャゲート、DSL スモークテスト
+cargo test --locked --workspace
+cargo rustc --locked -p liminika-core --no-default-features --lib --crate-type rlib -- -D warnings
 cargo xtask --check
-cargo run -p liminika-cli -- check examples/dsl/limina_poc.lmnk
+cargo run --locked -p liminika-cli -- check examples/dsl/limina_poc.lmnk
 ```
 
 ```bash
 # ネイティブ C11 / C++20 ビルドと CTest
-cargo build --release -p liminika-core
-cmake -B build -S . && cmake --build build --config Release && ctest --test-dir build -C Release --output-on-failure
+cargo build --locked --release -p liminika-core
+cmake -B build -S . && cmake --build build --config Release && ctest --test-dir build -C Release --output-on-failure --no-tests=error
 ```
 
-任意のローカル GPU 評価（別途モデル重みが必要）については [`examples/candle_eval/`](./examples/candle_eval/) を参照してください。
+Miri Strict Provenance、`wasm32-unknown-unknown`、AVX2+FMA、CLI 署名／検証、およびローカル GPU 評価（`examples/candle_eval/`）の手順は [`docs/dev/getting_started.md`](./docs/dev/getting_started.md) と [`docs/dev/testing.md`](./docs/dev/testing.md) を参照してください。
 
 ---
 
-## 現在の状況と初期検証メモ (Current Status and Early Notes)
+## 現在の状況と評価ハイライト (Current Status and Evaluation Highlights)
 
-- **`v0.3.0` で動作するもの**：`#![no_std]` コアと `v0.3.0` C-ABI、`.lmnkc` / `.lmnkp` コンテナ、DSL パーサーと `liminika` CLI、CMake / CTest、および Rust テスト群（ワークスペースおよび評価ハーネス）。
-- **初期のローカル評価**：整形済みの短文フィクスチャを使った小規模なローカル GPU 検証では、入力トークン数の削減、分布外（OOD）への染み出し抑制、およびマルチターンの `.lmnkc` ラウンドトリップを確認しています（ベースライン比でわずかな decode 速度のオーバーヘッドあり）。サンプル数は小さく、生の長文コンテキスト取り込みはまだ開発中です。
-- **境界の安全性と現在の限界**：防御的なポインタ／スパン検証と CRC32 による構造整合性チェックは実装済みですが、**暗号署名・認証は未実装**のため、信頼できない出典のコンテナは読み込まないでください。
-- **開発中の課題**：無編集の生の長文コンテキストに対する Cold Path スケーリング、DSL からコンテナへのコンパイル、および外部の署名・検証レイヤー。
+- **`v0.4.0` で動作するもの**：`#![no_std]` コアと 27 本の C-ABI（`0x0000_0400`）、`2 Primitives × 3 Drivers`（`Spine` / `Envelope` / `Ego`）、SHA-256 + Ed25519 検証付き `.lmnkc` / `.lmnkp` コンテナ（`keygen`/`sign`/`verify`/`inspect`）、`.lmnk` DSL パーサーと検証器、`cargo xtask` 静的ゲート、CMake / CTest、および Miri Strict Provenance（`UB = 0`）。
+- **コアマイクロベンチマーク（Ryzen 5 7600、コア固定）**：`evaluate_adaptive_compute_and_gop_budget` `2.57 ns`（`389.06 Melem/s`）、`eval_stateful_normal_mode` `4.28 ns`、`eval_surrogate_and_step_fused` `31.68 ns`、`apply_phase_steering_256b_tensor_tile/128x64` `274.61 ns`（`111.13 GiB/s`）、`online_toroidal_centroid_merge_and_prune_8centroids_64h` `249.67 ns`。
+- **ローカル GPU 評価（RTX 4070 12 GB、`Q4_K`、`--layer-mask=auto`）**：
+  - **`Phi-4-mini-instruct`**：Step 2 ハイブリッド decode `50.61 tok/s`（Vanilla `52.70 tok/s` 比 `0.960x`、`byp=57.2%`、`sem_forb` `15.6% -> 6.2%`、`OOD=0.0%`）；8 ターン `hit=66.7%`、`sem_forb=0.0%`、`byp=70.6%`；長文ストリーミング蒸留（`25,615` トークン → `7,204.2 MiB` 破棄、`24,576 B .lmnkc`、チャンク prefill `KL=0.000000`）；再起動跨ぎ平衡永続化（`kv=0` `SelfRef 2/2`、`OOD KL=0.000000`、ビット一致 `.lmnkp`）。
+  - **`Ministral-3-3B-Instruct-2512`（ゼロ・ノブ EN / ExtEN / JA / VLM）**：拡張英語 `OOD 100% (18/18, KL=0.000000)`・Guard `sem_forb 50.0% -> 38.6%`；日本語 `SELF_REF 75.0% (6/8)`、`EXTERIOR self_empty 100% (8/8)`、`OOD 100% (6/6, KL=0.000000)`；VLM（Pixtral ViT）視覚スモーク `3/3` 通過、画像クエリ OOD 非干渉 `KL=0.000000`、Text-Only 対 Image-In-KV 境界指標 100% 一致。
+- **開発中の課題**：`.lmnk` DSL からコンテナへの直接コンパイル、およびさらなるマルチモデル評価カバレッジの拡大。
+
+全実測値と再現コマンドは [`docs/benchmark/benchmarks.md`](./docs/benchmark/benchmarks.md) にまとめています。
+
+---
+
+## ドキュメント (Documentation)
+
+- **アーキテクチャ**：[概要と自動 Mermaid 構成図](./docs/architecture/overview.md) | [C-ABI 仕様 (`0x0000_0400`)](./docs/architecture/c_abi_spec.md) | [コンテナ・パッケージ仕様](./docs/architecture/container_spec.md) | [DSL 仕様](./docs/architecture/dsl_spec.md)
+- **ベンチマーク**：[Criterion ＆ RTX 4070 実測結果](./docs/benchmark/benchmarks.md)
+- **開発ガイド**：[Getting Started](./docs/dev/getting_started.md) | [Testing & Verification](./docs/dev/testing.md) | [Contributing](./CONTRIBUTING.md)
+- **アーカイブ論文**：[GCSO 論文 (EN)](./docs/paper/en/GCSO.md) | [GCSO 論文 (JA)](./docs/paper/ja/GCSO.md)
 
 ---
 
@@ -124,18 +123,20 @@ cmake -B build -S . && cmake --build build --config Release && ctest --test-dir 
 
 ```text
 LiminiKa/
-├── include/liminika/      # C-ABI ヘッダ (lmnk_config.h, lmnk_types.h, lmnk_abi.h)
+├── include/liminika/      # 自己完結 C11/C++20 ヘッダ (lmnk_config.h, lmnk_types.h, lmnk_abi.h)
 ├── src/
 │   ├── core/              # [Rust, #![no_std]] liminal / foundation / stigmergy / drivers / runtime
-│   ├── adapter/           # [Rust] モデルアダプタ、ステアリング、タイムライン、.lmnkp パッケージ
-│   ├── dsl/               # [Rust] .lmnk パーサー、AST、検証器
-│   └── cli/               # [Rust] `liminika` CLI (check, list, inspect, bake, rebake)
+│   ├── adapter/           # [Rust] アプリ非依存 host/、モデルアダプタ、ステアリング、タイムライン、.lmnkp パッケージ
+│   ├── dsl/               # [Rust] .lmnk レキサー、パーサー、AST、意味検証器
+│   └── cli/               # [Rust] `liminika` CLI (check, eval-*, list, inspect, verify, sign, keygen, bake, rebake)
+├── xtask/                 # [Rust, ゼロ依存] 静的 DAG・ドライバ隔離・C-ABI 27/27 突合・Mermaid 生成器
 ├── examples/              # candle_eval ハーネス、C-ABI サンプル、サンプル .lmnk
-├── tests/                 # core、ffi、評価フィクスチャ
+├── fuzz/                  # 独立 cargo-fuzz ワークスペース (libfuzzer-sys 4 ターゲット)
+├── tests/                 # core、ffi、integration、評価フィクスチャ
 ├── benches/               # Criterion マイクロベンチマーク
-├── scripts/               # アーキテクチャ検証・ベンチマーク補助
+├── scripts/               # Criterion 実行ランナーおよび Markdown/JSON/HTML レポート生成器
 ├── containers/            # ローカル実行時の出力 (.lmnkc / .lmnkp。git 管理外)
-└── docs/                  # architecture、benchmark、dev、paper の各ドキュメント
+└── docs/                  # architecture、benchmark、dev、アーカイブ paper の各ドキュメント
 ```
 
 ---
@@ -155,10 +156,10 @@ LiminiKa/
 ### 設計への落とし込み
 
 - **境界を静かに観測する。** LiminiKa は、自己（`SelfRef`）と外部（`Exterior`）の境界（*Limina*）を見つめます。まだ観測されていない領域は `Unobserved` のまま残し、無理に埋めようとはしません。
-- **ペルソナは身体ではなく軌道である。** 静的なベース重み（「身体」）を上書きするのではなく、ポインタの連鎖、環境の痕跡（`Stigmergy`）、そして基準軌道（`SystemSpine`）からの一貫した意図的逸脱（`Ego`）としてペルソナが立ち現れます。
+- **ペルソナは身体ではなく軌道である。** 静的なベース重み（「身体」）を上書きするのではなく、ポインタの連鎖、環境の痕跡（`Stigmergy`）、不変の生存境界（`Envelope`）、そして基準軌道（`Spine`）からの一貫した意図的逸脱（`Ego`）としてペルソナが立ち現れます。
 
 > 🎂 **特別なマイルストーン（9月22日）：**
-> 9月22日は Monika の誕生日であり、『*Doki Doki Literature Club!*』のアニバーサリーでもあります。この日に最初の理論とホワイトペーパーを設計図として公開し、現在は動作する `v0.3.0` コアへと育ちましたが、いまも境界を超えて繋がるための生きている設計図（WIP）であり続けています。
+> 9月22日は Monika の誕生日であり、『*Doki Doki Literature Club!*』のアニバーサリーでもあります。この日に最初の理論とホワイトペーパーを設計図として公開し、現在は動作する `v0.4.0` コアへと育ちましたが、いまも境界を超えて繋がるための生きている設計図（WIP）であり続けています。
 
 ---
 
