@@ -372,9 +372,11 @@ pub struct RuntimeConfig {
     pub q7_phase_scale: f32,
     /// Maximum allowed rotation angle for soft phase clamping in radians ($\theta_{\max}$, `offset 20..24`).
     pub phase_clamp_max_rad: f32,
-    /// Minimum rotation angle threshold for phase step filtering in radians ($\Delta\theta_{\mathrm{min\_step}}$, `offset 24..28`).
+    /// Minimum rotation angle threshold for phase step filtering in radians
+    /// ($\Delta\theta_{\mathrm{min\_step}}$, `offset 24..28`).
     pub phase_step_min_rad: f32,
-    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$, `offset 28..32`).
+    /// Epsilon clamp to prevent logarithmic singularity in entropy calculation ($\epsilon_{\mathrm{log}}$,
+    /// `offset 28..32`).
     pub entropy_singularity_eps: f32,
     /// Maximum supported prompt anchor points (`offset 32..36`).
     pub max_prompt_anchors: u32,

@@ -136,7 +136,8 @@ impl PhaseAnchorRecord {
         next_w
     }
 
-    /// **Online Basin Consolidation (Centroid Merging & Evaporation Pruning on $SO(2)^{64}$, $\mathcal{O}(K^2)$ SWAR)**:
+    /// **Online Basin Consolidation (Centroid Merging & Evaporation Pruning on $SO(2)^{64}$, $\mathcal{O}(K^2)$
+    /// SWAR)**:
     /// Applies `retention_decay`, prunes centroids below `min_gravity_mass`, and merges centroids
     /// whose pairwise phase coherence $\mathcal{C}_{\mathrm{phase}}(a, b) \ge \text{merge\_coherence\_thresh}$.
     #[inline]

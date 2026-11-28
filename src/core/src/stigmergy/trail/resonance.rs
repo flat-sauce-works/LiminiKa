@@ -657,7 +657,8 @@ mod test_resonance_helpers {
         /// using register-resident 8-word SWAR accumulators (`0` branches, `0 fdiv`).
         /// Folds an arbitrary slice of anchors (`anchor_phases`, `anchor_base_energies`) and optional
         /// repulsive phase inhibitor (`repulsion_phases_and_strength`) starting from pre-loaded 8-word
-        /// SWAR registers `init_w` (`0` entry reload) and returning `(final_pull_force, mean_coherence, active_anchor_count, post_words)`.
+        /// SWAR registers `init_w` (`0` entry reload) and returning `(final_pull_force, mean_coherence,
+        /// active_anchor_count, post_words)`.
         #[inline]
         pub(crate) fn apply_unified_manifold_anchor_slice_resonance_from_words(
             &mut self,
@@ -781,7 +782,8 @@ mod test_resonance_helpers {
             )
             .outside;
 
-            // Keep `acc_w` and `cur_w` in 8 64-bit registers across all coupled neighbors (`0` intermediate stack arrays)
+            // Keep `acc_w` and `cur_w` in 8 64-bit registers across all coupled neighbors (`0` intermediate
+            // stack arrays)
             let mut cur_w = primary_w;
             let mut running_pull = primary_pull;
             let mut coh_sum = 0.0_f32;
@@ -971,7 +973,9 @@ mod test_resonance_helpers {
                             )
                         }
                     } else {
-                        // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `key_anchor_phases[idx]` is a 64-byte slice (`_mm256_loadu_si256` allows unaligned loads).
+                        // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and
+                        // `key_anchor_phases[idx]` is a 64-byte slice (`_mm256_loadu_si256` allows unaligned
+                        // loads).
                         unsafe {
                             use core::arch::x86_64::{
                                 __m256i, _mm256_loadu_si256, _mm256_set1_epi64x, _mm256_sub_epi8,
@@ -995,7 +999,8 @@ mod test_resonance_helpers {
                         }
                     }
                 } else {
-                    // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `key_anchor_phases[idx]` is 64 bytes (`2 * __m256i`).
+                    // SAFETY: `target_feature = "avx2"` is checked by `#[cfg]`, and `key_anchor_phases[idx]` is
+                    // 64 bytes (`2 * __m256i`).
                     unsafe {
                         use core::arch::x86_64::{__m256i, _mm256_loadu_si256, _mm256_sub_epi8};
                         let (vq0, vq1) = vq_vecs

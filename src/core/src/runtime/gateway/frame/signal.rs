@@ -54,7 +54,8 @@ pub trait ManifoldGatewaySignal: CausalProvenanceSignal {
 
     /// Synthesizes `self` into both a 128-byte [`GatewayFrame`] and its register-resident 8 `u64`
     /// SWAR phase words (`[u64; 8]`), eliminating stack store-to-load forwarding stalls across
-    /// downstream ensemble folding, [`crate::stigmergy::StigmergicSubstrate`] steering, and Online Toroidal $k$-Means steps.
+    /// downstream ensemble folding, [`crate::stigmergy::StigmergicSubstrate`] steering, and Online Toroidal
+    /// $k$-Means steps.
     #[inline(always)]
     fn synthesize_gateway_frame_with_words(
         &self,
@@ -618,7 +619,8 @@ pub(crate) fn tangent_cosine_active_heads_64(
     branchless_clamp_f32((dot as f32) * inv_denom, -1.0, 1.0)
 }
 
-/// Linearly interpolates two 64-lane signed Q7 tangent arrays in $[-\theta_{\mathrm{clamp}}, +\theta_{\mathrm{clamp}}]^{64}$
+/// Linearly interpolates two 64-lane signed Q7 tangent arrays in $[-\theta_{\mathrm{clamp}},
+/// +\theta_{\mathrm{clamp}}]^{64}$
 /// (`[-127, +127]`) without modular $\pm 128$ wrapping overflow when $|b_h - a_h| > 127$.
 #[inline(always)]
 pub(super) fn swar_tangent_lerp_words_with_uniform_flag_64(

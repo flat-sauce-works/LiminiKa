@@ -66,7 +66,8 @@ impl AbstractDomain for PhaseProfileRef64<'_> {
     const DOMAIN_ID: &'static str = "stigmergy.phase_profile_ref_64";
 }
 
-/// Zero-byte domain-tagged borrowed 8-granule SWAR phase-word array for register-resident grounded absorption (`Grounded` phase).
+/// Zero-byte domain-tagged borrowed 8-granule SWAR phase-word array for register-resident grounded absorption
+/// (`Grounded` phase).
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhaseWordsRef64<'a>(pub &'a [u64; NUM_STIGMERGIC_GRANULES]);
@@ -163,13 +164,15 @@ pub struct DissipativeOverflowReport {
     pub primary_coherence: f32,
     /// Residual phase coherence against the best secondary scatter candidate.
     pub scatter_coherence: f32,
-    /// Saturation/dispersion pressure subtracted from `primary_coherence` (`(1 - r_bar) * 0.35 + ln(1 + count) * 0.06`).
+    /// Saturation/dispersion pressure subtracted from `primary_coherence` (`(1 - r_bar) * 0.35 + ln(1 + count)
+    /// * 0.06`).
     pub overflow_pressure: f32,
     /// Updated phase-gravity mass of `landed_idx`.
     pub updated_gravity_mass: f32,
     /// Nearest primary attractor slot index evaluated before overflow pressure.
     pub primary_idx: u16,
-    /// Slot index where the sample or its peeled residual settled (`primary_idx`, secondary scatter target, or spawned daughter).
+    /// Slot index where the sample or its peeled residual settled (`primary_idx`, secondary scatter target, or
+    /// spawned daughter).
     pub landed_idx: u16,
     /// `true` when `primary_idx` overflowed its capacity/coherence bound.
     pub overflowed: bool,
@@ -229,7 +232,8 @@ pub struct PhaseAnchorRecord {
     pub resultant_r_bar: f32,
     /// von Mises concentration parameter $\kappa_c \ge 0$ of the crystallized centroid (`offset 32..36`).
     pub von_mises_kappa: f32,
-    /// Phase-Proximity Gravity mass $M_{\mathrm{grav}} = E_{\mathrm{base}} \cdot \bar{R}_c (1 + 0.1 \ln(1 + N))$ (`offset 36..40`).
+    /// Phase-Proximity Gravity mass $M_{\mathrm{grav}} = E_{\mathrm{base}} \cdot \bar{R}_c (1 + 0.1 \ln(1 +
+    /// N))$ (`offset 36..40`).
     pub phase_gravity_mass: f32,
     /// Effective `PhaseClamp` limit in radians ($\theta_{\max}$, `offset 40..44`).
     pub phase_clamp_rad: f32,
@@ -1190,7 +1194,8 @@ impl PhaseAnchorRecord {
             let mut idx = 0usize;
             while idx < records.len() {
                 let r = &records[idx];
-                // SAFETY: `PhaseAnchorRecord` is a 128-byte `Pod` with `align >= 8`, so reading as `[u64; 16]` is valid.
+                // SAFETY: `PhaseAnchorRecord` is a 128-byte `Pod` with `align >= 8`, so reading as `[u64; 16]`
+                // is valid.
                 let src_w = unsafe { &*core::ptr::from_ref(r).cast::<[u64; 16]>() };
                 let mut w0 = src_w[0];
                 let mut w6 = src_w[6];

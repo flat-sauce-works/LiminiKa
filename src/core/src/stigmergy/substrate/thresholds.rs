@@ -40,17 +40,24 @@ pub struct StigmergicThresholds {
     pub evaporation_retain: f32,
     /// Base pheromone reinforcement deposit $g_{\mathrm{reinforce}} \ge 0.0$ on coherent hops (default `0.35`).
     pub reinforcement_gain: f32,
-    /// Low-entropy threshold $\tau_{\mathrm{skip}}$ in nats triggering [`StigmergicActionDecision::InertialLayerSkip`] (default `0.15`).
+    /// Low-entropy threshold $\tau_{\mathrm{skip}}$ in nats triggering
+    /// [`StigmergicActionDecision::InertialLayerSkip`] (default `0.15`).
     pub inertial_skip_entropy_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{steer}}$ triggering [`StigmergicActionDecision::ExpressPhaseSteer`] (default `0.35`).
+    /// Minimum stigmergic density $\tau_{\mathrm{steer}}$ triggering
+    /// [`StigmergicActionDecision::ExpressPhaseSteer`] (default `0.35`).
     pub express_steer_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{subhead}}$ triggering [`StigmergicActionDecision::SubHeadRoute`] (default `0.85`).
+    /// Minimum stigmergic density $\tau_{\mathrm{subhead}}$ triggering
+    /// [`StigmergicActionDecision::SubHeadRoute`] (default `0.85`).
     pub subhead_route_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{rank1}}$ triggering [`StigmergicActionDecision::FullOrchestration`] (default `1.50`).
+    /// Minimum stigmergic density $\tau_{\mathrm{rank1}}$ triggering
+    /// [`StigmergicActionDecision::FullOrchestration`] (default `1.50`).
     pub rank1_inject_density_thresh: f32,
-    /// Minimum stigmergic density $\tau_{\mathrm{anchor}}$ triggering [`StigmergicActionDecision::CrystallizeMacroBasin`] (default `2.20`).
+    /// Minimum stigmergic density $\tau_{\mathrm{anchor}}$ triggering
+    /// [`StigmergicActionDecision::CrystallizeMacroBasin`] (default `2.20`).
     pub crystallize_density_thresh: f32,
-    /// Contradiction coherence threshold $\tau_{\mathrm{contradict}} \in [0.0, 1.0]$ where $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$ triggers [`StigmergicActionDecision::RepulsionEscape`] (default `0.25`).
+    /// Contradiction coherence threshold $\tau_{\mathrm{contradict}} \in [0.0, 1.0]$ where
+    /// $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$ triggers
+    /// [`StigmergicActionDecision::RepulsionEscape`] (default `0.25`).
     pub contradiction_coherence_thresh: f32,
 }
 

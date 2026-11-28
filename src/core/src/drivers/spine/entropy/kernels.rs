@@ -76,7 +76,8 @@ pub const fn compute_sparse_surrogate_entropy(p_max: f32, p_2nd: f32, eps: f32) 
 /// constant-time mode (`0` branches, `0 fdiv`)** via `fast_inv_pos_normal_f32` and
 /// [`tanh_lut_eval_nonneg`] (Eq. 3.1).
 ///
-/// The inter-layer cosine modulation factor $1 + \gamma_{\mathrm{mod}} \tanh(\alpha_z \operatorname{ReLU}(z_{\mathrm{dist}}))$
+/// The inter-layer cosine modulation factor $1 + \gamma_{\mathrm{mod}} \tanh(\alpha_z
+/// \operatorname{ReLU}(z_{\mathrm{dist}}))$
 /// is evaluated with zero data dependency on `h_surrogate`, allowing out-of-order CPU execution units
 /// to overlap `fast_inv_pos_normal_f32(eff_sigma)` and `tanh_lut_eval_nonneg` in parallel with
 /// [`compute_sparse_surrogate_entropy`].
@@ -134,7 +135,8 @@ pub const fn compute_moving_z_score_entropy(
 }
 
 /// Evaluates scale-invariant Pitchfork Bifurcation potential barrier height
-/// $\Delta V = \frac{\alpha^2 (\max(0, \mathcal{E}_{\mathrm{lat}} - \tau_{\mathrm{eff}}))^2}{4 \beta d_{\mathrm{head}}}$
+/// $\Delta V = \frac{\alpha^2 (\max(0, \mathcal{E}_{\mathrm{lat}} - \tau_{\mathrm{eff}}))^2}{4 \beta
+/// d_{\mathrm{head}}}$
 /// in division-free (`0 fdiv`) mode (Lemma 3.1).
 ///
 /// # Errors

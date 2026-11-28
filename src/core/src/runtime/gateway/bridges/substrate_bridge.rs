@@ -52,7 +52,8 @@ impl StigmergicSubstrate {
     /// 2. Settles an active sandbox lane via [`Self::settle_sandbox_lane`] once consecutive
     ///    coherence improvement reaches `input.settle_dwell_threshold`.
     /// 3. On sustained assimilation drift (`drift_dwell >= input.drift_dwell_threshold`), when `input.ego_active`
-    ///    and `input.exterior_granule_mask != 0` (`(lacuna_exterior_mask | discovery_excursion_mask) & !overlap_core_mask`),
+    ///    and `input.exterior_granule_mask != 0` (`(lacuna_exterior_mask | discovery_excursion_mask) &
+    /// !overlap_core_mask`),
     ///    leases a free lane via [`WorkbenchSlotSpec::auto_sandbox`] masked strictly to `input.exterior_granule_mask`.
     #[inline]
     pub fn step_sandbox_hypothesis_lifecycle(

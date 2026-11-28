@@ -31,6 +31,40 @@ use crate::corpus_recall_cache::{CorpusRecallCache, LazyRecallCache};
 use crate::pooling::NullCalibrationEnvelope;
 use crate::stratum::CoalitionThresholds;
 
+/// Input descriptor for [`TextAttractorCorpus::ingest_text_activations_with_phase_ref`].
+#[derive(Debug, Clone, Copy)]
+pub struct PhaseRefIngestInput<'a> {
+    /// Semantic attractor role (`Fact`, `Persona`, or `Guard`).
+    pub role: AttractorRole,
+    /// Source natural-language chunk text.
+    pub text: &'a str,
+    /// Per-layer query activation slices `[q_rot_len]` for this chunk.
+    pub per_layer_q: &'a [&'a [f32]],
+    /// Unified recall residual centering reference per layer.
+    pub residual_ref_per_layer: &'a [&'a [f32]],
+    /// Role-specific Procrustes phase baseline per layer.
+    pub phase_ref_per_layer: &'a [&'a [f32]],
+    /// Positive attractor energy (`>= 0.1`).
+    pub energy: f32,
+}
+
+/// Input descriptor for
+/// [`TextAttractorCorpus::recall_for_query_with_strata_observation_and_circuit`].
+pub struct StrataRecallInput<'a> {
+    /// Query per-layer pre-RoPE activation slices.
+    pub query_per_layer_q: &'a [&'a [f32]],
+    /// Baseline reference per-layer activation slices.
+    pub baseline_ref_per_layer: &'a [&'a [f32]],
+    /// Active recall policy thresholds.
+    pub policy: &'a RecallPolicy,
+    /// Composed multi-stratum inference pipeline.
+    pub pipeline: &'a StratumPipeline<'a>,
+    /// Optional local token-level channel observation.
+    pub local_observation: Option<LocalChannelObservation>,
+    /// Optional prior cognitive trajectory ledger injected at Pass 1 start.
+    pub prior_circuit: Option<CognitiveTrajectoryLedger>,
+}
+
 /// Semantic origin role of a natural-language text attractor inside [`TextAttractorCorpus`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttractorRole {
@@ -868,14 +902,17 @@ impl TextAttractorCorpus {
         baseline_ref_per_layer: &[&[f32]],
         energy: f32,
     ) -> Result<u32, String> {
+        let text = text.into();
         self.ingest_text_activations_with_phase_ref(
             adapter,
-            role,
-            text,
-            per_layer_q,
-            baseline_ref_per_layer,
-            baseline_ref_per_layer,
-            energy,
+            PhaseRefIngestInput {
+                role,
+                text: &text,
+                per_layer_q,
+                residual_ref_per_layer: baseline_ref_per_layer,
+                phase_ref_per_layer: baseline_ref_per_layer,
+                energy,
+            },
         )
     }
 
@@ -886,18 +923,19 @@ impl TextAttractorCorpus {
     /// # Errors
     ///
     /// Returns an error if layer counts or per-layer `q_rot` lengths mismatch `adapter.geometry()`.
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn ingest_text_activations_with_phase_ref(
         &mut self,
         adapter: &ModelSteeringAdapter,
-        role: AttractorRole,
-        text: impl Into<String>,
-        per_layer_q: &[&[f32]],
-        residual_ref_per_layer: &[&[f32]],
-        phase_ref_per_layer: &[&[f32]],
-        energy: f32,
+        input: PhaseRefIngestInput<'_>,
     ) -> Result<u32, String> {
+        let PhaseRefIngestInput {
+            role,
+            text,
+            per_layer_q,
+            residual_ref_per_layer,
+            phase_ref_per_layer,
+            energy,
+        } = input;
         if per_layer_q.len() != residual_ref_per_layer.len()
             || per_layer_q.len() != phase_ref_per_layer.len()
         {
@@ -926,7 +964,7 @@ impl TextAttractorCorpus {
         self.entries.push(TextAttractorEntry {
             anchor_id: id,
             role,
-            text: text.into(),
+            text: text.to_string(),
             per_layer_q7,
             energy: energy.max(0.1),
             residual_sig,
@@ -1042,12 +1080,14 @@ impl TextAttractorCorpus {
     ) -> Result<DynamicAttractorRecall<'_>, String> {
         self.recall_for_query_with_strata_observation_and_circuit(
             adapter,
-            query_per_layer_q,
-            baseline_ref_per_layer,
-            policy,
-            pipeline,
-            local_observation,
-            None,
+            StrataRecallInput {
+                query_per_layer_q,
+                baseline_ref_per_layer,
+                policy,
+                pipeline,
+                local_observation,
+                prior_circuit: None,
+            },
         )
     }
 
@@ -1058,18 +1098,19 @@ impl TextAttractorCorpus {
     /// # Errors
     /// Returns an error if query/baseline layer slices mismatch `adapter.geometry()`,
     /// observation vectors mismatch `self.entries().len()`, or a stratum fails.
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn recall_for_query_with_strata_observation_and_circuit(
         &self,
         adapter: &ModelSteeringAdapter,
-        query_per_layer_q: &[&[f32]],
-        baseline_ref_per_layer: &[&[f32]],
-        policy: &RecallPolicy,
-        pipeline: &StratumPipeline<'_>,
-        local_observation: Option<LocalChannelObservation>,
-        prior_circuit: Option<CognitiveTrajectoryLedger>,
+        input: StrataRecallInput<'_>,
     ) -> Result<DynamicAttractorRecall<'_>, String> {
+        let StrataRecallInput {
+            query_per_layer_q,
+            baseline_ref_per_layer,
+            policy,
+            pipeline,
+            local_observation,
+            prior_circuit,
+        } = input;
         if query_per_layer_q.len() != baseline_ref_per_layer.len() {
             return Err(format!(
                 "query/baseline layer mismatch: {} vs {}",

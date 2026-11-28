@@ -3,15 +3,16 @@
 
 //! Workspace inter-crate gate, host LLM isolation, downstream vocabulary, and file-hygiene checks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::core_dag::BANNED_LEGACY_DECL_TOKENS;
 use crate::scanner::{
     QUARANTINED_CLI_FILES, extract_non_test_code, find_banned_public_decls,
     find_function_line_span, is_ident_cont, is_test_path, iter_idents, line_number_at, read_ident,
-    rel_posix, skip_ws, split_ident_tokens, strip_cfg_test_tail, walk_py_files, walk_rs_files,
+    rel_posix, skip_ws, split_ident_tokens, strip_cfg_test_tail, strip_comments_preserve_lines,
+    walk_py_files, walk_rs_files,
 };
 
 const MAX_PROD_LOC_PER_FILE: usize = 2000;
@@ -595,12 +596,235 @@ pub fn check_file_hygiene_and_loc(repo_root: &Path) -> Vec<String> {
     violations
 }
 
-/// Runs all downstream vocabulary, host isolation, workspace gate, and file-hygiene checks.
+/// Returns `true` when `ch` falls in the disallowed raw CJK / Kana / Hangul / fullwidth ranges
+/// for source code (`.rs`, `.h`, `.c`, `.cpp`). Mathematical symbols and Greek letters are allowed.
+#[inline]
+pub fn is_disallowed_raw_cjk_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3000}'..='\u{30FF}'
+            | '\u{31F0}'..='\u{31FF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{AC00}'..='\u{D7AF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{FF00}'..='\u{FFEF}'
+    )
+}
+
+/// Scans `text` for raw CJK / Kana / Hangul / fullwidth characters and reports line/column hits.
+pub fn scan_raw_cjk_in_source(text: &str, rel_path: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        if let Some((col_idx, ch)) = line
+            .chars()
+            .enumerate()
+            .find(|&(_, c)| is_disallowed_raw_cjk_char(c))
+        {
+            violations.push(format!(
+                "Raw CJK/fullwidth char (U+{:04X}): {rel_path}:{}:{}",
+                ch as u32,
+                idx + 1,
+                col_idx + 1,
+            ));
+        }
+    }
+    violations
+}
+
+fn walk_source_files_by_exts(dir: &Path, exts: &[&str], out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if matches!(
+                name,
+                "target" | ".git" | ".scratch" | "build-check" | "build"
+            ) {
+                continue;
+            }
+            walk_source_files_by_exts(&path, exts, out);
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && exts.contains(&ext)
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// Enforces zero raw CJK / Kana / Hangul / fullwidth characters across all `.rs`, `.h`, `.c`,
+/// and `.cpp` source files under `src/`, `include/`, `examples/`, `tests/`, `benches/`, `xtask/`,
+/// and `fuzz/`.
+pub fn check_no_raw_cjk_in_sources(repo_root: &Path) -> Vec<String> {
+    const SOURCE_EXTS: &[&str] = &["rs", "h", "c", "cpp"];
+    let roots = [
+        repo_root.join("src"),
+        repo_root.join("include"),
+        repo_root.join("examples"),
+        repo_root.join("tests"),
+        repo_root.join("benches"),
+        repo_root.join("xtask"),
+        repo_root.join("fuzz"),
+    ];
+    let mut files = Vec::new();
+    for root in roots {
+        if root.is_dir() {
+            walk_source_files_by_exts(&root, SOURCE_EXTS, &mut files);
+        }
+    }
+    files.sort_by_key(|p| rel_posix(repo_root, p));
+    let mut violations = Vec::new();
+    for path in files {
+        let rel = rel_posix(repo_root, &path);
+        let text = fs::read_to_string(&path).expect("read source file for CJK check");
+        violations.extend(scan_raw_cjk_in_source(&text, &rel));
+    }
+    violations
+}
+
+/// Extracts `#[unsafe(no_mangle)] pub [unsafe] extern "C" fn <name>` symbols from Rust ABI source.
+pub fn extract_rust_extern_c_exports(code: &str) -> BTreeSet<String> {
+    let mut exports = BTreeSet::new();
+    let mut pending_no_mangle = false;
+    for raw_line in code.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains("no_mangle") && trimmed.starts_with('#') {
+            pending_no_mangle = true;
+            continue;
+        }
+        if pending_no_mangle {
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            if let Some(after_extern) = trimmed.find("extern \"C\" fn ") {
+                let name_start = after_extern + "extern \"C\" fn ".len();
+                if let Some((ident, _)) = read_ident(trimmed, name_start) {
+                    exports.insert(ident.to_string());
+                }
+            }
+            pending_no_mangle = false;
+        }
+    }
+    exports
+}
+
+/// Extracts `LMNK_API ... LMNK_CALL <name>(` declarations from `lmnk_abi.h` and verifies
+/// `LMNK_NODISCARD` on every API declaration.
+pub fn extract_c_abi_header_decls(header_code: &str) -> (BTreeSet<String>, Vec<String>) {
+    let mut decls = BTreeSet::new();
+    let mut violations = Vec::new();
+    for stmt in header_code.split(';') {
+        if !stmt.contains("LMNK_API") || !stmt.contains("LMNK_CALL") {
+            continue;
+        }
+        if !stmt.contains("LMNK_NODISCARD") {
+            violations.push(format!(
+                "C-ABI header missing LMNK_NODISCARD: {}",
+                stmt.split_whitespace().collect::<Vec<_>>().join(" ")
+            ));
+        }
+        if let Some(call_pos) = stmt.find("LMNK_CALL") {
+            let after_call = &stmt[call_pos + "LMNK_CALL".len()..];
+            let ws = skip_ws(after_call.as_bytes(), 0);
+            if let Some((ident, _)) = read_ident(after_call, ws) {
+                decls.insert(ident.to_string());
+            }
+        }
+    }
+    (decls, violations)
+}
+
+/// Verifies 1:1 parity between `src/core/src/runtime/abi/` `extern "C"` exports and
+/// `include/liminika/lmnk_abi.h` declarations, `LMNK_NODISCARD` coverage, and zero `void*`
+/// in `include/liminika/*.h` declarations.
+pub fn check_c_abi_header_parity(repo_root: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    let abi_dir = repo_root.join("src/core/src/runtime/abi");
+    let mut rust_exports = BTreeSet::new();
+    if abi_dir.is_dir() {
+        for rs_file in walk_rs_files(&abi_dir) {
+            if is_test_path(&rs_file) {
+                continue;
+            }
+            let raw = fs::read_to_string(&rs_file).expect("read core abi rs file");
+            let stripped = strip_comments_preserve_lines(&raw);
+            let lines: Vec<&str> = stripped.lines().collect();
+            let prod = strip_cfg_test_tail(&lines)
+                .into_iter()
+                .map(|(_, l)| l)
+                .collect::<Vec<_>>()
+                .join("\n");
+            rust_exports.extend(extract_rust_extern_c_exports(&prod));
+        }
+    }
+
+    let abi_header = repo_root.join("include/liminika/lmnk_abi.h");
+    if abi_header.is_file() {
+        let raw_hdr = fs::read_to_string(&abi_header).expect("read lmnk_abi.h");
+        let clean_hdr = strip_comments_preserve_lines(&raw_hdr);
+        let (hdr_decls, nodiscard_errs) = extract_c_abi_header_decls(&clean_hdr);
+        violations.extend(nodiscard_errs);
+        for sym in rust_exports.difference(&hdr_decls) {
+            violations.push(format!(
+                "C-ABI parity: Rust export `{sym}` missing from include/liminika/lmnk_abi.h"
+            ));
+        }
+        for sym in hdr_decls.difference(&rust_exports) {
+            violations.push(format!(
+                "C-ABI parity: header decl `{sym}` in lmnk_abi.h has no Rust extern \"C\" export"
+            ));
+        }
+    }
+
+    let inc_dir = repo_root.join("include/liminika");
+    if inc_dir.is_dir() {
+        let mut headers = Vec::new();
+        walk_source_files_by_exts(&inc_dir, &["h"], &mut headers);
+        headers.sort();
+        for hdr in headers {
+            let rel = rel_posix(repo_root, &hdr);
+            let raw = fs::read_to_string(&hdr).expect("read include header");
+            let clean = strip_comments_preserve_lines(&raw);
+            for (idx, line) in clean.lines().enumerate() {
+                let bytes = line.as_bytes();
+                let mut i = 0;
+                while i + 4 < bytes.len() {
+                    if line[i..].starts_with("void")
+                        && (i == 0 || !is_ident_cont(bytes[i - 1]))
+                        && !is_ident_cont(bytes[i + 4])
+                    {
+                        let ws = skip_ws(bytes, i + 4);
+                        if ws < bytes.len() && bytes[ws] == b'*' {
+                            violations.push(format!(
+                                "C-ABI header `void*` pointer forbidden: {rel}:{}",
+                                idx + 1
+                            ));
+                        }
+                    }
+                    i += 1;
+                }
+            }
+        }
+    }
+
+    violations
+}
+
+/// Runs all downstream vocabulary, host isolation, workspace gate, CJK, C-ABI parity,
+/// and file-hygiene checks.
 pub fn run_workspace_checks(repo_root: &Path) -> Vec<String> {
     let mut violations = Vec::new();
     violations.extend(check_downstream_vocabulary(repo_root));
     violations.extend(check_host_llm_isolation(repo_root));
     violations.extend(check_workspace_crate_gates(repo_root));
     violations.extend(check_file_hygiene_and_loc(repo_root));
+    violations.extend(check_no_raw_cjk_in_sources(repo_root));
+    violations.extend(check_c_abi_header_parity(repo_root));
     violations
 }

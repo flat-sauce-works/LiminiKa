@@ -84,7 +84,8 @@ pub const WORKBENCH_LANE_FLAG_PINNED: u8 = 1 << 0;
 /// Workbench lane attribute bit: lane holds a phase-conjugate anti-hallucination repulsion profile (`bit 1`).
 pub const WORKBENCH_LANE_FLAG_REPULSION: u8 = 1 << 1;
 
-/// Workbench lane attribute bit: lane holds an isolated hypothesis acting only on exterior/discovery granules (`bit 2`).
+/// Workbench lane attribute bit: lane holds an isolated hypothesis acting only on exterior/discovery granules
+/// (`bit 2`).
 pub const WORKBENCH_LANE_FLAG_SANDBOX: u8 = 1 << 2;
 
 /// Default $8 \times 8$ Attractor Slot coupling bitmatrix (`u64`) enabling symmetric cross-slot
@@ -170,9 +171,11 @@ pub const MAX_ATTRACTOR_PULL_FORCE: f32 = 64.0;
 pub const TRAIL_FLAG_PHASE_STEER_ACTIVE: u32 = 1 << 0;
 /// Trail flag bit (`0x02`): Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) was triggered.
 pub const TRAIL_FLAG_REPULSION_ACTIVE: u32 = 1 << 1;
-/// Trail flag bit (`0x04`): Trail crossed the crystallization density threshold ($\rho_{\mathrm{stigmergy}} \ge \tau_{\mathrm{anchor}}$).
+/// Trail flag bit (`0x04`): Trail crossed the crystallization density threshold ($\rho_{\mathrm{stigmergy}} \ge
+/// \tau_{\mathrm{anchor}}$).
 pub const TRAIL_FLAG_CRYSTALLIZED_CANDIDATE: u32 = 1 << 2;
-/// Trail flag bit (`0x08`): Non-linear unified-manifold or cross-slot attractor resonance boosted the trail's phase trajectory.
+/// Trail flag bit (`0x08`): Non-linear unified-manifold or cross-slot attractor resonance boosted the trail's
+/// phase trajectory.
 pub const TRAIL_FLAG_SYNERGY_RESONANCE: u32 = 1 << 3;
 /// Trail flag bit (`0x10`): Liminal beat perturbation was injected across competing attractor boundaries.
 pub const TRAIL_FLAG_LIMINAL_BEAT_ACTIVE: u32 = 1 << 4;
@@ -203,7 +206,8 @@ pub const LEDGER_METRIC_SUBHEAD_ROUTED: u8 = 1 << 4;
 pub const LEDGER_METRIC_RANK1_INJECTED: u8 = 1 << 5;
 /// FastPathLedger telemetry metric bit (`0x40`): Lazy Phase Unwrapping relative shift applied.
 pub const LEDGER_METRIC_LAZY_UNWRAP_APPLIED: u8 = 1 << 6;
-/// FastPathLedger telemetry metric bit (`0x80`): Unified-field or cross-slot attractor synergy / mutual inhibition active.
+/// FastPathLedger telemetry metric bit (`0x80`): Unified-field or cross-slot attractor synergy / mutual
+/// inhibition active.
 pub const LEDGER_METRIC_SLOT_SYNERGY_ACTIVE: u8 = 1 << 7;
 /// `LedgerSlot::auto_tune_flags` bit (`0x01`): `telemetry_mini_ledger` stores chronological
 /// [`CognitiveStepOp`] records (`[Scale | Op | Intensity]`) rather than legacy metric masks.

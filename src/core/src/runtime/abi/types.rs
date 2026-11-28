@@ -132,7 +132,8 @@ pub const LMNK_ROPE_STEER_FLAG_UNCLAMPED: u32 = 1 << 0;
 /// Valid bitmask for [`lmnk_rope_steer_params_t::flags`].
 pub const LMNK_ROPE_STEER_KNOWN_FLAGS: u32 = LMNK_ROPE_STEER_FLAG_UNCLAMPED;
 
-/// Accumulate `y_inout += delta` in-place instead of overwriting `y_inout = delta` in [`lmnk_rank1_eval_params_t::flags`].
+/// Accumulate `y_inout += delta` in-place instead of overwriting `y_inout = delta` in
+/// [`lmnk_rank1_eval_params_t::flags`].
 pub const LMNK_RANK1_FLAG_FUSED: u32 = 1 << 0;
 /// Valid bitmask for [`lmnk_rank1_eval_params_t::flags`].
 pub const LMNK_RANK1_KNOWN_FLAGS: u32 = LMNK_RANK1_FLAG_FUSED;
@@ -920,7 +921,8 @@ pub struct lmnk_container_write_params_t {
     pub section_count: u32,
     /// Explicit alignment padding (`offset 20..24`).
     pub reserved0: u32,
-    /// Array of `section_count` [`lmnk_section_input_t`] descriptors (`NULL` permitted iff `section_count == 0`, `offset 24..`).
+    /// Array of `section_count` [`lmnk_section_input_t`] descriptors (`NULL` permitted iff `section_count ==
+    /// 0`, `offset 24..`).
     pub sections: *const lmnk_section_input_t,
     /// Destination byte buffer (`NULL` requests two-pass required byte-length query).
     pub out_bytes: *mut u8,

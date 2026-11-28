@@ -16,6 +16,7 @@ pub use layer_selection::{
     DEFAULT_CANDIDATE_BAND_START_RATIO, DEFAULT_TARGET_LAYER_RATIO, active_layers_mask,
     clip_layer_mask, ratio_band_layer_mask, select_adaptive_layer_mask, top_half_layer_mask,
 };
+pub use steering::LayerRopeStepInput;
 pub use telemetry::LiminalBoundaryFlowSummary;
 
 /// Memory pairing convention used by an LLM's Rotary Position Embedding (RoPE).

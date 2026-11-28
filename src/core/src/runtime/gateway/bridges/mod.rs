@@ -346,7 +346,8 @@ impl LiminalEgoState {
         fired_mask
     }
 
-    /// Branchlessly evaluates active Ego triggers directly across Liminal (`liminal`), Stigmergic (`stigmergy`), temporal velocity (`delta`), and `overlap`, updating both
+    /// Branchlessly evaluates active Ego triggers directly across Liminal (`liminal`), Stigmergic
+    /// (`stigmergy`), temporal velocity (`delta`), and `overlap`, updating both
     /// sub-layers and injecting counter-basin thrust or transgressive phase steering into `frame`
     /// in-place.
     #[inline]
@@ -434,7 +435,8 @@ impl LiminalEgoState {
     }
 }
 
-/// Composable receptor trait invoked by [`crate::stigmergy::StigmergicSubstrate`] when Swarm consensus and mapped-storage
+/// Composable receptor trait invoked by [`crate::stigmergy::StigmergicSubstrate`] when Swarm consensus and
+/// mapped-storage
 /// attractor pull elevate a pointer trail's stigmergic pheromone density across an action regime.
 ///
 /// Instead of writing ad-hoc `if/else` semantic branches (e.g., `if needs_web_search { ... }`),

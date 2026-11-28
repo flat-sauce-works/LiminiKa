@@ -313,7 +313,8 @@ pub(crate) const Q7_FULL_SIN_REF: &[f32; 256] = &Q7_FULL_SIN_LUT.0;
 /// Promoted `.rodata` reference to the 64B-aligned 256-entry `cos` Q7 table.
 pub(crate) const Q7_FULL_COS_REF: &[f32; 256] = &Q7_FULL_COS_LUT.0;
 
-/// 64B-aligned 2KB precomputed `(align_gain, inv_denom)` table for [`crate::foundation::scalar_math::branchless_phase_proximity_gravity_f32`]
+/// 64B-aligned 2KB precomputed `(align_gain, inv_denom)` table for
+/// [`crate::foundation::scalar_math::branchless_phase_proximity_gravity_f32`]
 /// under `DEFAULT_PHASE_GRAVITY_EPS` (`0.25`) across all 256 Q7 circular difference bytes `0..=255`,
 /// enabling 0-ULP bit-exact gravity evaluation in 1 LUT load + 2 `vmulss` (`0` Newton-Raphson iterations).
 pub(crate) const Q7_DEFAULT_GRAVITY_PAIR_LUT_256: AlignedLut256<(f32, f32)> = {
@@ -335,8 +336,10 @@ pub(crate) const Q7_DEFAULT_GRAVITY_PAIR_LUT_256: AlignedLut256<(f32, f32)> = {
 pub(crate) const Q7_DEFAULT_GRAVITY_PAIR_REF: &[(f32, f32); 256] =
     &Q7_DEFAULT_GRAVITY_PAIR_LUT_256.0;
 
-/// Evaluates Phase-Proximity Gravity $F_{\mathrm{grav}}(M_{\mathrm{grav}}, \cos(\Delta\theta_{\mathrm{Q7}}), \epsilon_{\mathrm{default}})$
-/// directly from a uniform Q7 circular difference byte `diff_u8` in 1 LUT load + 2 `vmulss` (`0` Newton-Raphson reciprocals, `0` ULP drift).
+/// Evaluates Phase-Proximity Gravity $F_{\mathrm{grav}}(M_{\mathrm{grav}}, \cos(\Delta\theta_{\mathrm{Q7}}),
+/// \epsilon_{\mathrm{default}})$
+/// directly from a uniform Q7 circular difference byte `diff_u8` in 1 LUT load + 2 `vmulss` (`0` Newton-Raphson
+/// reciprocals, `0` ULP drift).
 #[inline(always)]
 #[must_use]
 pub(crate) const fn branchless_q7_default_gravity_from_diff_u8(
@@ -384,7 +387,8 @@ pub(crate) const fn build_q7_fused_self_phase_clamp_sincos_lut(
 pub(crate) const Q7_FUSED_SELF_DEFAULT_PHASE_CLAMP_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_phase_clamp_sincos_lut(false);
 
-/// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(theta_b + theta_p), cos(theta_b + theta_p))`
+/// Precomputed 64-byte-aligned 2KB LUT of fused $SO(2)$ double-rotation `(sin(theta_b + theta_p), cos(theta_b +
+/// theta_p))`
 /// when `base_clamp_q7 == subhead_slot_q7` under `DEFAULT_PHASE_CLAMP_MAX_RAD` (geodesic sub-head router).
 pub(crate) const Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_LUT_256: AlignedLut256<(f32, f32)> =
     build_q7_fused_self_phase_clamp_sincos_lut(true);

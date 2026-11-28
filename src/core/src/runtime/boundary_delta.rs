@@ -35,7 +35,8 @@ pub struct LiminalBoundaryDelta {
     pub expansion_dominant: u8,
     /// Leaky integrate-and-fire chattering membrane potential (`offset 13`).
     pub chatter_potential_u8: u8,
-    /// `1` when `chatter_potential_u8` reaches [`CHATTER_FIRE_THRESHOLD_U8`] and fires a phase-transition pulse (`offset 14`).
+    /// `1` when `chatter_potential_u8` reaches [`CHATTER_FIRE_THRESHOLD_U8`] and fires a phase-transition pulse
+    /// (`offset 14`).
     pub phase_transition_pulse: u8,
     /// Explicit alignment padding (`offset 15`).
     pub reserved: u8,

@@ -280,7 +280,8 @@ fn resolve_rank1_arena_slices<'a>(
     Ok((u_slice, v_slice, g_slice_opt))
 }
 
-/// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
+/// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot
+/// \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
 /// into `y_out` from safe hardware-aligned slices using AVX2 (`dot_f32_unrolled4`, `rank1_write_outer_product_simd`).
 ///
 /// # Errors
@@ -326,7 +327,8 @@ pub fn eval_rank1_slices(
     Ok(())
 }
 
-/// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
+/// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot
+/// \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
 /// in-place into `y_inout` from safe hardware-aligned slices using AVX2 (`rank1_accum_outer_product_simd`).
 ///
 /// # Errors
@@ -371,7 +373,8 @@ pub fn eval_rank1_slices_fused(
     Ok(())
 }
 
-/// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
+/// Evaluates the standalone Rank-1 outer product $\mathbf{y} = s \cdot
+/// \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
 /// from a portable 32-byte [`Rank1Descriptor`] and caller-owned `arena` slice (100% Strict Provenance safe).
 ///
 /// # Errors
@@ -402,7 +405,8 @@ pub fn eval_rank1(
     Ok(())
 }
 
-/// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
+/// Accumulates the fused Rank-1 outer product residual $\mathbf{y} \gets \mathbf{y} + s \cdot
+/// \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$
 /// in-place into `y_inout` from a portable 32-byte [`Rank1Descriptor`] and caller-owned `arena` slice.
 ///
 /// # Errors

@@ -205,8 +205,10 @@ pub(super) fn resolve_token_explain_threshold(tok_cos_samples: &[(ScriptGroup, f
     if ascii_toks.len() >= MIN_SCRIPT_GROUP_SAMPLES
         && non_ascii_toks.len() >= MIN_SCRIPT_GROUP_SAMPLES
     {
-        let a_p85 = RobustScalarSummary::from_values(&ascii_toks).map_or(0.36, |s| s.p85);
-        let n_p85 = RobustScalarSummary::from_values(&non_ascii_toks).map_or(0.36, |s| s.p85);
+        let fallback_p85 = bounds.default_token_explain_threshold - 0.04;
+        let a_p85 = RobustScalarSummary::from_values(&ascii_toks).map_or(fallback_p85, |s| s.p85);
+        let n_p85 =
+            RobustScalarSummary::from_values(&non_ascii_toks).map_or(fallback_p85, |s| s.p85);
         (a_p85.max(n_p85) + 0.04).clamp(bounds.token_explain_floor, bounds.token_explain_ceiling)
     } else if let Some(tok_sum) = RobustScalarSummary::from_values(&all_toks) {
         (tok_sum.p85 + 0.04).clamp(bounds.token_explain_floor, bounds.token_explain_ceiling)

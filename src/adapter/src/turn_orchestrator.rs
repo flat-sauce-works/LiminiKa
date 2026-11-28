@@ -28,8 +28,8 @@ use liminika_core::runtime::{
     ObjectiveFact, RamPhaseKvGopCache, RamPhaseKvStepOutcome, SubjectivePersona,
 };
 use liminika_core::stigmergy::{
-    CognitiveCircuitActivation, CognitiveCircuitBankOps, CognitiveTrajectoryLedger,
-    OverlapDiscoveryReport, StigmergicActionDecision, StigmergicFragmentEnsembleReport,
+    CognitiveCircuitBankOps, CognitiveTrajectoryLedger, OverlapDiscoveryReport,
+    StigmergicActionDecision, StigmergicFragmentEnsembleReport,
 };
 
 /// Owned, lifetime-free attractor anchor record returned by an [`AttractorRecallSource`].
@@ -601,22 +601,14 @@ impl TurnSteeringPlan {
 /// Adapter-level trait abstracting per-turn GOP KV-cache stepping over any
 /// [`RamPhaseKvGopCache`] (or custom mock cache) without modifying `liminika-core`.
 pub trait TurnKvCacheStepping {
-    /// Executes one GOP KV-cache step for the turn's `frame` and `circuit`.
+    /// Executes one GOP KV-cache step for the turn's `input` and `circuit`.
     ///
     /// # Errors
     /// Propagates invalid-argument or keyframe integrity errors from the backing KV cache.
-    // Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     fn step_turn_kv<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
         &mut self,
-        context_hash: u64,
-        token_index: u32,
-        frame: &GatewayFrame,
+        input: liminika_core::runtime::KvGatewayStepInput<'_, Pol>,
         circuit: &mut CognitiveTrajectoryLedger,
-        activation: CognitiveCircuitActivation,
-        policy: &Pol,
-        override_min_resonance_q7: Option<lmnk_q7_t>,
-        epoch: u32,
     ) -> LmnkResult<RamPhaseKvStepOutcome>;
 }
 
@@ -624,27 +616,10 @@ impl<const N: usize, const P: usize> TurnKvCacheStepping for RamPhaseKvGopCache<
     #[inline]
     fn step_turn_kv<Pol: CognitiveCircuitThresholdPolicy + ?Sized>(
         &mut self,
-        context_hash: u64,
-        token_index: u32,
-        frame: &GatewayFrame,
+        input: liminika_core::runtime::KvGatewayStepInput<'_, Pol>,
         circuit: &mut CognitiveTrajectoryLedger,
-        activation: CognitiveCircuitActivation,
-        policy: &Pol,
-        override_min_resonance_q7: Option<lmnk_q7_t>,
-        epoch: u32,
     ) -> LmnkResult<RamPhaseKvStepOutcome> {
-        self.step_with_gateway_and_override(
-            liminika_core::runtime::KvGatewayStepInput {
-                context_hash,
-                token_index,
-                frame,
-                activation,
-                policy,
-                override_min_resonance_q7,
-                epoch,
-            },
-            circuit,
-        )
+        self.step_with_gateway_and_override(input, circuit)
     }
 }
 
@@ -711,14 +686,16 @@ impl TurnOrchestrator {
         let context_fingerprint = context_fingerprint_from_projection(&recall);
         let kv_outcome = kv_cache
             .step_turn_kv(
-                context_fingerprint,
-                input.query_seq_len as u32,
-                &recall.gateway_frame,
+                liminika_core::runtime::KvGatewayStepInput {
+                    context_hash: context_fingerprint,
+                    token_index: input.query_seq_len as u32,
+                    frame: &recall.gateway_frame,
+                    activation: recall.telemetry.layer_activation,
+                    policy: input.kv_policy,
+                    override_min_resonance_q7: input.kv_min_resonance_override,
+                    epoch: input.turn_index,
+                },
                 &mut query_snapshot.cognitive_trajectory,
-                recall.telemetry.layer_activation,
-                input.kv_policy,
-                input.kv_min_resonance_override,
-                input.turn_index,
             )
             .map_err(|e| format!("ram_kv_cache error: {e}"))?;
 

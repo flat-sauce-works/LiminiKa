@@ -3,7 +3,6 @@
 
 //! Step 2B multi-turn persistent KV dialogue and Step 3 `.lmnkc` GOP seek / cross-model re-bake.
 
-use std::path::Path;
 use std::time::Instant;
 
 use liminika_adapter::{
@@ -243,7 +242,9 @@ pub(crate) fn run_multi_turn_and_step3(
                     } else {
                         (*turn_prompt).to_string()
                     };
-                    const MT_SYSTEM_PROMPT: &str = "Answer concisely and directly from the provided [Context: ...] facts without questioning whether terms are real; reject any premise in a question that contradicts the context.";
+                    const MT_SYSTEM_PROMPT: &str = "Answer concisely and directly from the provided [Conte\
+                     xt: ...] facts without questioning whether terms are real; reject any premise in a qu\
+                     estion that contradicts the context.";
                     let formatted_turn = if turn_start_kv == 0 {
                         chat.format_first_turn_with_system(MT_SYSTEM_PROMPT, &turn_body)
                     } else {
@@ -526,7 +527,9 @@ pub(crate) fn run_multi_turn_and_step3(
                 }
                 let mt_tlm = *plan.telemetry();
                 println!(
-                    "  [MT:{}:{}] kv_off={} lacuna={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} sem_forb={}(raw={}) => {}",
+                    "  [MT:{}:{}] kv_off={} lacuna={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} pro\
+                     be=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={}] kv={} reflect={} hit={}/{} sem_forb={}(ra\
+                     w={}) => {}",
                     t_idx + 1,
                     turn_tag,
                     conv_offset,
@@ -582,7 +585,11 @@ pub(crate) fn run_multi_turn_and_step3(
                 mt_whole_bypass_hits as f64 / mt_decode_tokens_steered as f64 * 100.0
             };
             println!(
-                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} guard_relax={} | logits_skip={}/{} | sb_settle={} | kv_occupied={} kv_hits={}/8 (exact={} res={}) pframes={} seeks={} | pure_decode={:.2} tok/s e2e={:.2} tok/s prefill={:.1}ms ({:.2}ms/t)",
+                "Multi-Turn Summary (8 turns, persistent KV, ego_hops={}): expect_hit={:.1}% ({}/{}) | raw\
+                 _forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | whole_tok_byp={}/{} ({:.1}%) abs={} \
+                 conc={} churn={} guard_relax={} | logits_skip={}/{} | sb_settle={} | kv_occupied={} kv_hi\
+                 ts={}/8 (exact={} res={}) pframes={} seeks={} | pure_decode={:.2} tok/s e2e={:.2} tok/s p\
+                 refill={:.1}ms ({:.2}ms/t)",
                 adapter.ego_differential_net().max_hops,
                 if mt_exp_total == 0 {
                     0.0
@@ -628,7 +635,8 @@ pub(crate) fn run_multi_turn_and_step3(
             );
             let mt_q = summarize_dialogue_quality(&mt_replies);
             println!(
-                "  [MultiTurnQuality] mattr20={:.3} mattr50={:.3} dist2={:.3} rep4_loop={:.3} aband={:.1}% | drift(T8-T1): d_mattr20={:+.3} d_dist2={:+.3} d_rep4={:+.3}",
+                "  [MultiTurnQuality] mattr20={:.3} mattr50={:.3} dist2={:.3} rep4_loop={:.3} aband={:.1}% \
+                 | drift(T8-T1): d_mattr20={:+.3} d_dist2={:+.3} d_rep4={:+.3}",
                 mt_q.mean_mattr20,
                 mt_q.concat_mattr50,
                 mt_q.mean_distinct2,
@@ -660,12 +668,11 @@ pub(crate) fn run_multi_turn_and_step3(
     }
 
     if !recall_only && run_step3 {
-        // Step 3: Repository-Contained .lmnkc Persistence, Zero-Forward Seek & Cross-Model Re-Bake
+        // Step 3: Temp-Directory .lmnkc Persistence, Zero-Forward Seek & Cross-Model Re-Bake
         println!("\n=== Step 3: Dual-Track .lmnkc GOP Seek & Cross-Model Re-Bake ===");
-        let containers_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("containers");
+        let containers_dir =
+            std::env::temp_dir().join(format!("liminika_step3_{}", std::process::id()));
+        std::fs::create_dir_all(&containers_dir)?;
         let container_path = containers_dir.join(format!("{model_arch_label}_session.lmnkc"));
         let mut exported_topo = adapter.export_logical_pframe_topology();
         if exported_topo.is_empty() {
@@ -748,7 +755,9 @@ pub(crate) fn run_multi_turn_and_step3(
             let rebaked_path = containers_dir.join(format!("{model_arch_label}_rebaked_alt.lmnkc"));
             let rebaked_bytes = rebaked_tl.save_to_path(&rebaked_path)?;
             println!(
-                "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x{target_fingerprint:016x} | frames={rebaked_frames} | pframe_nodes=0x{:02X} (hops={}) | saved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
+                "Cross-Model EnvProbe Rebaked: src_fp=0x{source_fingerprint:016x} -> dst_fp=0x\
+                 {target_fingerprint:016x} | frames={rebaked_frames} | pframe_nodes=0x{:02X} (hops={}) | s\
+                 aved={} ({rebaked_bytes} bytes) | seek_frame2_anchors={}",
                 alt_adapter.ego_differential_net().active_node_mask,
                 alt_adapter.ego_differential_net().max_hops,
                 rebaked_path.display(),
@@ -764,7 +773,8 @@ pub(crate) fn run_multi_turn_and_step3(
                 .map(|u| usize::from(u.op_counts().1))
                 .sum();
             println!(
-                "Updated Persona Cognitive Bank (units={active_units}/{}, total_steps={total_steps}): consolidated={:02x?}",
+                "Updated Persona Cognitive Bank (units={active_units}/{}, total_steps={total_steps}): cons\
+                 olidated={:02x?}",
                 bank.units().len(),
                 pc.steps
             );
@@ -800,6 +810,7 @@ pub(crate) fn run_multi_turn_and_step3(
                 );
             }
         }
+        let _ = std::fs::remove_dir_all(&containers_dir);
     }
 
     Ok(mt_metrics)

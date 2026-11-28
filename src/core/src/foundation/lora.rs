@@ -32,7 +32,8 @@ pub struct LoraDimensions {
     pub dim_out: usize,
 }
 
-/// Projects fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}, W_B \in \mathbb{R}^{d_{\mathrm{out}} \times r}$)
+/// Projects fine-tuned LoRA matrices ($W_A \in \mathbb{R}^{r \times d_{\mathrm{in}}}, W_B \in
+/// \mathbb{R}^{d_{\mathrm{out}} \times r}$)
 /// via first-order SVD approximation into a Q7 phase profile and normalized `(u, v)` factor vectors
 /// packed contiguously into `arena_out[0 .. dim_out + dim_in]`.
 ///

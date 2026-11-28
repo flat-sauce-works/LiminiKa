@@ -42,7 +42,8 @@ thread_local! {
 struct ZeroAllocGuardAllocator;
 
 #[cfg(not(all(miri, windows)))]
-// SAFETY: Delegates directly to `std::alloc::System` while enforcing zero-allocation during Hot Path windows on the active test thread.
+// SAFETY: Delegates directly to `std::alloc::System` while enforcing zero-allocation during Hot Path windows on
+// the active test thread.
 unsafe impl GlobalAlloc for ZeroAllocGuardAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if ENFORCE_ZERO_ALLOC.with(Cell::get) {

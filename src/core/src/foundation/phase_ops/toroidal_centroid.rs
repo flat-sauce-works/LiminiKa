@@ -48,11 +48,12 @@ use crate::liminal::{
 /// SWAR words (`centroid_words`, `sample_words`) with an optional precomputed E-step phase
 /// coherence `precomputed_coh_opt` and pre-evaluated word-uniformity flags `(c_uni, sample_uni)`,
 /// in strictly constant time (`0` data-dependent branches on phase stationarity, normalized
-/// directional cosine weighting $w_{\mathrm{coh}} = \operatorname{clamp}(0.5(1 + \mathcal{C}_{\mathrm{phase}}), 0.25, 1.0)$).
+/// directional cosine weighting $w_{\mathrm{coh}} = \operatorname{clamp}(0.5(1 + \mathcal{C}_{\mathrm{phase}}),
+/// 0.25, 1.0)$).
 ///
 /// Returns `(updated_centroid_words, next_base_energy, resultant_r_bar, von_mises_kappa, words_changed)`.
 #[inline]
-// Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
+// Register-resident hot-path SWAR kernel keeps flat word/scalar arguments to avoid stack packing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn step_toroidal_centroid_words_cached_64(
     centroid_words: &[u64; 8],

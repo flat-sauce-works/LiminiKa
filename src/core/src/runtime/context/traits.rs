@@ -229,7 +229,8 @@ impl RuntimeContext {
     /// Sets the relative weight of workbench domain lane `domain_id`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS` or `weight` is negative/non-finite.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `domain_id >= MAX_ATTRACTOR_DOMAINS` or `weight` is
+    /// negative/non-finite.
     #[inline]
     pub fn set_domain_weight(&mut self, domain_id: u32, weight: f32) -> Result<()> {
         let idx = domain_id as usize;

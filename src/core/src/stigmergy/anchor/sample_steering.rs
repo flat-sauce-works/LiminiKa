@@ -432,7 +432,8 @@ pub struct AttractorGrowthReport {
     pub resonant_pull_force: f32,
     /// Circular resultant vector length $\bar{R}_c \in [0, 1]$ measuring phase alignment precision.
     pub resultant_r_bar: f32,
-    /// Von Mises concentration parameter $\kappa_c$ (higher values indicate sharper, more deterministic persona steering).
+    /// Von Mises concentration parameter $\kappa_c$ (higher values indicate sharper, more deterministic persona
+    /// steering).
     pub von_mises_kappa: f32,
     /// Newly crystallized anchor ID (`> 0`) if the sample triggered bottom-up crystallization, or `0`.
     pub crystallized_anchor_id: u32,

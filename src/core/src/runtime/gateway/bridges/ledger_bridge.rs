@@ -1,7 +1,8 @@
 // name: src/core/src/runtime/gateway/bridges/ledger_bridge.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! [`CognitiveTrajectoryLedger`], [`CognitiveCircuitBank`], [`PointerTrail`], and [`EntropyController`] Gateway bridges.
+//! [`CognitiveTrajectoryLedger`], [`CognitiveCircuitBank`], [`PointerTrail`], and [`EntropyController`] Gateway
+//! bridges.
 
 use super::super::*;
 use crate::drivers::{

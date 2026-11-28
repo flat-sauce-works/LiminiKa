@@ -56,7 +56,8 @@ pub struct GatewayFrame {
     pub phase_step_min_rad: f32,
     /// Multiplicative inverse-temperature logit scale $\beta_{\mathrm{eff}} \in [0.25, 4.0]$ (`offset 32..36`).
     pub effective_inv_temp: f32,
-    /// Cosine phase coherence $\mathcal{C}_{\mathrm{FP}} \in [-1, 1]$ between Objective Fact and Subjective Persona (`offset 36..40`).
+    /// Cosine phase coherence $\mathcal{C}_{\mathrm{FP}} \in [-1, 1]$ between Objective Fact and Subjective
+    /// Persona (`offset 36..40`).
     pub fact_persona_coherence: f32,
     /// Repulsive anomaly severity in $[0.0, 1.0]$ (`> 0.5` indicates anti-phase repulsion, `offset 40..44`).
     pub repulsion_severity: f32,
@@ -382,7 +383,8 @@ impl GatewayFrame {
         let (sin_t, cos_t) = branchless_sincos_q7_phase_clamp(phase_q7, self.phase_clamp_rad);
         #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
         {
-            // SAFETY: `target_feature = "avx2"` is enabled and `q_block32`, `k_block32`, `v_block32` are disjoint 32-float arrays.
+            // SAFETY: `target_feature = "avx2"` is enabled and `q_block32`, `k_block32`, `v_block32` are
+            // disjoint 32-float arrays.
             unsafe {
                 use core::arch::x86_64::_mm256_set1_ps;
                 crate::foundation::simd_stats::avx2_rotate_so2_triple_block32(

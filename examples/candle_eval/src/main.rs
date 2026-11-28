@@ -31,6 +31,7 @@ mod cli;
 mod equilibrium_bench;
 mod eval;
 mod eval_common;
+mod eval_profiles;
 mod eval_suites;
 mod extended_eval;
 mod long_doc_bench;
@@ -206,7 +207,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let vram_before = query_nvidia_smi_vram();
     println!(
-        "LiminiKa Candle Eval (RoPE + Entropy Gate + Rank-1 residual via liminika-adapter) | model={} arch={} chat={} stops={:?} layer_mask=0x{:08X}({}/{}) | device={:?} | layers={} heads={}/{} head_dim={} rotary_dim={}",
+        "LiminiKa Candle Eval (RoPE + Entropy Gate + Rank-1 residual via liminika-adapter) | model={} arch\
+         ={} chat={} stops={:?} layer_mask=0x{:08X}({}/{}) | device={:?} | layers={} heads={}/{} head_dim=\
+         {} rotary_dim={}",
         cfg.model_name,
         cfg.arch.label(),
         chat.kind.label(),
@@ -340,7 +343,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => String::new(),
     };
     println!(
-        "Compiled {} natural-language attractors (single-pass shared capture, two-pass novelty SIF + Stratum pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}{}",
+        "Compiled {} natural-language attractors (single-pass shared capture, two-pass novelty SIF + Strat\
+         um pipeline, base_prior={}) in {:.1}ms | auto RecallPolicy: min_coh={:.3} margin={:.3}{}",
         shared.compiled.corpus.entries().len(),
         shared.used_base_prior,
         shared.compile_ms,
@@ -392,7 +396,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let probe_res =
             calibrate_trial_adapter(&mut adapter, baked, &base_entropies, active_layer_mask)?;
         println!(
-            "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H={:.3} rank1_rho={:.3}",
+            "[EnvProbe epoch={}] heads={} steered_layers={} coh={:.3} H0={:.3} => dyn_gain={:.3} skip_H=\
+             {:.3} rank1_rho={:.3}",
             probe_res.probe_epoch,
             probe_res.active_heads,
             probe_res.steered_layers,
@@ -593,7 +598,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if rope_rad <= -1.5 {
                     let snap = adapter.telemetry_snapshot();
                     println!(
-                        "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
+                        "   [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head router\
+                         ={:.1}% Rank-1 residual={:.1}% Crystal={:.1}% Repulse={:.1}%",
                         snap.spine.continuous_standard_steps,
                         snap.decision_ratios_pct[0],
                         snap.decision_ratios_pct[1],
@@ -606,7 +612,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let guard_slot = adapter.coherence_guard_slot();
                     let dwell = adapter.horizon_dwell();
                     println!(
-                        "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% guard_act={} guard_ret={} dwell=({},{})",
+                        "   [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}\
+                         % guard_act={} guard_ret={} dwell=({},{})",
                         snap.mode,
                         snap.spine.total_steps,
                         snap.spine.continuous_standard_steps,
@@ -623,7 +630,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     for (idx, tr) in probe_traces.iter().enumerate() {
                         if rope_rad <= -1.5 {
                             println!(
-                                "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={} | {}",
+                                "   [P{}:{}] d_lp={:+.3} hit={}/forb={} rho={:.3} steps={} H={:.3} | Pas=\
+                                 {} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={} | {}",
                                 idx + 1,
                                 tr.slot,
                                 tr.d_lp,
@@ -782,7 +790,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         d[i] = counts_after[i].saturating_sub(counts_before[i]);
                     }
                     println!(
-                        "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head router={} Rank-1 residual={} Cry={} Rep={}] => {text}",
+                        "  [{turn_name}] rho={:.3} steps={} H={:.3} modes=[Pas={} Skp={} Exp={} sub-head r\
+                         outer={} Rank-1 residual={} Cry={} Rep={}] => {text}",
                         trail.stigmergic_density,
                         trail.step_count,
                         adapter.substrate().last_entropy_h_tilde,

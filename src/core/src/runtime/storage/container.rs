@@ -113,7 +113,8 @@ pub trait MappedStorage: Send + Sync {
         Ok(crc)
     }
 
-    /// Extracts a zero-copy byte slice `&'a [u8]` of length `track_len` for `track_id` (`0..=3`) from `container_bytes`.
+    /// Extracts a zero-copy byte slice `&'a [u8]` of length `track_len` for `track_id` (`0..=3`) from
+    /// `container_bytes`.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `track_id > 3`.

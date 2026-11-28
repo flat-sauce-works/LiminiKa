@@ -40,7 +40,8 @@ pub const CAUSAL_AXIS_CONTRADICTION_GUARD: u32 = 1 << 3;
 pub const CAUSAL_CAUSE_SYSTEM_QOS_THROTTLE: u32 = 1 << 8;
 /// Provenance cause bit (`bit 9`): Objective fact retrieval energy was weak or absent.
 pub const CAUSAL_CAUSE_FACT_RETRIEVAL_WEAK: u32 = 1 << 9;
-/// Provenance cause bit (`bit 10`): Subjective persona collided with objective fact ($\mathcal{C}_{\mathrm{FP}} < -\tau$).
+/// Provenance cause bit (`bit 10`): Subjective persona collided with objective fact ($\mathcal{C}_{\mathrm{FP}}
+/// < -\tau$).
 pub const CAUSAL_CAUSE_PERSONA_FACT_COLLISION: u32 = 1 << 10;
 /// Provenance cause bit (`bit 11`): Cohomological obstruction ($H^1 \neq 0$) or Bloom repulsion triggered.
 pub const CAUSAL_CAUSE_COHOMOLOGY_REPULSION: u32 = 1 << 11;
@@ -494,9 +495,11 @@ pub struct ManifoldProbeBaseline {
     pub active_heads: u16,
     /// Number of transformer layers selected by `layer_rope_mask` (`>= 1`).
     pub steered_layers: u16,
-    /// Baseline normalized `EntropyController` entropy observed on neutral calibration prompts ($\tilde{H}_0 \in [0, 1]$).
+    /// Baseline normalized `EntropyController` entropy observed on neutral calibration prompts ($\tilde{H}_0
+    /// \in [0, 1]$).
     pub baseline_entropy: f32,
-    /// Mean positive inter-layer / intra-turn phase trajectory coherence measured during calibration ($\bar{c} \in [0, 1]$).
+    /// Mean positive inter-layer / intra-turn phase trajectory coherence measured during calibration ($\bar{c}
+    /// \in [0, 1]$).
     pub baseline_inter_layer_coherence: f32,
     /// Neutral-token baseline cosine similarity against contrastive guard anchors ($\in [0, 1]$).
     pub baseline_guard_noise_floor: f32,
@@ -540,7 +543,8 @@ pub trait StigmergicThresholdPolicy {
         entropy_h_tilde: f32,
     ) -> StigmergicThresholds;
 
-    /// Resolves [`StigmergicThresholds`] and specializes [`crate::stigmergy::StigmergicSubstrate`] decision gates using an
+    /// Resolves [`StigmergicThresholds`] and specializes [`crate::stigmergy::StigmergicSubstrate`] decision
+    /// gates using an
     /// optional [`CognitiveTrajectoryLedger`] habit state at `scale`.
     ///
     /// Blanket default delegates to [`Self::resolve_thresholds`] followed by
@@ -840,7 +844,8 @@ impl StigmergicThresholdPolicy for AdaptiveThresholdPolicy {
             2.00,
         );
 
-        // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/Rank-1 residual gates.
+        // Sustained high-pull trails gradually ease crystallization, while resource pressure raises skip/Rank-1
+        // residual gates.
         let sustained_pull = if trail.step_count >= 16 {
             branchless_clamp_f32((trail.attractor_pull_force - 0.65_f32) * 2.0_f32, 0.0, 1.0)
         } else {
@@ -1008,7 +1013,8 @@ impl<T: CognitiveGroundingSignal + ?Sized> CognitiveGroundingSignal for &T {
 }
 
 /// **Origin 2-A Subtrait (`ObjectiveFactSignal: CognitiveGroundingSignal`)**:
-/// External RAG chunks, database records, and objective conversation logs (`Slot 2`, narrow `PhaseClamp` limit `0.14 rad`).
+/// External RAG chunks, database records, and objective conversation logs (`Slot 2`, narrow `PhaseClamp` limit
+/// `0.14 rad`).
 pub trait ObjectiveFactSignal: CognitiveGroundingSignal {
     /// Narrow single-axis cognitive aperture for factual grounding (`1 << 1`).
     const FACT_APERTURE_MASK: u32 = THRESHOLD_OBJECTIVE_FACT;
@@ -1041,7 +1047,8 @@ impl<T: ObjectiveFactSignal + ?Sized> ObjectiveFactSignal for &T {
 }
 
 /// **Origin 2-B Subtrait (`SubjectivePersonaSignal: CognitiveGroundingSignal`)**:
-/// System prompts, character beliefs, stylistic tone, and subjective episodic memory (`Slot 1`, wide `PhaseClamp` limit `0.24 rad`).
+/// System prompts, character beliefs, stylistic tone, and subjective episodic memory (`Slot 1`, wide
+/// `PhaseClamp` limit `0.24 rad`).
 pub trait SubjectivePersonaSignal: CognitiveGroundingSignal {
     /// Narrow single-axis cognitive aperture for subjective persona tone (`1 << 2`).
     const PERSONA_APERTURE_MASK: u32 = THRESHOLD_SUBJECTIVE_PERSONA;
@@ -1160,7 +1167,8 @@ pub struct ObjectiveFact<T> {
 }
 
 impl<T> ObjectiveFact<T> {
-    /// Constructs a new [`ObjectiveFact`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit anchor ID.
+    /// Constructs a new [`ObjectiveFact`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit
+    /// anchor ID.
     #[inline(always)]
     #[must_use]
     pub const fn new(
@@ -1248,7 +1256,8 @@ pub struct SubjectivePersona<T> {
 }
 
 impl<T> SubjectivePersona<T> {
-    /// Constructs a new [`SubjectivePersona`] with explicit base energy, 48-bit mapped-storage offset, and 32-bit anchor ID.
+    /// Constructs a new [`SubjectivePersona`] with explicit base energy, 48-bit mapped-storage offset, and
+    /// 32-bit anchor ID.
     #[inline(always)]
     #[must_use]
     pub const fn new(

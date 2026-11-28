@@ -1,7 +1,7 @@
 // name: tests/integration/host_envelope_coordination.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Domain-agnostic planetary coordination integration tests verifying Lv.0 `BoundarySignal`,
+//! Domain-agnostic host-envelope coordination integration tests verifying Lv.0 `BoundarySignal`,
 //! Lv.3 `EnvelopeState`, Lv.4 `RuntimeContext` 576 B snapshots, `EquilibriumState::join`
 //! reconciliation, and `2 x 3` `AttributionTag` telemetry isolation without domain-specific terms.
 

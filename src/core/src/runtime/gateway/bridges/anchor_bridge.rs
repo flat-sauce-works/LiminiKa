@@ -214,7 +214,8 @@ impl PhaseAnchorRecord {
     }
 
     /// Performs an Online Toroidal $k$-Means / DP-Means E+M step using preloaded SWAR phase words,
-    /// returning `(assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass, spawned_new_cluster)`.
+    /// returning `(assigned_cluster_idx, assigned_anchor_id, centroid_coherence, updated_gravity_mass,
+    /// spawned_new_cluster)`.
     #[inline]
     pub fn step_online_toroidal_kmeans_frame_with_words_64(
         centroids: &mut [Self],
@@ -298,9 +299,13 @@ impl PhaseAnchorRecord {
 
 impl PhaseAnchorRecord {
     /// Branchless 3-stage **Dissipative Overflow -> Residual Scatter -> Autonomous Daughter Birth** step:
-    /// 1. Evaluates saturation & dispersion pressure (`1 - resultant_r_bar`, `sample_count`) on the nearest attractor $A_1$.
-    /// 2. If $A_1$ overflows (`effective_coh < split_coherence_thresh`), peels $A_1$'s phase from `sample_w` via SWAR circular subtraction and scans remaining active slots for a secondary basin $A_2$ without branches.
-    /// 3. If the overflow residual settles on $A_2$, absorbs into $A_2$ (`scattered = true`); otherwise autonomously spawns a daughter attractor into an empty or weaker slot (`spawned_new = true`).
+    /// 1. Evaluates saturation & dispersion pressure (`1 - resultant_r_bar`, `sample_count`) on the nearest
+    ///    attractor $A_1$.
+    /// 2. If $A_1$ overflows (`effective_coh < split_coherence_thresh`), peels $A_1$'s phase from `sample_w`
+    ///    via SWAR circular subtraction and scans remaining active slots for a secondary basin $A_2$ without
+    ///    branches.
+    /// 3. If the overflow residual settles on $A_2$, absorbs into $A_2$ (`scattered = true`); otherwise
+    ///    autonomously spawns a daughter attractor into an empty or weaker slot (`spawned_new = true`).
     #[inline]
     pub fn step_dissipative_overflow_scatter_or_spawn_64(
         centroids: &mut [Self],

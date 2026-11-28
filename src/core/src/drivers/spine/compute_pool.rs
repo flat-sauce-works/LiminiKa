@@ -84,7 +84,8 @@ pub struct ComputePoolConfig {
     pub min_recovery_dwell: u16,
     /// Minimum sustained dwell steps before Slow-Loop lane migration is permitted.
     pub min_lane_switch_dwell: u16,
-    /// Minimum Q0.7 contribution pheromone (`0..=127`) required for a reversible slot to resist Fast-Loop bypass under pressure.
+    /// Minimum Q0.7 contribution pheromone (`0..=127`) required for a reversible slot to resist Fast-Loop
+    /// bypass under pressure.
     pub bypass_pheromone_floor_q7: u8,
     /// Pheromone floor under `Surge` pressure (higher than `Elevated` to shed more reversible work).
     pub surge_bypass_pheromone_floor_q7: u8,

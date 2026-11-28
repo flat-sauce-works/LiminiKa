@@ -685,7 +685,8 @@ impl CognitiveTrajectoryLedger {
     ///
     /// Keeps all regime thresholds strictly positive and monotonic
     /// (`express <= subhead <= rank1 <= crystallize`) while allowing identical runtime inputs
-    /// to fire different [`crate::stigmergy::StigmergicSubstrate`] regimes according to learned/preset cognitive habits.
+    /// to fire different [`crate::stigmergy::StigmergicSubstrate`] regimes according to learned/preset
+    /// cognitive habits.
     #[inline]
     #[must_use]
     pub fn bias_stigmergic_thresholds(

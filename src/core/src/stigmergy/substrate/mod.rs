@@ -52,22 +52,29 @@ pub const MIN_DERIVATIVE_ALPHA_Q7: u8 = 16;
 /// Maximum Q0.7 derivative weight permitted by Slow-Loop self-tuning.
 pub const MAX_DERIVATIVE_ALPHA_Q7: u8 = 96;
 
-/// Default low-entropy threshold ($\tau_{\mathrm{skip}} = 0.15\text{ nats}$) triggering [`StigmergicActionDecision::InertialLayerSkip`].
+/// Default low-entropy threshold ($\tau_{\mathrm{skip}} = 0.15\text{ nats}$) triggering
+/// [`StigmergicActionDecision::InertialLayerSkip`].
 pub const DEFAULT_STIGMERGIC_INERTIAL_SKIP_ENTROPY: f32 = 0.15;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{steer}} = 0.35$) triggering [`StigmergicActionDecision::ExpressPhaseSteer`].
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{steer}} = 0.35$) triggering
+/// [`StigmergicActionDecision::ExpressPhaseSteer`].
 pub const DEFAULT_STIGMERGIC_EXPRESS_STEER_THRESH: f32 = 0.35;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{subhead}} = 0.85$) triggering [`StigmergicActionDecision::SubHeadRoute`].
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{subhead}} = 0.85$) triggering
+/// [`StigmergicActionDecision::SubHeadRoute`].
 pub const DEFAULT_STIGMERGIC_SUBHEAD_ROUTE_THRESH: f32 = 0.85;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{rank1}} = 1.50$) triggering [`StigmergicActionDecision::FullOrchestration`].
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{rank1}} = 1.50$) triggering
+/// [`StigmergicActionDecision::FullOrchestration`].
 pub const DEFAULT_STIGMERGIC_RANK1_INJECT_THRESH: f32 = 1.50;
 
-/// Default stigmergic trail density threshold ($\tau_{\mathrm{anchor}} = 2.20$) triggering [`StigmergicActionDecision::CrystallizeMacroBasin`].
+/// Default stigmergic trail density threshold ($\tau_{\mathrm{anchor}} = 2.20$) triggering
+/// [`StigmergicActionDecision::CrystallizeMacroBasin`].
 pub const DEFAULT_STIGMERGIC_CRYSTALLIZE_THRESH: f32 = 2.20;
 
-/// Default directional contradiction threshold ($\tau_{\mathrm{contradict}} = 0.25$) where $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$ triggers [`StigmergicActionDecision::RepulsionEscape`].
+/// Default directional contradiction threshold ($\tau_{\mathrm{contradict}} = 0.25$) where
+/// $\mathcal{C}_{\mathrm{phase}} < -\tau_{\mathrm{contradict}}$ triggers
+/// [`StigmergicActionDecision::RepulsionEscape`].
 pub const DEFAULT_STIGMERGIC_CONTRADICTION_THRESH: f32 = 0.25;
 
 /// Total Q7 phase elements across all 8 Attractor Working Lanes (`8 * 64 = 512` bytes).
@@ -388,7 +395,8 @@ pub struct SubstrateStepReport {
     pub bloom_repulsion_density: u8,
 }
 
-// SAFETY: `SubstrateStepReport` is a 32-byte `#[repr(C, align(32))]` struct of primitive fields with zero implicit padding.
+// SAFETY: `SubstrateStepReport` is a 32-byte `#[repr(C, align(32))]` struct of primitive fields with zero
+// implicit padding.
 unsafe impl Pod for SubstrateStepReport {}
 
 impl SubstrateStepReport {
@@ -428,7 +436,8 @@ impl SubstrateStepReport {
 
 /// Concrete zero-allocation (`#[repr(C, align(64))]`, 2,816-byte [`Pod`]) micro passive carrier
 /// implementing [`crate::stigmergy::StigmergicSubstrateOps`]. Accumulates pointer trails, pheromones, and rejection
-/// traces whose grounded clusters cross the `liminal` boundary to form [`crate::stigmergy::anchor::PhaseAnchorRecord`] centroids.
+/// traces whose grounded clusters cross the `liminal` boundary to form
+/// [`crate::stigmergy::anchor::PhaseAnchorRecord`] centroids.
 ///
 /// # Memory Layout (2,816 Bytes = `44 x 64B` Cache Lines, Header-First, Zero Implicit Padding)
 /// - `CL0 (0..64)`: `thresholds` (`32B`) + `slot_weights` (`32B`)

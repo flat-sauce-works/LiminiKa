@@ -757,12 +757,14 @@ impl CompiledTokenCorpus {
             };
             corpus.ingest_text_activations_with_phase_ref(
                 adapter,
-                entry.role,
-                entry.text.as_str(),
-                &q_refs,
-                &centroid_refs,
-                phase_refs,
-                entry.energy,
+                crate::PhaseRefIngestInput {
+                    role: entry.role,
+                    text: entry.text.as_str(),
+                    per_layer_q: &q_refs,
+                    residual_ref_per_layer: &centroid_refs,
+                    phase_ref_per_layer: phase_refs,
+                    energy: entry.energy,
+                },
             )?;
         }
         corpus.fit_common_mode_subspace(3);
@@ -1454,12 +1456,14 @@ impl CompiledTokenCorpus {
         self.corpus
             .recall_for_query_with_strata_observation_and_circuit(
                 adapter,
-                &q_refs,
-                &centroid_refs,
-                &self.recall_policy,
-                pipeline,
-                Some(obs),
-                prior_circuit,
+                crate::StrataRecallInput {
+                    query_per_layer_q: &q_refs,
+                    baseline_ref_per_layer: &centroid_refs,
+                    policy: &self.recall_policy,
+                    pipeline,
+                    local_observation: Some(obs),
+                    prior_circuit,
+                },
             )
     }
 }

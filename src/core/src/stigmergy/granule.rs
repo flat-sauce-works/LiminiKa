@@ -70,7 +70,8 @@ impl StigmergicGranuleEngine {
     #[inline(always)]
     #[must_use]
     pub const fn words_ref(&self) -> &[u64; NUM_STIGMERGIC_GRANULES] {
-        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
+        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is
+        // at offset 0.
         unsafe {
             &*(self
                 .cell_phases
@@ -83,7 +84,8 @@ impl StigmergicGranuleEngine {
     #[inline(always)]
     #[must_use]
     pub const fn words_mut(&mut self) -> &mut [u64; NUM_STIGMERGIC_GRANULES] {
-        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is at offset 0.
+        // SAFETY: `StigmergicGranuleEngine` is 64-byte aligned (`#[repr(C, align(64))]`) and `cell_phases` is
+        // at offset 0.
         unsafe {
             &mut *(self
                 .cell_phases
@@ -187,7 +189,8 @@ pub struct OverlapDiscoveryReport {
     pub overlap_fringe_mask: u8,
     /// 8-bit mask where bit `g == 1` iff granule `g` lies outside all attractors (`overlap == 0`, `offset 26`).
     pub lacuna_exterior_mask: u8,
-    /// 8-bit mask where bit `g == 1` iff granule `g` lies in `lacuna_exterior_mask` with drift `>= floor` (`offset 27`).
+    /// 8-bit mask where bit `g == 1` iff granule `g` lies in `lacuna_exterior_mask` with drift `>= floor`
+    /// (`offset 27`).
     pub discovery_excursion_mask: u8,
     /// Maximum number of attractors overlapping on any single granule (`offset 28`).
     pub max_overlap_depth: u8,

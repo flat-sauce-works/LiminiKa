@@ -669,7 +669,8 @@ pub fn coherence_from_word_arrays_with_both_uniform_flags_64(
 /// Evaluates normalized 64-head phase coherence $\mathcal{C}_{\mathrm{phase}}(a, b) \in [-1.0, 1.0]$
 /// when $\mathcal{C}_{\mathrm{phase}}(a, b) \ge \text{floor\_coh}$ is possible, or returns `-2.0`
 /// in 5 AVX2 instructions (`vpabsb + vpsadbw`) when the exact Lagrangian $L_1$ upper bound
-/// $\mathcal{C}_{64}(a, b) \le 1.21052 - \frac{1}{4096}\sum_{h=0}^{63}|d_h|$ proves $\mathcal{C}_{64}(a, b) < \text{floor\_coh}$.
+/// $\mathcal{C}_{64}(a, b) \le 1.21052 - \frac{1}{4096}\sum_{h=0}^{63}|d_h|$ proves $\mathcal{C}_{64}(a, b) <
+/// \text{floor\_coh}$.
 #[inline(always)]
 #[must_use]
 pub fn coherence_above_floor_from_word_arrays_64(
@@ -1066,7 +1067,8 @@ pub fn circular_r_bar_from_words_with_uniform_flag_64(w: &[u64; 8], w_is_uniform
 }
 
 /// Evaluates the circular resultant vector length
-/// $\bar{R} = \sqrt{\left(\frac{1}{64}\sum_{h=0}^{63}\sin\theta_h\right)^2 + \left(\frac{1}{64}\sum_{h=0}^{63}\cos\theta_h\right)^2} \in [0.0, 1.0]$
+/// $\bar{R} = \sqrt{\left(\frac{1}{64}\sum_{h=0}^{63}\sin\theta_h\right)^2 +
+/// \left(\frac{1}{64}\sum_{h=0}^{63}\cos\theta_h\right)^2} \in [0.0, 1.0]$
 /// directly from all 8 packed 64-bit SWAR words (`w`) in strictly constant time (`0` branches, `0 fdiv`).
 #[inline(always)]
 pub fn circular_r_bar_from_words_64(w: &[u64; 8]) -> f32 {

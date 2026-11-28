@@ -188,7 +188,8 @@ impl RuntimeContext {
         &mut self.last_overlap_report
     }
 
-    /// Returns the bitmask of external [`crate::runtime::horizon::LatentHorizonSlot`] boundaries currently slid into the
+    /// Returns the bitmask of external [`crate::runtime::horizon::LatentHorizonSlot`] boundaries currently slid
+    /// into the
     /// active cognitive window.
     #[inline(always)]
     #[must_use]

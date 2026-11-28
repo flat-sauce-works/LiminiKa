@@ -806,7 +806,8 @@ fn bench_phase_steering_provisional_lmnk_container(c: &mut Criterion) {
 
     group.throughput(Throughput::Bytes(tensor_bytes as u64));
 
-    // 1. Provisional `.lmnk` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble Gateway Steering
+    // 1. Provisional `.lmnk` (MappedStorage) Zero-Copy Deserialization + Phase-Proximity Gravity Ensemble
+    // Gateway Steering
     let engine = PhaseSteeringEngine::new(head_dim, num_heads)
         .expect("Failed 64-head PhaseSteeringEngine init");
     group.bench_function(

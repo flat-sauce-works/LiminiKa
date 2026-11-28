@@ -1,10 +1,30 @@
 // name: src/adapter/src/model_adapter/steering.rs
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Per-layer RoPE phase baking, gateway/horizon steering, Rank-1 residual injection, and entropy evaluation on [`ModelSteeringAdapter`].
+//! Per-layer RoPE phase baking, gateway/horizon steering, Rank-1 residual injection, and
+//! entropy evaluation on [`ModelSteeringAdapter`].
 
 use super::super::*;
 use super::{AlignedF32Buffer32, AlignedQ7Buffer16, ModelSteeringAdapter};
+
+/// Per-layer RoPE steering step descriptor shared by
+/// [`ModelSteeringAdapter::orchestrate_layer_rope_with_substrate`],
+/// [`ModelSteeringAdapter::orchestrate_layer_rope_with_horizon_slots`], and
+/// [`ModelSteeringAdapter::orchestrate_layer_rope_with_spillover`].
+pub struct LayerRopeStepInput<'a, S: ManifoldGatewaySignal + ?Sized> {
+    /// Zero-based transformer layer index.
+    pub layer_idx: usize,
+    /// Active manifold gateway steering signal.
+    pub signal: &'a S,
+    /// Optional exit entropy override (`None` reuses substrate `last_entropy_h_tilde`).
+    pub entropy_h_tilde_opt: Option<f32>,
+    /// Unresolved damping multiplier in Q0.7 (`0..=128`).
+    pub unresolved_damping_u7: u8,
+    /// Mutable flattened `[num_heads * rotary_dim]` pre-RoPE query slice.
+    pub q_rot_inout: &'a mut [f32],
+    /// Optional mutable logits slice for entropy-gate modulation.
+    pub logits_opt: Option<&'a mut [f32]>,
+}
 
 impl ModelSteeringAdapter {
     /// Computes per-head Q7 phase deltas from negative (`source`) and positive (`target`)
@@ -269,18 +289,11 @@ impl ModelSteeringAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if `q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
+    /// Returns an error if `input.q_rot_inout` length mismatches or `liminika-core` rejects the inputs.
     pub fn orchestrate_layer_rope_with_substrate<S: ManifoldGatewaySignal + ?Sized>(
         &mut self,
-        layer_idx: usize,
-        signal: &S,
+        input: LayerRopeStepInput<'_, S>,
         trail_inout: &mut lmnk_pointer_trail_t,
-        entropy_h_tilde_opt: Option<f32>,
-        unresolved_damping_u7: u8,
-        q_rot_inout: &mut [f32],
-        logits_opt: Option<&mut [f32]>,
     ) -> Result<
         Option<(
             GatewayFrame,
@@ -292,15 +305,10 @@ impl ModelSteeringAdapter {
         let mut guard_slot = self.coherence_guard_slot;
         let mut no_escalator = ();
         let res = self.orchestrate_layer_rope_with_horizon_slots(
-            layer_idx,
-            signal,
+            input,
             &mut guard_slot,
             &mut no_escalator,
             trail_inout,
-            entropy_h_tilde_opt,
-            unresolved_damping_u7,
-            q_rot_inout,
-            logits_opt,
         );
         self.coherence_guard_slot = guard_slot;
         res
@@ -312,25 +320,18 @@ impl ModelSteeringAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
+    /// Returns an error if `input.q_rot_inout` length mismatches, `escalation_provider` fails, or
     /// `liminika-core` rejects the inputs.
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_layer_rope_with_horizon_slots<
         S: ManifoldGatewaySignal + ?Sized,
         H: LatentHorizonSlot + ?Sized,
         E: HorizonEscalationProvider + ?Sized,
     >(
         &mut self,
-        layer_idx: usize,
-        signal: &S,
+        input: LayerRopeStepInput<'_, S>,
         horizon_slots: &mut H,
         escalation_provider: &mut E,
         trail_inout: &mut lmnk_pointer_trail_t,
-        entropy_h_tilde_opt: Option<f32>,
-        unresolved_damping_u7: u8,
-        q_rot_inout: &mut [f32],
-        logits_opt: Option<&mut [f32]>,
     ) -> Result<
         Option<(
             GatewayFrame,
@@ -339,6 +340,14 @@ impl ModelSteeringAdapter {
         )>,
         String,
     > {
+        let LayerRopeStepInput {
+            layer_idx,
+            signal,
+            entropy_h_tilde_opt,
+            unresolved_damping_u7,
+            q_rot_inout,
+            logits_opt,
+        } = input;
         self.marshal_q_rot_and_logits(layer_idx, q_rot_inout, logits_opt, |this, q, logits| {
             let entropy_h_tilde =
                 entropy_h_tilde_opt.unwrap_or(this.ctx.substrate().last_entropy_h_tilde);
@@ -529,23 +538,16 @@ impl ModelSteeringAdapter {
     ///
     /// # Errors
     ///
-    /// Returns an error if `q_rot_inout` length mismatches, `escalation_provider` fails, or
+    /// Returns an error if `input.q_rot_inout` length mismatches, `escalation_provider` fails, or
     /// `liminika-core` rejects the inputs.
-    // v0.3.0 frozen public Rust API; parameter-struct consolidation deferred to v0.4.0.
-    #[allow(clippy::too_many_arguments)]
     pub fn orchestrate_layer_rope_with_spillover<
         S: ManifoldGatewaySignal + ?Sized,
         E: HorizonEscalationProvider + ?Sized,
     >(
         &mut self,
-        layer_idx: usize,
-        signal: &S,
+        input: LayerRopeStepInput<'_, S>,
         escalation_provider: &mut E,
         trail_inout: &mut lmnk_pointer_trail_t,
-        entropy_h_tilde_opt: Option<f32>,
-        unresolved_damping_u7: u8,
-        q_rot_inout: &mut [f32],
-        logits_opt: Option<&mut [f32]>,
     ) -> Result<
         Option<(
             GatewayFrame,
@@ -559,15 +561,10 @@ impl ModelSteeringAdapter {
         let res = {
             let mut combined = (&mut guard_slot, &mut *spillover_box);
             self.orchestrate_layer_rope_with_horizon_slots(
-                layer_idx,
-                signal,
+                input,
                 &mut combined,
                 escalation_provider,
                 trail_inout,
-                entropy_h_tilde_opt,
-                unresolved_damping_u7,
-                q_rot_inout,
-                logits_opt,
             )
         };
         self.coherence_guard_slot = guard_slot;

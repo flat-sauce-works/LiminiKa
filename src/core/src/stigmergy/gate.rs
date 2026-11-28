@@ -61,7 +61,8 @@ const _: () = {
 // 1. Primary Phase-Steering Engine (`16B` Pod)
 // ===================================================================
 
-/// Primary dynamic phase-shifted RoPE execution engine (`PhaseSteering`, `PhaseClamp`, `PhaseStepFilter`) (`16B` aligned, [`Pod`]).
+/// Primary dynamic phase-shifted RoPE execution engine (`PhaseSteering`, `PhaseClamp`, `PhaseStepFilter`)
+/// (`16B` aligned, [`Pod`]).
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PhaseSteeringEngine {
@@ -155,7 +156,8 @@ impl PhaseSteeringEngine {
         self.phase_clamp_max_rad
     }
 
-    /// Returns the configured `PhaseStepFilter` minimum phase step cutoff in radians ($\Delta\theta_{\mathrm{min\_step}}$).
+    /// Returns the configured `PhaseStepFilter` minimum phase step cutoff in radians
+    /// ($\Delta\theta_{\mathrm{min\_step}}$).
     #[inline(always)]
     pub const fn phase_step_min_rad(&self) -> f32 {
         self.phase_step_min_rad
@@ -340,7 +342,8 @@ impl ResidualAdapterEngine {
         Ok(())
     }
 
-    /// Validated Rank-1 outer-product residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$)
+    /// Validated Rank-1 outer-product residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot
+    /// \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$)
     /// gated by an [`Indivisible<Active, _>`] sealed closure certificate.
     ///
     /// Statically excludes [`crate::liminal::Unmarked`], [`crate::liminal::Bottom`], and

@@ -95,7 +95,8 @@ impl TokenSequenceEncoder for LmTokenEncoder<'_> {
 
 /// Detects whether a UTF-8 leading span `span` diverges in its leading `1..=3` token IDs when
 /// tokenized after a minimal script-appropriate continuation prefix (`": "` for ASCII-only spans,
-/// `"、"` when non-ASCII characters are present) compared to standalone start-of-sequence encoding.
+/// `"\u{3001}"` ideographic comma when non-ASCII characters are present) compared to standalone
+/// start-of-sequence encoding.
 ///
 /// Returns `Ok(Some((full_ids, slice_start, slice_len)))` when continuation tokenization differs,
 /// where `full_ids[slice_start..slice_start + slice_len]` are the leading `1..=3` continuation
@@ -398,7 +399,8 @@ pub(crate) fn print_runtime_profile(
         load_elapsed,
     );
     println!(
-        "[Model ] params={:.2}M weights_est={:.1}MiB kv2048_est={:.1}MiB layers={} heads={}/{} head_dim={} rotary_dim={} sidecar_substrate={}B",
+        "[Model ] params={:.2}M weights_est={:.1}MiB kv2048_est={:.1}MiB layers={} heads={}/{} head_dim={} \
+         rotary_dim={} sidecar_substrate={}B",
         params as f64 / 1_000_000.0,
         weights_mb,
         kv_2048_mb,

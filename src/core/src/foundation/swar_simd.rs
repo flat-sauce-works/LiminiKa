@@ -295,7 +295,8 @@ pub(crate) const fn swar_q7_phase_step_filter_with_thresh_x8(
     packed & keep_mask & valid_step_mask
 }
 
-/// True bit-parallel SWAR 8-lane discrete phase-step cutoff filter (`PhaseStepFilter`) in strictly constant time (`0` branches).
+/// True bit-parallel SWAR 8-lane discrete phase-step cutoff filter (`PhaseStepFilter`) in strictly constant
+/// time (`0` branches).
 #[inline(always)]
 pub const fn swar_q7_phase_step_filter_x8(packed: u64, min_step_q7: u8) -> u64 {
     let thresh_x8 = ((min_step_q7 & 0x7F) as u64).wrapping_mul(SWAR_SPLAT_BYTE_64);
@@ -873,9 +874,11 @@ pub(crate) const fn eval_geodesic_phase_clamp_sincos_q7_fast(
     }
 }
 
-/// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}), \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}))$
+/// Evaluates the $SO(2)$-composed $(\sin(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}),
+/// \cos(\theta_{\mathrm{base}} + \theta_{\mathrm{subhead}}))$
 /// for a single attention head, using two 1-cycle LUT loads when both `PhaseClamp` limits equal
-/// [`crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian angles and evaluating
+/// [`crate::foundation::scalar_math::DEFAULT_PHASE_CLAMP_MAX_RAD`], or summing the two `tanh`-clamped radian
+/// angles and evaluating
 /// `sincos_phase_clamp_poly` **once** instead of twice when custom `PhaseClamp` limits are active.
 #[inline(always)]
 // Hot-path register-passed SIMD/SWAR kernel leaf kept flat to avoid stack-frame spills.

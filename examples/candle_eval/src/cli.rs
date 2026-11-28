@@ -116,10 +116,12 @@ pub(crate) fn print_help() {
         "  --smoke-test                       Run Steer-OFF greedy generation smoke test and exit"
     );
     println!(
-        "  --fixture=<path>                   Override evaluation fixture file (default: tests/fixtures/gcso_eval_samples.txt)"
+        "  --fixture=<path>                   Override evaluation fixture file (default: tests/fixtures/gc\
+         so_eval_samples.txt)"
     );
     println!(
-        "  --bench-trials=<N>                 Run N independent benchmark trials after warmup and report median/spread (default: 1)"
+        "  --bench-trials=<N>                 Run N independent benchmark trials after warmup and report m\
+         edian/spread (default: 1)"
     );
     println!(
         "  --step2-only                       Skip Step 1 sweeps and run Step 2 (+ Step 3) directly"
@@ -140,7 +142,8 @@ pub(crate) fn print_help() {
         "  --logits-observe-stride=<N>        Dynamic GPU->CPU logits observe max stride (default: 1, clamp 0->1)"
     );
     println!(
-        "  --guard-hold-tokens=<N>            Transient contradiction-guard hold window before relaxation (default: 0 = full turn)"
+        "  --guard-hold-tokens=<N>            Transient contradiction-guard hold window before relaxation \
+         (default: 0 = full turn)"
     );
     println!(
         "  --multi-turn                       Run 8-turn persistent KV dialogue evaluation (Step 2B)"
@@ -156,10 +159,12 @@ pub(crate) fn print_help() {
          mid12, mid16, upper-mid12, all, or 0xHEX (default: auto)"
     );
     println!(
-        "  --phase-clamp-rad=<f32>            Override eval-harness PhaseClamp arc in (0, pi/2] rad (default: core GatewayFrame default)"
+        "  --phase-clamp-rad=<f32>            Override eval-harness PhaseClamp arc in (0, pi/2] rad (defau\
+         lt: core GatewayFrame default)"
     );
     println!(
-        "  --random-push-control              Inject norm-matched deterministic random Q7 phase perturbation through the closed-loop pipeline"
+        "  --random-push-control              Inject norm-matched deterministic random Q7 phase perturbati\
+         on through the closed-loop pipeline"
     );
     println!(
         "  --max-tokens=<N>                   Maximum generated decode tokens per turn in [1, 512] (default: 64)"
@@ -174,13 +179,16 @@ pub(crate) fn print_help() {
         "  --equilibrium-bench                Run cross-restart equilibrium & .lmnkp immutability E2E bench"
     );
     println!(
-        "  --physics-eval                     Run the 4-axis deterministic steering-physics evaluation suite in a single model load"
+        "  --physics-eval                     Run the 4-axis deterministic steering-physics evaluation sui\
+         te in a single model load"
     );
     println!(
-        "  --extended-eval                    Run extended English boundary (54) and guard (24) probes in an isolated state"
+        "  --extended-eval                    Run extended English boundary (54) and guard (24) probes in \
+         an isolated state"
     );
     println!(
-        "  --ja-eval                          Run fictional Japanese multilingual corpus and 28-probe suite in an isolated state"
+        "  --ja-eval                          Run fictional Japanese multilingual corpus and 28-probe suit\
+         e in an isolated state"
     );
     println!(
         "  --vlm-eval                         Run multimodal VLM boundary evaluation (smoke, contrast, audit)"
@@ -561,7 +569,9 @@ pub(crate) fn print_bench_trials_summary(trials: &[Vec<TrialPassMetrics>]) {
             first.whole_bypass_hits as f64 / first.decode_tokens_steered as f64 * 100.0
         };
         println!(
-            "  {:<26} | pure_med={:6.2} [{:6.2}..{:6.2}] ({:4.1}%) | e2e_med={:6.2} [{:6.2}..{:6.2}] ({:4.1}%) | prefill_med={:6.1}ms ({:5.2}ms/req) | hit={:5.1}% sem_forb={:4.1}% ood={:4.1}% byp={:4.1}% det={}",
+            "  {:<26} | pure_med={:6.2} [{:6.2}..{:6.2}] ({:4.1}%) | e2e_med={:6.2} [{:6.2}..{:6.2}] (\
+             {:4.1}%) | prefill_med={:6.1}ms ({:5.2}ms/req) | hit={:5.1}% sem_forb={:4.1}% ood={:4.1}% byp\
+             ={:4.1}% det={}",
             first.label,
             pure_st.median,
             pure_st.min,
@@ -591,7 +601,8 @@ pub(crate) fn print_bench_trials_summary(trials: &[Vec<TrialPassMetrics>]) {
         for (lbl, c_pure, c_e2e) in c_rows {
             if b_pure > 1e-6 && b_e2e > 1e-6 {
                 println!(
-                    "  [Calibrated C/B Median] {lbl} vs B:Vanilla+MinRAG | pure_decode={:.3}x ({:+.2}%) | e2e={:.3}x ({:+.2}%)",
+                    "  [Calibrated C/B Median] {lbl} vs B:Vanilla+MinRAG | pure_decode={:.3}x ({:+.2}%) | \
+                     e2e={:.3}x ({:+.2}%)",
                     c_pure / b_pure,
                     (c_pure - b_pure) / b_pure * 100.0,
                     c_e2e / b_e2e,

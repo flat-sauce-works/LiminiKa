@@ -25,7 +25,8 @@ pub const CHEBYSHEV_FILTER_DEGREE: usize = 3;
 /// Number of expansion coefficients $[c_0, c_1, c_2, c_3]$ in a 3rd-order Chebyshev filter (`4`).
 pub const CHEBYSHEV_COEFF_LEN: usize = 4;
 
-/// Evaluates the Gershgorin upper bound $\hat{\lambda}_{\max} = 2 \cdot \max_i D_{ii}$ in $\mathcal{O}(\vert V \vert)$ time (Section 1.2).
+/// Evaluates the Gershgorin upper bound $\hat{\lambda}_{\max} = 2 \cdot \max_i D_{ii}$ in $\mathcal{O}(\vert V
+/// \vert)$ time (Section 1.2).
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `node_degrees` is empty.
@@ -131,7 +132,8 @@ pub fn eval_chebyshev_spectral_filter_deg3(
     Ok(())
 }
 
-/// Evaluates the Hierarchical Tree Pseudo-ultrametric distance $d_{\mathcal{V}}(x, y) = \tanh(w_{\mathrm{key}} (l_{\max} - l_{\mathrm{lca}}))$ (Lemma 1.1).
+/// Evaluates the Hierarchical Tree Pseudo-ultrametric distance $d_{\mathcal{V}}(x, y) = \tanh(w_{\mathrm{key}}
+/// (l_{\max} - l_{\mathrm{lca}}))$ (Lemma 1.1).
 #[inline(always)]
 #[must_use]
 pub fn eval_pseudo_ultrametric_distance(l_lca: u32, l_max: u32, w_key: f32) -> f32 {
@@ -140,7 +142,8 @@ pub fn eval_pseudo_ultrametric_distance(l_lca: u32, l_max: u32, w_key: f32) -> f
     branchless_tanh_f32(safe_w * diff)
 }
 
-/// Evaluates the cohomological obstruction residual $\mathbf{r}_{\mathrm{obs}} = \mathbf{r} - \delta_0 \boldsymbol{\phi} \in \mathrm{im}(\delta_0)^\perp$ (Section 1.1).
+/// Evaluates the cohomological obstruction residual $\mathbf{r}_{\mathrm{obs}} = \mathbf{r} - \delta_0
+/// \boldsymbol{\phi} \in \mathrm{im}(\delta_0)^\perp$ (Section 1.1).
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `cochain_residual_r` is empty or slice lengths differ.
@@ -167,7 +170,9 @@ pub fn evaluate_cohomological_obstruction(
 }
 
 /// Evaluates the Hodge obstruction residual $\mathbf{r}_{\mathrm{obs}} \in H^1(K; \mathcal{F})$
-/// and normalized dual Cellular Sheaf Homology pairing $\frac{\vert\langle \mathbf{r}_{\mathrm{obs}}, \boldsymbol{\gamma} \rangle\vert}{\|\mathbf{r}_{\mathrm{obs}}\|_2 \|\boldsymbol{\gamma}\|_2} \in [0, 1]$ (Section 1.1).
+/// and normalized dual Cellular Sheaf Homology pairing $\frac{\vert\langle \mathbf{r}_{\mathrm{obs}},
+/// \boldsymbol{\gamma} \rangle\vert}{\|\mathbf{r}_{\mathrm{obs}}\|_2 \|\boldsymbol{\gamma}\|_2} \in [0, 1]$
+/// (Section 1.1).
 ///
 /// # Errors
 /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if any slice is empty or lengths differ.

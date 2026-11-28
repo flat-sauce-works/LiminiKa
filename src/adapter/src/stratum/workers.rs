@@ -21,21 +21,33 @@ fn short_query_contrast_shrinkage(query_seq_len: usize) -> f32 {
     }
 }
 
-/// Applies leave-one-out top-k viewing-angle contrast across a subset of corpus `indices`
-/// to eliminate `1/N` self-dilution bias across differently sized role populations.
-// Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
-#[allow(clippy::too_many_arguments)]
-fn apply_loo_top_k_contrast_on_indices(
-    cos_matrix: &[Vec<f32>],
-    indices: &[usize],
+/// Parameters for [`apply_loo_top_k_contrast_on_indices`].
+struct LooContrastParams<'a> {
+    indices: &'a [usize],
     num_axes: usize,
     top_k: usize,
     gain: f32,
     multiply_weight: bool,
     weight_min: f32,
     weight_max: f32,
+}
+
+/// Applies leave-one-out top-k viewing-angle contrast across a subset of corpus `indices`
+/// to eliminate `1/N` self-dilution bias across differently sized role populations.
+fn apply_loo_top_k_contrast_on_indices(
+    cos_matrix: &[Vec<f32>],
+    params: LooContrastParams<'_>,
     signal: &mut StratumSignal,
 ) {
+    let LooContrastParams {
+        indices,
+        num_axes,
+        top_k,
+        gain,
+        multiply_weight,
+        weight_min,
+        weight_max,
+    } = params;
     let n_sub = indices.len();
     if n_sub <= 1 || num_axes == 0 || top_k == 0 {
         return;
@@ -137,13 +149,15 @@ impl RecallStratum for LocalFeatureWorkerStratum {
                     let idxs = ctx.neighborhood_stats.role_indices(role);
                     apply_loo_top_k_contrast_on_indices(
                         &layer_cos,
-                        idxs,
-                        num_steered,
-                        top_l,
-                        eff_gain,
-                        false,
-                        0.5,
-                        1.5,
+                        LooContrastParams {
+                            indices: idxs,
+                            num_axes: num_steered,
+                            top_k: top_l,
+                            gain: eff_gain,
+                            multiply_weight: false,
+                            weight_min: 0.5,
+                            weight_max: 1.5,
+                        },
                         signal,
                     );
                 }
@@ -261,13 +275,15 @@ impl RecallStratum for HeadAngleWorkerStratum {
             let idxs = ctx.neighborhood_stats.role_indices(role);
             apply_loo_top_k_contrast_on_indices(
                 &head_cos,
-                idxs,
-                n_heads,
-                top_k_heads,
-                eff_head_gain,
-                true,
-                0.4,
-                2.0,
+                LooContrastParams {
+                    indices: idxs,
+                    num_axes: n_heads,
+                    top_k: top_k_heads,
+                    gain: eff_head_gain,
+                    multiply_weight: true,
+                    weight_min: 0.4,
+                    weight_max: 2.0,
+                },
                 signal,
             );
         }

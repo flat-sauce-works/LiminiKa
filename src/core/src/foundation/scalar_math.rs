@@ -22,7 +22,8 @@ use crate::liminal::{
 /// Default soft-bounded phase clamp limit in radians ($5^\circ \approx 0.08726646\text{ rad}$).
 pub const DEFAULT_PHASE_CLAMP_MAX_RAD: f32 = 0.087_266_46;
 
-/// Canonical ratio `Q7_PHASE_SCALE_RAD / DEFAULT_PHASE_CLAMP_MAX_RAD` mapping Q7 phase deltas to normalized `tanh` units.
+/// Canonical ratio `Q7_PHASE_SCALE_RAD / DEFAULT_PHASE_CLAMP_MAX_RAD` mapping Q7 phase deltas to normalized
+/// `tanh` units.
 pub const DEFAULT_PHASE_CLAMP_Q7_TO_NORM_SCALE: f32 =
     Q7_PHASE_SCALE_RAD / DEFAULT_PHASE_CLAMP_MAX_RAD;
 
@@ -241,7 +242,8 @@ pub const fn branchless_smoothstep_f32(edge0: f32, edge1: f32, x: f32) -> f32 {
     u * u * (3.0 - 2.0 * u)
 }
 
-/// Branchless $SO(2)$ 2D rotation operator applying $(q_0 \cos\theta - q_1 \sin\theta, q_0 \sin\theta + q_1 \cos\theta)$.
+/// Branchless $SO(2)$ 2D rotation operator applying $(q_0 \cos\theta - q_1 \sin\theta, q_0 \sin\theta + q_1
+/// \cos\theta)$.
 #[inline(always)]
 pub const fn branchless_rotate_so2_pair(q0: f32, q1: f32, sin_t: f32, cos_t: f32) -> (f32, f32) {
     (q0 * cos_t - q1 * sin_t, q0 * sin_t + q1 * cos_t)
@@ -321,7 +323,8 @@ pub const fn branchless_sigmoid_f32(x: f32) -> f32 {
     0.5 + 0.5 * branchless_tanh_f32(0.5 * x)
 }
 
-/// Branchless soft-bounded (`PhaseClamp`) phase angle clamp: $\Delta\theta_{\mathrm{safe}} = \theta_{\max} \cdot \tanh(\Delta\theta / \theta_{\max})$.
+/// Branchless soft-bounded (`PhaseClamp`) phase angle clamp: $\Delta\theta_{\mathrm{safe}} = \theta_{\max}
+/// \cdot \tanh(\Delta\theta / \theta_{\max})$.
 #[inline(always)]
 pub const fn branchless_phase_clamp_rad(delta_rad: f32, max_rad: f32) -> f32 {
     let valid_max = (max_rad > 1.0e-9) & branchless_is_finite_f32(max_rad);
@@ -521,7 +524,8 @@ pub const fn branchless_sincos_half_pi_f32(theta_rad: f32) -> (f32, f32) {
     )
 }
 
-/// Direct $\mathcal{O}(1)$ 64B-aligned 256-entry LUT lookup for `PhaseClamp` $(\sin\theta_{\mathrm{safe}}, \cos\theta_{\mathrm{safe}})$
+/// Direct $\mathcal{O}(1)$ 64B-aligned 256-entry LUT lookup for `PhaseClamp` $(\sin\theta_{\mathrm{safe}},
+/// \cos\theta_{\mathrm{safe}})$
 /// under [`DEFAULT_PHASE_CLAMP_MAX_RAD`].
 #[inline(always)]
 pub const fn branchless_sincos_q7_phase_clamp_default_lut(phase_q7: PhaseQ7) -> (f32, f32) {
@@ -539,7 +543,8 @@ pub const fn branchless_sincos_q7_geodesic_phase_clamp_default_lut(
     lut[(phase_q7 as u8) as usize]
 }
 
-/// Evaluates the signed `PhaseClamp`-limited radian angle $\Delta\theta_{\mathrm{safe}} = \mathrm{sgn}(q_7)\cdot |\theta_{\max}| \cdot \tanh(|q_7|\cdot s)$
+/// Evaluates the signed `PhaseClamp`-limited radian angle $\Delta\theta_{\mathrm{safe}} =
+/// \mathrm{sgn}(q_7)\cdot |\theta_{\max}| \cdot \tanh(|q_7|\cdot s)$
 /// using the 257-entry `TANH_LUT_257` table.
 #[inline(always)]
 pub(crate) const fn eval_phase_clamp_theta_rad_preinv(
@@ -554,7 +559,8 @@ pub(crate) const fn eval_phase_clamp_theta_rad_preinv(
     f32::from_bits(safe_theta_mag.to_bits() | ((is_neg as u32) << 31))
 }
 
-/// Division-free (`0 fdiv`) branchless `PhaseClamp` soft-clamped $(\sin\theta_{\mathrm{safe}}, \cos\theta_{\mathrm{safe}})$
+/// Division-free (`0 fdiv`) branchless `PhaseClamp` soft-clamped $(\sin\theta_{\mathrm{safe}},
+/// \cos\theta_{\mathrm{safe}})$
 /// using precomputed `q7_to_norm_scale = Q7_PHASE_SCALE_RAD / max_rad`.
 #[inline(always)]
 pub const fn branchless_sincos_q7_phase_clamp_preinv(
@@ -578,7 +584,8 @@ pub const fn branchless_sincos_q7_phase_clamp_preinv(
     )
 }
 
-/// Standalone division-free branchless `PhaseClamp` soft-clamped $(\sin\theta_{\mathrm{safe}}, \cos\theta_{\mathrm{safe}})$ from Q7.
+/// Standalone division-free branchless `PhaseClamp` soft-clamped $(\sin\theta_{\mathrm{safe}},
+/// \cos\theta_{\mathrm{safe}})$ from Q7.
 #[inline(always)]
 pub const fn branchless_sincos_q7_phase_clamp(phase_q7: PhaseQ7, max_rad: f32) -> (f32, f32) {
     if max_rad == DEFAULT_PHASE_CLAMP_MAX_RAD {
@@ -753,7 +760,8 @@ pub const fn branchless_von_mises_kappa(r_bar: f32) -> f32 {
     v0 + frac * (v1 - v0)
 }
 
-/// Evaluates Phase-Proximity Gravity $F_{\mathrm{grav}} = \frac{M_{\mathrm{grav}} \cdot \max(0, 1 + \mathcal{C}_{\mathrm{phase}})}{d_{\mathrm{chord}}^2 + \epsilon_{\mathrm{grav}}}$
+/// Evaluates Phase-Proximity Gravity $F_{\mathrm{grav}} = \frac{M_{\mathrm{grav}} \cdot \max(0, 1 +
+/// \mathcal{C}_{\mathrm{phase}})}{d_{\mathrm{chord}}^2 + \epsilon_{\mathrm{grav}}}$
 /// on $SO(2)^{64}$ where $d_{\mathrm{chord}}^2 = 2(1 - \mathcal{C}_{\mathrm{phase}})$ (`0` branches, `0 fdiv`).
 #[inline(always)]
 pub const fn branchless_phase_proximity_gravity_f32(

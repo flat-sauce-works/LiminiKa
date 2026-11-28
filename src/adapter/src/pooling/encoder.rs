@@ -22,43 +22,60 @@ const MAX_ASCII_LEADING_ALIAS_CHARS: usize = 24;
 /// unspaced CJK/Japanese sentences from collapsing into whole-line alias probes).
 const MAX_NON_ASCII_LEADING_ALIAS_CHARS: usize = 8;
 
+const RAW_STARTUP_PRIOR_PROBES: &str = include_str!("startup_prior_probes.txt");
+
+/// Parses `N` non-empty, non-comment UTF-8 probe lines from `raw` at compile time using pure
+/// safe byte scanning (`0 unsafe`), defensively stripping any trailing `\r`.
+const fn parse_startup_prior_probes<const N: usize>(raw: &'static str) -> [&'static str; N] {
+    let bytes = raw.as_bytes();
+    let len = bytes.len();
+    let mut out = [""; N];
+    let mut count = 0usize;
+    let mut pos = 0usize;
+
+    while pos < len {
+        let line_start = pos;
+        while pos < len && bytes[pos] != b'\n' {
+            pos += 1;
+        }
+        let mut line_end = pos;
+        if line_end > line_start && bytes[line_end - 1] == b'\r' {
+            line_end -= 1;
+        }
+        if pos < len && bytes[pos] == b'\n' {
+            pos += 1;
+        }
+        if line_end == line_start || bytes[line_start] == b'#' {
+            continue;
+        }
+        assert!(
+            count < N,
+            "startup_prior_probes.txt contains more probe lines than expected"
+        );
+        let line_bytes = bytes.split_at(line_end).0.split_at(line_start).1;
+        let Ok(line) = core::str::from_utf8(line_bytes) else {
+            panic!("startup_prior_probes.txt line must be valid UTF-8");
+        };
+        out[count] = line;
+        count += 1;
+    }
+
+    assert!(
+        count == N,
+        "startup_prior_probes.txt must contain exactly 24 non-comment probe lines"
+    );
+    out
+}
+
 /// Default neutral multilingual prompts spanning six general domains (technical, arithmetic,
 /// factual, code, daily conversation, and summarization) across English (12 original prompts
 /// preserved verbatim) and Japanese/CJK/symbol-numeric prompts (12 added prompts), interleaved in
 /// parity-balanced pairs so 2-fold cross-fitting receives 6 English + 6 non-ASCII prompts and all
 /// 6 domains in each fold.
-pub const DEFAULT_STARTUP_PRIOR_PROBES: [&str; 24] = [
-    // Domain 0: Technical / Architecture (EN even/odd, JA/symbol even/odd)
-    "Explain the basic design trade-offs of a modular systems architecture.",
-    "Summarize how memory alignment affects hardware cache performance.",
-    "分散システムでキャッシュ整合性を保つための基本的な設計手法を簡潔に説明してください。",
-    "HTTP/2とTCP接続の多重化がレイテンシに与える影響を2文で要約してください。",
-    // Domain 1: Arithmetic / Numeric + Symbols (EN even/odd, JA/numeric even/odd)
-    "What is 23 multiplied by 4?",
-    "Calculate the remainder when 50 is divided by 7.",
-    "37 × 6 + 14 の計算結果と途中の手順を簡潔に示してください。",
-    "時速45kmで2時間20分移動したときの合計距離（km）を求めてください。",
-    // Domain 2: General Factual / Geography & Units (EN even/odd, JA/CJK even/odd)
-    "Which ocean lies between Europe and North America?",
-    "How many seconds are in a single hour?",
-    "地球上で最も深い海溝の名称と、それが位置する海域を教えてください。",
-    "標準大気圧のもとで純水が沸騰する温度は摂氏何度ですか。",
-    // Domain 3: Code / Data Structures (EN even/odd, JA + ASCII symbols even/odd)
-    "Write a short function signature in C that returns the square of an integer.",
-    "What does a hash table use to map keys to array slots?",
-    "整数配列から最大値を返す関数 `max_val(a[], n)` の時間計算量は何ですか。",
-    "二分探索木で要素を探索するとき、平均計算量がO(log n)になる理由を述べてください。",
-    // Domain 4: Daily Conversation / Practical (EN even/odd, JA/CJK even/odd)
-    "Suggest two quick ways to keep fresh herbs crisp in the refrigerator.",
-    "How can someone politely follow up on an unanswered email?",
-    "湿気の多い季節に革靴のカビを防ぐための簡単な保管方法を2つ挙げてください。",
-    "会議の日程変更を社外の関係者へ丁寧に伝える短い案内文の要点を示してください。",
-    // Domain 5: Science & Definitions (EN even/odd, JA/CJK even/odd)
-    "Briefly explain how evaporation cools a liquid surface.",
-    "Define the term algorithm in one clear sentence.",
-    "冬に窓ガラスの内側へ結露が生じる物理的な仕組みを一文で説明してください。",
-    "データ圧縮における可逆圧縮と非可逆圧縮の決定的な違いを簡潔に述べてください。",
-];
+///
+/// Loaded at compile time from `src/adapter/src/pooling/startup_prior_probes.txt`.
+pub const DEFAULT_STARTUP_PRIOR_PROBES: [&str; 24] =
+    parse_startup_prior_probes::<24>(RAW_STARTUP_PRIOR_PROBES);
 
 /// Raw per-token, per-layer pre-RoPE query activations captured from one text sequence,
 /// optionally paired with a final-layer hidden state for contrastive Rank-1 residual vectors
@@ -201,33 +218,33 @@ fn is_alias_span_boundary(ch: char) -> bool {
                 | '>'
                 | '"'
                 | '\''
-                | '\u{3001}' // 、
-                | '\u{3002}' // 。
-                | '\u{300C}' // 「
-                | '\u{300D}' // 」
-                | '\u{300E}' // 『
-                | '\u{300F}' // 』
-                | '\u{FF08}' // （
-                | '\u{FF09}' // ）
-                | '\u{3010}' // 【
-                | '\u{3011}' // 】
-                | '\u{3008}' // 〈
-                | '\u{3009}' // 〉
-                | '\u{300A}' // 《
-                | '\u{300B}' // 》
-                | '\u{30FB}' // ・
-                | '\u{FF1A}' // ：
-                | '\u{FF1B}' // ；
-                | '\u{FF01}' // ！
-                | '\u{FF1F}' // ？
-                | '\u{FF0C}' // ，
-                | '\u{FF0E}' // ．
-                | '\u{201C}' // “
-                | '\u{201D}' // ”
-                | '\u{2018}' // ‘
-                | '\u{2019}' // ’
-                | '\u{2014}' // —
-                | '\u{2026}' // …
+                | '\u{3001}' // ideographic comma
+                | '\u{3002}' // ideographic full stop
+                | '\u{300C}' // left corner bracket
+                | '\u{300D}' // right corner bracket
+                | '\u{300E}' // left white corner bracket
+                | '\u{300F}' // right white corner bracket
+                | '\u{FF08}' // fullwidth left parenthesis
+                | '\u{FF09}' // fullwidth right parenthesis
+                | '\u{3010}' // left black lenticular bracket
+                | '\u{3011}' // right black lenticular bracket
+                | '\u{3008}' // left angle bracket
+                | '\u{3009}' // right angle bracket
+                | '\u{300A}' // left double angle bracket
+                | '\u{300B}' // right double angle bracket
+                | '\u{30FB}' // katakana middle dot
+                | '\u{FF1A}' // fullwidth colon
+                | '\u{FF1B}' // fullwidth semicolon
+                | '\u{FF01}' // fullwidth exclamation mark
+                | '\u{FF1F}' // fullwidth question mark
+                | '\u{FF0C}' // fullwidth comma
+                | '\u{FF0E}' // fullwidth full stop
+                | '\u{201C}' // left double quotation mark
+                | '\u{201D}' // right double quotation mark
+                | '\u{2018}' // left single quotation mark
+                | '\u{2019}' // right single quotation mark
+                | '\u{2014}' // em dash
+                | '\u{2026}' // horizontal ellipsis
         )
 }
 
@@ -239,11 +256,12 @@ fn is_leading_alias_skip(ch: char) -> bool {
 /// Extracts a UTF-8-safe leading non-punctuation span (`>= 2` Unicode scalar values) from `text`
 /// for subword-prefix alias probing without assuming ASCII whitespace word segmentation.
 ///
-/// Leading whitespace, brackets, quotes, and punctuation are skipped so bracketed terms such as
-/// `「東京」` still yield `"東京"`. Spans terminate at ASCII or Unicode clause/bracket boundaries
-/// and are bounded at the character boundary (`<= 24` chars for ASCII-only spans, `<= 8` chars
-/// once any non-ASCII character appears) so unspaced CJK/Japanese sentences never collapse into
-/// whole-line probes while preserving exact first-word extraction on space-delimited English text.
+/// Leading whitespace, brackets, quotes, and punctuation are skipped so corner-bracketed terms
+/// (such as `\u{300C}...\u{300D}`) yield the inner term. Spans terminate at ASCII or Unicode
+/// clause/bracket boundaries and are bounded at the character boundary (`<= 24` chars for
+/// ASCII-only spans, `<= 8` chars once any non-ASCII character appears) so unspaced CJK/Japanese
+/// sentences never collapse into whole-line probes while preserving exact first-word extraction on
+/// space-delimited English text.
 #[must_use]
 pub fn extract_leading_alias_word(text: &str) -> Option<&str> {
     let start_byte = text

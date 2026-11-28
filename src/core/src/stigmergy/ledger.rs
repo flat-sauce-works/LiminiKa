@@ -295,7 +295,8 @@ impl PagedBitmask {
                 + (self.bits[3] & other.bits[3]).count_ones())
     }
 
-    /// Evaluates normalized Jaccard similarity $\frac{\vert{}\mathbf{M}_i \cap \mathbf{M}_j\vert{}}{\vert{}\mathbf{M}_i \cup \mathbf{M}_j\vert{}} \in [0, 1]$
+    /// Evaluates normalized Jaccard similarity $\frac{\vert{}\mathbf{M}_i \cap
+    /// \mathbf{M}_j\vert{}}{\vert{}\mathbf{M}_i \cup \mathbf{M}_j\vert{}} \in [0, 1]$
     /// in division-free (`0 fdiv`) constant time via `POPCOUNT_RSQRT_LUT_257`.
     #[inline(always)]
     pub fn stigmergic_jaccard_similarity(&self, other: &Self) -> f32 {
@@ -308,7 +309,8 @@ impl PagedBitmask {
         branchless_clamp_f32((inter as f32) * (rsqrt_u * rsqrt_u), 0.0, 1.0)
     }
 
-    /// Evaluates non-negative binary cosine similarity $\frac{\mathbf{M}_i^T \mathbf{M}_j}{\sqrt{\Vert{}\mathbf{M}_i\Vert{}_1 \Vert{}\mathbf{M}_j\Vert{}_1}} \in [0, 1]$.
+    /// Evaluates non-negative binary cosine similarity $\frac{\mathbf{M}_i^T
+    /// \mathbf{M}_j}{\sqrt{\Vert{}\mathbf{M}_i\Vert{}_1 \Vert{}\mathbf{M}_j\Vert{}_1}} \in [0, 1]$.
     #[inline(always)]
     pub fn stigmergic_cosine_similarity(&self, other: &Self) -> f32 {
         let inter = self.stigmergic_adjacency_overlap(other);
@@ -667,7 +669,8 @@ impl ContrastivePhaseBloomFilter {
 
     /// Applies Phase-Conjugate Attractor Repulsion ($-\boldsymbol{\Delta\theta}$) in-place across
     /// `candidate_phases` and returns `(density, repulsion_triggered, post_repulsion_words)` directly
-    /// in 8 `u64` SWAR registers (`0` stack reload for downstream `PhaseStepFilter`/`PhaseClamp` or unified-field kernels).
+    /// in 8 `u64` SWAR registers (`0` stack reload for downstream `PhaseStepFilter`/`PhaseClamp` or
+    /// unified-field kernels).
     #[inline(always)]
     pub const fn apply_phase_conjugate_repulsion_to_words(
         &self,
@@ -869,7 +872,8 @@ pub trait FastPathLedger {
         Ok(())
     }
 
-    /// Evaluates telemetry ledger to auto-tune sub-head router ratios, `PhaseClamp` limits, and `EntropyController` thresholds.
+    /// Evaluates telemetry ledger to auto-tune sub-head router ratios, `PhaseClamp` limits, and
+    /// `EntropyController` thresholds.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_INVALID_STATE`] if `slot` is in an incompatible mode.

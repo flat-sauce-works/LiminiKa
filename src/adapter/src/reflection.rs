@@ -228,7 +228,8 @@ impl ReflectionCritique {
                     "Answer strictly from verified context and avoid false premises.".to_string()
                 } else {
                     format!(
-                        "Carefully audit this draft for false premises or contradictions ({compact_draft}) and re-answer strictly from verified facts."
+                        "Carefully audit this draft for false premises or contradictions ({compact_draft}) \
+                         and re-answer strictly from verified facts."
                     )
                 }
             }
@@ -238,7 +239,8 @@ impl ReflectionCritique {
                         .to_string()
                 } else {
                     format!(
-                        "The draft ({compact_draft}) drifted or omitted key grounded details. Re-examine the question and cover all grounded context points concisely."
+                        "The draft ({compact_draft}) drifted or omitted key grounded details. Re-examine t\
+                         he question and cover all grounded context points concisely."
                     )
                 }
             }

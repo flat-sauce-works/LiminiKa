@@ -300,7 +300,8 @@ pub(crate) fn diff_norm_sq_f32_unrolled4(a: &[f32], b: &[f32]) -> f32 {
     }
 }
 
-/// Computes $(\|\mathbf{r} - \mathbf{p}\|_2^2, \langle \mathbf{r} - \mathbf{p}, \boldsymbol{\gamma} \rangle, \|\boldsymbol{\gamma}\|_2^2)$
+/// Computes $(\|\mathbf{r} - \mathbf{p}\|_2^2, \langle \mathbf{r} - \mathbf{p}, \boldsymbol{\gamma} \rangle,
+/// \|\boldsymbol{\gamma}\|_2^2)$
 /// in a single fused AVX2 memory pass while keeping peak live YMM usage `<= 5`
 /// (`0` Windows x64 `xmm6..xmm15` stack saves/restores).
 #[inline]
@@ -316,7 +317,8 @@ pub(crate) fn hodge_obstruction_and_dual_pairing_f32(
         let pr = r_slice.as_ptr();
         let pp = p_slice.as_ptr();
         let pg = g_slice.as_ptr();
-        // SAFETY: `target_feature = "avx2"` is enabled at compile time, and pointer offsets are bounds-checked against `n`.
+        // SAFETY: `target_feature = "avx2"` is enabled at compile time, and pointer offsets are bounds-checked
+        // against `n`.
         // Using 3 accumulator YMMs (`obs_all, dot_all, gam_all`) + 2 scratch YMMs (`d, g`) keeps peak live YMMs
         // at 5 (`ymm0..ymm4`), eliminating 8 `vmovaps` stack saves/restores of `xmm6..xmm13` on Windows x64 ABI
         // and cutting `hodge_obstruction_and_dual_homology_pairing_64` variance and latency.

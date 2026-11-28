@@ -199,27 +199,30 @@ fn dispatch_rope_orchestration_inner<S: ManifoldGatewaySignal + ?Sized>(
         horizon_mode,
         HorizonAblationMode::Spillover | HorizonAblationMode::SlowLoop
     ) {
+        let step_input = liminika_adapter::LayerRopeStepInput {
+            layer_idx,
+            signal,
+            entropy_h_tilde_opt: None,
+            unresolved_damping_u7: 128,
+            q_rot_inout: slice,
+            logits_opt: None,
+        };
         if let Some(esc) = escalation_provider {
-            adapter.orchestrate_layer_rope_with_spillover(
-                layer_idx, signal, esc, trail, None, 128, slice, None,
-            )?;
+            adapter.orchestrate_layer_rope_with_spillover(step_input, esc, trail)?;
         } else {
             let mut no_esc = ();
-            adapter.orchestrate_layer_rope_with_spillover(
-                layer_idx,
-                signal,
-                &mut no_esc,
-                trail,
-                None,
-                128,
-                slice,
-                None,
-            )?;
+            adapter.orchestrate_layer_rope_with_spillover(step_input, &mut no_esc, trail)?;
         }
     } else {
-        adapter.orchestrate_layer_rope_with_substrate(
-            layer_idx, signal, trail, None, 128, slice, None,
-        )?;
+        let step_input = liminika_adapter::LayerRopeStepInput {
+            layer_idx,
+            signal,
+            entropy_h_tilde_opt: None,
+            unresolved_damping_u7: 128,
+            q_rot_inout: slice,
+            logits_opt: None,
+        };
+        adapter.orchestrate_layer_rope_with_substrate(step_input, trail)?;
     }
     Ok(())
 }

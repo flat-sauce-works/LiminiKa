@@ -121,7 +121,7 @@ impl PhaseAnchorRecord {
     }
 
     #[inline(always)]
-    // Internal helper keeps a flat parameter list; parameter-struct consolidation deferred to v0.4.0.
+    // Hot-path SWAR helper keeps flat word/scalar arguments for register residency.
     #[allow(clippy::too_many_arguments)]
     fn apply_macro_centroid_pull_to_trail_64(
         trail: &mut PointerTrail,
@@ -504,7 +504,8 @@ impl PhaseAnchorRecord {
     /// geodesic between both centroids (bridging the *Limina* inter-memory boundary) and stamps
     /// `TRAIL_FLAG_LIMINAL_BEAT_ACTIVE | TRAIL_FLAG_SYNERGY_RESONANCE`.
     ///
-    /// Returns `(primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence, total_gravity, is_liminal_bifurcation)`.
+    /// Returns `(primary_idx, secondary_idx, primary_anchor_id, secondary_anchor_id, blended_coherence,
+    /// total_gravity, is_liminal_bifurcation)`.
     #[inline]
     pub fn route_top2_liminal_centroids_64(
         centroids: &[Self],

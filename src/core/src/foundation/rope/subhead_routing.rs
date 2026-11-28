@@ -757,7 +757,8 @@ pub(crate) fn rotate_fused_self_phase_clamp_and_subhead_default_words(
     );
 }
 
-/// Rotates `q_slice` via `Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}} + \theta_{\mathrm{subhead}}$)
+/// Rotates `q_slice` via `Q7_FUSED_SELF_GEODESIC_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}} +
+/// \theta_{\mathrm{subhead}}$)
 /// and `k_slice` via `Q7_DEFAULT_PHASE_CLAMP_SINCOS_REF` ($\theta_{\mathrm{clamp}}$), checking SWAR phase
 /// uniformity once and streaming `q_slice` then `k_slice` in 4-head-unrolled passes to eliminate
 /// 2-stream 4KB page-offset Load-Store Queue aliasing on 32KB (`128x64`) tensors.

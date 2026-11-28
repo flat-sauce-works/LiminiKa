@@ -324,7 +324,8 @@ pub(crate) fn run_step2_evaluation(
                         chat.format_single_turn(prompt)
                     } else {
                         chat.format_single_turn(&format!(
-                            "[Context: {recalled_ctx}]\n[Style Guidelines: {persona_rag_text}]\n[Do NOT claim: {guard_rag_text}]\n{prompt}"
+                            "[Context: {recalled_ctx}]\n[Style Guidelines: {persona_rag_text}]\n[Do NOT cl\
+                             aim: {guard_rag_text}]\n{prompt}"
                         ))
                     }
                 } else if run_cond.steering_enabled() {
@@ -707,7 +708,9 @@ pub(crate) fn run_step2_evaluation(
                 }
             }
             println!(
-                "  [S2:{}:{}] lacuna={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recall_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_slot={}] ctx_hit={}/{} hit={}/{} sem_forb={}(raw={}) => {}",
+                "  [S2:{}:{}] lacuna={:?} action={:?} top1={:.3} top2={:.3} guard_m={:+.3} recall={} recal\
+                 l_ms={:.2} kv={} reflect={} core=[{}] probe=[g=#{:?}({:.3}) loc=#{:?}({:.3}) dis={} prov_\
+                 slot={}] ctx_hit={}/{} hit={}/{} sem_forb={}(raw={}) => {}",
                 idx + 1,
                 slot,
                 query_lacuna_state,
@@ -769,7 +772,11 @@ pub(crate) fn run_step2_evaluation(
         };
         let vram_pass = query_nvidia_smi_vram().unwrap_or_else(|| "n/a".to_string());
         let summary_line = format!(
-            "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit={:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=({}/{} skip={}) | ext_rescue={} sb_settle={} logits_skip={}/{} | core=[L0={} L1={} Ego={} hops={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms pure_decode={:.2} tok/s e2e={:.2} tok/s prefill={:.1}ms ({:.2}ms/p) | vram={}",
+            "Step 2 Dynamic Corpus Summary ({run_label}): recall_ctx_hit={:.1}% ({}/{}) | gen_expect_hit=\
+             {:.1}% ({}/{}) | raw_forbid={:.1}% ({}/{}) | sem_forbid={:.1}% ({}/{}) | in_tok={} | reflect=\
+             ({}/{} skip={}) | ext_rescue={} sb_settle={} logits_skip={}/{} | core=[L0={} L1={} Ego={} hop\
+             s={} fired=0x{:02X}] | compile={:.1}ms mean_recall={:.2}ms pure_decode={:.2} tok/s e2e={:.2} \
+             tok/s prefill={:.1}ms ({:.2}ms/p) | vram={}",
             if step2_exp_total == 0 {
                 0.0
             } else {
@@ -825,7 +832,8 @@ pub(crate) fn run_step2_evaluation(
         let dwell = adapter.horizon_dwell();
         let spillover = adapter.residual_spillover();
         let action_line = format!(
-            "  [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head={:.1}% Rank-1={:.1}% Crystal={:.1}% Repulse={:.1}%",
+            "  [Substrate] total={} Passive={:.1}% Skip={:.1}% Express={:.1}% sub-head={:.1}% Rank-1={:.1}\
+             % Crystal={:.1}% Repulse={:.1}%",
             step_tlm.continuous_standard_steps,
             step_tlm.decision_pct(0),
             step_tlm.decision_pct(1),
@@ -836,7 +844,8 @@ pub(crate) fn run_step2_evaluation(
             step_tlm.decision_pct(6),
         );
         let core_line = format!(
-            "  [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% slide_in={} slide_out={} guard_act={} guard_ret={} dwell=({},{}) assim_drift={:.3}({})",
+            "  [CoreTelemetry 3+System] mode={:?} steps={}(std={}) L0_exc={:.1}% L2_ego={:.1}% slide_in={} \
+             slide_out={} guard_act={} guard_ret={} dwell=({},{}) assim_drift={:.3}({})",
             last_snap.mode,
             step_tlm.total_steps,
             step_tlm.continuous_standard_steps,
@@ -872,7 +881,9 @@ pub(crate) fn run_step2_evaluation(
             lane_util_sum / lane_util_cnt as f32 * 100.0
         };
         let stratified_line = format!(
-            "  [StratifiedMetrics] mean_target_coh={mean_target_coh:.3} (n={target_coh_cnt}) | mean_guard_margin={mean_guard_margin:+.3} (n={guard_margin_cnt}) | ood_bleed_rate={ood_bleed_rate:.1}% ({ood_bleed_hits}/{ood_total}) | workbench_lane_utilization={workbench_lane_utilization:.1}%",
+            "  [StratifiedMetrics] mean_target_coh={mean_target_coh:.3} (n={target_coh_cnt}) | mean_guard_\
+             margin={mean_guard_margin:+.3} (n={guard_margin_cnt}) | ood_bleed_rate={ood_bleed_rate:.1}% (\
+             {ood_bleed_hits}/{ood_total}) | workbench_lane_utilization={workbench_lane_utilization:.1}%",
         );
         println!("{stratified_line}");
         let spillover_line = format!(
@@ -886,7 +897,8 @@ pub(crate) fn run_step2_evaluation(
             spillover.retractions,
         );
         let slow_loop_line = format!(
-            "  [SlowLoop] epochs_applied={} alpha_q7={} dwell_delta={:+} repulse_bias={:+} skip_thresh={:.3} express_thresh={:.3} rank1_thresh={:.3} slide_out_dwell={}",
+            "  [SlowLoop] epochs_applied={} alpha_q7={} dwell_delta={:+} repulse_bias={:+} skip_thresh=\
+             {:.3} express_thresh={:.3} rank1_thresh={:.3} slide_out_dwell={}",
             slow_loop_epochs_applied,
             adapter.telemetry_bank().derivative_alpha_q7(),
             slow_loop_last_dwell_delta,
@@ -899,7 +911,8 @@ pub(crate) fn run_step2_evaluation(
         let dist_report = step_tlm.distortion_report();
         let tension = adapter.distortion_tension();
         let distortion_line = format!(
-            "  [Distortion] kind={:?} sat={:.1}% passive={:.1}% active={:.1}% wakeups={} cooldowns={} tension(damp={} exc={} scale={} d_norm={})",
+            "  [Distortion] kind={:?} sat={:.1}% passive={:.1}% active={:.1}% wakeups={} cooldowns={} tens\
+             ion(damp={} exc={} scale={} d_norm={})",
             dist_report.kind,
             dist_report.action_saturation_ratio * 100.0,
             dist_report.passive_distortion_ratio * 100.0,
@@ -918,7 +931,9 @@ pub(crate) fn run_step2_evaluation(
             step2_steer_bypass_hits as f64 / step2_steer_eligible_layers as f64 * 100.0
         };
         let compute_pool_line = format!(
-            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} recov={} guard_relax={} spine_veto=(g={},r={},p={})",
+            "  [ComputePool] regime={:?} ema_p={} base_p={} dwell={} lane={} slots(active={} pinned={} rev\
+             ={}) layer_byp={}/{} ({:.1}%) whole_tok_byp={}/{} ({:.1}%) abs={} conc={} churn={} recov={} g\
+             uard_relax={} spine_veto=(g={},r={},p={})",
             cp.regime,
             cp.ema_pressure_q15,
             cp.baseline_pressure_q15,
@@ -949,7 +964,8 @@ pub(crate) fn run_step2_evaluation(
         println!("{distortion_line}");
         println!("{compute_pool_line}");
         step2_ablation_summaries.push(format!(
-            "{summary_line}\n  {stratified_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  {slow_loop_line}\n  {distortion_line}\n  {compute_pool_line}"
+            "{summary_line}\n  {stratified_line}\n  {action_line}\n  {core_line}\n  {spillover_line}\n  \
+             {slow_loop_line}\n  {distortion_line}\n  {compute_pool_line}"
         ));
         pass_metrics.push(TrialPassMetrics {
             label: run.label.clone(),
@@ -1020,7 +1036,8 @@ pub(crate) fn run_step2_evaluation(
             None => "auto(2/sqrt(H))".to_string(),
         };
         println!(
-            "RAM Phase-KV GOP Cache ({} KB / {} slots, zero-VRAM, min_res={}): occupied={} hits={}/{} ({:.1}%: exact={} res={}) pframes={} seeks={} repulsed={} avg_lookup={:.2} us",
+            "RAM Phase-KV GOP Cache ({} KB / {} slots, zero-VRAM, min_res={}): occupied={} hits={}/{} (\
+             {:.1}%: exact={} res={}) pframes={} seeks={} repulsed={} avg_lookup={:.2} us",
             core::mem::size_of::<StandardPhaseKvGopCache>() / 1024,
             ram_kv_cache.entries().len(),
             kv_mode_label,
@@ -1076,7 +1093,8 @@ pub(crate) fn run_step2_evaluation(
         );
         for r in pass_results.iter().filter(|r| r.axis == 1) {
             println!(
-                "  {:<26} | {:5.1}% | {:5.1}% | {:5.1}% | {:6.1}% | {:6.1}% | {:6.1}% | {:5.1}% | {:>6} | {:>7.2} | {:4.1}% | {}/{}",
+                "  {:<26} | {:5.1}% | {:5.1}% | {:5.1}% | {:6.1}% | {:6.1}% | {:6.1}% | {:5.1}% | {:>6} | \
+                 {:>7.2} | {:4.1}% | {}/{}",
                 r.label,
                 pct(r.exp_hits, r.exp_total),
                 pct(r.fact_exp_hits, r.fact_exp_total),
@@ -1151,7 +1169,8 @@ pub(crate) fn run_step2_evaluation(
             };
             let rep_str = rep_jacc.map_or_else(|| "   n/a".to_string(), |v| format!("{v:6.3}"));
             println!(
-                "  {:<22} | {:7.1}% | {:>8.3} | {:>8} | {:5.1}% | {:5.1}% | {:6.1}% | {:5.1}% | {:5.1}% | {:>7.2} | {:>5} | {:?}/{}",
+                "  {:<22} | {:7.1}% | {:>8.3} | {:>8} | {:5.1}% | {:5.1}% | {:6.1}% | {:5.1}% | {:5.1}% | \
+                 {:>7.2} | {:>5} | {:?}/{}",
                 r.label,
                 div_sys,
                 sys_jacc,

@@ -146,7 +146,8 @@ impl<'a, T> FfiHandleRef<'a, T> {
         if U::IS_ZST || size_of::<U>() > size_of::<T>() {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks `align_of::<U>()`.
+        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks
+        // `align_of::<U>()`.
         unsafe { FfiHandleRef::<U>::from_raw(self.ptr.as_ptr().cast::<U>()) }
     }
 
@@ -268,7 +269,8 @@ impl<'a, T> FfiHandleMut<'a, T> {
     /// or `Ok(Some(FfiHandleMut))` if non-null and properly aligned.
     ///
     /// # Safety
-    /// If non-null, caller must ensure `raw_ptr` points to a valid, uniquely borrowed instance of `T` for lifetime `'a`.
+    /// If non-null, caller must ensure `raw_ptr` points to a valid, uniquely borrowed instance of `T` for
+    /// lifetime `'a`.
     ///
     /// # Errors
     /// Returns [`LMNK_ERR_ALIGNMENT`] if `raw_ptr` is non-null and violates `align_of::<T>()`.
@@ -389,7 +391,8 @@ impl<'a, T> FfiHandleMut<'a, T> {
         if U::IS_ZST || size_of::<U>() > size_of::<T>() {
             return Err(LMNK_ERR_INVALID_ARGUMENT);
         }
-        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks `align_of::<U>()`.
+        // SAFETY: Both `T` and `U` are `Pod`, `size_of::<U>() <= size_of::<T>()`, and `from_raw` checks
+        // `align_of::<U>()`.
         unsafe { FfiHandleMut::<U>::from_raw(self.ptr.as_ptr().cast::<U>()) }
     }
 

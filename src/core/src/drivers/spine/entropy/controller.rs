@@ -35,7 +35,8 @@ pub struct EntropyController {
     pub state: EntropyState,
     /// Total stateful evaluation steps processed (`offset 32..40`).
     pub step_count: u64,
-    /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds (`offset 40..44`).
+    /// Hysteresis deadband width ($\delta_{\mathrm{hyst}}$) preventing mode chattering near thresholds (`offset
+    /// 40..44`).
     pub hysteresis_band: f32,
     /// Threshold for sliding-window entropy rate flux ($\tau_{\mathrm{flux}}$, `offset 44..48`).
     pub tau_flux: f32,
@@ -749,7 +750,8 @@ impl EntropyController {
     }
 
     /// Calculates Eyring-Kramers potential barrier height:
-    /// $\Delta V = \min\left(\frac{\tau_{\mathrm{eff}}}{\max(0, \mathcal{E}_{\mathrm{lat}}) + \epsilon_{\mathrm{log}}}, \Delta V_{\max}\right)$
+    /// $\Delta V = \min\left(\frac{\tau_{\mathrm{eff}}}{\max(0, \mathcal{E}_{\mathrm{lat}}) +
+    /// \epsilon_{\mathrm{log}}}, \Delta V_{\max}\right)$
     /// in division-free (`0 fdiv`) mode, clamping `denom` to `F32_MIN_POSITIVE_NORMAL` and
     /// evaluating `fast_inv_pos_normal_f32` to eliminate subnormal-branch jitter near epsilon singularities.
     ///

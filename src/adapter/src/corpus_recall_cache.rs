@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Lazily populated contiguous recall cache (`CorpusRecallCache`) with deterministic
-//! SWAR [`BitCut64`](liminika_core::liminal::BitCut64) + stride-sampled quasi-linear
+//! SWAR [`BitCut64`] + stride-sampled quasi-linear
 //! neighborhood calibration above [`EXACT_CORPUS_STATS_LIMIT`].
 
 use std::sync::OnceLock;

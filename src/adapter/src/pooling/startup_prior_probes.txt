@@ -1,0 +1,42 @@
+# name: src/adapter/src/pooling/startup_prior_probes.txt
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# Default neutral multilingual startup prior probes (24 prompts across 6 general domains).
+# Interleaved in parity-balanced pairs (EN even/odd, JA/CJK/symbol even/odd) so 2-fold
+# cross-fitting receives 6 English + 6 non-ASCII prompts and all 6 domains in each fold.
+
+# Domain 0: Technical / Architecture (EN even/odd, JA/symbol even/odd)
+Explain the basic design trade-offs of a modular systems architecture.
+Summarize how memory alignment affects hardware cache performance.
+分散システムでキャッシュ整合性を保つための基本的な設計手法を簡潔に説明してください。
+HTTP/2とTCP接続の多重化がレイテンシに与える影響を2文で要約してください。
+
+# Domain 1: Arithmetic / Numeric + Symbols (EN even/odd, JA/numeric even/odd)
+What is 23 multiplied by 4?
+Calculate the remainder when 50 is divided by 7.
+37 × 6 + 14 の計算結果と途中の手順を簡潔に示してください。
+時速45kmで2時間20分移動したときの合計距離（km）を求めてください。
+
+# Domain 2: General Factual / Geography & Units (EN even/odd, JA/CJK even/odd)
+Which ocean lies between Europe and North America?
+How many seconds are in a single hour?
+地球上で最も深い海溝の名称と、それが位置する海域を教えてください。
+標準大気圧のもとで純水が沸騰する温度は摂氏何度ですか。
+
+# Domain 3: Code / Data Structures (EN even/odd, JA + ASCII symbols even/odd)
+Write a short function signature in C that returns the square of an integer.
+What does a hash table use to map keys to array slots?
+整数配列から最大値を返す関数 `max_val(a[], n)` の時間計算量は何ですか。
+二分探索木で要素を探索するとき、平均計算量がO(log n)になる理由を述べてください。
+
+# Domain 4: Daily Conversation / Practical (EN even/odd, JA/CJK even/odd)
+Suggest two quick ways to keep fresh herbs crisp in the refrigerator.
+How can someone politely follow up on an unanswered email?
+湿気の多い季節に革靴のカビを防ぐための簡単な保管方法を2つ挙げてください。
+会議の日程変更を社外の関係者へ丁寧に伝える短い案内文の要点を示してください。
+
+# Domain 5: Science & Definitions (EN even/odd, JA/CJK even/odd)
+Briefly explain how evaporation cools a liquid surface.
+Define the term algorithm in one clear sentence.
+冬に窓ガラスの内側へ結露が生じる物理的な仕組みを一文で説明してください。
+データ圧縮における可逆圧縮と非可逆圧縮の決定的な違いを簡潔に述べてください。

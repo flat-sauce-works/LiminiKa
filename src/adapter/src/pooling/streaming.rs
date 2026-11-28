@@ -463,12 +463,14 @@ impl StreamingCorpusDistiller {
             };
             corpus.ingest_text_activations_with_phase_ref(
                 adapter,
-                entry.role,
-                entry.text.as_str(),
-                &q_refs,
-                &centroid_refs,
-                phase_refs,
-                entry.energy,
+                crate::PhaseRefIngestInput {
+                    role: entry.role,
+                    text: entry.text.as_str(),
+                    per_layer_q: &q_refs,
+                    residual_ref_per_layer: &centroid_refs,
+                    phase_ref_per_layer: phase_refs,
+                    energy: entry.energy,
+                },
             )?;
         }
 

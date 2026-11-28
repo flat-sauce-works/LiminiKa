@@ -48,7 +48,8 @@ pub trait PheromoneDensityOps {
     /// Updates the stored pheromone density scalar for this record.
     fn set_pheromone_density(&mut self, density: f32);
 
-    /// Applies subnormal-safe temporal evaporative decay ($\rho \gets \min(\rho \cdot \lambda_{\mathrm{retain}}, \rho_{\max})$).
+    /// Applies subnormal-safe temporal evaporative decay ($\rho \gets \min(\rho \cdot
+    /// \lambda_{\mathrm{retain}}, \rho_{\max})$).
     #[inline(always)]
     fn evaporate_pheromone(&mut self, retain_factor: f32) -> f32 {
         let clean_decay =

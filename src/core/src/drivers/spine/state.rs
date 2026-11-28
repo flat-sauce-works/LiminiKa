@@ -298,7 +298,8 @@ pub struct SpineDecodeInput {
     pub min_calm_dwell: u8,
     /// Bitwise OR of `SPINE_DECODE_INPUT_FLAG_*` flags (`offset 15`).
     pub flags: u8,
-    /// Explicit Q0.7 exit pheromone reward (`0..=127`) honored when [`SPINE_DECODE_FLAG_REWARD_OVERRIDE`] is set (`offset 16`).
+    /// Explicit Q0.7 exit pheromone reward (`0..=127`) honored when [`SPINE_DECODE_FLAG_REWARD_OVERRIDE`] is
+    /// set (`offset 16`).
     pub exit_reward_override_q7: u8,
     /// Explicit zero-initialized reserved space for future ABI extensions (`offset 17..32`).
     pub reserved: [u8; 15],

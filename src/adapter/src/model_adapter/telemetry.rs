@@ -79,13 +79,13 @@ fn safe_clamped_ratio(numerator: u64, denominator: u64) -> f32 {
 }
 
 impl ModelSteeringAdapter {
-    /// Returns a shared reference to the embedded 5,120-byte [`RuntimeContext`].
+    /// Returns a shared reference to the embedded 5,184-byte [`RuntimeContext`].
     #[must_use]
     pub fn runtime_context(&self) -> &RuntimeContext {
         &self.ctx
     }
 
-    /// Returns a mutable reference to the embedded 5,120-byte [`RuntimeContext`].
+    /// Returns a mutable reference to the embedded 5,184-byte [`RuntimeContext`].
     #[cfg(test)]
     pub(crate) fn runtime_context_mut(&mut self) -> &mut RuntimeContext {
         &mut self.ctx
@@ -909,7 +909,8 @@ impl ModelSteeringAdapter {
         self.sync_ego_differential_net_from_configured();
     }
 
-    /// Configures Core Layer 2 [`LiminalEgoState`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`, `Medium`, `High`).
+    /// Configures Core Layer 2 [`LiminalEgoState`] from a coarse [`LiminalEgoPreset`] (`Custom`, `Low`,
+    /// `Medium`, `High`).
     pub fn configure_ego_from_preset(&mut self, preset: LiminalEgoPreset) {
         let ego = LiminalEgoState::from_preset(preset);
         self.ctx.core_layers_mut().ego = ego;
@@ -1161,7 +1162,8 @@ impl ModelSteeringAdapter {
         let _ = writeln!(out, "| :--- | :--- | ---: | ---: |");
         let _ = writeln!(
             out,
-            "| Abstract Residency | `stationary_shortcut_hits` + `unobserved_aperture_zeros` (`whole_token_bypass_events={}`) | {} + {} / {} | {:.1}% |",
+            "| Abstract Residency | `stationary_shortcut_hits` + `unobserved_aperture_zeros` (`whole_token\
+             _bypass_events={}`) | {} + {} / {} | {:.1}% |",
             s.whole_token_bypass_events,
             s.stationary_shortcut_hits,
             s.unobserved_aperture_zeros,
@@ -1170,12 +1172,14 @@ impl ModelSteeringAdapter {
         );
         let _ = writeln!(
             out,
-            "| Boundary Gate Flux | `liminal.slide_in_count` / `slide_out_count` / `chatter_events` | {} / {} / {} | - |",
+            "| Boundary Gate Flux | `liminal.slide_in_count` / `slide_out_count` / `chatter_events` | {} / \
+             {} / {} | - |",
             s.slide_in_count, s.slide_out_count, s.chatter_events
         );
         let _ = writeln!(
             out,
-            "| Concrete Ego P-Frame | `ego.intervention_count` (`pframe_chain_evals={}`, `pframe_total_hops={}`) | {} / {} | {:.1}% |",
+            "| Concrete Ego P-Frame | `ego.intervention_count` (`pframe_chain_evals={}`, `pframe_total_hop\
+             s={}`) | {} / {} | {:.1}% |",
             s.pframe_chain_evals,
             s.pframe_total_hops,
             s.ego_interventions,
@@ -1191,7 +1195,8 @@ impl ModelSteeringAdapter {
         );
         let _ = writeln!(
             out,
-            "| Tension Balance | `immediate_tension_damps` / (`damps` + `slow_tension_excites`) | {} / ({} + {}) | {:.1}% |",
+            "| Tension Balance | `immediate_tension_damps` / (`damps` + `slow_tension_excites`) | {} / ({} \
+             + {}) | {:.1}% |",
             s.immediate_tension_damps,
             s.immediate_tension_damps,
             s.slow_tension_excites,

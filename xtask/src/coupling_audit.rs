@@ -13,7 +13,7 @@ use crate::scanner::{
 };
 
 const DETERMINISTIC_INFRA_FILES: &[&str] = &[
-    "src/adapter/src/package.rs",
+    "src/adapter/src/package/mod.rs",
     "examples/candle_eval/src/metrics.rs",
     "examples/candle_eval/src/cli.rs",
     "examples/candle_eval/src/model/mod.rs",

@@ -40,7 +40,8 @@ pub const ACTION_MODE_PHASE_STEER: u8 = 1 << 0;
 /// Action Mode Bit 1 (`0x02`): Enable intermediate layer skipping with SWAR phase compensation.
 pub const ACTION_MODE_LAYER_SKIP: u8 = 1 << 1;
 
-/// Action Mode Bit 2 (`0x04`): Enable Contrastive Phase Bloom Filter anti-phase repulsion ($-\boldsymbol{\Delta\theta}$).
+/// Action Mode Bit 2 (`0x04`): Enable Contrastive Phase Bloom Filter anti-phase repulsion
+/// ($-\boldsymbol{\Delta\theta}$).
 pub const ACTION_MODE_PHASE_REPULSE: u8 = 1 << 2;
 
 /// Action Mode Bit 3 (`0x08`): Enable single-pass sub-head group routing (Fact / Logic / Explore).
@@ -69,7 +70,8 @@ pub const ACTION_PRESET_FULL_ORCHESTRATION: u8 =
 /// Bitmask extracting the 5-bit Action Mode flags from an 8-bit [`TaggedPtr`] tag (`bits 0..=4`).
 pub const TAG_ACTION_MODE_MASK: u8 = 0x1F;
 
-/// Bit shift offset for encoding/extracting the 3-bit Target Attractor Slot ID (`0..=7`) in an 8-bit tag (`bits 5..=7`).
+/// Bit shift offset for encoding/extracting the 3-bit Target Attractor Slot ID (`0..=7`) in an 8-bit tag (`bits
+/// 5..=7`).
 pub const TAG_ATTRACTOR_SLOT_SHIFT: u32 = 5;
 
 /// Packs a 3-bit Target Attractor Slot ID (`0..=7`) and a 5-bit Action Mode mask (`0x00..=0x1F`)
@@ -424,7 +426,8 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely reinterprets a slice of `Self` as a slice of another `Pod` type `U`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of
+    /// `size_of::<U>()`.
     /// Returns [`LMNK_ERR_ALIGNMENT`] if the slice base pointer violates `align_of::<U>()`.
     #[inline(always)]
     fn try_cast_slice<U: Pod>(slice: &[Self]) -> LmnkResult<&[U]> {
@@ -444,7 +447,8 @@ pub unsafe trait Pod: Copy + Sized + Send + Sync + 'static {
     /// Safely reinterprets a mutable slice of `Self` as a mutable slice of another `Pod` type `U`.
     ///
     /// # Errors
-    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of `size_of::<U>()`.
+    /// Returns [`LMNK_ERR_INVALID_ARGUMENT`] if `U` is zero-sized or total byte length is not a multiple of
+    /// `size_of::<U>()`.
     /// Returns [`LMNK_ERR_ALIGNMENT`] if the slice base pointer violates `align_of::<U>()`.
     #[inline(always)]
     fn try_cast_slice_mut<U: Pod>(slice: &mut [Self]) -> LmnkResult<&mut [U]> {
@@ -657,7 +661,8 @@ impl ArenaSpan {
 pub const RANK1_GAIN_UNUSED: u32 = u32::MAX;
 
 /// Portable 32-byte (`#[repr(C, align(32))]`) [`Pod`] descriptor for Sparse Dynamic Rank-1
-/// residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T \mathbf{x})$),
+/// residual injection ($\mathbf{y} \gets \mathbf{y} + s \cdot \mathrm{diag}(\mathbf{g})\mathbf{u}(\mathbf{v}^T
+/// \mathbf{x})$),
 /// addressing all factor vectors via [`ArenaSpan`] element offsets inside a caller-owned `f32` arena.
 ///
 /// Identical layout across 32-bit (`wasm32`), 64-bit CPUs, and GPU `std430` with zero raw pointers
@@ -699,7 +704,8 @@ impl Default for Rank1Descriptor {
     }
 }
 
-/// 64-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Predictive Motion Delta (P-Frame) Packet** (Section 4.3).
+/// 64-byte cacheline-aligned Plain Old Data (`Pod`) **KV-keyframe Predictive Motion Delta (P-Frame) Packet**
+/// (Section 4.3).
 ///
 /// Stores the 64-head inter-step Q7 phase motion vector $\boldsymbol{\Delta\theta}_t \in \mathrm{Q7}^{64}$
 /// (`offset 0..64`) between consecutive steps inside a Variable Group of Pictures (GOP) memory/persona stream.

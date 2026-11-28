@@ -51,7 +51,8 @@ pub const SCOPE_REGION_EXTERIOR: u8 = 1 << 2;
 /// Partition flag (`bit 0`): validated exterior granules require isolated non-copy sandbox staging.
 pub const LACUNA_PARTITION_FLAG_SANDBOX_ELIGIBLE: u8 = 1 << 0;
 
-/// Partition flag (`bit 1`): zero-aperture non-observation (`self_ref_mask == 0`, `exterior_mask == 0`, `undefined_mask == 0`).
+/// Partition flag (`bit 1`): zero-aperture non-observation (`self_ref_mask == 0`, `exterior_mask == 0`,
+/// `undefined_mask == 0`).
 pub const LACUNA_PARTITION_FLAG_UNOBSERVED_APERTURE_ZERO: u8 = 1 << 1;
 
 /// Partition flag (`bit 2`): at least one granule encountered a non-finite or Q0.7 bit-7 fault (`undefined_mask != 0`).
@@ -72,7 +73,8 @@ const fn spread_bits_u8_to_u16(m: u8) -> u16 {
 }
 
 /// Packs disjoint 8-bit region masks into 8x 2-bit [`Lacuna`] codes (`bits 2g..=2g+1`):
-/// - `0b00` (`Unobserved`): `unobserved_mask` ($\overline{S \cup O} \setminus \bot$) **and** `interior_mask` ($S \setminus O \setminus \bot$)
+/// - `0b00` (`Unobserved`): `unobserved_mask` ($\overline{S \cup O} \setminus \bot$) **and** `interior_mask`
+///   ($S \setminus O \setminus \bot$)
 /// - `0b01` (`SelfRef`): `self_ref_mask` ($S \cap O \setminus \bot$)
 /// - `0b10` (`Exterior`): `exterior_mask` (validated $O \setminus S \setminus \bot$)
 /// - `0b11` (`Undefined`): `undefined_mask` ($\bot$)
@@ -96,15 +98,18 @@ const fn pack_lacuna_codes_u16(self_ref_mask: u8, exterior_mask: u8, undefined_m
 pub struct LacunaPartition8 {
     /// 8-granule cognitive boundary bitmask $S$ of self/active memory (`offset 0`).
     pub self_mask: u8,
-    /// 8-granule noise-filtered external bitmask $O$ (`self_ref_mask | exterior_mask`, disjoint from $\bot$, `offset 1`).
+    /// 8-granule noise-filtered external bitmask $O$ (`self_ref_mask | exterior_mask`, disjoint from $\bot$,
+    /// `offset 1`).
     pub observed_mask: u8,
     /// $S \cap O \setminus \bot$: observed self-reference bridge granules (`0b01 = SelfRef`, `offset 2`).
     pub self_ref_mask: u8,
     /// $S \setminus O \setminus \bot$: protected self-specific interior granules (`0b00 = Unobserved`, `offset 3`).
     pub interior_mask: u8,
-    /// Validated $O \setminus S \setminus \bot$: exterior observations routed to isolated sandbox (`0b10 = Exterior`, `offset 4`).
+    /// Validated $O \setminus S \setminus \bot$: exterior observations routed to isolated sandbox (`0b10 =
+    /// Exterior`, `offset 4`).
     pub exterior_mask: u8,
-    /// $\overline{S \cup O} \setminus \bot$ (plus rejected isolated single-granule noise, `0b00 = Unobserved`, `offset 5`).
+    /// $\overline{S \cup O} \setminus \bot$ (plus rejected isolated single-granule noise, `0b00 = Unobserved`,
+    /// `offset 5`).
     pub unobserved_mask: u8,
     /// $\bot$: non-finite or Q0.7 `bit 7 != 0` fault granules (`0b11 = Undefined`, `offset 6`).
     pub undefined_mask: u8,

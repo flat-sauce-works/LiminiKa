@@ -67,7 +67,7 @@ const ALLOWED_SUBSTRATE_DECLS: &[(&str, &str)] = &[
     ("SubstrateStepReport", "stigmergy/substrate/mod.rs"),
     ("PointerSubstrate", "stigmergy/trail/traits.rs"),
     ("StigmergicSubstrateOps", "stigmergy/trail/traits.rs"),
-    ("SubstrateGatewayExt", "runtime/gateway/orchestrator.rs"),
+    ("SubstrateGatewayExt", "runtime/gateway/orchestrator/mod.rs"),
 ];
 
 /// Sibling driver isolation pairs (`(source_driver, forbidden_sibling)`) covering all 6 directed

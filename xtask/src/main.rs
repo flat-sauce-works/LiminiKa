@@ -328,4 +328,44 @@ pub fn demo<'a, 'static_like>(x: &'a str) -> (&'static std::ffi::CStr, char) {
         assert!(core_dag::check_topology_matrix_parity(&core_src).is_empty());
         assert!(core_dag::check_xtask_zero_external_deps(&root).is_empty());
     }
+
+    #[test]
+    fn raw_cjk_gate_rejects_cjk_and_allows_escapes_ascii_and_math() {
+        let bad_kana = "// comment \u{3042} here\n";
+        let bad_kanji = "let s = \"\u{6771}\u{4EAC}\";\n";
+        let bad_fullwidth = "let p = '\u{FF08}';\n";
+        let bad_hangul = "// \u{AC00}\n";
+        assert_eq!(
+            workspace_gates::scan_raw_cjk_in_source(bad_kana, "a.rs").len(),
+            1
+        );
+        assert_eq!(
+            workspace_gates::scan_raw_cjk_in_source(bad_kanji, "b.rs").len(),
+            1
+        );
+        assert_eq!(
+            workspace_gates::scan_raw_cjk_in_source(bad_fullwidth, "c.rs").len(),
+            1
+        );
+        assert_eq!(
+            workspace_gates::scan_raw_cjk_in_source(bad_hangul, "d.rs").len(),
+            1
+        );
+
+        let ok_src = "// math: \u{2014} \u{00D7} \u{2264} \u{03C0} \u{03C3}\n\
+                      let esc = \"\\u{6771}\\u{4EAC}\";\n";
+        assert!(workspace_gates::scan_raw_cjk_in_source(ok_src, "ok.rs").is_empty());
+    }
+
+    #[test]
+    fn c_abi_header_parity_check_passes_on_workspace() {
+        let root = repo_root();
+        assert!(workspace_gates::check_c_abi_header_parity(&root).is_empty());
+
+        let sample_hdr = "LMNK_API int LMNK_CALL lmnk_bad_nodiscard(void);\n\
+                          LMNK_NODISCARD LMNK_API int LMNK_CALL lmnk_good_fn(void);\n";
+        let (decls, errs) = workspace_gates::extract_c_abi_header_decls(sample_hdr);
+        assert!(decls.contains("lmnk_good_fn"));
+        assert_eq!(errs.len(), 1);
+    }
 }

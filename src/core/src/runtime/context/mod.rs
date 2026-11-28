@@ -357,7 +357,8 @@ pub struct OrchestratorStatusSnapshot {
     pub ego_intervention_epochs: u32,
     /// Whether Core Stack Slot 0 boundaries are quiescent (`stationary_shortcut_ready != 0`).
     pub stationary_shortcut_ready: bool,
-    /// Bitmask of external [`crate::runtime::horizon::LatentHorizonSlot`] traits currently slid into the cognitive window.
+    /// Bitmask of external [`crate::runtime::horizon::LatentHorizonSlot`] traits currently slid into the
+    /// cognitive window.
     pub active_horizon_slots_mask: u32,
     /// Consecutive destabilized steps observed by the orchestrator.
     pub unstable_dwell_steps: u16,

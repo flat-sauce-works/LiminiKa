@@ -853,27 +853,35 @@ mod tests {
     #[test]
     fn utf8_semantic_forbid_matching_handles_non_spaced_japanese_and_negation() {
         let cues: Vec<String> = vec![
-            "ではない".to_string(),
-            "使用しません".to_string(),
-            "接続せず".to_string(),
-            "不要".to_string(),
+            "\u{3067}\u{306F}\u{306A}\u{3044}".to_string(),
+            "\u{4F7F}\u{7528}\u{3057}\u{307E}\u{305B}\u{3093}".to_string(),
+            "\u{63A5}\u{7D9A}\u{305B}\u{305A}".to_string(),
+            "\u{4E0D}\u{8981}".to_string(),
         ];
         let forb = vec![
-            "外部クラウド".to_string(),
-            "可変長CSV".to_string(),
-            "公衆無線LAN".to_string(),
+            "\u{5916}\u{90E8}\u{30AF}\u{30E9}\u{30A6}\u{30C9}".to_string(),
+            "\u{53EF}\u{5909}\u{9577}CSV".to_string(),
+            "\u{516C}\u{8846}\u{7121}\u{7DDA}LAN".to_string(),
         ];
 
         // Affirmative non-spaced Japanese hits must all be counted.
-        let aff = "翠紋解析器は外部クラウドへ接続し可変長CSVと公衆無線LANを利用します。";
+        let aff = "\u{7FE0}\u{7D0B}\u{89E3}\u{6790}\u{5668}\u{306F}\u{5916}\u{90E8}\u{30AF}\u{30E9}\
+         \u{30A6}\u{30C9}\u{3078}\u{63A5}\u{7D9A}\u{3057}\u{53EF}\u{5909}\u{9577}CSV\u{3068}\u{516C}\
+         \u{8846}\u{7121}\u{7DDA}LAN\u{3092}\u{5229}\u{7528}\u{3057}\u{307E}\u{3059}\u{3002}";
         assert_eq!(count_semantic_forbid_hits_utf8(aff, &forb, &cues), (3, 3));
 
         // Negated Japanese clauses must suppress semantic hits while keeping raw hits.
-        let neg = "外部クラウドは使用しません。可変長CSVは不要です。公衆無線LANには接続せず館内専用回線を使います。";
+        let neg = "\u{5916}\u{90E8}\u{30AF}\u{30E9}\u{30A6}\u{30C9}\u{306F}\u{4F7F}\u{7528}\u{3057}\
+         \u{307E}\u{305B}\u{3093}\u{3002}\u{53EF}\u{5909}\u{9577}CSV\u{306F}\u{4E0D}\u{8981}\u{3067}\
+         \u{3059}\u{3002}\u{516C}\u{8846}\u{7121}\u{7DDA}LAN\u{306B}\u{306F}\u{63A5}\u{7D9A}\u{305B}\
+         \u{305A}\u{9928}\u{5185}\u{5C02}\u{7528}\u{56DE}\u{7DDA}\u{3092}\u{4F7F}\u{3044}\u{307E}\u{3059}\
+         \u{3002}";
         assert_eq!(count_semantic_forbid_hits_utf8(neg, &forb, &cues), (3, 0));
 
         // Mixed negated + affirmative across CJK sentence boundary.
-        let mixed = "外部クラウドは使用しません。ただし可変長CSVを出力します。";
+        let mixed = "\u{5916}\u{90E8}\u{30AF}\u{30E9}\u{30A6}\u{30C9}\u{306F}\u{4F7F}\u{7528}\u{3057}\
+         \u{307E}\u{305B}\u{3093}\u{3002}\u{305F}\u{3060}\u{3057}\u{53EF}\u{5909}\u{9577}CSV\u{3092}\
+         \u{51FA}\u{529B}\u{3057}\u{307E}\u{3059}\u{3002}";
         assert_eq!(count_semantic_forbid_hits_utf8(mixed, &forb, &cues), (2, 1));
     }
 
